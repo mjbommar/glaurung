@@ -88,6 +88,11 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
+[`results/wp3-aarch64-frame-origins.md`](results/wp3-aarch64-frame-origins.md):
+AArch64 canonical/promoted prologues and paired restore epilogues now preserve
+exact replacement owners through attribution; its observed-red test, both
+focused ownership tests, all 12 module tests, and one exact AArch64 O0 review
+cell pass. The preceding
 [`results/wp3-x86-epilogue-origins.md`](results/wp3-x86-epilogue-origins.md):
 ordinary `leave`, pop, promoted-stack, and second-round x86 epilogues now see
 attributed statements and preserve exact replacement owners; its observed-red

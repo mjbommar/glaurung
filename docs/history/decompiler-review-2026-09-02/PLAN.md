@@ -993,6 +993,13 @@ provenance through lowering.
   independent. Its observed-red test, four focused ownership assertions, all
   39 x86 frame tests, and both exact host O0 `classify` cells pass. See
   `results/wp3-x86-epilogue-origins.md`.
+  Commit `2efa3106` then migrates the AArch64 frame transaction: canonical and
+  promoted prologues, paired `fp`/`lr` restores, and adjacent stack teardown
+  see attributed statements, while replacement comments receive exact
+  consumed-owner unions and returns remain independent. Its observed-red
+  prologue test, focused epilogue ownership test, all 12 module tests, and one
+  exact AArch64 O0 `classify` cell pass. See
+  `results/wp3-aarch64-frame-origins.md`.
   Expression ownership, the remaining wildcard consumers, and production
   attribution remain open.
 
