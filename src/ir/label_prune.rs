@@ -633,7 +633,7 @@ fn prune_unreachable_body(body: &mut Vec<Stmt>) {
         // Origin-wrapped transfers are machine edges already represented by
         // the enclosing recovered region. Only residual lexical labels and
         // terminators delimit this list for the early reachability cleanup.
-        if matches!(statement, Stmt::Label(_)) {
+        if matches!(statement.semantic(), Stmt::Label(_)) {
             // A label may be entered by a goto from any nested region. Target
             // pruning below will remove it on the next iteration if no such
             // edge survives.
@@ -643,7 +643,7 @@ fn prune_unreachable_body(body: &mut Vec<Stmt>) {
             return false;
         }
         if matches!(
-            statement,
+            statement.semantic(),
             Stmt::Return { .. } | Stmt::Goto { .. } | Stmt::IndirectGoto { .. } | Stmt::Break
         ) {
             reachable = false;
@@ -1328,6 +1328,46 @@ mod tests {
         );
         assert!(matches!(f.body[0], Stmt::Store { .. }));
         assert!(matches!(f.body[1], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn attributed_return_prunes_unreachable_tail_and_keeps_surviving_owners() {
+        let result = crate::ir::types::VReg::phys("local_4");
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(result.clone()),
+                    src: Expr::Const(0),
+                    size: 4,
+                }
+                .with_origins(OriginSet::one(0x1010)),
+                Stmt::Label(0x1100).with_origins(OriginSet::one(0x1014)),
+                Stmt::Return {
+                    value: Some(Expr::Reg(result.clone())),
+                }
+                .with_origins(OriginSet::one(0x1018)),
+                Stmt::Store {
+                    addr: Expr::Reg(result),
+                    src: Expr::Const(1),
+                    size: 4,
+                }
+                .with_origins(OriginSet::one(0x101c)),
+                Stmt::Goto { target: 0x1100 }.with_origins(OriginSet::one(0x1020)),
+            ],
+        };
+
+        prune_unreachable_tails(&mut f);
+
+        assert_eq!(
+            f.body.len(),
+            2,
+            "attributed unreachable tail leaked: {:#?}",
+            f.body
+        );
+        assert_eq!(f.body[0].origins(), Some(&OriginSet::one(0x1010)));
+        assert_eq!(f.body[1].origins(), Some(&OriginSet::one(0x1018)));
     }
 
     #[test]
