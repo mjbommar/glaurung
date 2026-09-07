@@ -5,7 +5,7 @@
 //! transactional: it collapses a frame only when its saved-register widths,
 //! local allocation, and every lexical return path balance exactly.
 
-use crate::ir::ast::{Expr, Function, Stmt};
+use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 use crate::ir::types::{BinOp, VReg};
 
 #[derive(Debug)]
@@ -69,15 +69,16 @@ pub fn recognise_arm32_frame(f: &mut Function) {
         return;
     }
 
-    candidate.drain(frame.start..frame.end);
-    candidate.insert(
-        frame.start,
-        Stmt::Comment(format!(
+    let prologue_comment = comment_with_origins(
+        format!(
             "arm32 prologue: save {}, frame {} bytes",
             frame.saved_names().join("/"),
             frame.total_width()
-        )),
+        ),
+        &candidate[frame.start..frame.end],
     );
+    candidate.drain(frame.start..frame.end);
+    candidate.insert(frame.start, prologue_comment);
 
     // Stack-local promotion should have converted every source-level object to
     // a semantic stack slot. A remaining architectural `sp` is therefore a
@@ -91,7 +92,10 @@ pub fn recognise_arm32_frame(f: &mut Function) {
 
 fn parse_prologue(body: &[Stmt]) -> Option<Arm32Frame> {
     let mut start = 0;
-    while matches!(body.get(start), Some(Stmt::Nop | Stmt::Label(_))) {
+    while body
+        .get(start)
+        .is_some_and(|statement| matches!(statement.semantic(), Stmt::Nop | Stmt::Label(_)))
+    {
         start += 1;
     }
 
@@ -210,7 +214,7 @@ fn saved_register_store(statement: &Stmt) -> Option<(StackLocation, String, u8)>
         addr,
         src: Expr::Reg(register),
         size,
-    } = statement
+    } = statement.semantic()
     else {
         return None;
     };
@@ -221,7 +225,7 @@ fn saved_register_store(statement: &Stmt) -> Option<(StackLocation, String, u8)>
 }
 
 fn aliased_frame_pointer_store(statement: &Stmt) -> Option<(StackLocation, StackLocation)> {
-    let Stmt::Store { addr, src, size: 4 } = statement else {
+    let Stmt::Store { addr, src, size: 4 } = statement.semantic() else {
         return None;
     };
     Some((stack_location(addr)?, stack_location(src)?))
@@ -230,7 +234,7 @@ fn aliased_frame_pointer_store(statement: &Stmt) -> Option<(StackLocation, Stack
 fn collapse_epilogues(body: &mut Vec<Stmt>, frame: &Arm32Frame) -> Option<usize> {
     let mut return_count = 0;
     for statement in body.iter_mut() {
-        return_count += match statement {
+        return_count += match statement.semantic_mut() {
             Stmt::If {
                 then_body,
                 else_body,
@@ -262,16 +266,19 @@ fn collapse_epilogues(body: &mut Vec<Stmt>, frame: &Arm32Frame) -> Option<usize>
     let return_positions: Vec<usize> = body
         .iter()
         .enumerate()
-        .filter_map(|(index, statement)| matches!(statement, Stmt::Return { .. }).then_some(index))
+        .filter_map(|(index, statement)| {
+            matches!(statement.semantic(), Stmt::Return { .. }).then_some(index)
+        })
         .collect();
     return_count += return_positions.len();
     for return_index in return_positions.into_iter().rev() {
         let start = match_epilogue(body, return_index, frame)?;
-        body.drain(start..return_index);
-        body.insert(
-            start,
-            Stmt::Comment("arm32 epilogue: restore machine frame".to_string()),
+        let epilogue_comment = comment_with_origins(
+            "arm32 epilogue: restore machine frame".to_string(),
+            &body[start..return_index],
         );
+        body.drain(start..return_index);
+        body.insert(start, epilogue_comment);
     }
     Some(return_count)
 }
@@ -293,7 +300,7 @@ fn match_epilogue(body: &[Stmt], return_index: usize, frame: &Arm32Frame) -> Opt
     let mut cursor = start;
     let a32_restores_sp_from_fp = body.get(cursor).is_some_and(|statement| {
         matches!(
-            statement,
+            statement.semantic(),
             Stmt::Assign {
                 dst,
                 src: Expr::Reg(source),
@@ -348,7 +355,7 @@ fn first_saved_slot(frame: &Arm32Frame) -> Option<&StackLocation> {
 }
 
 fn frame_deallocation_piece(statement: &Stmt, frame: &Arm32Frame) -> bool {
-    match statement {
+    match statement.semantic() {
         Stmt::Assign { dst, src } if is_sp(dst) => {
             matches!(src, Expr::Reg(register) if matches!(canonical_saved_register(register).as_deref(), Some("r7" | "fp")))
                 || matches!(
@@ -374,7 +381,7 @@ fn match_frame_deallocation(body: &[Stmt], cursor: usize, frame: &Arm32Frame) ->
     // Clang A32 commonly establishes `fp = sp` after the save and tears local
     // storage down with the exact inverse `sp = fp`.
     if matches!(
-        body.get(cursor),
+        body.get(cursor).map(Stmt::semantic),
         Some(Stmt::Assign {
             dst,
             src: Expr::Reg(source),
@@ -387,26 +394,28 @@ fn match_frame_deallocation(body: &[Stmt], cursor: usize, frame: &Arm32Frame) ->
     // Thumb: `add r7, sp, #0` established the bottom of the local allocation;
     // GCC tears it down as `mov sp, r7`, which promotion spells by first
     // rematerialising the saved-frame object address into r7.
-    if let (
-        Some(Stmt::Assign { dst: anchor, src }),
-        Some(Stmt::Assign {
-            dst,
-            src: Expr::Reg(source),
-        }),
-    ) = (body.get(cursor), body.get(cursor + 1))
-    {
-        if canonical_saved_register(anchor).as_deref() == Some("r7")
-            && stack_location(src).as_ref() == first_saved_slot(frame)
-            && is_sp(dst)
-            && source == anchor
+    if let (Some(first), Some(second)) = (body.get(cursor), body.get(cursor + 1)) {
+        if let (
+            Stmt::Assign { dst: anchor, src },
+            Stmt::Assign {
+                dst,
+                src: Expr::Reg(source),
+            },
+        ) = (first.semantic(), second.semantic())
         {
-            return Some(cursor + 2);
+            if canonical_saved_register(anchor).as_deref() == Some("r7")
+                && stack_location(src).as_ref() == first_saved_slot(frame)
+                && is_sp(dst)
+                && source == anchor
+            {
+                return Some(cursor + 2);
+            }
         }
     }
 
     // A32: `add fp, sp, #4` makes the first pushed word live at `fp - 4`.
     if matches!(
-        body.get(cursor),
+        body.get(cursor).map(Stmt::semantic),
         Some(Stmt::Assign {
             dst,
             src: Expr::Bin { op: BinOp::Sub, lhs, rhs },
@@ -421,7 +430,7 @@ fn match_frame_deallocation(body: &[Stmt], cursor: usize, frame: &Arm32Frame) ->
 }
 
 fn restored_register(statement: &Stmt) -> Option<(String, StackLocation)> {
-    let Stmt::Assign { dst, src } = statement else {
+    let Stmt::Assign { dst, src } = statement.semantic() else {
         return None;
     };
     let slot = match src {
@@ -462,7 +471,7 @@ fn stack_location(expression: &Expr) -> Option<StackLocation> {
 }
 
 fn frame_pointer_setup(statement: &Stmt) -> Option<StackLocation> {
-    let Stmt::Assign { dst, src } = statement else {
+    let Stmt::Assign { dst, src } = statement.semantic() else {
         return None;
     };
     let name = canonical_saved_register(dst)?;
@@ -475,7 +484,7 @@ fn sp_adjust(statement: &Stmt, expected_op: BinOp) -> Option<i64> {
     let Stmt::Assign {
         dst,
         src: Expr::Bin { op, lhs, rhs },
-    } = statement
+    } = statement.semantic()
     else {
         return None;
     };
@@ -488,6 +497,19 @@ fn sp_adjust(statement: &Stmt, expected_op: BinOp) -> Option<i64> {
     match rhs.as_ref() {
         Expr::Const(width) if *width > 0 => Some(*width),
         _ => None,
+    }
+}
+
+fn comment_with_origins(text: String, statements: &[Stmt]) -> Stmt {
+    let origins = statements
+        .iter()
+        .filter_map(Stmt::origins)
+        .fold(OriginSet::empty(), |merged, origins| merged.union(origins));
+    let comment = Stmt::Comment(text);
+    if origins.is_empty() {
+        comment
+    } else {
+        comment.with_origins(origins)
     }
 }
 
@@ -901,6 +923,71 @@ mod tests {
             "promoted frame record leaked after collapse: {:#?}",
             f.body
         );
+    }
+
+    #[test]
+    fn attributed_thumb_frame_collapses_with_exact_machine_owners() {
+        use crate::ir::ast::OriginSet;
+
+        let mut f = function(vec![
+            sp_sub(8).with_origins(OriginSet::one(0x1000)),
+            Stmt::Store {
+                addr: object_addr("local_8", 0),
+                src: Expr::Reg(reg("r7")),
+                size: 4,
+            }
+            .with_origins(OriginSet::one(0x1004)),
+            Stmt::Store {
+                addr: object_addr("local_8", 4),
+                src: Expr::Reg(reg("lr")),
+                size: 4,
+            }
+            .with_origins(OriginSet::one(0x1008)),
+            Stmt::Assign {
+                dst: reg("r7#1"),
+                src: object_addr("local_8", 0),
+            }
+            .with_origins(OriginSet::one(0x100c)),
+            Stmt::Nop.with_origins(OriginSet::one(0x1010)),
+            Stmt::Assign {
+                dst: reg("r7#2"),
+                src: Expr::Deref {
+                    addr: Box::new(object_addr("local_8", 0)),
+                    size: 4,
+                },
+            }
+            .with_origins(OriginSet::one(0x1014)),
+            sp_add(8).with_origins(OriginSet::one(0x1018)),
+            Stmt::Return { value: None }.with_origins(OriginSet::one(0x101c)),
+        ]);
+
+        recognise_arm32_frame(&mut f);
+
+        assert_eq!(
+            f.body.len(),
+            4,
+            "attributed frame did not collapse: {:#?}",
+            f.body
+        );
+        assert!(matches!(
+            f.body[0].semantic(),
+            Stmt::Comment(text) if text == "arm32 prologue: save r7/lr, frame 8 bytes"
+        ));
+        assert_eq!(
+            f.body[0].origins(),
+            Some(&OriginSet::from_addresses([0x1000, 0x1004, 0x1008, 0x100c]))
+        );
+        assert_eq!(f.body[1].origins(), Some(&OriginSet::one(0x1010)));
+        assert!(matches!(
+            f.body[2].semantic(),
+            Stmt::Comment(text) if text == "arm32 epilogue: restore machine frame"
+        ));
+        assert_eq!(
+            f.body[2].origins(),
+            Some(&OriginSet::from_addresses([0x1014, 0x1018]))
+        );
+        assert!(matches!(f.body[3].semantic(), Stmt::Return { value: None }));
+        assert_eq!(f.body[3].origins(), Some(&OriginSet::one(0x101c)));
     }
 
     #[test]
