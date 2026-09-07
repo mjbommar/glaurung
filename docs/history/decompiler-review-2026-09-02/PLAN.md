@@ -1053,6 +1053,12 @@ provenance through lowering.
   touched-module tests pass, and the exact four-cell host O0 conditional/switch
   slice remains green on a fresh release build; see
   `results/wp3-return-expression-origins.md`.
+  Commit `86ac95a6` then completes expression-owner transfer for all four
+  adjacent def/use movements: exactly-once effectful scratch, promoted value,
+  eager guard, and consumed-and-overwritten value. All four ownership tests
+  were observed red, all 19 touched-module tests pass, and a release-built
+  8-lane/24-function effectful-select, guarded-dispatch, and conditional slice
+  remains entirely green; see `results/wp3-adjacent-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
