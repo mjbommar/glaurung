@@ -87,9 +87,12 @@ pub(super) fn fold_returns(body: &mut Vec<Stmt>) {
         };
         if fold_here {
             let (definition, definition_origins) = body.remove(i).into_semantic_with_origins();
-            let Stmt::Assign { src, .. } = definition else {
+            let Stmt::Assign { mut src, .. } = definition else {
                 unreachable!()
             };
+            if let Some(origins) = &definition_origins {
+                src.merge_origins(origins);
+            }
             let (_, return_origins) = std::mem::replace(&mut body[return_index - 1], Stmt::Nop)
                 .into_semantic_with_origins();
             let origins = match (definition_origins, return_origins) {
@@ -170,7 +173,11 @@ pub(crate) fn remove_redundant_return_constant_assignments(body: &mut Vec<Stmt>)
             let assignment_origins = body[index].origins().cloned();
             body.remove(index);
             if let Some(origins) = assignment_origins {
-                body[return_index - 1].merge_origins(&origins);
+                let returned = &mut body[return_index - 1];
+                if let Stmt::Return { value: Some(value) } = returned.semantic_mut() {
+                    value.merge_origins(&origins);
+                }
+                returned.merge_origins(&origins);
             }
             continue;
         }
@@ -523,6 +530,36 @@ mod tests {
     }
 
     #[test]
+    fn attributed_return_fold_moves_definition_owner_to_returned_expression() {
+        let definition_owner = OriginSet::one(0x1000);
+        let return_owner = OriginSet::one(0x1004);
+        let mut body = vec![
+            Stmt::Assign {
+                dst: VReg::phys("rax#7"),
+                src: Expr::Const(42),
+            }
+            .with_origins(definition_owner.clone()),
+            Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("rax#7"))),
+            }
+            .with_origins(return_owner.clone()),
+        ];
+
+        fold_returns(&mut body);
+
+        assert_eq!(body.len(), 1);
+        assert_eq!(
+            body[0].origins(),
+            Some(&definition_owner.union(&return_owner))
+        );
+        let Stmt::Return { value: Some(value) } = body[0].semantic() else {
+            panic!("expected folded return: {body:#?}")
+        };
+        assert!(matches!(value.semantic(), Expr::Const(42)));
+        assert_eq!(value.origins(), Some(&definition_owner));
+    }
+
+    #[test]
     fn late_return_cleanup_removes_redundant_identical_constant_assignment() {
         let mut body = vec![
             Stmt::Assign {
@@ -561,15 +598,17 @@ mod tests {
         remove_redundant_return_constant_assignments(&mut body);
 
         assert_eq!(body.len(), 1);
-        assert!(matches!(
-            body[0].semantic(),
-            Stmt::Return {
-                value: Some(Expr::Const(-1))
-            }
-        ));
+        let Stmt::Return { value: Some(value) } = body[0].semantic() else {
+            panic!("expected retained constant return: {body:#?}")
+        };
+        assert!(matches!(value.semantic(), Expr::Const(-1)));
         assert_eq!(
             body[0].origins(),
             Some(&crate::ir::ast::OriginSet::from_addresses([0x1010, 0x1014]))
+        );
+        assert_eq!(
+            value.origins(),
+            Some(&crate::ir::ast::OriginSet::one(0x1010))
         );
     }
 
