@@ -1013,6 +1013,12 @@ provenance through lowering.
   while control and arm-specific owners remain disjoint. Both focused tests
   were observed red; all six module tests and four exact O0 if/switch cells
   pass. See `results/wp3-exhaustive-return-origins.md`.
+  Commit `91432a22` closes the remaining raw lexical boundary in label cleanup:
+  attributed labels and return/goto/indirect-goto/break transfers now delimit
+  unreachable runs, while removed unreachable mappings disappear and surviving
+  owners remain exact. Its observed-red test, all 20 label-prune tests, and both
+  exact host O0 `classify` cells pass. See
+  `results/wp3-unreachable-tail-origins.md`.
   Expression ownership, the remaining wildcard consumers, and production
   attribution remain open.
 
