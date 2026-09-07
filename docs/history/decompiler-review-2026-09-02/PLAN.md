@@ -79,8 +79,19 @@ the raw guarded-return and diamond surface in `select_fold`. Commit `e92d7248`
 closes that surface, including nested `try`/`catch` traversal, and improves the
 whole-Python boundary from 221 to 218 failures with zero new nodes. A controlled
 parent/tip release A/B proves all three removals, including corrected ARM
-hard-float execution. See `results/wp3-select-fold-origins.md`. Re-audit the
-remaining enabled pass surface before beginning expression ownership. Most
+hard-float execution. See `results/wp3-select-fold-origins.md`. Commit
+`18ef9fdc` restores GOT-pointer folding through origin carriers and closes its
+exception, transfer, push, and call-expression omissions with exactly neutral
+stripped and whole-Python comparisons; see
+`results/wp3-got-fold-origins.md`. Commit `217796be` then makes attributed
+definitions and exception paths participate in relocation-proven
+function-table recovery and conservative clobber tracking. Its stripped map is
+exactly neutral, while the whole-Python boundary improves from 218 to 217
+failures with no addition; a controlled release A/B proves the recovered
+portable `ops[5]` table is attributable. See
+`results/wp3-function-table-origins.md`. The next enabled raw consumer is
+`call_args::tail_calls`; audit its direct, resolved-indirect, and vtable
+replacement paths before beginning expression ownership. Most
 semantic consumers, multi-output definition identity, expression origins, and
 structured line mappings remain open. A bounded, pre-WP3 WP7B relational slice
 is landed and proved at `9c9c607c`; it does not establish the general
