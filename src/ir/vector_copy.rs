@@ -6,7 +6,7 @@
 //! the exact load/store batches keeps that identity available to the C backend
 //! without hiding any intervening packed computation.
 
-use crate::ir::ast::{Expr, Function, Stmt};
+use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 use crate::ir::types::VReg;
 
 #[derive(Clone)]
@@ -67,7 +67,7 @@ fn load_batch_at(body: &[Stmt], start: usize) -> Option<LaneLoad> {
             addr: first_addr,
             size: 4,
         },
-    } = &batch[0]
+    } = batch[0].semantic()
     else {
         return None;
     };
@@ -79,7 +79,7 @@ fn load_batch_at(body: &[Stmt], start: usize) -> Option<LaneLoad> {
         let Stmt::Assign {
             dst,
             src: Expr::Deref { addr, size: 4 },
-        } = statement
+        } = statement.semantic()
         else {
             return None;
         };
@@ -101,7 +101,7 @@ fn lane_store_batch_at(body: &[Stmt], start: usize) -> Option<(VReg, Expr)> {
         addr: first_addr,
         src: Expr::Reg(first_src),
         size: 4,
-    } = &batch[0]
+    } = batch[0].semantic()
     else {
         return None;
     };
@@ -114,7 +114,7 @@ fn lane_store_batch_at(body: &[Stmt], start: usize) -> Option<(VReg, Expr)> {
             addr,
             src: Expr::Reg(src),
             size: 4,
-        } = statement
+        } = statement.semantic()
         else {
             return None;
         };
@@ -150,7 +150,7 @@ fn scalar_view_bridge_target(statement: &Stmt) -> Option<String> {
                 lhs,
                 rhs,
             },
-    } = statement
+    } = statement.semantic()
     else {
         return None;
     };
@@ -255,7 +255,8 @@ fn dead_scalar_views(body: &[Stmt]) -> std::collections::HashSet<String> {
 }
 
 fn child_bodies(statement: &Stmt) -> Vec<&Vec<Stmt>> {
-    match statement {
+    match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::If {
             then_body,
             else_body,
@@ -288,7 +289,8 @@ fn child_bodies(statement: &Stmt) -> Vec<&Vec<Stmt>> {
 /// store is redundant with the 16-byte transport this pass is about to create.
 fn drop_dead_scalar_views(body: &mut Vec<Stmt>, dead: &std::collections::HashSet<String>) {
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -336,6 +338,11 @@ fn drop_dead_scalar_views(body: &mut Vec<Stmt>, dead: &std::collections::HashSet
         })
         .collect();
     if !removable.is_empty() {
+        for &index in &removable {
+            if let Some(origins) = body[index].origins().cloned() {
+                body[index - 4].merge_origins(&origins);
+            }
+        }
         let mut index = 0usize;
         body.retain(|_| {
             let keep = !removable.contains(&index);
@@ -351,14 +358,61 @@ fn drop_dead_scalar_views(body: &mut Vec<Stmt>, dead: &std::collections::HashSet
 /// rather than occurrences is enough: the store batch reads each lane once, so
 /// a second consumer of any kind pushes the count above one.
 fn count_reading_statements(body: &[Stmt], register: &VReg) -> usize {
+    fn count(statement: &Stmt, register: &VReg) -> usize {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
+            Stmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => {
+                usize::from(cond.contains_reg(register))
+                    + count_reading_statements(then_body, register)
+                    + else_body
+                        .as_ref()
+                        .map_or(0, |body| count_reading_statements(body, register))
+            }
+            Stmt::While { cond, body } | Stmt::DoWhile { body, cond } => {
+                usize::from(cond.contains_reg(register)) + count_reading_statements(body, register)
+            }
+            Stmt::For {
+                init,
+                cond,
+                step,
+                body,
+            } => {
+                count(init, register)
+                    + usize::from(cond.contains_reg(register))
+                    + count_reading_statements(body, register)
+                    + count(step, register)
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+                default,
+            } => {
+                usize::from(discriminant.contains_reg(register))
+                    + cases
+                        .iter()
+                        .map(|(_, body)| count_reading_statements(body, register))
+                        .sum::<usize>()
+                    + default
+                        .as_ref()
+                        .map_or(0, |body| count_reading_statements(body, register))
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                count_reading_statements(try_body, register)
+                    + catches
+                        .iter()
+                        .map(|catch| count_reading_statements(&catch.body, register))
+                        .sum::<usize>()
+            }
+            _ => usize::from(crate::ir::dead_stores::stmt_reads(statement, register)),
+        }
+    }
+
     body.iter()
-        .map(|statement| {
-            usize::from(crate::ir::dead_stores::stmt_reads(statement, register))
-                + child_bodies(statement)
-                    .into_iter()
-                    .map(|nested| count_reading_statements(nested, register))
-                    .sum::<usize>()
-        })
+        .map(|statement| count(statement, register))
         .sum()
 }
 
@@ -385,7 +439,7 @@ fn exclusive_lane_registers(body: &[Stmt]) -> std::collections::HashSet<String> 
         out: &mut std::collections::HashMap<String, std::collections::BTreeSet<VReg>>,
     ) {
         for statement in body {
-            if let Stmt::Assign { dst, .. } = statement {
+            if let Stmt::Assign { dst, .. } = statement.semantic() {
                 if let Some((wide, _)) = lane_name(dst) {
                     out.entry(wide).or_default().insert(dst.clone());
                 }
@@ -411,7 +465,8 @@ fn exclusive_lane_registers(body: &[Stmt]) -> std::collections::HashSet<String> 
 
 fn recover_body(body: &mut Vec<Stmt>, exclusive: &std::collections::HashSet<String>) {
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -467,28 +522,51 @@ fn recover_body(body: &mut Vec<Stmt>, exclusive: &std::collections::HashSet<Stri
         };
         let destination = store_batch_at(body, store_index, &load.wide)
             .expect("candidate store batch was checked");
+        let load_origins = merged_origins(&body[index..index + 4]);
+        let store_origins = merged_origins(&body[store_index..store_index + 4]);
         replacements.push((
             store_index,
-            Stmt::Store {
-                addr: destination,
-                src: Expr::Reg(load.wide.clone()),
-                size: 16,
-            },
+            attach_origins(
+                Stmt::Store {
+                    addr: destination,
+                    src: Expr::Reg(load.wide.clone()),
+                    size: 16,
+                },
+                store_origins,
+            ),
         ));
         replacements.push((
             index,
-            Stmt::Assign {
-                dst: load.wide,
-                src: Expr::Deref {
-                    addr: Box::new(load.address),
-                    size: 16,
+            attach_origins(
+                Stmt::Assign {
+                    dst: load.wide,
+                    src: Expr::Deref {
+                        addr: Box::new(load.address),
+                        size: 16,
+                    },
                 },
-            },
+                load_origins,
+            ),
         ));
     }
     replacements.sort_by_key(|(start, _)| std::cmp::Reverse(*start));
     for (start, statement) in replacements {
         body.splice(start..start + 4, [statement]);
+    }
+}
+
+fn merged_origins(statements: &[Stmt]) -> OriginSet {
+    statements
+        .iter()
+        .filter_map(Stmt::origins)
+        .fold(OriginSet::empty(), |origins, next| origins.union(next))
+}
+
+fn attach_origins(statement: Stmt, origins: OriginSet) -> Stmt {
+    if origins.is_empty() {
+        statement
+    } else {
+        statement.with_origins(origins)
     }
 }
 
@@ -505,6 +583,7 @@ pub fn recover_wide_copies(function: &mut Function) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ast::OriginSet;
 
     fn address(base: &str, disp: i64) -> Expr {
         Expr::Lea {
@@ -614,10 +693,10 @@ mod tests {
     }
 
     #[test]
-    fn a_dead_scalar_view_bridge_does_not_hide_the_transport() {
-        let mut body = Vec::new();
+    fn two_nested_consumers_are_counted_individually() {
+        let mut nested = Vec::new();
         for lane in 0..4 {
-            body.push(Stmt::Assign {
+            nested.push(Stmt::Assign {
                 dst: VReg::phys(format!("xmm0_d{lane}")),
                 src: Expr::Deref {
                     addr: Box::new(address("rsi", lane * 4)),
@@ -625,13 +704,59 @@ mod tests {
                 },
             });
         }
-        body.push(scalar_view_bridge("xmm0"));
+        for destination in ["rdi", "rdx"] {
+            for lane in 0..4 {
+                nested.push(Stmt::Store {
+                    addr: address(destination, lane * 4),
+                    src: Expr::Reg(VReg::phys(format!("xmm0_d{lane}"))),
+                    size: 4,
+                });
+            }
+        }
+        let original = nested.clone();
+        let mut function = Function {
+            name: "nested_two_streams".into(),
+            entry_va: 0,
+            body: vec![Stmt::If {
+                cond: Expr::Reg(VReg::phys("zf")),
+                then_body: nested,
+                else_body: None,
+            }],
+        };
+
+        recover_wide_copies(&mut function);
+
+        let Stmt::If { then_body, .. } = &function.body[0] else {
+            panic!("nested owner stopped being an if")
+        };
+        assert_eq!(then_body, &original);
+    }
+
+    #[test]
+    fn a_dead_scalar_view_bridge_does_not_hide_the_transport() {
+        let mut body = Vec::new();
         for lane in 0..4 {
-            body.push(Stmt::Store {
-                addr: address("rdi", lane * 4),
-                src: Expr::Reg(VReg::phys(format!("xmm0_d{lane}"))),
-                size: 4,
-            });
+            body.push(
+                Stmt::Assign {
+                    dst: VReg::phys(format!("xmm0_d{lane}")),
+                    src: Expr::Deref {
+                        addr: Box::new(address("rsi", lane * 4)),
+                        size: 4,
+                    },
+                }
+                .with_origins(OriginSet::one(0x1000 + lane as u64 * 4)),
+            );
+        }
+        body.push(scalar_view_bridge("xmm0").with_origins(OriginSet::one(0x1010)));
+        for lane in 0..4 {
+            body.push(
+                Stmt::Store {
+                    addr: address("rdi", lane * 4),
+                    src: Expr::Reg(VReg::phys(format!("xmm0_d{lane}"))),
+                    size: 4,
+                }
+                .with_origins(OriginSet::one(0x1020 + lane as u64 * 4)),
+            );
         }
         let mut function = Function {
             name: "bridged".into(),
@@ -643,7 +768,7 @@ mod tests {
 
         assert!(
             matches!(
-                &function.body[0],
+                function.body[0].semantic(),
                 Stmt::Assign { dst: VReg::Phys(name), src: Expr::Deref { size: 16, .. } }
                     if name == "xmm0"
             ),
@@ -652,11 +777,23 @@ mod tests {
         );
         assert!(
             function.body.iter().any(|statement| matches!(
-                statement,
+                statement.semantic(),
                 Stmt::Store { src: Expr::Reg(VReg::Phys(name)), size: 16, .. } if name == "xmm0"
             )),
             "the 16-byte store must be recovered: {:#?}",
             function.body
+        );
+        assert_eq!(
+            function.body[0].origins(),
+            Some(&OriginSet::from_addresses([
+                0x1000, 0x1004, 0x1008, 0x100c, 0x1010,
+            ]))
+        );
+        assert_eq!(
+            function.body[1].origins(),
+            Some(&OriginSet::from_addresses(
+                [0x1020, 0x1024, 0x1028, 0x102c,]
+            ))
         );
         // The bridge read lanes the rejoin no longer defines, so leaving it
         // would overwrite the recovered value with undefined operands.
@@ -664,6 +801,63 @@ mod tests {
             !function.body.iter().any(is_scalar_view_bridge),
             "the dead bridge must be removed with the lanes it read: {:#?}",
             function.body
+        );
+    }
+
+    #[test]
+    fn an_attributed_nested_transport_is_rejoined_without_losing_its_owner() {
+        let mut nested = Vec::new();
+        for lane in 0..4 {
+            nested.push(
+                Stmt::Assign {
+                    dst: VReg::phys(format!("xmm0_d{lane}")),
+                    src: Expr::Deref {
+                        addr: Box::new(address("rsi", lane * 4)),
+                        size: 4,
+                    },
+                }
+                .with_origins(OriginSet::one(0x1100 + lane as u64 * 4)),
+            );
+        }
+        for lane in 0..4 {
+            nested.push(
+                Stmt::Store {
+                    addr: address("rdi", lane * 4),
+                    src: Expr::Reg(VReg::phys(format!("xmm0_d{lane}"))),
+                    size: 4,
+                }
+                .with_origins(OriginSet::one(0x1120 + lane as u64 * 4)),
+            );
+        }
+        let mut function = Function {
+            name: "nested_copy".into(),
+            entry_va: 0,
+            body: vec![Stmt::If {
+                cond: Expr::Reg(VReg::phys("zf")),
+                then_body: nested,
+                else_body: None,
+            }
+            .with_origins(OriginSet::one(0x10f0))],
+        };
+
+        recover_wide_copies(&mut function);
+
+        let Stmt::If { then_body, .. } = function.body[0].semantic() else {
+            panic!("attributed owner stopped being an if")
+        };
+        assert_eq!(then_body.len(), 2, "{then_body:#?}");
+        assert_eq!(function.body[0].origins(), Some(&OriginSet::one(0x10f0)));
+        assert_eq!(
+            then_body[0].origins(),
+            Some(&OriginSet::from_addresses(
+                [0x1100, 0x1104, 0x1108, 0x110c,]
+            ))
+        );
+        assert_eq!(
+            then_body[1].origins(),
+            Some(&OriginSet::from_addresses(
+                [0x1120, 0x1124, 0x1128, 0x112c,]
+            ))
         );
     }
 
