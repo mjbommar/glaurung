@@ -1099,14 +1099,14 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
         // source variable immediately before the return.
         if ret_idx >= 2
             && matches!(
-                &body[ret_idx - 1],
+                body[ret_idx - 1].semantic(),
                 Stmt::Comment(text) if text.starts_with("x86-64 epilogue:")
             )
         {
             let mut cursor = ret_idx - 1;
             while cursor > 0
                 && matches!(
-                    &body[cursor - 1],
+                    body[cursor - 1].semantic(),
                     Stmt::Nop
                         | Stmt::Assign {
                             dst: VReg::Temp(_),
@@ -1117,8 +1117,12 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
                 cursor -= 1;
             }
             if cursor > 0 && is_rsp_add(&body[cursor - 1]) {
+                let removed_origins = body[cursor - 1].origins().cloned();
                 body.remove(cursor - 1);
                 ret_idx -= 1;
+                if let Some(origins) = removed_origins {
+                    body[ret_idx - 1].merge_origins(&origins);
+                }
             }
         }
         // The pre-rematerialised POP spelling has the stack increment AFTER
@@ -1130,14 +1134,14 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
         if ret_idx >= 2
             && is_rsp_add(&body[ret_idx - 1])
             && matches!(
-                &body[ret_idx - 2],
+                body[ret_idx - 2].semantic(),
                 Stmt::Assign { dst, src: Expr::Reg(slot) }
                     if is_rbp(dst) && is_promoted_stack_slot(slot)
             )
         {
             let start = if ret_idx >= 3
                 && matches!(
-                    &body[ret_idx - 3],
+                    body[ret_idx - 3].semantic(),
                     Stmt::Assign { dst, src: Expr::Reg(s) }
                         if is_rsp(dst) && is_rbp(s)
                 ) {
@@ -1145,65 +1149,53 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
             } else {
                 ret_idx - 2
             };
-            body.drain(start..ret_idx);
-            body.insert(
-                start,
-                Stmt::Comment("x86-64 epilogue: restore rbp".to_string()),
-            );
+            replace_with_epilogue_comment(body, start, ret_idx, "x86-64 epilogue: restore rbp");
             continue;
         }
         // Pattern A (from `leave`): `rsp = rbp; pop rbp; return;`
         if ret_idx >= 2
-            && matches!(&body[ret_idx - 1], Stmt::Pop { target: t } if is_rbp(t))
+            && matches!(body[ret_idx - 1].semantic(), Stmt::Pop { target: t } if is_rbp(t))
             && matches!(
-                &body[ret_idx - 2],
+                body[ret_idx - 2].semantic(),
                 Stmt::Assign { dst, src: Expr::Reg(s) } if is_rsp(dst) && is_rbp(s)
             )
         {
-            body.drain(ret_idx - 2..ret_idx);
-            ret_idx -= 2;
-            body.insert(
+            replace_with_epilogue_comment(
+                body,
+                ret_idx - 2,
                 ret_idx,
-                Stmt::Comment("x86-64 epilogue: restore rbp".to_string()),
+                "x86-64 epilogue: restore rbp",
             );
             continue;
         }
         // Pattern B: `pop rbp; return;` (no leave, just pop), optionally
         // preceded by a `%rsp = (%rsp + N);` teardown.
-        if ret_idx >= 1 && matches!(&body[ret_idx - 1], Stmt::Pop { target: t } if is_rbp(t)) {
-            body.remove(ret_idx - 1);
-            ret_idx -= 1;
+        if ret_idx >= 1
+            && matches!(body[ret_idx - 1].semantic(), Stmt::Pop { target: t } if is_rbp(t))
+        {
+            let mut start = ret_idx - 1;
             // Pattern B': `%rsp += N;` immediately before the pop — fold it
             // into the same epilogue collapse.
-            if ret_idx > 0 && is_rsp_add(&body[ret_idx - 1]) {
-                body.remove(ret_idx - 1);
-                ret_idx -= 1;
+            if start > 0 && is_rsp_add(&body[start - 1]) {
+                start -= 1;
             }
-            body.insert(
-                ret_idx,
-                Stmt::Comment("x86-64 epilogue: restore rbp".to_string()),
-            );
+            replace_with_epilogue_comment(body, start, ret_idx, "x86-64 epilogue: restore rbp");
             continue;
         }
         // Pattern B in the pre-rematerialised stack-slot form:
         // `rbp = stack_N; return`, optionally after the frame teardown.
         if ret_idx >= 1
             && matches!(
-                &body[ret_idx - 1],
+                body[ret_idx - 1].semantic(),
                 Stmt::Assign { dst, src: Expr::Reg(slot) }
                     if is_rbp(dst) && is_promoted_stack_slot(slot)
             )
         {
-            body.remove(ret_idx - 1);
-            ret_idx -= 1;
-            if ret_idx > 0 && is_rsp_add(&body[ret_idx - 1]) {
-                body.remove(ret_idx - 1);
-                ret_idx -= 1;
+            let mut start = ret_idx - 1;
+            if start > 0 && is_rsp_add(&body[start - 1]) {
+                start -= 1;
             }
-            body.insert(
-                ret_idx,
-                Stmt::Comment("x86-64 epilogue: restore rbp".to_string()),
-            );
+            replace_with_epilogue_comment(body, start, ret_idx, "x86-64 epilogue: restore rbp");
             continue;
         }
         // Pattern C: `%rsp += N; return;` with no rbp restore at all.
@@ -1220,6 +1212,16 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
             );
         }
     }
+}
+
+fn replace_with_epilogue_comment(body: &mut Vec<Stmt>, start: usize, end: usize, text: &str) {
+    let origins = origins_in_range(body, start, end);
+    body.drain(start..end);
+    body.insert(
+        start,
+        Stmt::Comment(text.to_string())
+            .with_optional_origins((!origins.is_empty()).then_some(origins)),
+    );
 }
 
 fn is_rsp_add(s: &Stmt) -> bool {
@@ -2407,6 +2409,85 @@ mod tests {
     }
 
     #[test]
+    fn attributed_leave_epilogue_unions_exact_machine_owners() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Reg(reg("rbp")),
+                }
+                .with_origins(OriginSet::one(0x1010)),
+                Stmt::Pop { target: reg("rbp") }.with_origins(OriginSet::one(0x1014)),
+                Stmt::Return { value: None }.with_origins(OriginSet::one(0x1018)),
+            ],
+        };
+
+        recognise_x86_prologue(&mut f);
+
+        assert_eq!(f.body.len(), 2, "attributed leave leaked: {:#?}", f.body);
+        assert!(matches!(
+            f.body[0].semantic(),
+            Stmt::Comment(text) if text == "x86-64 epilogue: restore rbp"
+        ));
+        assert_eq!(
+            f.body[0].origins(),
+            Some(&OriginSet::from_addresses([0x1010, 0x1014]))
+        );
+        assert!(matches!(f.body[1].semantic(), Stmt::Return { .. }));
+        assert_eq!(f.body[1].origins(), Some(&OriginSet::one(0x1018)));
+    }
+
+    #[test]
+    fn attributed_pop_epilogue_includes_preceding_teardown_owner() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0x1000,
+            body: vec![
+                rsp_add(0x20).with_origins(OriginSet::one(0x1010)),
+                Stmt::Pop { target: reg("rbp") }.with_origins(OriginSet::one(0x1014)),
+                Stmt::Return { value: None }.with_origins(OriginSet::one(0x1018)),
+            ],
+        };
+
+        recognise_x86_prologue(&mut f);
+
+        assert_eq!(f.body.len(), 2);
+        assert_eq!(
+            f.body[0].origins(),
+            Some(&OriginSet::from_addresses([0x1010, 0x1014]))
+        );
+        assert_eq!(f.body[1].origins(), Some(&OriginSet::one(0x1018)));
+    }
+
+    #[test]
+    fn attributed_promoted_restore_includes_preceding_teardown_owner() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0x1000,
+            body: vec![
+                rsp_add(0x20).with_origins(OriginSet::one(0x1010)),
+                Stmt::Assign {
+                    dst: reg("rbp"),
+                    src: Expr::Reg(reg("stack_0")),
+                }
+                .with_origins(OriginSet::one(0x1014)),
+                Stmt::Return { value: None }.with_origins(OriginSet::one(0x1018)),
+            ],
+        };
+
+        recognise_x86_prologue(&mut f);
+
+        assert_eq!(f.body.len(), 2);
+        assert_eq!(
+            f.body[0].origins(),
+            Some(&OriginSet::from_addresses([0x1010, 0x1014]))
+        );
+        assert_eq!(f.body[1].origins(), Some(&OriginSet::one(0x1018)));
+    }
+
+    #[test]
     fn second_epilogue_round_swallows_rsp_add_before_existing_comment() {
         let mut f = Function {
             name: "f".into(),
@@ -2423,6 +2504,29 @@ mod tests {
         assert_eq!(f.body.len(), 2, "stranded frame teardown: {:#?}", f.body);
         assert!(matches!(&f.body[0], Stmt::Comment(text) if text.contains("epilogue")));
         assert!(matches!(&f.body[1], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn attributed_second_epilogue_round_merges_teardown_into_existing_comment() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0x1000,
+            body: vec![
+                rsp_add(0x20).with_origins(OriginSet::one(0x1010)),
+                Stmt::Comment("x86-64 epilogue: restore rbp".into())
+                    .with_origins(OriginSet::one(0x1014)),
+                Stmt::Return { value: None }.with_origins(OriginSet::one(0x1018)),
+            ],
+        };
+
+        recognise_x86_prologue(&mut f);
+
+        assert_eq!(f.body.len(), 2);
+        assert_eq!(
+            f.body[0].origins(),
+            Some(&OriginSet::from_addresses([0x1010, 0x1014]))
+        );
+        assert_eq!(f.body[1].origins(), Some(&OriginSet::one(0x1018)));
     }
 
     #[test]
