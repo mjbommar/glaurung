@@ -1069,10 +1069,10 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
         if ret_idx >= 16
             && body[ret_idx - 16..ret_idx - 8]
                 .iter()
-                .all(|statement| matches!(statement, Stmt::Unknown(mnemonic) if mnemonic == "fldz"))
+                .all(|statement| matches!(statement.semantic(), Stmt::Unknown(mnemonic) if mnemonic == "fldz"))
             && body[ret_idx - 8..ret_idx]
                 .iter()
-                .all(|statement| matches!(statement, Stmt::Unknown(mnemonic) if mnemonic == "fstp"))
+                .all(|statement| matches!(statement.semantic(), Stmt::Unknown(mnemonic) if mnemonic == "fstp"))
         {
             let mut start = ret_idx - 16;
             while start > 0 && is_rsp_add(&body[start - 1]) {
@@ -1083,8 +1083,13 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
             } else {
                 "x86-64 epilogue: clear call-used x87"
             };
+            let origins = origins_in_range(body, start, ret_idx);
             body.drain(start..ret_idx);
-            body.insert(start, Stmt::Comment(text.to_string()));
+            body.insert(
+                start,
+                Stmt::Comment(text.to_string())
+                    .with_optional_origins((!origins.is_empty()).then_some(origins)),
+            );
             continue;
         }
         // An earlier recognition round may already have replaced `pop rbp`
@@ -2511,6 +2516,39 @@ mod tests {
                 value: Some(Expr::Const(-6))
             }
         ));
+    }
+
+    #[test]
+    fn attributed_x87_scrub_unions_exact_machine_owners_on_the_comment() {
+        let mut body = Vec::new();
+        body.extend((0..8).map(|index| {
+            Stmt::Unknown("fldz".into()).with_origins(OriginSet::one(0x1000 + index * 4))
+        }));
+        body.extend((0..8).map(|index| {
+            Stmt::Unknown("fstp".into()).with_origins(OriginSet::one(0x1020 + index * 4))
+        }));
+        body.push(Stmt::Return { value: None }.with_origins(OriginSet::one(0x1040)));
+        let mut f = Function {
+            name: "hardened_return".into(),
+            entry_va: 0x1000,
+            body,
+        };
+
+        recognise_x86_prologue(&mut f);
+
+        assert_eq!(f.body.len(), 2, "attributed scrub leaked: {:#?}", f.body);
+        assert!(matches!(
+            f.body[0].semantic(),
+            Stmt::Comment(text) if text == "x86-64 epilogue: clear call-used x87"
+        ));
+        assert_eq!(
+            f.body[0].origins(),
+            Some(&OriginSet::from_addresses(
+                (0..16).map(|index| 0x1000 + index * 4)
+            ))
+        );
+        assert!(matches!(f.body[1].semantic(), Stmt::Return { .. }));
+        assert_eq!(f.body[1].origins(), Some(&OriginSet::one(0x1040)));
     }
 
     #[test]
