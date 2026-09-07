@@ -994,7 +994,8 @@ fn fold_one_recovered_layout_call(body: &mut Vec<Stmt>, call_idx: usize, layout:
     let mut index = call_idx;
     while index > 0 && found.iter().any(Option::is_none) {
         index -= 1;
-        match &body[index] {
+        match body[index].semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign {
                 dst: VReg::Phys(name),
                 src,
@@ -1048,12 +1049,20 @@ fn fold_one_recovered_layout_call(body: &mut Vec<Stmt>, call_idx: usize, layout:
         .flatten()
         .map(|(_, expression, _)| expression.clone())
         .collect();
-    if let Stmt::Call { args, .. } = &mut body[call_idx] {
+    if let Stmt::Call { args, .. } = body[call_idx].semantic_mut() {
         *args = arguments;
     } else {
         return false;
     }
     let mut used: Vec<usize> = found.iter().flatten().map(|(index, _, _)| *index).collect();
+    let consumed_origins = used
+        .iter()
+        .filter_map(|index| body[*index].origins())
+        .cloned()
+        .reduce(|left, right| left.union(&right));
+    if let Some(origins) = consumed_origins.as_ref() {
+        body[call_idx].merge_origins(origins);
+    }
     used.sort_unstable_by(|left, right| right.cmp(left));
     for index in used {
         body.remove(index);
@@ -1078,7 +1087,8 @@ fn fold_one_recovered_layout_call_with_live_ins(
     let mut index = call_idx;
     while index > 0 {
         index -= 1;
-        match &body[index] {
+        match body[index].semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign {
                 dst: VReg::Phys(name),
                 src,
@@ -1165,12 +1175,20 @@ fn fold_one_recovered_layout_call_with_live_ins(
         return false;
     }
 
-    if let Stmt::Call { args, .. } = &mut body[call_idx] {
+    if let Stmt::Call { args, .. } = body[call_idx].semantic_mut() {
         *args = arguments;
     } else {
         return false;
     }
     let mut used: Vec<usize> = found.iter().flatten().map(|(index, _, _)| *index).collect();
+    let consumed_origins = used
+        .iter()
+        .filter_map(|index| body[*index].origins())
+        .cloned()
+        .reduce(|left, right| left.union(&right));
+    if let Some(origins) = consumed_origins.as_ref() {
+        body[call_idx].merge_origins(origins);
+    }
     used.sort_unstable_by(|left, right| right.cmp(left));
     for index in used {
         body.remove(index);
@@ -4534,6 +4552,68 @@ mod tests {
             ]
         );
         assert_eq!(dst, &Some(reg("s0")));
+    }
+
+    #[test]
+    fn attributed_recovered_layout_setup_folds_and_joins_the_call_owner() {
+        let setup0 = crate::ir::ast::OriginSet::one(0x1010);
+        let setup1 = crate::ir::ast::OriginSet::one(0x1014);
+        let call_owner = crate::ir::ast::OriginSet::one(0x1018);
+        let mut body = vec![
+            assign("rdi#1", 7).with_origins(setup0),
+            assign("rsi#1", 11).with_origins(setup1),
+            call_to("mixed_float").with_origins(call_owner),
+        ];
+
+        assert!(fold_one_recovered_layout_call(
+            &mut body,
+            2,
+            &[reg("rdi"), reg("rsi")],
+        ));
+
+        assert_eq!(body.len(), 1);
+        assert!(matches!(
+            body[0].semantic(),
+            Stmt::Call { args, .. } if args == &[Expr::Const(7), Expr::Const(11)]
+        ));
+        assert_eq!(
+            body[0].origins().expect("folded call owner").addresses(),
+            &[0x1010, 0x1014, 0x1018]
+        );
+    }
+
+    #[test]
+    fn attributed_mixed_layout_setup_folds_with_a_proven_live_in() {
+        let mut body = vec![
+            assign("rdi#1", 7).with_origins(crate::ir::ast::OriginSet::one(0x1020)),
+            call_to("mixed_float").with_origins(crate::ir::ast::OriginSet::one(0x1024)),
+        ];
+        let live_ins = vec![Some(Expr::Reg(reg("rdi"))), Some(Expr::Reg(reg("rsi")))];
+        let enclosing = EnclosingSlots::entry(
+            CallConv::SysVAmd64,
+            &live_ins,
+            vec![true; arg_slots(CallConv::SysVAmd64).len()],
+        );
+
+        assert!(fold_one_recovered_layout_call_with_live_ins(
+            &mut body,
+            1,
+            CallConv::SysVAmd64,
+            &[reg("rdi"), reg("rsi")],
+            &[0, 1].into_iter().collect(),
+            &enclosing,
+        ));
+
+        assert_eq!(body.len(), 1);
+        assert!(matches!(
+            body[0].semantic(),
+            Stmt::Call { args, .. }
+                if args == &[Expr::Const(7), Expr::Reg(reg("rsi"))]
+        ));
+        assert_eq!(
+            body[0].origins().expect("folded call owner").addresses(),
+            &[0x1020, 0x1024]
+        );
     }
 
     #[test]
