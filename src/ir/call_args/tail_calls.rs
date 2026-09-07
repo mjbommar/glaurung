@@ -71,7 +71,8 @@ pub fn recover_resolved_direct_tail_calls(
 
 fn collect_labels(body: &[Stmt], labels: &mut std::collections::HashSet<u64>) {
     for statement in body {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Label(va) => {
                 labels.insert(*va);
             }
@@ -96,7 +97,26 @@ fn collect_labels(body: &[Stmt], labels: &mut std::collections::HashSet<u64>) {
                     collect_labels(default, labels);
                 }
             }
-            _ => {}
+            Stmt::TryCatch { try_body, catches } => {
+                collect_labels(try_body, labels);
+                for catch in catches {
+                    collect_labels(&catch.body, labels);
+                }
+            }
+            Stmt::Assign { .. }
+            | Stmt::Store { .. }
+            | Stmt::Call { .. }
+            | Stmt::Return { .. }
+            | Stmt::Pop { .. }
+            | Stmt::Goto { .. }
+            | Stmt::IndirectGoto { .. }
+            | Stmt::Break
+            | Stmt::Continue
+            | Stmt::Push { .. }
+            | Stmt::Nop
+            | Stmt::Unknown(_)
+            | Stmt::Comment(_)
+            | Stmt::Throw { .. } => {}
         }
     }
 }
@@ -108,7 +128,8 @@ fn recover_direct_tail_calls_in_body(
     local_labels: &std::collections::HashSet<u64>,
 ) {
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -133,13 +154,33 @@ fn recover_direct_tail_calls_in_body(
                     recover_direct_tail_calls_in_body(default, arch, names, local_labels);
                 }
             }
-            _ => {}
+            Stmt::TryCatch { try_body, catches } => {
+                recover_direct_tail_calls_in_body(try_body, arch, names, local_labels);
+                for catch in catches {
+                    recover_direct_tail_calls_in_body(&mut catch.body, arch, names, local_labels);
+                }
+            }
+            Stmt::Assign { .. }
+            | Stmt::Store { .. }
+            | Stmt::Call { .. }
+            | Stmt::Return { .. }
+            | Stmt::Pop { .. }
+            | Stmt::Goto { .. }
+            | Stmt::IndirectGoto { .. }
+            | Stmt::Label(_)
+            | Stmt::Break
+            | Stmt::Continue
+            | Stmt::Push { .. }
+            | Stmt::Nop
+            | Stmt::Unknown(_)
+            | Stmt::Comment(_)
+            | Stmt::Throw { .. } => {}
         }
     }
 
     let mut index = 0;
     while index < body.len() {
-        let callee = match &body[index] {
+        let callee = match body[index].semantic() {
             Stmt::Goto { target } if !local_labels.contains(target) => {
                 names.get(target).map(|name| Expr::Named {
                     va: *target,
@@ -163,17 +204,20 @@ fn recover_direct_tail_calls_in_body(
                 .map(|slot| Expr::Reg(VReg::phys(format!("arg{slot}"))))
                 .collect()
         };
+        let origins = body[index].origins().cloned();
         body[index] = Stmt::Call {
             target: callee,
             args,
             dst: None,
             call_spec: None,
-        };
+        }
+        .with_optional_origins(origins.clone());
         body.insert(
             index + 1,
             Stmt::Return {
                 value: Some(Expr::Reg(VReg::phys(return_reg(arch)))),
-            },
+            }
+            .with_optional_origins(origins),
         );
         index += 2;
     }
@@ -181,7 +225,8 @@ fn recover_direct_tail_calls_in_body(
 
 fn recover_tail_calls_in_body(body: &mut Vec<Stmt>, arch: CallConv) {
     for stmt in body.iter_mut() {
-        match stmt {
+        match stmt.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -204,13 +249,33 @@ fn recover_tail_calls_in_body(body: &mut Vec<Stmt>, arch: CallConv) {
                     recover_tail_calls_in_body(default, arch);
                 }
             }
-            _ => {}
+            Stmt::TryCatch { try_body, catches } => {
+                recover_tail_calls_in_body(try_body, arch);
+                for catch in catches {
+                    recover_tail_calls_in_body(&mut catch.body, arch);
+                }
+            }
+            Stmt::Assign { .. }
+            | Stmt::Store { .. }
+            | Stmt::Call { .. }
+            | Stmt::Return { .. }
+            | Stmt::Pop { .. }
+            | Stmt::Goto { .. }
+            | Stmt::IndirectGoto { .. }
+            | Stmt::Label(_)
+            | Stmt::Break
+            | Stmt::Continue
+            | Stmt::Push { .. }
+            | Stmt::Nop
+            | Stmt::Unknown(_)
+            | Stmt::Comment(_)
+            | Stmt::Throw { .. } => {}
         }
     }
 
     let mut index = 0;
     while index < body.len() {
-        let callee = match &body[index] {
+        let callee = match body[index].semantic() {
             Stmt::IndirectGoto {
                 target: Expr::Deref { addr, .. },
             } => match addr.as_ref() {
@@ -237,17 +302,20 @@ fn recover_tail_calls_in_body(body: &mut Vec<Stmt>, arch: CallConv) {
                 .map(|slot| Expr::Reg(VReg::phys(format!("arg{slot}"))))
                 .collect()
         };
+        let origins = body[index].origins().cloned();
         body[index] = Stmt::Call {
             target: callee,
             args,
             dst: None,
             call_spec: None,
-        };
+        }
+        .with_optional_origins(origins.clone());
         body.insert(
             index + 1,
             Stmt::Return {
                 value: Some(Expr::Reg(VReg::phys(return_reg(arch)))),
-            },
+            }
+            .with_optional_origins(origins),
         );
         index += 2;
     }
@@ -259,7 +327,8 @@ fn recover_vtable_tail_calls_in_body(
     prototypes: &std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>,
 ) {
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -281,13 +350,33 @@ fn recover_vtable_tail_calls_in_body(
                     recover_vtable_tail_calls_in_body(default, arch, prototypes);
                 }
             }
-            _ => {}
+            Stmt::TryCatch { try_body, catches } => {
+                recover_vtable_tail_calls_in_body(try_body, arch, prototypes);
+                for catch in catches {
+                    recover_vtable_tail_calls_in_body(&mut catch.body, arch, prototypes);
+                }
+            }
+            Stmt::Assign { .. }
+            | Stmt::Store { .. }
+            | Stmt::Call { .. }
+            | Stmt::Return { .. }
+            | Stmt::Pop { .. }
+            | Stmt::Goto { .. }
+            | Stmt::IndirectGoto { .. }
+            | Stmt::Label(_)
+            | Stmt::Break
+            | Stmt::Continue
+            | Stmt::Push { .. }
+            | Stmt::Nop
+            | Stmt::Unknown(_)
+            | Stmt::Comment(_)
+            | Stmt::Throw { .. } => {}
         }
     }
 
     let Some(Stmt::IndirectGoto {
         target: Expr::Reg(target_register),
-    }) = body.last()
+    }) = body.last().map(Stmt::semantic)
     else {
         return;
     };
@@ -296,7 +385,7 @@ fn recover_vtable_tail_calls_in_body(
         .iter()
         .enumerate()
         .rev()
-        .find_map(|(index, statement)| match statement {
+        .find_map(|(index, statement)| match statement.semantic() {
             Stmt::Assign { dst, src } if *dst == target_register => Some((index, src.clone())),
             _ => None,
         })
@@ -311,7 +400,7 @@ fn recover_vtable_tail_calls_in_body(
             .iter()
             .enumerate()
             .rev()
-            .find_map(|(index, statement)| match statement {
+            .find_map(|(index, statement)| match statement.semantic() {
                 Stmt::Call {
                     target: Expr::Named { va, .. },
                     ..
@@ -335,19 +424,24 @@ fn recover_vtable_tail_calls_in_body(
     }
 
     let tail_index = body.len() - 1;
+    let origins = body[tail_index].origins().cloned();
     body[tail_index] = Stmt::Call {
         target,
         args: Vec::new(),
         dst: None,
         call_spec: None,
-    };
-    body.push(Stmt::Return {
-        value: Some(Expr::Reg(VReg::phys(return_reg(arch)))),
-    });
+    }
+    .with_optional_origins(origins.clone());
+    body.push(
+        Stmt::Return {
+            value: Some(Expr::Reg(VReg::phys(return_reg(arch)))),
+        }
+        .with_optional_origins(origins),
+    );
 }
 
 fn statement_writes_high_result(statement: &Stmt, arch: CallConv) -> bool {
-    match statement {
+    match statement.semantic() {
         Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => {
             matches!(dst, VReg::Phys(name) if crate::ir::abi::wide_integer_return_part(arch, name) == Some(1))
         }
@@ -421,7 +515,7 @@ fn contains_high_word_extract(expr: &Expr, word_bits: u32) -> bool {
 }
 
 fn statement_writes_argument_slot(stmt: &Stmt, arch: CallConv) -> bool {
-    match stmt {
+    match stmt.semantic() {
         Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => {
             matches!(dst, VReg::Phys(name) if slot_of(arch, name).is_some())
         }
@@ -450,13 +544,38 @@ fn statement_writes_argument_slot(stmt: &Stmt, arch: CallConv) -> bool {
                     .any(|stmt| statement_writes_argument_slot(stmt, arch))
             })
         }
-        _ => false,
+        Stmt::TryCatch { try_body, catches } => {
+            try_body
+                .iter()
+                .any(|stmt| statement_writes_argument_slot(stmt, arch))
+                || catches.iter().any(|catch| {
+                    catch
+                        .body
+                        .iter()
+                        .any(|stmt| statement_writes_argument_slot(stmt, arch))
+                })
+        }
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
+        Stmt::Store { .. }
+        | Stmt::Call { .. }
+        | Stmt::Return { .. }
+        | Stmt::Goto { .. }
+        | Stmt::IndirectGoto { .. }
+        | Stmt::Label(_)
+        | Stmt::Break
+        | Stmt::Continue
+        | Stmt::Push { .. }
+        | Stmt::Nop
+        | Stmt::Unknown(_)
+        | Stmt::Comment(_)
+        | Stmt::Throw { .. } => false,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ast::{CatchClause, OriginSet};
     use crate::ir::call_args::reconstruct_args_with_params;
 
     fn reg(n: &str) -> VReg {
@@ -644,6 +763,87 @@ mod tests {
     }
 
     #[test]
+    fn attributed_got_tail_and_argument_setup_keep_the_transfer_owner() {
+        let setup_owner = OriginSet::one(0x1010);
+        let transfer_owner = OriginSet::one(0x1014);
+        let mut f = Function {
+            name: "forward".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rdi#1"),
+                    src: Expr::Reg(reg("rsi#0")),
+                }
+                .with_origins(setup_owner.clone()),
+                got_tail("sum_arg6", 0x4008).with_origins(transfer_owner.clone()),
+            ],
+        };
+
+        recover_resolved_tail_calls(&mut f, CallConv::SysVAmd64);
+
+        let Stmt::Call { args, .. } = f.body[1].semantic() else {
+            panic!("expected attributed recovered call, got {:#?}", f.body)
+        };
+        assert!(args.is_empty(), "the attributed local setup was ignored");
+        assert_eq!(f.body[0].origins(), Some(&setup_owner));
+        assert_eq!(f.body[1].origins(), Some(&transfer_owner));
+        assert!(matches!(f.body[2].semantic(), Stmt::Return { .. }));
+        assert_eq!(f.body[2].origins(), Some(&transfer_owner));
+    }
+
+    #[test]
+    fn attributed_direct_tail_inside_a_catch_keeps_the_transfer_owner() {
+        let transfer_owner = OriginSet::one(0x1020);
+        let mut f = Function {
+            name: "catch_forward".into(),
+            entry_va: 0,
+            body: vec![Stmt::TryCatch {
+                try_body: vec![Stmt::Throw {
+                    value: Expr::Const(1),
+                }],
+                catches: vec![CatchClause {
+                    type_name: "int".into(),
+                    binding: reg("caught"),
+                    body: vec![Stmt::Goto { target: 0x1070 }.with_origins(transfer_owner.clone())],
+                }],
+            }],
+        };
+        let names = [(0x1070, "sum_arg6@plt".to_string())].into_iter().collect();
+
+        recover_resolved_direct_tail_calls(&mut f, CallConv::SysVAmd64, &names);
+
+        let Stmt::TryCatch { catches, .. } = f.body[0].semantic() else {
+            panic!("exception shape changed")
+        };
+        assert!(matches!(catches[0].body[0].semantic(), Stmt::Call { .. }));
+        assert_eq!(catches[0].body[0].origins(), Some(&transfer_owner));
+        assert!(matches!(catches[0].body[1].semantic(), Stmt::Return { .. }));
+        assert_eq!(catches[0].body[1].origins(), Some(&transfer_owner));
+    }
+
+    #[test]
+    fn attributed_local_label_prevents_a_false_external_tail_call() {
+        let mut f = Function {
+            name: "loop".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Goto { target: 0x1070 }.with_origins(OriginSet::one(0x1004)),
+                Stmt::Label(0x1070).with_origins(OriginSet::one(0x1070)),
+                Stmt::Return { value: None },
+            ],
+        };
+        let names = [(0x1070, "other_symbol".to_string())].into_iter().collect();
+
+        recover_resolved_direct_tail_calls(&mut f, CallConv::SysVAmd64, &names);
+
+        assert!(matches!(
+            f.body[0].semantic(),
+            Stmt::Goto { target: 0x1070 }
+        ));
+        assert_eq!(f.body.len(), 3);
+    }
+
+    #[test]
     fn direct_jump_with_an_in_function_label_stays_a_goto() {
         let mut f = Function {
             name: "loop".into(),
@@ -691,6 +891,27 @@ mod tests {
                 Stmt::Return { .. }
             ]
         ));
+    }
+
+    #[test]
+    fn attributed_vtable_tail_keeps_the_transfer_owner() {
+        let call_owner = OriginSet::one(0x1100);
+        let load_owner = OriginSet::one(0x1104);
+        let transfer_owner = OriginSet::one(0x1108);
+        let mut f = vtable_tail_function(24);
+        f.body[0] = std::mem::replace(&mut f.body[0], Stmt::Nop).with_origins(call_owner.clone());
+        f.body[1] = std::mem::replace(&mut f.body[1], Stmt::Nop).with_origins(load_owner.clone());
+        f.body[2] =
+            std::mem::replace(&mut f.body[2], Stmt::Nop).with_origins(transfer_owner.clone());
+
+        recover_proven_vtable_tail_calls(&mut f, CallConv::SysVAmd64, &wide_prototypes());
+
+        assert!(matches!(f.body[2].semantic(), Stmt::Call { .. }));
+        assert_eq!(f.body[0].origins(), Some(&call_owner));
+        assert_eq!(f.body[1].origins(), Some(&load_owner));
+        assert_eq!(f.body[2].origins(), Some(&transfer_owner));
+        assert!(matches!(f.body[3].semantic(), Stmt::Return { .. }));
+        assert_eq!(f.body[3].origins(), Some(&transfer_owner));
     }
 
     #[test]
