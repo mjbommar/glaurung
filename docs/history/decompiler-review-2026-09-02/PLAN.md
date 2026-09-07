@@ -1059,6 +1059,14 @@ provenance through lowering.
   were observed red, all 19 touched-module tests pass, and a release-built
   8-lane/24-function effectful-select, guarded-dispatch, and conditional slice
   remains entirely green; see `results/wp3-adjacent-expression-origins.md`.
+  Commit `fb878925` next gives every generic register-call argument its own
+  setup origin and composes earlier scratch-definition owners through the
+  backward scan. Its disjoint two-argument test was observed red, all 110
+  parent call-argument tests pass, and the release-built 52-function call-shapes
+  fixture remains entirely green; see
+  `results/wp3-register-argument-expression-origins.md`. Generic stack
+  arguments and specialized recovered-layout/cdecl/AAPCS producers remain
+  open.
   The remaining wildcard consumers and universal production attribution remain
   open.
 

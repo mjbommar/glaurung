@@ -261,10 +261,11 @@ explicitly ambiguous opaque SSA identities beside the lowered AST and migrates
 float-role type projection as the first product consumer. Commit `af65c260`
 migrates optimized DWARF register-local recovery as the second; both 419-pair
 maps are byte-identical. Statement origins and structured line mappings are
-now live. Commits `3c5c74b9`, `f30167f7`, `b269a3f2`, and `86ac95a6` make the
-first bounded production expression-origin attachments during temporary
-reconstruction, simple/exhaustive return folding, and all four safe adjacent
-value movements without changing their scoped real-binary verdicts. Multi-output
+now live. Commits `3c5c74b9`, `f30167f7`, `b269a3f2`, `86ac95a6`, and
+`fb878925` make the first bounded production expression-origin attachments
+during temporary reconstruction, simple/exhaustive return folding, all four
+safe adjacent value movements, and generic register-call argument recovery
+without changing their scoped real-binary verdicts. Multi-output
 identity, remaining display-name consumers,
 universal expression attribution, and remaining mutating-pass migrations keep
 WP3 open. WP6 and WP7B
