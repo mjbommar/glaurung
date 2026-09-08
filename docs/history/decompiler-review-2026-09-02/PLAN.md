@@ -1720,6 +1720,14 @@ provenance through lowering.
   lookalike fails closed. All 17 splitter tests, all 59 value-number tests, and
   four focused call-result fixture lanes pass; see
   `results/wp3-call-result-splitting-storage-identities.md`.
+  Commit `bde6dd82` makes float-role projection consume that typed physical-
+  storage fact when phi elimination coalesces several SSA versions of one VFP
+  register. Agreement on one storage base projects the float width; conflicting
+  bases fail closed. All 24 type-map tests pass. A strict four-function ARMv7
+  A/B removes integer bit-cast plumbing from narrow and wide loop arithmetic
+  without changing the failure set. The existing missing-`count` signature
+  regression is identical with the change reversed and remains separate debt;
+  see `results/wp3-float-storage-identities.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
