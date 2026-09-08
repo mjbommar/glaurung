@@ -32,7 +32,6 @@ use crate::ir::types_recover::TypeMap;
 #[derive(Clone, Copy)]
 enum ParameterAuthority<'a> {
     LegacySpelling,
-    Slots(&'a std::collections::HashSet<usize>),
     Identities(&'a crate::ir::value_number::ValueIdentities),
 }
 
@@ -40,9 +39,6 @@ impl ParameterAuthority<'_> {
     fn owns(self, name: &str) -> bool {
         match self {
             Self::LegacySpelling => crate::ir::ast::parse_arg_index(name).is_some(),
-            Self::Slots(slots) => {
-                crate::ir::ast::parse_arg_index(name).is_some_and(|slot| slots.contains(&slot))
-            }
             Self::Identities(identities) => identities
                 .parameter_slot(&crate::ir::types::VReg::phys(name))
                 .is_some(),
@@ -75,14 +71,6 @@ fn rewrite(slot: &mut Expr, value: Expr, changed: &mut bool) {
 /// Returns whether anything was rewritten — see [`rewrite`].
 pub fn fold_constants(f: &mut Function) -> bool {
     fold_constants_with_parameter_authority(f, ParameterAuthority::LegacySpelling)
-}
-
-/// Fold constants while recognizing parameters only from pipeline-owned slots.
-pub(crate) fn fold_constants_with_parameter_slots(
-    f: &mut Function,
-    parameter_slots: &std::collections::HashSet<usize>,
-) -> bool {
-    fold_constants_with_parameter_authority(f, ParameterAuthority::Slots(parameter_slots))
 }
 
 /// Fold constants while recognizing parameters only from exact AST identities.
@@ -4575,13 +4563,15 @@ mod tests {
             }),
             size: 4,
         });
-        assert!(!fold_constants_with_parameter_slots(
+        assert!(!fold_constants_with_identities(
             &mut slot_unowned,
-            &std::collections::HashSet::new(),
+            &identities,
         ));
-        assert!(fold_constants_with_parameter_slots(
+        let stack_parameter =
+            identities.with_parameter_slots(&std::collections::HashSet::from([0]));
+        assert!(fold_constants_with_identities(
             &mut slot_unowned,
-            &std::collections::HashSet::from([0]),
+            &stack_parameter,
         ));
     }
 

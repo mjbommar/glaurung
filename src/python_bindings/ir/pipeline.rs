@@ -488,6 +488,16 @@ impl AstPassOrder {
 /// The pass-by-pass AST dump (`GLAURUNG_DUMP_PASSES=1`) is read here, so EVERY entry
 /// point gets identical diagnostics rather than only the one that happened to carry the
 /// macro. Debugging `--all` used to produce no dump at all.
+/// Fold the pre-naming AST using explicit register and stack parameter roles.
+fn fold_early_constants(
+    function: &mut crate::ir::ast::Function,
+    value_identities: &crate::ir::value_number::ValueIdentities,
+    parameter_slots: &std::collections::HashSet<usize>,
+) -> bool {
+    let parameter_identities = value_identities.with_parameter_slots(parameter_slots);
+    crate::ir::const_fold::fold_constants_with_identities(function, &parameter_identities)
+}
+
 pub(super) fn run_ast_passes(
     f: &mut crate::ir::ast::Function,
     profiler: &mut crate::decompile::profile::FunctionProfiler,
@@ -565,7 +575,7 @@ pub(super) fn run_ast_passes(
     pass!("reconstruct", crate::ir::expr_reconstruct::reconstruct(f));
     pass!(
         "fold_constants",
-        crate::ir::const_fold::fold_constants_with_parameter_slots(f, param_slots)
+        fold_early_constants(f, value_identities, param_slots)
     );
     pass!(
         "fold_boolean_masks",
@@ -1803,10 +1813,55 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
 #[cfg(test)]
 mod request_tests {
     use super::{
-        AnalysisBudget, AstPassOrder, AstPassOrderError, CalleeBudget, CfgBudget,
-        DecompileCompleteness, DecompileRequest, DiscoveryBudget, PipelineStage,
+        fold_early_constants, AnalysisBudget, AstPassOrder, AstPassOrderError, CalleeBudget,
+        CfgBudget, DecompileCompleteness, DecompileRequest, DiscoveryBudget, PipelineStage,
         PipelineStageTracker, RenderOptions, SizeBudget, TypeBudget,
     };
+
+    #[test]
+    fn early_constant_fold_uses_typed_stack_parameter_roles() {
+        use crate::ir::ast::{Expr, Function, Stmt};
+        use crate::ir::types::VReg;
+
+        let load = |name: &str| Expr::Deref {
+            addr: Box::new(Expr::StackAddr {
+                object: VReg::phys(name),
+                size: 4,
+            }),
+            size: 4,
+        };
+        let mut function = Function {
+            name: "typed_early_fold".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("owned"),
+                    src: load("arg0"),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("unowned"),
+                    src: load("arg99"),
+                },
+            ],
+        };
+
+        assert!(fold_early_constants(
+            &mut function,
+            &crate::ir::value_number::ValueIdentities::default(),
+            &std::collections::HashSet::from([0]),
+        ));
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Assign { src: Expr::Reg(value), .. } if value == &VReg::phys("arg0")
+        ));
+        assert!(matches!(
+            &function.body[1],
+            Stmt::Assign {
+                src: Expr::Deref { .. },
+                ..
+            }
+        ));
+    }
 
     #[test]
     fn ast_pass_order_allows_omissions_but_rejects_duplicates_and_reordering() {

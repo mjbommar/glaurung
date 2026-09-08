@@ -172,7 +172,13 @@ impl ValueIdentities {
         aliases: &HashMap<String, String>,
         parameter_slots: &HashSet<usize>,
     ) -> Self {
-        let mut projected = self.with_role_aliases(aliases);
+        self.with_role_aliases(aliases)
+            .with_parameter_slots(parameter_slots)
+    }
+
+    /// Attach pipeline-owned stack-parameter roles without parsing a name.
+    pub(crate) fn with_parameter_slots(&self, parameter_slots: &HashSet<usize>) -> Self {
+        let mut projected = self.clone();
         for slot in parameter_slots {
             projected
                 .parameter_slots_by_value
@@ -797,6 +803,16 @@ mod tests {
         let projected = identities.with_role_aliases_and_parameter_slots(&aliases, &slots);
 
         assert_eq!(projected.parameter_slot(&VReg::phys("arg0")), Some(0));
+        assert_eq!(projected.parameter_slot(&VReg::phys("arg99")), None);
+    }
+
+    #[test]
+    fn stack_parameter_projection_records_only_owned_slots() {
+        let projected = ValueIdentities::default().with_parameter_slots(&HashSet::from([0, 2]));
+
+        assert_eq!(projected.parameter_slot(&VReg::phys("arg0")), Some(0));
+        assert_eq!(projected.parameter_slot(&VReg::phys("arg1")), None);
+        assert_eq!(projected.parameter_slot(&VReg::phys("arg2")), Some(2));
         assert_eq!(projected.parameter_slot(&VReg::phys("arg99")), None);
     }
 
