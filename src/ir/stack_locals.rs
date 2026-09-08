@@ -22,7 +22,7 @@
 //! to [`Expr::StackAddr`] so the C renderer passes `&local_N`, never arithmetic
 //! on an uninitialised `rbp`/`rsp` local.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::call_args::CallConv;
@@ -48,7 +48,7 @@ use address_recovery::{
 };
 use coordinate_flow::{collect_label_stack_deltas, collect_stack_address_defs};
 use indexed_objects::{collect_read_stack_slots, seed_indexed_stack_objects};
-use rewrite::{reconcile_late_address_taken_objects, rewrite_body};
+use rewrite::{reconcile_late_address_taken_objects, rewrite_body, RewriteEvidence};
 
 const STACK_BASES: &[&str] = &["rsp", "esp", "sp", "rbp", "ebp", "bp", "x29", "w29", "fp"];
 const FRAME_POINTER_BASES: &[&str] = &["rbp", "ebp", "bp", "x29", "w29", "fp"];
@@ -161,6 +161,8 @@ pub struct StackLocalFacts {
     pub source_names: HashMap<String, String>,
     /// Source-parameter slot proven for each promoted stack identity.
     pub parameter_slots: HashMap<String, usize>,
+    /// Promoted storage proven to hold an ABI callee-saved entry value.
+    pub machine_saved_slots: HashSet<String>,
     /// Frame coordinate `(base, disp)` each promoted name was minted from.
     ///
     /// This is the join MIR evidence needs. MIR memory objects are keyed by
@@ -178,6 +180,59 @@ pub struct StackLocalFacts {
     /// both render as `stack_top`), and binding object evidence through an
     /// ambiguous name would attach a proven fact to the wrong variable.
     pub frame_coordinates: HashMap<String, (String, i64)>,
+}
+
+/// Remove no-op stores created when late copy propagation rejoins a promoted
+/// stack load with the same promoted object.
+///
+/// A bare-register AST store can also mean `*pointer = value`, so spelling is
+/// not enough authority to delete it. Only names published by stack promotion
+/// are eligible here.
+pub(crate) fn prune_promoted_self_stores(
+    function: &mut Function,
+    promoted_slots: &HashMap<String, u8>,
+) {
+    fn prune(body: &mut Vec<Stmt>, promoted_slots: &HashMap<String, u8>) {
+        body.retain_mut(|statement| {
+            match statement.semantic_mut() {
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    prune(then_body, promoted_slots);
+                    if let Some(else_body) = else_body {
+                        prune(else_body, promoted_slots);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                    prune(body, promoted_slots);
+                }
+                Stmt::For { body, .. } => prune(body, promoted_slots),
+                Stmt::Switch { cases, default, .. } => {
+                    for (_, case_body) in cases {
+                        prune(case_body, promoted_slots);
+                    }
+                    if let Some(default) = default {
+                        prune(default, promoted_slots);
+                    }
+                }
+                _ => {}
+            }
+            let promoted_self_store = match statement.semantic() {
+                Stmt::Store { addr, src, .. } => match (addr.semantic(), src.semantic()) {
+                    (Expr::Reg(VReg::Phys(destination)), Expr::Reg(VReg::Phys(source))) => {
+                        destination == source && promoted_slots.contains_key(destination)
+                    }
+                    _ => false,
+                },
+                _ => false,
+            };
+            !promoted_self_store
+        });
+    }
+
+    prune(&mut function.body, promoted_slots);
 }
 
 /// Overlay analyst-chosen stack-variable names and types onto the recovered
@@ -486,6 +541,33 @@ pub fn promote_stack_locals_with_facts(
     parameter_count: Option<usize>,
     object_hints: &[StackObjectHint],
 ) -> StackLocalFacts {
+    promote_stack_locals_with_optional_identities(f, cc, parameter_count, object_hints, None)
+}
+
+/// Promote stack storage while retaining exact SSA ownership of machine saves.
+pub(crate) fn promote_stack_locals_with_facts_and_identities(
+    f: &mut Function,
+    cc: Option<CallConv>,
+    parameter_count: Option<usize>,
+    object_hints: &[StackObjectHint],
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> StackLocalFacts {
+    promote_stack_locals_with_optional_identities(
+        f,
+        cc,
+        parameter_count,
+        object_hints,
+        Some(identities),
+    )
+}
+
+fn promote_stack_locals_with_optional_identities(
+    f: &mut Function,
+    cc: Option<CallConv>,
+    parameter_count: Option<usize>,
+    object_hints: &[StackObjectHint],
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> StackLocalFacts {
     let mut map: HashMap<SlotKey, SlotVal> = HashMap::new();
     let mut names = SlotNames::default();
     let ctx = StackContext {
@@ -583,6 +665,11 @@ pub fn promote_stack_locals_with_facts(
     );
     let read_slots = collect_read_stack_slots(&f.body, ctx, &address_defs, &label_deltas);
     let mut sp_delta = Some(0i64);
+    let mut machine_saved_slots = HashSet::new();
+    let mut evidence = RewriteEvidence {
+        identities,
+        machine_saved_slots: &mut machine_saved_slots,
+    };
     rewrite_body(
         &mut f.body,
         &mut map,
@@ -592,6 +679,7 @@ pub fn promote_stack_locals_with_facts(
         &address_defs,
         &label_deltas,
         &read_slots,
+        &mut evidence,
     );
     reconcile_late_address_taken_objects(&mut f.body, &map);
     // Several machine SlotKeys can intentionally collapse to one source-level
@@ -600,6 +688,7 @@ pub fn promote_stack_locals_with_facts(
     // iteration order choose the declaration width, so identical inputs could
     // alternate between `char` and `long` across processes.
     let mut facts = StackLocalFacts::default();
+    facts.machine_saved_slots = machine_saved_slots;
     // Names withheld from `frame_coordinates` because two machine slot keys
     // reached them; see the field's documentation.
     let mut ambiguous_coordinates: std::collections::HashSet<String> =
@@ -1020,6 +1109,26 @@ mod tests {
     fn reg(n: &str) -> VReg {
         VReg::phys(n)
     }
+
+    #[test]
+    fn promoted_self_store_is_removed_but_pointer_self_store_is_preserved() {
+        let self_store = |name: &str| Stmt::Store {
+            addr: Expr::Reg(reg(name)),
+            src: Expr::Reg(reg(name)),
+            size: 8,
+        };
+        let mut function = Function {
+            name: "self_store".into(),
+            entry_va: 0,
+            body: vec![self_store("local_1028"), self_store("pointer")],
+        };
+        let promoted = HashMap::from([("local_1028".to_string(), 8)]);
+
+        prune_promoted_self_stores(&mut function, &promoted);
+
+        assert_eq!(function.body, vec![self_store("pointer")]);
+    }
+
     fn lea(base: &str, disp: i64) -> Expr {
         Expr::Lea {
             base: Some(reg(base)),

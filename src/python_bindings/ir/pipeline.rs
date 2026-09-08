@@ -514,7 +514,7 @@ pub(super) fn run_ast_passes(
     function_tables: &[crate::ir::function_tables::FunctionPointerTable],
     stack_object_hints: &[crate::ir::stack_locals::StackObjectHint],
     got_targets: &std::collections::HashMap<u64, u64>,
-    value_identities: &crate::ir::value_number::ValueIdentities,
+    value_identities: &mut crate::ir::value_number::ValueIdentities,
 ) -> Result<
     (
         crate::ir::stack_locals::StackLocalFacts,
@@ -656,13 +656,15 @@ pub(super) fn run_ast_passes(
     };
     let stack_facts = pass!(
         "promote_stack_locals",
-        crate::ir::stack_locals::promote_stack_locals_with_facts(
+        crate::ir::stack_locals::promote_stack_locals_with_facts_and_identities(
             f,
             Some(cc),
             locked_parameter_count,
             &stack_object_hints,
+            value_identities,
         )
     );
+    value_identities.attach_machine_saved_slots(&stack_facts.machine_saved_slots);
     // Now that the buffer is a named object, make it the destination of the
     // call that fills it. Before promotion its address is still `sp + k`
     // arithmetic, which no renderer can take the address of.
@@ -677,9 +679,13 @@ pub(super) fn run_ast_passes(
     // A second call after the remaining passes still handles epilogues exposed
     // by stack-op rematerialisation.
     pass!("recognise_machine_frame", {
-        recognise_machine_frame(f, cc);
+        recognise_machine_frame(f, cc, value_identities);
         if nested_machine_frame_cleanup {
-            crate::ir::dead_stores::prune_callee_saved_spills_nested(f, cc);
+            crate::ir::dead_stores::prune_callee_saved_spills_nested_with_identities(
+                f,
+                cc,
+                value_identities,
+            );
         }
     });
     // Project a prototype-proven result while the raw ABI output register is
@@ -771,6 +777,7 @@ pub(super) fn run_ast_passes(
 pub(super) fn recognise_machine_frame(
     f: &mut crate::ir::ast::Function,
     cc: crate::ir::call_args::CallConv,
+    value_identities: &crate::ir::value_number::ValueIdentities,
 ) {
     match cc {
         crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64 => {
@@ -798,7 +805,7 @@ pub(super) fn recognise_machine_frame(
     // pattern, the callee-saved spills themselves are still machine bookkeeping.
     // This runs for every convention. It also removes any independently proven
     // dead spill that an architecture recogniser deliberately left alone.
-    crate::ir::dead_stores::prune_callee_saved_spills(f, cc);
+    crate::ir::dead_stores::prune_callee_saved_spills_with_identities(f, cc, value_identities);
 }
 
 /// Apply the presentation-boundary semantic facts every renderer consumes.
@@ -844,7 +851,7 @@ pub(super) fn finalize_prepared_ast(
         );
         crate::ir::exception_recover::recover_throws(&mut prepared.function);
     }
-    recognise_machine_frame(&mut prepared.function, cc);
+    recognise_machine_frame(&mut prepared.function, cc, &prepared.ast_value_identities);
     if let Some(field_map) = field_map {
         crate::ir::pdb_fields::annotate_function_fields(&mut prepared.function, field_map);
     }
@@ -1330,6 +1337,7 @@ pub(super) fn render_prepared_ast(
             debug_types,
             &prepared.stack_facts.source_types,
             &prepared.stack_facts.source_names,
+            &prepared.stack_facts.sizes,
             debug_contract.map_or(&[], |contract| contract.static_locals.as_slice()),
             cc,
             address_names,
@@ -1529,7 +1537,7 @@ pub(super) fn lower_and_run_ast_passes(
         region,
         cfg_health,
         numbered,
-        value_identities,
+        mut value_identities,
         definition_widths,
         parameter_slots: mut param_slots,
         inferred_prototype,
@@ -1573,7 +1581,7 @@ pub(super) fn lower_and_run_ast_passes(
         function_tables,
         stack_object_hints,
         got_targets,
-        &value_identities,
+        &mut value_identities,
     )?;
     let ast_value_identities =
         value_identities.with_role_aliases_and_parameter_slots(&role_names, &param_slots);

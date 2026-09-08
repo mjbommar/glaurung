@@ -71,6 +71,7 @@ pub struct ValueIdentities {
     by_numbered_value: HashMap<VReg, BTreeSet<SsaValue>>,
     parameter_slots_by_value: HashMap<VReg, BTreeSet<usize>>,
     result_roles: HashSet<VReg>,
+    machine_saved_slots: HashSet<VReg>,
 }
 
 impl ValueIdentities {
@@ -96,6 +97,17 @@ impl ValueIdentities {
     /// Whether `value` carries the pipeline-owned source result role.
     pub(crate) fn is_result_role(&self, value: &VReg) -> bool {
         self.result_roles.contains(value)
+    }
+
+    /// Whether stack promotion proved this object stores ABI entry state.
+    pub(crate) fn is_machine_saved_slot(&self, value: &VReg) -> bool {
+        self.machine_saved_slots.contains(value)
+    }
+
+    /// Publish machine-save storage identities discovered during promotion.
+    pub(crate) fn attach_machine_saved_slots(&mut self, slots: &HashSet<String>) {
+        self.machine_saved_slots
+            .extend(slots.iter().cloned().map(VReg::phys));
     }
 
     pub(crate) fn record(&mut self, numbered: VReg, identity: SsaValue) {
@@ -209,6 +221,12 @@ impl ValueIdentities {
                 .or_default()
                 .extend(slots);
         }
+        let previous = std::mem::take(&mut self.machine_saved_slots);
+        self.machine_saved_slots.extend(
+            previous
+                .into_iter()
+                .map(|value| renames.get(&value).cloned().unwrap_or(value)),
+        );
         let previous = std::mem::take(&mut self.result_roles);
         for value in previous {
             self.result_roles

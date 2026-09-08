@@ -23,6 +23,11 @@ use crate::ir::ast::{Expr, Stmt};
 use crate::ir::call_args::CallConv;
 use crate::ir::types::VReg;
 
+pub(super) struct RewriteEvidence<'a> {
+    pub identities: Option<&'a crate::ir::value_number::ValueIdentities>,
+    pub machine_saved_slots: &'a mut HashSet<String>,
+}
+
 pub(super) fn rewrite_body(
     body: &mut [Stmt],
     map: &mut HashMap<SlotKey, SlotVal>,
@@ -32,6 +37,7 @@ pub(super) fn rewrite_body(
     address_defs: &HashMap<VReg, (String, i64)>,
     label_deltas: &HashMap<u64, Option<i64>>,
     read_slots: &HashSet<SlotKey>,
+    evidence: &mut RewriteEvidence<'_>,
 ) {
     for s in body.iter_mut() {
         match s.semantic_mut() {
@@ -73,6 +79,14 @@ pub(super) fn rewrite_body(
                 }
             }
             Stmt::Store { addr, src, size } => {
+                let saves_machine_entry = ctx.cc.is_some_and(|cc| {
+                    let Expr::Reg(source) = src.semantic() else {
+                        return false;
+                    };
+                    evidence.identities.is_some_and(|identities| {
+                        crate::ir::dead_stores::is_entry_callee_saved_value(source, cc, identities)
+                    })
+                });
                 // Whether this store addressed MEMORY before promotion. A store
                 // whose address is already a bare register is a pointer write
                 // (`*p = v`) and must never be mistaken for a slot assignment —
@@ -81,6 +95,11 @@ pub(super) fn rewrite_body(
                 // Store's addr is an Lea — we need to rewrite the Lea itself
                 // into a Reg reference when the lea points to a stack slot.
                 try_promote_lea_to_local(addr, *size, map, names, ctx, *sp_delta, address_defs);
+                if saves_machine_entry {
+                    if let Expr::Reg(VReg::Phys(slot)) = addr.semantic() {
+                        evidence.machine_saved_slots.insert(slot.clone());
+                    }
+                }
                 rewrite_expr(src, map, names, ctx, *sp_delta, address_defs);
                 // A by-reference closure capture stores a frame address into a
                 // field before the closure is called. This escape is every bit
@@ -143,6 +162,7 @@ pub(super) fn rewrite_body(
                     address_defs,
                     label_deltas,
                     read_slots,
+                    evidence,
                 );
                 let mut else_delta = incoming;
                 if let Some(eb) = else_body {
@@ -155,6 +175,7 @@ pub(super) fn rewrite_body(
                         address_defs,
                         label_deltas,
                         read_slots,
+                        evidence,
                     );
                 }
                 let then_falls_through = body_falls_through(then_body);
@@ -179,6 +200,7 @@ pub(super) fn rewrite_body(
                     address_defs,
                     label_deltas,
                     read_slots,
+                    evidence,
                 );
                 *sp_delta = merge_stack_deltas(incoming, body_delta);
             }
@@ -197,6 +219,7 @@ pub(super) fn rewrite_body(
                     address_defs,
                     label_deltas,
                     read_slots,
+                    evidence,
                 );
                 rewrite_expr(cond, map, names, ctx, *sp_delta, address_defs);
                 let loop_entry = *sp_delta;
@@ -210,6 +233,7 @@ pub(super) fn rewrite_body(
                     address_defs,
                     label_deltas,
                     read_slots,
+                    evidence,
                 );
                 rewrite_body(
                     std::slice::from_mut(step.as_mut()),
@@ -220,6 +244,7 @@ pub(super) fn rewrite_body(
                     address_defs,
                     label_deltas,
                     read_slots,
+                    evidence,
                 );
                 *sp_delta = merge_stack_deltas(loop_entry, body_delta);
             }
@@ -235,6 +260,7 @@ pub(super) fn rewrite_body(
                     address_defs,
                     label_deltas,
                     read_slots,
+                    evidence,
                 );
                 rewrite_expr(cond, map, names, ctx, body_delta, address_defs);
                 *sp_delta = merge_stack_deltas(incoming, body_delta);
@@ -262,6 +288,7 @@ pub(super) fn rewrite_body(
                         address_defs,
                         label_deltas,
                         read_slots,
+                        evidence,
                     );
                     merged = Some(match merged {
                         Some(prior) => merge_stack_deltas(prior, case_delta),
@@ -279,6 +306,7 @@ pub(super) fn rewrite_body(
                         address_defs,
                         label_deltas,
                         read_slots,
+                        evidence,
                     );
                     merged = Some(match merged {
                         Some(prior) => merge_stack_deltas(prior, default_delta),

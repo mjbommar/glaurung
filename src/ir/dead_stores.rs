@@ -481,7 +481,16 @@ fn drop_unread_abi_zeros(body: &mut Vec<Stmt>) {
 /// call itself — it walks forward and stops at the first nested `If`, and these
 /// stores sit above all of a function's control flow.
 pub fn prune_callee_saved_spills(f: &mut Function, cc: CallConv) {
-    prune_callee_saved_spills_with_scope(f, cc, false);
+    prune_callee_saved_spills_with_scope(f, cc, false, None);
+}
+
+/// Remove top-level callee saves using exact SSA entry-value authority.
+pub fn prune_callee_saved_spills_with_identities(
+    f: &mut Function,
+    cc: CallConv,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    prune_callee_saved_spills_with_scope(f, cc, false, Some(identities));
 }
 
 /// Remove otherwise-dead callee saves nested by an experimental region tree.
@@ -490,10 +499,24 @@ pub fn prune_callee_saved_spills(f: &mut Function, cc: CallConv) {
 /// must opt in only when the selected region has independent verification;
 /// register-looking nested assignments are not sufficient global provenance.
 pub fn prune_callee_saved_spills_nested(f: &mut Function, cc: CallConv) {
-    prune_callee_saved_spills_with_scope(f, cc, true);
+    prune_callee_saved_spills_with_scope(f, cc, true, None);
 }
 
-fn prune_callee_saved_spills_with_scope(f: &mut Function, cc: CallConv, recursive: bool) {
+/// Remove nested callee saves using exact SSA entry-value authority.
+pub fn prune_callee_saved_spills_nested_with_identities(
+    f: &mut Function,
+    cc: CallConv,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    prune_callee_saved_spills_with_scope(f, cc, true, Some(identities));
+}
+
+fn prune_callee_saved_spills_with_scope(
+    f: &mut Function,
+    cc: CallConv,
+    recursive: bool,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     fn visit_statements(body: &[Stmt], recursive: bool, visit: &mut impl FnMut(&Stmt)) {
         for statement in body {
             visit(statement);
@@ -558,8 +581,8 @@ fn prune_callee_saved_spills_with_scope(f: &mut Function, cc: CallConv, recursiv
                 dst,
                 src: Expr::Reg(source),
             } if is_saved_frame_slot(dst)
-                || is_arm_saved_register_local(dst, source, cc)
-                || is_x86_saved_register_local(dst, source, cc) =>
+                || is_arm_saved_register_local(dst, source, cc, identities)
+                || is_x86_saved_register_local(dst, source, cc, identities) =>
             {
                 Some(dst.clone())
             }
@@ -568,8 +591,8 @@ fn prune_callee_saved_spills_with_scope(f: &mut Function, cc: CallConv, recursiv
                 src: Expr::Reg(source),
                 ..
             } if is_saved_frame_slot(slot)
-                || is_arm_saved_register_local(slot, source, cc)
-                || is_x86_saved_register_local(slot, source, cc) =>
+                || is_arm_saved_register_local(slot, source, cc, identities)
+                || is_x86_saved_register_local(slot, source, cc, identities) =>
             {
                 Some(slot.clone())
             }
@@ -922,27 +945,27 @@ fn stmt_reads_direct(statement: &Stmt, register: &VReg) -> bool {
 /// exception to the ARM calling conventions, entry SSA versions, and the
 /// architectural callee-save/return-address registers keeps an arbitrary
 /// `local_4 = r0` source spill outside the machine-frame cleanup.
-fn is_arm_saved_register_local(slot: &VReg, source: &VReg, cc: CallConv) -> bool {
+fn is_arm_saved_register_local(
+    slot: &VReg,
+    source: &VReg,
+    cc: CallConv,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     if !matches!(cc, CallConv::Arm | CallConv::ArmHardFloat) {
         return false;
     }
     let VReg::Phys(slot_name) = slot else {
         return false;
     };
-    let VReg::Phys(source_name) = source else {
-        return false;
-    };
     if !slot_name.starts_with("local_") {
         return false;
     }
-    let (base, version) = source_name
-        .split_once('#')
-        .map_or((source_name.as_str(), None), |(base, version)| {
-            (base, Some(version))
-        });
-    if !matches!(version, None | Some("0")) {
-        return false;
+    if identities.is_some_and(|identities| identities.is_machine_saved_slot(slot)) {
+        return true;
     }
+    let Some(base) = entry_value_base(source, identities) else {
+        return false;
+    };
     if matches!(base, "fp" | "lr" | "r14") {
         return true;
     }
@@ -959,7 +982,12 @@ fn is_arm_saved_register_local(slot: &VReg, source: &VReg, cc: CallConv) -> bool
 /// not a source parameter.  Restrict this exception to the unversioned/SSA-zero
 /// entry value; a later definition held in the same architectural register is
 /// ordinary recovered program state and must remain visible.
-fn is_x86_saved_register_local(slot: &VReg, source: &VReg, cc: CallConv) -> bool {
+fn is_x86_saved_register_local(
+    slot: &VReg,
+    source: &VReg,
+    cc: CallConv,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     if !matches!(
         cc,
         CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Cdecl32
@@ -969,19 +997,67 @@ fn is_x86_saved_register_local(slot: &VReg, source: &VReg, cc: CallConv) -> bool
     let VReg::Phys(slot_name) = slot else {
         return false;
     };
-    let VReg::Phys(source_name) = source else {
-        return false;
-    };
     if !slot_name.starts_with("local_") {
         return false;
     }
-    let (base, version) = source_name
-        .split_once('#')
-        .map_or((source_name.as_str(), None), |(base, version)| {
-            (base, Some(version))
-        });
-    matches!(version, None | Some("0"))
-        && matches!(base, "rbx" | "rbp" | "r12" | "r13" | "r14" | "r15")
+    if identities.is_some_and(|identities| identities.is_machine_saved_slot(slot)) {
+        return true;
+    }
+    entry_value_base(source, identities)
+        .is_some_and(|base| matches!(base, "rbx" | "rbp" | "r12" | "r13" | "r14" | "r15"))
+}
+
+fn entry_value_base<'a>(
+    source: &'a VReg,
+    identities: Option<&'a crate::ir::value_number::ValueIdentities>,
+) -> Option<&'a str> {
+    match identities {
+        Some(identities) => {
+            let identity = identities.exact(source)?;
+            if identity.version != 0 {
+                return None;
+            }
+            let VReg::Phys(base) = &identity.base else {
+                return None;
+            };
+            Some(base)
+        }
+        None => {
+            let VReg::Phys(name) = source else {
+                return None;
+            };
+            let (base, version) = name
+                .split_once('#')
+                .map_or((name.as_str(), None), |(base, version)| {
+                    (base, Some(version))
+                });
+            matches!(version, None | Some("0")).then_some(base)
+        }
+    }
+}
+
+/// Whether an exact SSA value is ABI machine state present at function entry.
+pub(crate) fn is_entry_callee_saved_value(
+    source: &VReg,
+    cc: CallConv,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> bool {
+    let Some(base) = entry_value_base(source, Some(identities)) else {
+        return false;
+    };
+    match cc {
+        CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Cdecl32 => {
+            matches!(base, "rbx" | "rbp" | "r12" | "r13" | "r14" | "r15")
+        }
+        CallConv::Arm | CallConv::ArmHardFloat => {
+            matches!(base, "fp" | "lr" | "r14")
+                || base
+                    .strip_prefix('r')
+                    .and_then(|index| index.parse::<u8>().ok())
+                    .is_some_and(|index| (4..=11).contains(&index))
+        }
+        CallConv::Aarch64 => false,
+    }
 }
 
 pub(crate) fn stmt_reads(s: &Stmt, dst: &VReg) -> bool {
@@ -1992,6 +2068,60 @@ mod tests {
                 value: Some(Expr::Const(7))
             }]
         );
+    }
+
+    #[test]
+    fn typed_callee_save_cleanup_requires_an_entry_identity() {
+        let candidate = || Function {
+            name: "typed_frame".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("local_8"),
+                    src: Expr::Reg(reg("opaque")),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+        let mut unowned = candidate();
+        prune_callee_saved_spills_with_identities(
+            &mut unowned,
+            CallConv::SysVAmd64,
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
+        assert_eq!(unowned.body.len(), 2, "unowned spelling was deleted");
+
+        let mut entry_identities = crate::ir::value_number::ValueIdentities::default();
+        entry_identities.record(
+            reg("opaque"),
+            crate::ir::ssa::SsaValue {
+                base: reg("r15"),
+                version: 0,
+            },
+        );
+        let mut entry = candidate();
+        prune_callee_saved_spills_with_identities(
+            &mut entry,
+            CallConv::SysVAmd64,
+            &entry_identities,
+        );
+        assert_eq!(entry.body, vec![Stmt::Return { value: None }]);
+
+        let mut later_identities = crate::ir::value_number::ValueIdentities::default();
+        later_identities.record(
+            reg("opaque"),
+            crate::ir::ssa::SsaValue {
+                base: reg("r15"),
+                version: 3,
+            },
+        );
+        let mut later = candidate();
+        prune_callee_saved_spills_with_identities(
+            &mut later,
+            CallConv::SysVAmd64,
+            &later_identities,
+        );
+        assert_eq!(later.body.len(), 2, "later SSA value was deleted");
     }
 
     #[test]

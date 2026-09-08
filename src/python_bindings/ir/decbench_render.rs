@@ -98,6 +98,7 @@ pub(super) fn decbench_text(
     dwarf_types: &[crate::debug::dwarf::DwarfType],
     dwarf_local_types: &std::collections::HashMap<String, String>,
     dwarf_local_names: &std::collections::HashMap<String, String>,
+    promoted_stack_slots: &std::collections::HashMap<String, u8>,
     dwarf_static_locals: &[crate::debug::dwarf::DwarfStaticLocal],
     cc: crate::ir::call_args::CallConv,
     addr_map: &std::collections::HashMap<u64, String>,
@@ -132,6 +133,7 @@ pub(super) fn decbench_text(
         dwarf_types,
         dwarf_local_types,
         dwarf_local_names,
+        promoted_stack_slots,
         cc,
         addr_map,
     );
@@ -161,6 +163,7 @@ fn decbench_text_with_installed_environment(
     dwarf_types: &[crate::debug::dwarf::DwarfType],
     dwarf_local_types: &std::collections::HashMap<String, String>,
     dwarf_local_names: &std::collections::HashMap<String, String>,
+    promoted_stack_slots: &std::collections::HashMap<String, u8>,
     cc: crate::ir::call_args::CallConv,
     addr_map: &std::collections::HashMap<u64, String>,
 ) -> String {
@@ -190,7 +193,7 @@ fn decbench_text_with_installed_environment(
         // machine-only suffix.  Run the idempotent recogniser at this semantic
         // boundary, then repeat the narrow joined-return fold it may unblock.
         // The renderer below remains formatting-only.
-        recognise_machine_frame(&mut prepared, cc);
+        recognise_machine_frame(&mut prepared, cc, &value_identities);
         crate::ir::ast::fold_exhaustive_if_returns_with_identities(
             &mut prepared,
             &value_identities,
@@ -548,13 +551,16 @@ fn decbench_text_with_installed_environment(
         "prune_unobserved_promoted_object_stores",
         crate::ir::dead_stores::prune_unobserved_promoted_object_stores(&mut prepared)
     );
+    pass!("prune_promoted_self_stores", {
+        crate::ir::stack_locals::prune_promoted_self_stores(&mut prepared, promoted_stack_slots)
+    });
     // Typed/local preparation can be the first point at which every saved
     // cdecl32 frame identity has disappeared and GCC's entry-realignment
     // prologue/epilogue becomes one exact balanced transaction. Repeat the
     // idempotent architecture recognizer at the final semantic boundary so
     // the verifier and renderer never inherit that now-provable ABI state.
     pass!("recognise_final_machine_frame", {
-        recognise_machine_frame(&mut prepared, cc)
+        recognise_machine_frame(&mut prepared, cc, &value_identities)
     });
     pass!("drop_final_machine_frame_comments", {
         crate::ir::ast::drop_machine_frame_comments(&mut prepared.body)
