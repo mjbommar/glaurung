@@ -1185,6 +1185,12 @@ provenance through lowering.
   preserves the enclosing operation and both operand owners. Its observed-red
   test and all 70 constant-fold tests pass; see
   `results/wp3-same-operand-expression-origins.md`.
+  Commit `3627ca65` next makes the full neutral/absorbing constant-identity
+  family transparent to carriers. Neutral folds retain the survivor and
+  constant owners; absorbing folds retain the determining constant but exclude
+  the genuinely irrelevant value owner. Its observed-red policy test and all
+  71 constant-fold tests pass; see
+  `results/wp3-constant-identity-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
