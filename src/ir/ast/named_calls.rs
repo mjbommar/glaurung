@@ -35,6 +35,9 @@ fn observe_address_taken_symbols(
     observations: &mut std::collections::BTreeMap<String, Vec<CallPrototype>>,
 ) {
     match expression {
+        Expr::Origin { expr, .. } => {
+            observe_address_taken_symbols(expr, current_name, observations)
+        }
         Expr::Named { name, .. } => {
             let displayed = sanitize_c_ident(callee_display_name(name));
             if displayed != current_name {
@@ -504,6 +507,20 @@ pub(super) fn recover_named_call_prototypes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attributed_address_taken_symbol_remains_a_declaration_candidate() {
+        let expression = Expr::Named {
+            va: 0x2000,
+            name: "callback".into(),
+        }
+        .with_origins(crate::ir::ast::OriginSet::one(0x1004));
+        let mut observations = std::collections::BTreeMap::new();
+
+        observe_address_taken_symbols(&expression, "caller", &mut observations);
+
+        assert_eq!(observations.get("callback"), Some(&Vec::new()));
+    }
 
     #[test]
     fn named_call_prototype_preserves_an_exact_observed_contract() {
