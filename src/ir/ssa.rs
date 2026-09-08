@@ -1102,9 +1102,14 @@ mod tests {
         let pipeline = include_str!("../python_bindings/ir/pipeline.rs");
 
         assert_eq!(
-            pipeline.matches(".apply_mutation(").count(),
+            pipeline.matches("tracked.apply_mutation(").count(),
             2,
             "adding or removing a post-SSA LLIR mutation requires an explicit audit"
+        );
+        assert_eq!(
+            pipeline.matches("self.ssa.apply_mutation(").count(),
+            1,
+            "the tracked LLIR transaction must have one mutation gateway"
         );
         assert_eq!(
             pipeline.matches("Invalidate::All").count(),

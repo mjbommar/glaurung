@@ -1384,24 +1384,58 @@ pub(super) fn target_calling_convention(
 /// normalized LLIR consumed by region recovery and value numbering.  Keeping
 /// this sequence in one helper prevents the four Python decompilation entry
 /// points from drifting into different value models.
+struct SsaTrackedLlir<'a> {
+    function: &'a mut crate::ir::types::LlirFunction,
+    ssa: crate::ir::ssa::VersionedSsa,
+}
+
+impl<'a> SsaTrackedLlir<'a> {
+    fn new(
+        function: &'a mut crate::ir::types::LlirFunction,
+        ssa: crate::ir::ssa::VersionedSsa,
+    ) -> Self {
+        Self { function, ssa }
+    }
+
+    fn function(&self) -> &crate::ir::types::LlirFunction {
+        self.function
+    }
+
+    fn ensure(&mut self, analyzed: &crate::ir::types::LlirFunction) -> &crate::ir::ssa::SsaInfo {
+        self.ssa.ensure(analyzed)
+    }
+
+    fn apply_mutation<R>(
+        &mut self,
+        change: crate::ir::ssa::Invalidate,
+        mutation: impl FnOnce(&mut crate::ir::types::LlirFunction) -> (R, bool),
+    ) -> R {
+        self.ssa.apply_mutation(self.function, change, mutation)
+    }
+}
+
 fn normalize_definedness_with_ssa(
-    function: &mut crate::ir::types::LlirFunction,
+    tracked: &mut SsaTrackedLlir<'_>,
     exception_sites: &[crate::analysis::exception::ExceptionCallSite],
     cc: crate::ir::call_args::CallConv,
-    ssa: &mut crate::ir::ssa::VersionedSsa,
 ) {
-    let graph = crate::analysis::exception::with_exceptional_successors(function, exception_sites);
-    let current_ssa = ssa.ensure(&graph).clone();
+    let graph = crate::analysis::exception::with_exceptional_successors(
+        tracked.function(),
+        exception_sites,
+    );
+    let current_ssa = tracked.ensure(&graph).clone();
     let oracle = crate::ir::definedness::BitDemandOracle::analyze(&graph, &current_ssa, cc);
-    let erased = ssa.apply_mutation(function, crate::ir::ssa::Invalidate::Uses, |function| {
+    let erased = tracked.apply_mutation(crate::ir::ssa::Invalidate::Uses, |function| {
         let count =
             crate::ir::definedness::erase_unobserved_masked_inputs(function, &current_ssa, &oracle);
         (count, count != 0)
     });
     if erased != 0 {
-        let normalized_graph =
-            crate::analysis::exception::with_exceptional_successors(function, exception_sites);
-        ssa.ensure(&normalized_graph);
+        let normalized_graph = crate::analysis::exception::with_exceptional_successors(
+            tracked.function(),
+            exception_sites,
+        );
+        tracked.ensure(&normalized_graph);
     }
 }
 
@@ -1606,20 +1640,23 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
 ) -> PreparedLlir {
     let initial_graph =
         crate::analysis::exception::with_exceptional_successors(function, exception_sites);
-    let mut ssa_state = crate::ir::ssa::VersionedSsa::compute(&initial_graph, *image.target());
-    normalize_definedness_with_ssa(function, exception_sites, cc, &mut ssa_state);
-    let current_graph =
-        crate::analysis::exception::with_exceptional_successors(function, exception_sites);
-    let ssa = ssa_state.ensure(&current_graph).clone();
+    let ssa_state = crate::ir::ssa::VersionedSsa::compute(&initial_graph, *image.target());
+    let mut tracked = SsaTrackedLlir::new(function, ssa_state);
+    normalize_definedness_with_ssa(&mut tracked, exception_sites, cc);
+    let current_graph = crate::analysis::exception::with_exceptional_successors(
+        tracked.function(),
+        exception_sites,
+    );
+    let ssa = tracked.ensure(&current_graph).clone();
     let provisional_slots = if recover_semantic_prototype {
-        crate::ir::value_number::value_number_with_parameter_slots(function, &ssa, cc).2
+        crate::ir::value_number::value_number_with_parameter_slots(tracked.function(), &ssa, cc).2
     } else {
-        crate::ir::value_number::live_in_arg_slots_llir(function, cc)
+        crate::ir::value_number::live_in_arg_slots_llir(tracked.function(), cc)
     };
     let mut inferred_prototype = None;
     let prototype = recover_semantic_prototype.then(|| {
         let (mut prototype, inferred) = recover_decbench_prototype_with_inferred(
-            function,
+            tracked.function(),
             &ssa,
             cc,
             &provisional_slots,
@@ -1650,21 +1687,23 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
         prototype
     });
     let materialized_returns = prototype.as_ref().map_or(0, |prototype| {
-        ssa_state.apply_mutation(function, crate::ir::ssa::Invalidate::Uses, |function| {
+        tracked.apply_mutation(crate::ir::ssa::Invalidate::Uses, |function| {
             let count =
                 crate::ir::types_recover::materialize_return_values(function, cc, prototype);
             (count, count != 0)
         })
     });
     if materialized_returns != 0 {
-        normalize_definedness_with_ssa(function, exception_sites, cc, &mut ssa_state);
+        normalize_definedness_with_ssa(&mut tracked, exception_sites, cc);
     }
-    let current_graph =
-        crate::analysis::exception::with_exceptional_successors(function, exception_sites);
-    let ssa = ssa_state.ensure(&current_graph).clone();
+    let current_graph = crate::analysis::exception::with_exceptional_successors(
+        tracked.function(),
+        exception_sites,
+    );
+    let ssa = tracked.ensure(&current_graph).clone();
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
         eprintln!("\n===== prototype-resolved LLIR =====");
-        for block in &function.blocks {
+        for block in &tracked.function().blocks {
             eprintln!("block 0x{:x} -> {:?}", block.start_va, block.succs);
             for instruction in &block.instrs {
                 eprintln!("  0x{:x}: {}", instruction.va, instruction.op);
@@ -1676,35 +1715,35 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
     // function and no extra object parse. It reaches only the terminal census;
     // no region decision depends on it.
     let indirect_destinations = crate::ir::indirect_targets::resolve_indirect_jumps(
-        function,
+        tracked.function(),
         &ssa,
         &image.relocated_symbol_slots(),
     );
     let (region, cfg_health) = crate::ir::structure::recover_verified_with_health_and_destinations(
-        function,
+        tracked.function(),
         &ssa,
         &indirect_destinations,
     );
     let shadow_v2_region = prepare_shadow_v2
         .then(|| {
-            let report = crate::ir::structure_v2::observe(function, &ssa);
-            crate::ir::structure_v2::render::adapt_tree(function, report.tree.as_ref()?)
+            let report = crate::ir::structure_v2::observe(tracked.function(), &ssa);
+            crate::ir::structure_v2::render::adapt_tree(tracked.function(), report.tree.as_ref()?)
         })
         .flatten();
     let (numbered, definition_widths, mut parameter_slots, value_identities) =
         if recover_semantic_prototype {
             let source_lifetimes = dwarf_source_register_lifetimes(declared, cc);
             crate::ir::value_number::value_number_with_parameter_slots_lifetimes_and_identities(
-                function,
+                tracked.function(),
                 &ssa,
                 cc,
                 &source_lifetimes,
             )
         } else {
             (
-                function.clone(),
+                tracked.function().clone(),
                 std::collections::HashMap::new(),
-                crate::ir::value_number::live_in_arg_slots_llir(function, cc),
+                crate::ir::value_number::live_in_arg_slots_llir(tracked.function(), cc),
                 crate::ir::value_number::ValueIdentities::default(),
             )
         };
