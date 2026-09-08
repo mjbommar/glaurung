@@ -337,7 +337,11 @@ fn decbench_text_with_installed_environment(
     if let Some(tm) = refined_decl.as_ref() {
         pass!(
             "propagate_adjacent_typed_promoted_values",
-            crate::ir::copy_prop::propagate_adjacent_typed_promoted_values(&mut prepared, tm)
+            crate::ir::copy_prop::propagate_adjacent_typed_promoted_values_with_identities(
+                &mut prepared,
+                tm,
+                &value_identities,
+            )
         );
         pass!(
             "fold_typed_declared_views",

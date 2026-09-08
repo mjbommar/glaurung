@@ -65,7 +65,7 @@ use super::subst::subst;
 /// carries a distinct assignment representation.
 pub fn propagate_adjacent_promoted_values(f: &mut Function) {
     loop {
-        if !fold_one_adjacent_promoted_value(&mut f.body, None) {
+        if !fold_one_adjacent_promoted_value(&mut f.body, None, None) {
             break;
         }
     }
@@ -82,7 +82,20 @@ pub fn propagate_adjacent_promoted_values(f: &mut Function) {
 /// safe. Unknown, float, pointer, and code-pointer destinations remain explicit.
 pub fn propagate_adjacent_typed_promoted_values(f: &mut Function, types: &TypeMap) {
     loop {
-        if !fold_one_adjacent_promoted_value(&mut f.body, Some(types)) {
+        if !fold_one_adjacent_promoted_value(&mut f.body, Some(types), None) {
+            break;
+        }
+    }
+}
+
+/// Identity-aware production form of [`propagate_adjacent_typed_promoted_values`].
+pub fn propagate_adjacent_typed_promoted_values_with_identities(
+    f: &mut Function,
+    types: &TypeMap,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    loop {
+        if !fold_one_adjacent_promoted_value(&mut f.body, Some(types), Some(identities)) {
             break;
         }
     }
@@ -410,11 +423,21 @@ fn fold_one_adjacent_guard_value(body: &mut Vec<Stmt>, reads: &RegMap<usize>) ->
     false
 }
 
-fn fold_one_adjacent_promoted_value(body: &mut Vec<Stmt>, types: Option<&TypeMap>) -> bool {
+fn fold_one_adjacent_promoted_value(
+    body: &mut Vec<Stmt>,
+    types: Option<&TypeMap>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    let promoted = |value: &crate::ir::types::VReg| {
+        identities.map_or_else(
+            || is_promoted_local_reg(value),
+            |identities| identities.is_promoted_stack_object(value),
+        )
+    };
     for index in 0..body.len().saturating_sub(1) {
         let candidate = match body[index].semantic() {
             Stmt::Assign { dst, src }
-                if is_promoted_local_reg(dst)
+                if promoted(dst)
                     && is_deferable_promoted_value(src)
                     && !contains_reg(src, dst)
                     && promoted_value_width(src).is_some() =>
@@ -425,7 +448,7 @@ fn fold_one_adjacent_promoted_value(body: &mut Vec<Stmt>, types: Option<&TypeMap
                 addr: Expr::Reg(dst),
                 src,
                 size,
-            } if is_promoted_local_reg(dst)
+            } if promoted(dst)
                 && types.is_some_and(|types| {
                     matches!(
                         types.get(dst),
@@ -499,21 +522,21 @@ fn fold_one_adjacent_promoted_value(body: &mut Vec<Stmt>, types: Option<&TypeMap
                 else_body,
                 ..
             } => {
-                fold_one_adjacent_promoted_value(then_body, types)
-                    || else_body
-                        .as_mut()
-                        .is_some_and(|body| fold_one_adjacent_promoted_value(body, types))
+                fold_one_adjacent_promoted_value(then_body, types, identities)
+                    || else_body.as_mut().is_some_and(|body| {
+                        fold_one_adjacent_promoted_value(body, types, identities)
+                    })
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                fold_one_adjacent_promoted_value(body, types)
+                fold_one_adjacent_promoted_value(body, types, identities)
             }
             Stmt::Switch { cases, default, .. } => {
                 cases
                     .iter_mut()
-                    .any(|(_, body)| fold_one_adjacent_promoted_value(body, types))
-                    || default
-                        .as_mut()
-                        .is_some_and(|body| fold_one_adjacent_promoted_value(body, types))
+                    .any(|(_, body)| fold_one_adjacent_promoted_value(body, types, identities))
+                    || default.as_mut().is_some_and(|body| {
+                        fold_one_adjacent_promoted_value(body, types, identities)
+                    })
             }
             _ => false,
         };
@@ -882,6 +905,88 @@ mod tests {
                 value: Some(predicate),
             }]
         );
+    }
+
+    #[test]
+    fn typed_promoted_store_accepts_opaque_owned_storage() {
+        let object = "frame_object".to_string();
+        let predicate = Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs: Box::new(Expr::Reg(reg("state"))),
+            rhs: Box::new(Expr::Const(3)),
+        };
+        let mut function = Function {
+            name: "finished".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(reg(&object)),
+                    src: predicate.clone(),
+                    size: 4,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg(&object))),
+                },
+            ],
+        };
+        let mut types = crate::ir::types_recover::TypeMap::default();
+        types.upsert_public(
+            reg(&object),
+            crate::ir::types_recover::TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object]);
+
+        propagate_adjacent_typed_promoted_values_with_identities(
+            &mut function,
+            &types,
+            &identities,
+        );
+
+        assert_eq!(
+            function.body,
+            vec![Stmt::Return {
+                value: Some(predicate),
+            }]
+        );
+    }
+
+    #[test]
+    fn typed_promoted_store_rejects_unowned_local_spelling() {
+        let mut function = Function {
+            name: "finished".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(reg("local_4")),
+                    src: Expr::Const(1),
+                    size: 4,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("local_4"))),
+                },
+            ],
+        };
+        let expected = function.clone();
+        let mut types = crate::ir::types_recover::TypeMap::default();
+        types.upsert_public(
+            reg("local_4"),
+            crate::ir::types_recover::TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        propagate_adjacent_typed_promoted_values_with_identities(
+            &mut function,
+            &types,
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
+
+        assert_eq!(function, expected);
     }
 
     #[test]

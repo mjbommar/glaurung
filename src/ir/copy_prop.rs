@@ -58,6 +58,7 @@ pub use adjacent::{
     move_adjacent_effectful_scratch_values, propagate_adjacent_guard_values,
     propagate_adjacent_overwritten_values, propagate_adjacent_promoted_values,
     propagate_adjacent_typed_promoted_values,
+    propagate_adjacent_typed_promoted_values_with_identities,
 };
 pub use switch_entry::propagate_switch_entry_copies;
 
