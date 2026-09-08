@@ -703,6 +703,22 @@ AArch64 O2 `bst_inorder_checksum` lane ran, reporting no scoped regression. The
 recent four-cell Hello checkpoint was not repeated. No broad suite or corpus
 ran.
 
+## x86 scalar-frame storage identities
+
+Commit `21599ad4` makes the production x86-64 scalar rbp-frame prologue and
+recursive epilogue recognizers consume producer-owned promoted-stack identity.
+An opaque owned slot collapses and an unowned `stack_0` fails closed. Both
+exact boundary tests and all 42 x86 frame tests pass using `cargo test --lib`,
+with 4,588 unrelated library tests filtered out. A fresh serial extension build
+passes the build guard and the exact compiled x86 stack-clash execution fixture.
+
+A concurrent uncommitted decoder lane appeared during census generation.
+Corrective commit `681594ed` excludes its three tests and records this source
+increment alone: 5,164 declared Rust tests and zero outside every gate. An
+isolated archive of the pushed tip reproduces the baseline and passes all six
+census checks. The recent Hello checkpoint was not repeated. No broad suite or
+corpus ran.
+
 ## Ground rules
 
 Verified before any claim of done: `cargo test --features python-ext`,

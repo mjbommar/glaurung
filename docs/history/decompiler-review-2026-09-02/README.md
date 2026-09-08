@@ -88,6 +88,11 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
+[`results/wp3-x86-scalar-frame-storage-identities.md`](results/wp3-x86-scalar-frame-storage-identities.md):
+production x86-64 scalar rbp-frame save/restore cleanup now consumes owned
+storage identity rather than `stack_`/`local_` spelling. Its two exact
+boundaries, all 42 owning tests, one compiled stack-clash execution fixture,
+and isolated census gate pass. The preceding
 [`results/wp3-aarch64-frame-storage-identities.md`](results/wp3-aarch64-frame-storage-identities.md):
 production AArch64 fp/lr save and restore cleanup now uses producer-owned stack
 identity instead of `stack_` spelling. Four exact identity boundaries, all 16

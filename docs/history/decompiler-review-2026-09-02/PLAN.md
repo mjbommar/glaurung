@@ -2126,6 +2126,16 @@ provenance through lowering.
   fresh serial extension rebuild. The typed `StackAddr` frame-record form and
   explicit no-sidecar wrapper remain separate. No broad suite or corpus ran.
   See `results/wp3-aarch64-frame-storage-identities.md`.
+  Commit `21599ad4` then moves the production x86-64 scalar rbp-frame
+  prologue and recursive epilogue proofs onto owned promoted-stack identity.
+  Opaque owned storage is recognized; unowned `stack_0` is not. Typed
+  `StackAddr` remains authoritative on its AST shape, while cdecl32 stays a
+  separate compatibility consumer. Both exact boundary tests, all 42 owning
+  tests, and only the compiled x86 stack-clash execution fixture pass after a
+  fresh rebuild. Corrective commit `681594ed` isolates the 5,164-test census
+  from three concurrent uncommitted decoder tests; an archive of the exact tip
+  passes all six census checks. No broad suite or corpus ran. See
+  `results/wp3-x86-scalar-frame-storage-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
