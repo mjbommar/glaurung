@@ -662,6 +662,20 @@ preparation pass remains a compatibility boundary, so the wider WP3 migration
 is still open. The four-cell Hello checkpoint had just passed and was not
 repeated. No broad suite or corpus ran.
 
+## Typed promoted-value identities
+
+Commit `f90a277c` makes late typed adjacent promoted-value folding require
+producer-owned stack identity in addition to the existing scalar type and
+one-use proofs. An opaque owned `frame_object` folds, while an unowned
+`local_4` with the same scalar type declines. Both exact tests and all 66 copy-
+propagation tests pass with 4,553 unrelated Rust tests filtered out. The census
+records 5,156 declared Rust tests and zero outside every gate; all six census
+checks pass after the source commit. A fresh serial native rebuild passes the
+build guard and only the exact Clang O0 `fsm_returns_from_arm` fixture ran,
+reporting no scoped regression. The untyped pre-sidecar mover remains a
+compatibility boundary. The recent four-cell Hello checkpoint was not
+repeated. No broad suite or corpus ran.
+
 ## Ground rules
 
 Verified before any claim of done: `cargo test --features python-ext`,

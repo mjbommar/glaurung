@@ -2102,6 +2102,14 @@ provenance through lowering.
   retains compatibility behavior, so copy-propagation migration remains open.
   No broad suite or corpus ran. See
   `results/wp3-late-copy-storage-identities.md`.
+  Commit `f90a277c` then moves late typed adjacent promoted-value folding onto
+  producer-owned stack-object identity. Scalar type evidence remains required,
+  but an unowned `local_4` can no longer authorize the fold while an opaque
+  owned `frame_object` can. Both exact boundary tests, all 66 copy-propagation
+  tests, the census gate, and only the Clang O0 `fsm_returns_from_arm` fixture
+  pass after a fresh serial extension rebuild. The untyped pre-sidecar mover
+  retains compatibility behavior, so the package remains open. No broad suite
+  or corpus ran. See `results/wp3-typed-promoted-value-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and

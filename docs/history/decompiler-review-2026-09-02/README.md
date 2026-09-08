@@ -88,7 +88,13 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
-[`results/wp3-late-copy-storage-identities.md`](results/wp3-late-copy-storage-identities.md):
+[`results/wp3-typed-promoted-value-identities.md`](results/wp3-typed-promoted-value-identities.md):
+late typed adjacent promoted-value folding now requires producer-owned stack
+identity in addition to scalar type evidence. Its two exact boundary tests,
+all 66 copy-propagation tests, census gate, and exact Clang O0 structured FSM
+fixture pass. The preceding
+[`results/wp3-late-copy-storage-identities.md`](results/wp3-late-copy-storage-identities.md)
+records that
 late production copy cleanup now distinguishes scratch values from promoted
 storage by producer-owned identity rather than `local_` / `stack_` spelling.
 Its two exact boundary tests, all 64 copy-propagation tests, census gate, and
