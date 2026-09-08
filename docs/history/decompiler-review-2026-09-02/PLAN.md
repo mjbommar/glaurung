@@ -1873,6 +1873,15 @@ provenance through lowering.
   pointer cases pass afterward, and the exact nullable-locale compile/runtime
   round trip remains green after a release rebuild. See
   `results/wp3-pointer-destination-expression-origin-rendering.md`.
+  Commit `8e8e63d7` closes the next destination-side reader and directly
+  protects the signed-literal part of the motivating `classify` defect.
+  An attributed all-ones 32-bit value assigned to signed `int` now retains
+  `-1` instead of regressing to `0xffffffff`; unsigned, boolean, pointer,
+  64-bit, and out-of-range refusals are unchanged. The strengthened contract
+  was observed red, the exhaustive narrow spelling check passes, and all four
+  compiler/optimization cells for fixture 97's `size_like_loop` remain green
+  after a release rebuild. See
+  `results/wp3-signed-destination-literal-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
