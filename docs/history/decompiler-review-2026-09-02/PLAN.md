@@ -1652,6 +1652,11 @@ provenance through lowering.
   library-call parameter refinement to the AST identity sidecar: only a value
   carrying an authoritative parameter slot can lend a nominal type such as
   `FILE *` to the caller prototype, while an unowned `arg0` spelling cannot.
+  Commit `40cb2904` migrates the full-width parameter-address load fold across
+  both production phases: the early shared pipeline uses its owned slot set,
+  and post-promotion preparation/rendering use projected identities. An
+  unowned `StackAddr(arg0)` therefore remains a dereference rather than being
+  rewritten into an unrelated scalar value.
   See
   `results/wp3-parameter-role-metadata.md`. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name

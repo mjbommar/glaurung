@@ -64,6 +64,15 @@ merely spelled `arg0` cannot change the caller's prototype. The explicit
 no-sidecar API retains name parsing for compatibility, and the existing
 compatible and conflicting-use behavior remains pinned there.
 
+Commit `40cb2904` migrates constant folding's parameter-address load rule. The
+shared early AST pipeline supplies its authoritative parameter slots; the
+post-promotion preparation fixpoint and all later renderer folds supply the
+projected AST identity sidecar. Consequently a full-width load through the
+address of an owned scalar parameter still becomes the parameter, while an
+unowned value merely spelled `arg0` remains a dereference. Partial loads remain
+explicit. The no-authority entry point retains its legacy behavior for tests,
+benchmarks, and compatibility callers.
+
 Focused validation used exact Rust tests only:
 
 ```text
@@ -141,6 +150,18 @@ compatible_library_uses_recover_an_opaque_caller_parameter
 
 conflicting_library_uses_do_not_invent_a_nominal_parameter_type
 1 passed; 4,431 filtered out
+
+parameter_address_load_requires_a_typed_parameter_role
+1 passed; 4,432 filtered out
+
+full_width_load_of_parameter_address_is_the_parameter
+1 passed; 4,432 filtered out
+
+attributed_full_width_parameter_load_unions_address_and_load_origins
+1 passed; 4,432 filtered out
+
+partial_load_of_parameter_address_is_not_widened
+1 passed; 4,432 filtered out
 ```
 
 Each command was `cargo test --features python-ext --lib
