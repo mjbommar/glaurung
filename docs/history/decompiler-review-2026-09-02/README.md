@@ -88,6 +88,10 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
+[`results/wp3-wp7b-for-loop-stack-identities.md`](results/wp3-wp7b-for-loop-stack-identities.md):
+store-backed counted-loop promotion now requires producer-owned stack identity
+in production. All 31 loop-form tests and the exact GCC O0 `for_sum` fixture
+pass. The preceding
 [`results/wp3-exception-stack-identities.md`](results/wp3-exception-stack-identities.md):
 integer exception recovery now follows producer-owned promoted copies, and its
 RTTI proof sees attributed expressions. All 10 owning tests and the exact

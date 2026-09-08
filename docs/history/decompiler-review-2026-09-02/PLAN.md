@@ -2048,6 +2048,12 @@ provenance through lowering.
   conversion transparency repaired it before commit. All 10 owning tests and
   the exact Clang O2 `cpp_exception` fixture pass, with 4,592 unrelated Rust
   tests filtered out. See `results/wp3-exception-stack-identities.md`.
+  Commit `50cc926d` then migrates store-backed counted-loop promotion from
+  `local_`/`stack_` spelling to producer-owned stack identity. Opaque owned
+  induction objects promote; misleading `local_i` spelling without ownership
+  declines. All 31 loop-form tests and the exact GCC O0 `for_sum` fixture pass,
+  with 4,572 unrelated Rust tests filtered out. See
+  `results/wp3-wp7b-for-loop-stack-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and

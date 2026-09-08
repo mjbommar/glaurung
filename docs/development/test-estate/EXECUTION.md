@@ -558,6 +558,16 @@ Rust tests and zero outside every gate. After a fresh serial rebuild, only
 `10_cpp_runtime_shapes:clang:O2:cpp_exception` ran and reported no scoped
 regression. No broad suite or corpus ran.
 
+## For-loop stack identities
+
+Commit `50cc926d` makes store-backed counted-loop promotion consume
+producer-owned stack identity instead of `local_`/`stack_` spelling. An opaque
+owned induction object promotes, while an unowned `local_i` declines. All 31
+loop-form tests pass with 4,572 unrelated tests filtered out; the census records
+5,140 Rust tests and zero outside every gate. After a fresh serial rebuild,
+only `03_loop_shapes:gcc:O0:for_sum` ran and reported no scoped regression. No
+broad suite or corpus ran.
+
 ## Ground rules
 
 Verified before any claim of done: `cargo test --features python-ext`,
