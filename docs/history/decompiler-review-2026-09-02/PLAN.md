@@ -1834,6 +1834,15 @@ provenance through lowering.
   writes now use exact identities. All 15 owning tail-call tests and the exact
   Rust O2 `rust_dyn_apply` fixture pass; no broad suite or corpus ran. See
   `results/wp3-vtable-tail-identities.md`.
+  Commit `f79d7909` then migrates the ordinary backward call scan's ABI-slot
+  lookup. Opaque values carrying exact argument-register identities now fold,
+  misleading `rdi#version` spellings mapped to non-argument storage refuse,
+  and coalesced candidates must agree on one slot. The exact regression, all
+  141 owning call-argument tests, and the single GCC O2
+  `call_accumulate_bytes` canary pass; no broad suite or corpus ran. A wider
+  attempt to infer AST-name immutability from the original SSA version was
+  rejected by that canary because post-SSA AST coalescing can reuse a
+  presentation variable. See `results/wp3-call-argument-slot-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
