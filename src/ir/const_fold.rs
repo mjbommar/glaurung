@@ -899,41 +899,36 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
         // canonical shape of x86 signed predicates: SF ^ OF, where OF is
         // itself the XOR of a signed comparison and SF.
         if op == BinOp::Xor {
-            let replacement = match (lhs.as_ref(), rhs.as_ref()) {
-                (
-                    a,
-                    Expr::Bin {
-                        op: BinOp::Xor,
-                        lhs: b,
-                        rhs: c,
-                    },
-                ) if a == c.as_ref() => Some(b.as_ref().clone()),
-                (
-                    a,
-                    Expr::Bin {
-                        op: BinOp::Xor,
-                        lhs: b,
-                        rhs: c,
-                    },
-                ) if a == b.as_ref() => Some(c.as_ref().clone()),
-                (
-                    Expr::Bin {
-                        op: BinOp::Xor,
-                        lhs: b,
-                        rhs: c,
-                    },
-                    a,
-                ) if a == c.as_ref() => Some(b.as_ref().clone()),
-                (
-                    Expr::Bin {
-                        op: BinOp::Xor,
-                        lhs: b,
-                        rhs: c,
-                    },
-                    a,
-                ) if a == b.as_ref() => Some(c.as_ref().clone()),
-                _ => None,
+            let cancel = |a: &Expr, nested: &Expr| {
+                let Expr::Bin {
+                    op: BinOp::Xor,
+                    lhs: b,
+                    rhs: c,
+                } = nested.semantic()
+                else {
+                    return None;
+                };
+                let survivor = if a.semantic() == c.semantic() {
+                    b.as_ref()
+                } else if a.semantic() == b.semantic() {
+                    c.as_ref()
+                } else {
+                    return None;
+                };
+                let origins = [a, nested, b.as_ref(), c.as_ref()]
+                    .into_iter()
+                    .filter_map(Expr::origins)
+                    .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+                        owners.union(next)
+                    });
+                Some(
+                    survivor
+                        .semantic()
+                        .clone()
+                        .with_optional_origins((!origins.is_empty()).then_some(origins)),
+                )
             };
+            let replacement = cancel(lhs, rhs).or_else(|| cancel(rhs, lhs));
             if let Some(replacement) = replacement {
                 rewrite(e, replacement, changed);
                 return;
@@ -2309,6 +2304,50 @@ mod tests {
         };
         assert_eq!(src.semantic(), &less);
         assert_eq!(src.origins(), Some(&owner));
+    }
+
+    #[test]
+    fn attributed_xor_cancellation_unions_consumed_flag_origins() {
+        let outer_owner = crate::ir::ast::OriginSet::one(0x1070);
+        let first_flag_owner = crate::ir::ast::OriginSet::one(0x1074);
+        let nested_owner = crate::ir::ast::OriginSet::one(0x1078);
+        let relation_owner = crate::ir::ast::OriginSet::one(0x107c);
+        let repeated_flag_owner = crate::ir::ast::OriginSet::one(0x1080);
+        let relation = Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: Box::new(Expr::Reg(reg("rax"))),
+            rhs: Box::new(Expr::Reg(reg("rbx"))),
+        };
+        let mut function = one_stmt(
+            bin(
+                BinOp::Xor,
+                Expr::Reg(reg("sf")).with_origins(first_flag_owner.clone()),
+                bin(
+                    BinOp::Xor,
+                    relation.clone().with_origins(relation_owner.clone()),
+                    Expr::Reg(reg("sf")).with_origins(repeated_flag_owner.clone()),
+                )
+                .with_origins(nested_owner.clone()),
+            )
+            .with_origins(outer_owner.clone()),
+        );
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        assert_eq!(src.semantic(), &relation);
+        assert_eq!(
+            src.origins(),
+            Some(
+                &outer_owner
+                    .union(&first_flag_owner)
+                    .union(&nested_owner)
+                    .union(&relation_owner)
+                    .union(&repeated_flag_owner)
+            )
+        );
     }
 
     #[test]
