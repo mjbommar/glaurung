@@ -304,7 +304,9 @@ impl ValueIdentities {
 }
 
 #[cfg(test)]
-use coalesce::{coalesce_phi_copies, coalesce_phi_copies_with_lifetimes};
+use coalesce::{
+    coalesce_phi_copies, coalesce_phi_copies_with_identities, coalesce_phi_copies_with_lifetimes,
+};
 
 /// Return a copy of `lf` with every physical register occurrence rewritten to
 /// its SSA-value-tagged name. `cc` identifies the return registers whose final
@@ -525,6 +527,7 @@ pub fn value_number_with_parameter_slots_lifetimes_and_identities(
         &definition_widths_by_site,
         &phi_copies.incoming_widths,
         source_lifetimes,
+        Some(&identities),
     );
     identities.apply_renames(&renames);
     identities.attach_abi_parameter_slots(cc, &parameter_slots);
@@ -2169,6 +2172,118 @@ mod tests {
             register_copies(&lf).contains(&("rax#1".to_string(), "rdi".to_string())),
             "the live-in parameter must keep its own identity: {lf:#?}"
         );
+    }
+
+    #[test]
+    fn production_phi_coalescing_uses_opaque_ssa_identity() {
+        let first = VReg::phys("opaque_first");
+        let second = VReg::phys("opaque_second");
+        let mut lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x100c,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x1000,
+                        op: Op::Assign {
+                            dst: first.clone(),
+                            src: Value::Const(7),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1004,
+                        op: Op::Assign {
+                            dst: second.clone(),
+                            src: Value::Reg(first.clone()),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1008,
+                        op: Op::Assign {
+                            dst: VReg::phys("sink"),
+                            src: Value::Reg(second.clone()),
+                        },
+                    },
+                ],
+                succs: vec![],
+            }],
+        };
+        let mut identities = ValueIdentities::default();
+        identities.record(
+            first.clone(),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 1,
+            },
+        );
+        identities.record(
+            second.clone(),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 2,
+            },
+        );
+
+        let renames = coalesce_phi_copies_with_identities(
+            &mut lf,
+            &[(second.clone(), first.clone())],
+            &mut HashMap::new(),
+            &identities,
+        );
+
+        assert_eq!(renames.get(&second), Some(&first));
+        assert_eq!(
+            register_copies(&lf),
+            vec![("sink".into(), "opaque_first".into())]
+        );
+    }
+
+    #[test]
+    fn production_phi_coalescing_rejects_unowned_version_spelling() {
+        let first = VReg::phys("rax#1");
+        let second = VReg::phys("rax#2");
+        let mut lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x100c,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x1000,
+                        op: Op::Assign {
+                            dst: first.clone(),
+                            src: Value::Const(7),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1004,
+                        op: Op::Assign {
+                            dst: second.clone(),
+                            src: Value::Reg(first.clone()),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1008,
+                        op: Op::Assign {
+                            dst: VReg::phys("sink"),
+                            src: Value::Reg(second.clone()),
+                        },
+                    },
+                ],
+                succs: vec![],
+            }],
+        };
+
+        let renames = coalesce_phi_copies_with_identities(
+            &mut lf,
+            &[(second.clone(), first.clone())],
+            &mut HashMap::new(),
+            &ValueIdentities::default(),
+        );
+
+        assert!(renames.is_empty());
+        assert!(register_copies(&lf).contains(&("rax#2".into(), "rax#1".into())));
     }
 
     #[test]

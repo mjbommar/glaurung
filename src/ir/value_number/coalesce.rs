@@ -38,8 +38,26 @@ pub(crate) type DefinitionWidthsBySite = HashMap<(InstrAddr, usize), u8>;
 /// pipeline binds by spelling — a live-in parameter (version 0), a structural
 /// frame register, or a return value [`KeepBare`] deliberately did not version —
 /// and renaming any of them would move a source-level identity, not a temporary.
-fn coalescable(v: &VReg) -> Option<(&str, u32)> {
-    let VReg::Phys(name) = v else { return None };
+fn coalescable<'a>(
+    value: &'a VReg,
+    identities: Option<&'a super::ValueIdentities>,
+) -> Option<(&'a str, u32)> {
+    if let Some(identities) = identities {
+        let identity = identities.exact(value)?;
+        let VReg::Phys(base) = &identity.base else {
+            return None;
+        };
+        // A kept-bare ABI carrier can have a nonzero SSA identity, but it is
+        // intentionally not an out-of-SSA temporary and must not be renamed.
+        // The tagger changes the value key for every ordinary numbered value;
+        // use that typed relationship rather than decoding `base#version`.
+        return (identity.version != 0 && value != &identity.base)
+            .then_some((base.as_str(), identity.version));
+    }
+
+    let VReg::Phys(name) = value else {
+        return None;
+    };
     let (base, version) = name.rsplit_once('#')?;
     Some((base, version.parse().ok()?))
 }
@@ -430,7 +448,9 @@ const MAX_COALESCE_CANDIDATES: usize = 4096;
 /// Two extra conditions beyond interference, neither of which is about
 /// correctness of the dataflow:
 ///
-/// * **Only tagged names.** See [`coalescable`] — bare names carry ABI identity.
+/// * **Only numbered identities.** See [`coalescable`] — bare names carry ABI
+///   identity, and production eligibility comes from the SSA sidecar rather
+///   than from a `#version` display spelling.
 /// * **One semantic arithmetic width per class.** Plain moves and loads carry
 ///   storage width but preserve their expression's value semantics, so they do
 ///   not constrain a source-level declaration. Arithmetic, selects and
@@ -455,7 +475,26 @@ pub(crate) fn coalesce_phi_copies(
         &DefinitionWidthsBySite::new(),
         &[],
         &[],
+        None,
     );
+}
+
+#[cfg(test)]
+pub(crate) fn coalesce_phi_copies_with_identities(
+    out: &mut LlirFunction,
+    copies: &[(VReg, VReg)],
+    definition_widths: &mut HashMap<VReg, u8>,
+    identities: &super::ValueIdentities,
+) -> HashMap<VReg, VReg> {
+    coalesce_phi_copies_with_definition_sites(
+        out,
+        copies,
+        definition_widths,
+        &DefinitionWidthsBySite::new(),
+        &[],
+        &[],
+        Some(identities),
+    )
 }
 
 #[cfg(test)]
@@ -472,6 +511,7 @@ pub(crate) fn coalesce_phi_copies_with_lifetimes(
         &DefinitionWidthsBySite::new(),
         &[],
         lifetimes,
+        None,
     );
 }
 
@@ -489,6 +529,7 @@ pub(crate) fn coalesce_phi_copies_with_definition_sites(
     definition_widths_by_site: &DefinitionWidthsBySite,
     incoming_widths: &[Option<u8>],
     source_lifetimes: &[SourceRegisterLifetime],
+    identities: Option<&super::ValueIdentities>,
 ) -> HashMap<VReg, VReg> {
     if copies.is_empty() {
         return HashMap::new();
@@ -498,7 +539,7 @@ pub(crate) fn coalesce_phi_copies_with_definition_sites(
     let mut index: HashMap<VReg, usize> = HashMap::new();
     let mut names: Vec<VReg> = Vec::new();
     let intern = |v: &VReg, index: &mut HashMap<VReg, usize>, names: &mut Vec<VReg>| {
-        coalescable(v)?;
+        coalescable(v, identities)?;
         Some(*index.entry(v.clone()).or_insert_with(|| {
             names.push(v.clone());
             names.len() - 1
@@ -537,7 +578,7 @@ pub(crate) fn coalesce_phi_copies_with_definition_sites(
                 let Some(&value_index) = index.get(&value) else {
                     continue;
                 };
-                let Some((base, _version)) = coalescable(&value) else {
+                let Some((base, _version)) = coalescable(&value, identities) else {
                     continue;
                 };
                 for (lifetime_index, lifetime) in source_lifetimes.iter().enumerate() {
@@ -687,7 +728,11 @@ pub(crate) fn coalesce_phi_copies_with_definition_sites(
     let mut representative: HashMap<usize, usize> = HashMap::new();
     for i in 0..n {
         let root = find(&mut parent, i);
-        let version = |k: usize| coalescable(&names[k]).map(|(_, v)| v).unwrap_or(0);
+        let version = |k: usize| {
+            coalescable(&names[k], identities)
+                .map(|(_, version)| version)
+                .unwrap_or(0)
+        };
         representative
             .entry(root)
             .and_modify(|best| {
