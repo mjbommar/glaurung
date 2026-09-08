@@ -1829,6 +1829,11 @@ provenance through lowering.
   uses complete identity candidates instead of register text. All 14 owning
   tail-call tests and the exact GCC O2 `forward_sum6` fixture pass; no broad
   suite or corpus ran. See `results/wp3-tail-call-setup-identities.md`.
+  Commit `c576b207` then threads the sidecar through proven Rust vtable tails.
+  Computed-target equality, wide-result high-half recognition, and intervening
+  writes now use exact identities. All 15 owning tail-call tests and the exact
+  Rust O2 `rust_dyn_apply` fixture pass; no broad suite or corpus ran. See
+  `results/wp3-vtable-tail-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
@@ -3914,7 +3919,12 @@ relevant ratchet's accepted-regression record.
    classification with complete identity candidates; its 14 owning tests and
    exact GCC O2 `forward_sum6` fixture pass. See
    `results/wp3-tail-call-setup-identities.md`. Continue with proven Rust
-   vtable-tail high-result identity. Keep
+   vtable-tail high-result identity. Commit `c576b207` closes computed-target,
+   high-result-base, and intervening-write identity in that path; its 15 owning
+   tests and exact Rust O2 `rust_dyn_apply` fixture pass. See
+   `results/wp3-vtable-tail-identities.md`. Continue the ordinary
+   recovered-layout/call-fold parser audit, then remove the final typed
+   `tag_phys` dependency. Keep
    pre-sidecar tagging internals and explicit no-sidecar compatibility parsers
    classified separately.
    Keep expression ownership behind completion of that audit.
