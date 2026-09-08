@@ -123,7 +123,7 @@ impl VersionedSsa {
     }
 
     /// Declare the effect of a mutation before another SSA consumer runs.
-    pub fn invalidate(&mut self, change: Invalidate) {
+    fn invalidate(&mut self, change: Invalidate) {
         self.dirty |= change.affects_ssa();
     }
 
@@ -1095,6 +1095,27 @@ mod tests {
         assert_eq!(changed, 11);
         assert!(state.clone().into_info().is_err());
         assert_eq!(state.ensure(&function).revision(), 1);
+    }
+
+    #[test]
+    fn production_pipeline_ratchets_classified_mutations_and_legacy_all() {
+        let pipeline = include_str!("../python_bindings/ir/pipeline.rs");
+
+        assert_eq!(
+            pipeline.matches(".apply_mutation(").count(),
+            2,
+            "adding or removing a post-SSA LLIR mutation requires an explicit audit"
+        );
+        assert_eq!(
+            pipeline.matches("Invalidate::All").count(),
+            0,
+            "production mutations must use the narrowest proved invalidation class"
+        );
+        assert_eq!(
+            pipeline.matches(".invalidate(").count(),
+            0,
+            "production callers must use apply_mutation so no-op changes stay valid"
+        );
     }
 
     #[test]
