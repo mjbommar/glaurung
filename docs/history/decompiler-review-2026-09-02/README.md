@@ -92,7 +92,8 @@ The latest WP3 record is
 production adjacent overwritten-store cleanup now requires producer-owned
 stack identity instead of trusting `local_` / `stack_` spelling. Its observed-
 red fail-closed regression, positive identity control, all 47 dead-store tests,
-the census gate, and the exact Win64/PDB fixture pass. The preceding
+the census gate, and the exact Win64/PDB fixture pass. The periodic x86-64/
+AArch64 O0/O2 Hello checkpoint remains four-for-four. The preceding
 [`results/wp3-unobserved-object-store-identities.md`](results/wp3-unobserved-object-store-identities.md)
 moves unobserved promoted-object field-store cleanup across the same boundary;
 the preceding

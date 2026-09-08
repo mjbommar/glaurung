@@ -628,8 +628,9 @@ unrelated Rust tests filtered out. The census records 5,150 declared Rust tests
 and zero outside every gate; all six census checks pass after the source
 commit. A fresh serial native rebuild passes the build guard and the exact
 committed Win64/PDB `record_value` regression passes. The periodic Hello matrix
-was not repeated for this non-Hello identity seam. No broad suite or corpus
-ran.
+then passes four-for-four across x86-64 Clang and AArch64, each at O0 and O2
+with symbol-bearing PIE input and exact canonical output. No broad suite or
+corpus ran.
 
 ## Ground rules
 

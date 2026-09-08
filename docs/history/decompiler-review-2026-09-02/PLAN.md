@@ -2078,9 +2078,10 @@ provenance through lowering.
   because of its name. Production now preserves it while still optimizing an
   opaque producer-owned `frame_object`. Both exact tests, all 47 dead-store
   tests, the census gate, and only the exact committed Win64/PDB `record_value`
-  regression pass after a fresh serial extension rebuild. The Hello canary was
-  not repeated for this non-Hello identity seam. No broad suite or corpus ran.
-  See `results/wp3-adjacent-store-identities.md`.
+  regression pass after a fresh serial extension rebuild. The periodic
+  x86-64/AArch64 O0/O2 symbol-bearing PIE Hello checkpoint then remains four-
+  for-four with exact canonical output. No broad suite or corpus ran. See
+  `results/wp3-adjacent-store-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and

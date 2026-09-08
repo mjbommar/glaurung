@@ -17,7 +17,7 @@ native module fresh and the exact committed Win64/PDB
 `test_overwritten_win64_push_value_does_not_become_an_undefined_local` fixture
 passes. The census records 5,150 declared Rust tests and zero outside every
 gate; all six census checks pass after the source commit. The four-cell Hello
-World canary was not repeated because this identity migration preserves the
-existing rendered Win64 output and does not affect the Hello path; its latest
-amd64/AArch64 Clang O0/O2 run remains four-for-four. No broad Rust suite,
-Python suite, fixture matrix, DecBench, or Joern lane ran.
+World checkpoint then passes four-for-four across x86-64 Clang and AArch64,
+each at O0 and O2 with symbol-bearing PIE input. Every cell independently
+compiles its binary and requires exact canonical recovered source. No broad
+Rust suite, Python suite, fixture matrix, DecBench, or Joern lane ran.
