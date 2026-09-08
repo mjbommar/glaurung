@@ -1248,6 +1248,12 @@ provenance through lowering.
   refusals remain unchanged. Its strengthened observed-red test and all 76
   constant-fold tests pass; see
   `results/wp3-inclusive-operand-expression-origins.md`.
+  Commit `8f499b04` then makes terminal mixed-view recovery transparent to
+  attributed repeated bounds. Equality and strict-less constants compare by
+  semantic value, and the bound in the recovered readable relation keeps both
+  contributing owners without weakening equality, representability, or width
+  proofs. Its strengthened observed-red test and all 76 constant-fold tests
+  pass; see `results/wp3-relation-bound-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
