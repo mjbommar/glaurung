@@ -1628,6 +1628,15 @@ provenance through lowering.
   legacy spelling rule. Both exact regressions, all 68 copy-propagation tests,
   and the compiled ARM32 frame-spill fixture pass; see
   `results/wp3-copy-store-lvalue-identities.md`.
+  Commit `3e8cb088` next migrates the late adjacent effectful-value mover to
+  the same production identity authority. An opaque promoted stack object can
+  no longer be mistaken for a disposable scratch destination, while an opaque
+  promoted store target can receive its sole adjacent call value without
+  duplicating or reordering that call. Missing identity refuses production
+  role inference, and the identity-free wrapper remains available only for
+  compatibility. Both exact role tests, all 70 copy-propagation tests, and the
+  compiled lazy-call-select fixture pass; see
+  `results/wp3-copy-effectful-value-identities.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
