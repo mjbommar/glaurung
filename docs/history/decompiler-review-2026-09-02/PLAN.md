@@ -1857,6 +1857,14 @@ provenance through lowering.
   `strdup((const char *)((long)((long)arg0)))`; both focused contracts and the
   exact nullable-locale compile/runtime round trip pass after the repair. See
   `results/wp3-pointer-call-expression-origin-rendering.md`.
+  Commit `2be32b51` completes the adjacent integer call-argument view readers.
+  Origin carriers around non-narrowing integer views, declared registers,
+  representable literals, global loads, and the final value no longer hide the
+  existing call-boundary proofs. A narrowing byte view remains explicit. The
+  strengthened contract was observed red with redundant casts on every
+  argument and passes afterward; the exact ARM mixed hard-float
+  compile/decompile/recompile/execute round trip also passes after a release
+  rebuild. See `results/wp3-integer-call-expression-origin-rendering.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
