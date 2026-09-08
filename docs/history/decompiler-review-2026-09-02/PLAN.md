@@ -1409,6 +1409,12 @@ provenance through lowering.
   hid that identity and the pass incorrectly folded; it now remains byte-for-
   byte unchanged, and all 13 latch-predicate tests pass. See
   `results/wp3-latch-next-value-refusal.md`.
+  Commit `5b8909b3` then makes the late redundant-return cleanup recognize
+  attributed constant expressions and transfers both ownership layers from
+  the deleted ABI-result assignment to the surviving constant return. The
+  mismatched-constant refusal remains unchanged. Its observed-red test and all
+  eight return-fold tests pass; see
+  `results/wp3-late-return-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
