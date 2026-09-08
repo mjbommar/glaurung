@@ -1620,6 +1620,14 @@ provenance through lowering.
   canonical definition/use owner union while all prior adjacency and sequencing
   refusals remain. Its observed-red test and all 21 adjacent-copy tests pass;
   see `results/wp3-copy-effectful-use-origins.md`.
+  Commit `e4bd8cb4` then migrates the store-lvalue protection inside both linear
+  copy walkers from `local_*` spelling to the pipeline-owned promoted-stack
+  identity sidecar. Opaque stack objects now retain lvalue meaning when copied
+  through a scratch; missing identity remains a fail-closed refusal in
+  production, while the identity-free compatibility entry point retains the
+  legacy spelling rule. Both exact regressions, all 68 copy-propagation tests,
+  and the compiled ARM32 frame-spill fixture pass; see
+  `results/wp3-copy-store-lvalue-identities.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
