@@ -38,47 +38,70 @@
 //! Comparisons against a non-zero constant, mixed operands, and unsigned
 //! relations that would need a width to be decided are all left alone.
 
+use std::collections::HashMap;
+
 use crate::ir::ast::{Expr, Function, Stmt};
-use crate::ir::types::{BinOp, CmpOp};
+use crate::ir::types::{BinOp, CmpOp, VReg};
 use crate::ir::types_recover::{TypeHint, TypeMap};
 
 /// Fuse two-comparison guards throughout a function body.
 pub fn fuse_comparisons(function: &mut Function) {
-    fuse_block(&mut function.body, None);
+    let writes = assignment_counts(function);
+    fuse_block(&mut function.body, None, &writes, HashMap::new());
 }
 
 /// Fuse comparisons with the recovered value widths available to rules whose
 /// safety depends on an explicit machine-width view.
 pub fn fuse_comparisons_with_types(function: &mut Function, types: &TypeMap) {
-    fuse_block(&mut function.body, Some(types));
+    let writes = assignment_counts(function);
+    fuse_block(&mut function.body, Some(types), &writes, HashMap::new());
 }
 
-fn fuse_block(statements: &mut Vec<Stmt>, types: Option<&TypeMap>) {
+fn fuse_block(
+    statements: &mut Vec<Stmt>,
+    types: Option<&TypeMap>,
+    writes: &HashMap<VReg, usize>,
+    mut definitions: HashMap<VReg, Expr>,
+) {
     for statement in statements.iter_mut() {
-        fuse_stmt(statement, types);
+        fuse_stmt(statement, types, writes, &definitions);
+        if let Stmt::Assign { dst, src } = statement.semantic() {
+            if writes.get(dst).copied() == Some(1)
+                && proof_expression(src)
+                && !expression_reads_register(src, dst)
+                && expression_reads_only_immutable_registers(src, writes)
+            {
+                definitions.insert(dst.clone(), src.clone());
+            }
+        }
     }
 }
 
-fn fuse_stmt(statement: &mut Stmt, types: Option<&TypeMap>) {
-    match statement {
+fn fuse_stmt(
+    statement: &mut Stmt,
+    types: Option<&TypeMap>,
+    writes: &HashMap<VReg, usize>,
+    definitions: &HashMap<VReg, Expr>,
+) {
+    match statement.semantic_mut() {
         Stmt::If {
             cond,
             then_body,
             else_body,
         } => {
-            fuse_expr_with_types(cond, types);
-            fuse_block(then_body, types);
+            fuse_expr_with_types(cond, types, definitions);
+            fuse_block(then_body, types, writes, definitions.clone());
             if let Some(body) = else_body.as_mut() {
-                fuse_block(body, types);
+                fuse_block(body, types, writes, definitions.clone());
             }
         }
         Stmt::While { cond, body } => {
-            fuse_expr_with_types(cond, types);
-            fuse_block(body, types);
+            fuse_expr_with_types(cond, types, definitions);
+            fuse_block(body, types, writes, definitions.clone());
         }
         Stmt::DoWhile { body, cond } => {
-            fuse_block(body, types);
-            fuse_expr_with_types(cond, types);
+            fuse_block(body, types, writes, definitions.clone());
+            fuse_expr_with_types(cond, types, definitions);
         }
         Stmt::For {
             init,
@@ -86,76 +109,89 @@ fn fuse_stmt(statement: &mut Stmt, types: Option<&TypeMap>) {
             step,
             body,
         } => {
-            fuse_stmt(init, types);
-            fuse_expr_with_types(cond, types);
-            fuse_stmt(step, types);
-            fuse_block(body, types);
+            fuse_stmt(init, types, writes, definitions);
+            fuse_expr_with_types(cond, types, definitions);
+            fuse_stmt(step, types, writes, definitions);
+            fuse_block(body, types, writes, definitions.clone());
         }
         Stmt::Switch {
             discriminant,
             cases,
             default,
         } => {
-            fuse_expr_with_types(discriminant, types);
+            fuse_expr_with_types(discriminant, types, definitions);
             for (_, body) in cases.iter_mut() {
-                fuse_block(body, types);
+                fuse_block(body, types, writes, definitions.clone());
             }
             if let Some(body) = default.as_mut() {
-                fuse_block(body, types);
+                fuse_block(body, types, writes, definitions.clone());
             }
         }
         Stmt::TryCatch { try_body, catches } => {
-            fuse_block(try_body, types);
+            fuse_block(try_body, types, writes, definitions.clone());
             for catch in catches.iter_mut() {
-                fuse_block(&mut catch.body, types);
+                fuse_block(&mut catch.body, types, writes, definitions.clone());
             }
         }
-        Stmt::Assign { src, .. } => fuse_expr_with_types(src, types),
+        Stmt::Assign { src, .. } => fuse_expr_with_types(src, types, definitions),
         Stmt::Store { addr, src, .. } => {
-            fuse_expr_with_types(addr, types);
-            fuse_expr_with_types(src, types);
+            fuse_expr_with_types(addr, types, definitions);
+            fuse_expr_with_types(src, types, definitions);
         }
         Stmt::Call { target, args, .. } => {
-            fuse_expr_with_types(target, types);
+            fuse_expr_with_types(target, types, definitions);
             for arg in args.iter_mut() {
-                fuse_expr_with_types(arg, types);
+                fuse_expr_with_types(arg, types, definitions);
             }
         }
         Stmt::Return { value } => {
             if let Some(value) = value.as_mut() {
-                fuse_expr_with_types(value, types);
+                fuse_expr_with_types(value, types, definitions);
             }
         }
-        Stmt::Throw { value } | Stmt::Push { value } => fuse_expr_with_types(value, types),
-        Stmt::IndirectGoto { target } => fuse_expr_with_types(target, types),
+        Stmt::Throw { value } | Stmt::Push { value } => {
+            fuse_expr_with_types(value, types, definitions)
+        }
+        Stmt::IndirectGoto { target } => fuse_expr_with_types(target, types, definitions),
         _ => {}
     }
 }
 
 #[cfg(test)]
 fn fuse_expr(expression: &mut Expr) {
-    fuse_expr_with_types(expression, None);
+    fuse_expr_with_types(expression, None, &HashMap::new());
 }
 
-fn fuse_expr_with_types(expression: &mut Expr, types: Option<&TypeMap>) {
+fn fuse_expr_with_types(
+    expression: &mut Expr,
+    types: Option<&TypeMap>,
+    definitions: &HashMap<VReg, Expr>,
+) {
     // Children first: an inner guard must already be fused before an outer
     // rule inspects it.
     match expression {
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-            fuse_expr_with_types(lhs, types);
-            fuse_expr_with_types(rhs, types);
+            fuse_expr_with_types(lhs, types, definitions);
+            fuse_expr_with_types(rhs, types, definitions);
         }
-        Expr::Un { src, .. } => fuse_expr_with_types(src, types),
-        Expr::Cast { expr, .. } => fuse_expr_with_types(expr, types),
+        Expr::Un { src, .. } => fuse_expr_with_types(src, types, definitions),
+        Expr::Cast { expr, .. } => fuse_expr_with_types(expr, types, definitions),
         _ => {}
     }
-    if let Some(fused) = fused_form(expression, types) {
+    if let Some(fused) = fused_form(expression, types, definitions) {
         *expression = fused;
     }
 }
 
 /// The single fused comparison equivalent to a two-comparison guard, if any.
-fn fused_form(expression: &Expr, types: Option<&TypeMap>) -> Option<Expr> {
+fn fused_form(
+    expression: &Expr,
+    types: Option<&TypeMap>,
+    definitions: &HashMap<VReg, Expr>,
+) -> Option<Expr> {
+    if let Some(comparison) = fused_two_word_unsigned_comparison(expression, types, definitions) {
+        return Some(comparison);
+    }
     if let Some(range) = fused_unsigned_subtract_range(expression, types) {
         return Some(range);
     }
@@ -214,6 +250,268 @@ fn fused_form(expression: &Expr, types: Option<&TypeMap>) -> Option<Expr> {
         lhs: Box::new(operand.clone()),
         rhs: Box::new(Expr::Const(0)),
     })
+}
+
+/// Recover the two-dword unsigned comparison emitted for i386 cdecl values.
+///
+/// For 32-bit words `hi`, `lo`, and `limit`, GCC spells `wide > limit` as:
+///
+/// ```text
+/// (0 <u hi) | ((0 - hi) <u (limit <u lo))
+/// ```
+///
+/// If `hi` is exactly `(uint32_t)(wide >> 32)`, `lo` is exactly the low
+/// 32-bit view of the same authoritative unsigned 64-bit value, and `limit`
+/// fits in one word, this is an identity: when `hi != 0` the left arm is true;
+/// when `hi == 0` the right arm is precisely `limit < lo`.
+fn fused_two_word_unsigned_comparison(
+    expression: &Expr,
+    types: Option<&TypeMap>,
+    definitions: &HashMap<VReg, Expr>,
+) -> Option<Expr> {
+    let Expr::Bin { op, lhs, rhs } = strip_casts(expression) else {
+        return None;
+    };
+    if !matches!(op, BinOp::Or | BinOp::LogicalOr) {
+        return None;
+    }
+
+    let left = resolve_proof_expr(lhs, definitions, &mut Vec::new())?;
+    let right = resolve_proof_expr(rhs, definitions, &mut Vec::new())?;
+    let (high, borrow) = zero_less_than(&left)
+        .map(|high| (high, &right))
+        .or_else(|| zero_less_than(&right).map(|high| (high, &left)))?;
+
+    let Expr::Cmp {
+        op: CmpOp::Ult,
+        lhs: negative_high,
+        rhs: carry,
+    } = strip_casts(borrow)
+    else {
+        return None;
+    };
+    let Expr::Bin {
+        op: BinOp::Sub,
+        lhs: zero,
+        rhs: borrowed_high,
+    } = strip_casts(negative_high)
+    else {
+        return None;
+    };
+    if !is_zero(strip_casts(zero))
+        || observed_unsigned_width(negative_high) != Some(4)
+        || observed_unsigned_width(borrowed_high) != Some(4)
+        || strip_casts(borrowed_high) != strip_casts(high)
+    {
+        return None;
+    }
+    let Expr::Cmp {
+        op: CmpOp::Ult,
+        lhs: limit,
+        rhs: low,
+    } = strip_casts(carry)
+    else {
+        return None;
+    };
+    let Expr::Const(limit) = strip_casts(limit) else {
+        return None;
+    };
+    if !(0..=u32::MAX as i64).contains(limit) {
+        return None;
+    }
+
+    let wide_from_high = high_word_source(high)?;
+    let wide_from_low = low_word_source(low)?;
+    if wide_from_high != wide_from_low {
+        return None;
+    }
+    let Expr::Reg(source) = wide_from_low else {
+        return None;
+    };
+    if !matches!(
+        types?.get(source),
+        Some(TypeHint::Int {
+            signed: false,
+            width: 8
+        })
+    ) {
+        return None;
+    }
+
+    Some(Expr::Cmp {
+        op: CmpOp::Ult,
+        lhs: Box::new(Expr::Const(*limit)),
+        rhs: Box::new(wide_from_low.clone()),
+    })
+}
+
+fn zero_less_than(expression: &Expr) -> Option<&Expr> {
+    let Expr::Cmp {
+        op: CmpOp::Ult,
+        lhs,
+        rhs,
+    } = strip_casts(expression)
+    else {
+        return None;
+    };
+    is_zero(strip_casts(lhs)).then_some(rhs)
+}
+
+fn high_word_source(expression: &Expr) -> Option<&Expr> {
+    if observed_unsigned_width(expression) != Some(4) {
+        return None;
+    }
+    let Expr::Bin {
+        op: BinOp::Shr,
+        lhs,
+        rhs,
+    } = strip_casts(expression)
+    else {
+        return None;
+    };
+    if !matches!(strip_casts(rhs), Expr::Const(32)) || observed_unsigned_width(lhs) != Some(8) {
+        return None;
+    }
+    Some(strip_casts(lhs))
+}
+
+fn low_word_source(expression: &Expr) -> Option<&Expr> {
+    (observed_unsigned_width(expression) == Some(4)).then(|| strip_casts(expression))
+}
+
+fn resolve_proof_expr(
+    expression: &Expr,
+    definitions: &HashMap<VReg, Expr>,
+    resolving: &mut Vec<VReg>,
+) -> Option<Expr> {
+    match expression {
+        Expr::Reg(register) => {
+            let Some(definition) = definitions.get(register) else {
+                return Some(expression.clone());
+            };
+            if resolving.contains(register) || resolving.len() >= 16 {
+                return None;
+            }
+            resolving.push(register.clone());
+            let resolved = resolve_proof_expr(definition, definitions, resolving);
+            resolving.pop();
+            resolved
+        }
+        Expr::Const(_) => Some(expression.clone()),
+        Expr::Cast {
+            signed,
+            width,
+            expr,
+        } => Some(Expr::Cast {
+            signed: *signed,
+            width: *width,
+            expr: Box::new(resolve_proof_expr(expr, definitions, resolving)?),
+        }),
+        Expr::Bin { op, lhs, rhs } => Some(Expr::Bin {
+            op: *op,
+            lhs: Box::new(resolve_proof_expr(lhs, definitions, resolving)?),
+            rhs: Box::new(resolve_proof_expr(rhs, definitions, resolving)?),
+        }),
+        Expr::Cmp { op, lhs, rhs } => Some(Expr::Cmp {
+            op: *op,
+            lhs: Box::new(resolve_proof_expr(lhs, definitions, resolving)?),
+            rhs: Box::new(resolve_proof_expr(rhs, definitions, resolving)?),
+        }),
+        Expr::Un { op, src } => Some(Expr::Un {
+            op: *op,
+            src: Box::new(resolve_proof_expr(src, definitions, resolving)?),
+        }),
+        _ => None,
+    }
+}
+
+fn proof_expression(expression: &Expr) -> bool {
+    match expression {
+        Expr::Reg(_) | Expr::Const(_) => true,
+        Expr::Cast { expr, .. } | Expr::Un { src: expr, .. } => proof_expression(expr),
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            proof_expression(lhs) && proof_expression(rhs)
+        }
+        _ => false,
+    }
+}
+
+fn expression_reads_register(expression: &Expr, register: &VReg) -> bool {
+    match expression {
+        Expr::Reg(candidate) => candidate == register,
+        Expr::Cast { expr, .. } | Expr::Un { src: expr, .. } => {
+            expression_reads_register(expr, register)
+        }
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            expression_reads_register(lhs, register) || expression_reads_register(rhs, register)
+        }
+        _ => false,
+    }
+}
+
+fn expression_reads_only_immutable_registers(
+    expression: &Expr,
+    writes: &HashMap<VReg, usize>,
+) -> bool {
+    match expression {
+        Expr::Reg(register) => !writes.contains_key(register),
+        Expr::Cast { expr, .. } | Expr::Un { src: expr, .. } => {
+            expression_reads_only_immutable_registers(expr, writes)
+        }
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            expression_reads_only_immutable_registers(lhs, writes)
+                && expression_reads_only_immutable_registers(rhs, writes)
+        }
+        Expr::Const(_) => true,
+        _ => false,
+    }
+}
+
+fn assignment_counts(function: &Function) -> HashMap<VReg, usize> {
+    fn visit(body: &[Stmt], counts: &mut HashMap<VReg, usize>) {
+        for statement in body {
+            match statement.semantic() {
+                Stmt::Assign { dst, .. } => *counts.entry(dst.clone()).or_default() += 1,
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    visit(then_body, counts);
+                    if let Some(else_body) = else_body {
+                        visit(else_body, counts);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => visit(body, counts),
+                Stmt::For {
+                    init, step, body, ..
+                } => {
+                    visit(std::slice::from_ref(init.as_ref()), counts);
+                    visit(std::slice::from_ref(step.as_ref()), counts);
+                    visit(body, counts);
+                }
+                Stmt::Switch { cases, default, .. } => {
+                    for (_, body) in cases {
+                        visit(body, counts);
+                    }
+                    if let Some(default) = default {
+                        visit(default, counts);
+                    }
+                }
+                Stmt::TryCatch { try_body, catches } => {
+                    visit(try_body, counts);
+                    for catch in catches {
+                        visit(&catch.body, counts);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut counts = HashMap::new();
+    visit(&function.body, &mut counts);
+    counts
 }
 
 /// Recover `(unsigned W)(x - low) <= span` as the explicit closed range
@@ -467,6 +765,7 @@ fn same_value(left: &Expr, right: &Expr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ast::OriginSet;
     use crate::ir::types::VReg;
 
     fn local(name: &str) -> Expr {
@@ -702,6 +1001,202 @@ mod tests {
         );
     }
 
+    fn two_word_greater_than(high: Expr, low: Expr, limit: Expr) -> Expr {
+        bin(
+            BinOp::Or,
+            cmp(CmpOp::Ult, Expr::Const(0), high.clone()),
+            cmp(
+                CmpOp::Ult,
+                cast(false, 4, bin(BinOp::Sub, Expr::Const(0), high)),
+                cmp(CmpOp::Ult, limit, low),
+            ),
+        )
+    }
+
+    fn unsigned_high_word(source: Expr) -> Expr {
+        cast(
+            false,
+            4,
+            bin(BinOp::Shr, cast(false, 8, source), Expr::Const(32)),
+        )
+    }
+
+    #[test]
+    fn fuses_a_proved_two_word_unsigned_comparison_through_single_definitions() {
+        let mut function = Function {
+            name: "wide_guard".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("low"),
+                    src: local("op"),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("high"),
+                    src: unsigned_high_word(local("op")),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("limit"),
+                    src: Expr::Const(5),
+                },
+                Stmt::If {
+                    cond: two_word_greater_than(
+                        cast(false, 4, local("high")),
+                        cast(false, 4, local("low")),
+                        local("limit"),
+                    ),
+                    then_body: vec![],
+                    else_body: None,
+                },
+            ],
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            VReg::phys("op"),
+            TypeHint::Int {
+                signed: false,
+                width: 8,
+            },
+        );
+
+        fuse_comparisons_with_types(&mut function, &types);
+
+        let Stmt::If { cond, .. } = &function.body[3] else {
+            panic!("expected guard")
+        };
+        assert_eq!(
+            cond,
+            &cmp(CmpOp::Ult, Expr::Const(5), local("op")),
+            "the two machine words must recover one source comparison"
+        );
+    }
+
+    #[test]
+    fn two_word_comparison_refuses_a_signed_source_or_mismatched_halves() {
+        for (signed, high_source) in [(true, "op"), (false, "other")] {
+            let original = two_word_greater_than(
+                unsigned_high_word(local(high_source)),
+                cast(false, 4, local("op")),
+                Expr::Const(5),
+            );
+            let mut function = Function {
+                name: "refuse_wide_guard".to_string(),
+                entry_va: 0x1000,
+                body: vec![Stmt::If {
+                    cond: original.clone(),
+                    then_body: vec![],
+                    else_body: None,
+                }],
+            };
+            let mut types = TypeMap::default();
+            types.upsert_public(VReg::phys("op"), TypeHint::Int { signed, width: 8 });
+            types.upsert_public(
+                VReg::phys("other"),
+                TypeHint::Int {
+                    signed: false,
+                    width: 8,
+                },
+            );
+
+            fuse_comparisons_with_types(&mut function, &types);
+
+            let Stmt::If { cond, .. } = &function.body[0] else {
+                panic!("expected guard")
+            };
+            assert_eq!(cond, &original);
+        }
+    }
+
+    #[test]
+    fn two_word_comparison_refuses_a_multiply_defined_alias() {
+        let original = two_word_greater_than(
+            cast(false, 4, local("high")),
+            cast(false, 4, local("op")),
+            Expr::Const(5),
+        );
+        let mut function = Function {
+            name: "mutable_high".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("high"),
+                    src: unsigned_high_word(local("op")),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("high"),
+                    src: Expr::Const(0),
+                },
+                Stmt::If {
+                    cond: original.clone(),
+                    then_body: vec![],
+                    else_body: None,
+                },
+            ],
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            VReg::phys("op"),
+            TypeHint::Int {
+                signed: false,
+                width: 8,
+            },
+        );
+
+        fuse_comparisons_with_types(&mut function, &types);
+
+        let Stmt::If { cond, .. } = &function.body[2] else {
+            panic!("expected guard")
+        };
+        assert_eq!(cond, &original);
+    }
+
+    #[test]
+    fn two_word_comparison_refuses_an_alias_of_a_later_mutated_source() {
+        let original = two_word_greater_than(
+            cast(false, 4, local("high")),
+            cast(false, 4, local("low")),
+            Expr::Const(5),
+        );
+        let mut function = Function {
+            name: "captured_before_mutation".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("low"),
+                    src: local("op"),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("high"),
+                    src: unsigned_high_word(local("op")),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("op"),
+                    src: Expr::Const(0),
+                },
+                Stmt::If {
+                    cond: original.clone(),
+                    then_body: vec![],
+                    else_body: None,
+                },
+            ],
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            VReg::phys("op"),
+            TypeHint::Int {
+                signed: false,
+                width: 8,
+            },
+        );
+
+        fuse_comparisons_with_types(&mut function, &types);
+
+        let Stmt::If { cond, .. } = &function.body[3] else {
+            panic!("expected guard")
+        };
+        assert_eq!(cond, &original);
+    }
+
     #[test]
     fn unsigned_subtract_range_is_exhaustively_equivalent_at_8_and_16_bits() {
         for width in [1_u8, 2_u8] {
@@ -816,5 +1311,35 @@ mod tests {
                 cmp(CmpOp::Sle, local("n"), Expr::Const(0))
             )
         );
+    }
+
+    #[test]
+    fn attributed_guard_is_fused_without_losing_its_owner() {
+        let owner = OriginSet::one(0x1010);
+        let mut function = Function {
+            name: "attributed_guard".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::If {
+                cond: bin(
+                    BinOp::Or,
+                    cmp(CmpOp::Eq, local("n"), Expr::Const(0)),
+                    cmp(CmpOp::Slt, local("n"), Expr::Const(0)),
+                ),
+                then_body: Vec::new(),
+                else_body: None,
+            }
+            .with_origins(owner.clone())],
+        };
+
+        fuse_comparisons(&mut function);
+
+        assert!(matches!(
+            function.body[0].semantic(),
+            Stmt::If {
+                cond: Expr::Cmp { op: CmpOp::Sle, .. },
+                ..
+            }
+        ));
+        assert_eq!(function.body[0].origins(), Some(&owner));
     }
 }

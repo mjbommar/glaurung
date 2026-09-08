@@ -56,7 +56,8 @@ pub fn fold_got_pointer_loads(function: &mut Function, targets: &HashMap<u64, u6
 
 fn fold_body(body: &mut [Stmt], targets: &HashMap<u64, u64>) {
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { src, .. } => fold_expr(src, targets),
             Stmt::Store { addr, src, .. } => {
                 fold_expr(addr, targets);
@@ -112,7 +113,25 @@ fn fold_body(body: &mut [Stmt], targets: &HashMap<u64, u64>) {
                     fold_expr(argument, targets);
                 }
             }
-            _ => {}
+            Stmt::IndirectGoto { target } | Stmt::Push { value: target } => {
+                fold_expr(target, targets)
+            }
+            Stmt::Throw { value } => fold_expr(value, targets),
+            Stmt::TryCatch { try_body, catches } => {
+                fold_body(try_body, targets);
+                for catch in catches {
+                    fold_body(&mut catch.body, targets);
+                }
+            }
+            Stmt::Return { value: None }
+            | Stmt::Pop { .. }
+            | Stmt::Goto { .. }
+            | Stmt::Label(_)
+            | Stmt::Break
+            | Stmt::Continue
+            | Stmt::Nop
+            | Stmt::Unknown(_)
+            | Stmt::Comment(_) => {}
         }
     }
 }
@@ -156,6 +175,12 @@ fn fold_expr(expr: &mut Expr, targets: &HashMap<u64, u64>) {
                 fold_expr(argument, targets);
             }
         }
+        Expr::Call { target, args, .. } => {
+            fold_expr(target, targets);
+            for argument in args.iter_mut() {
+                fold_expr(argument, targets);
+            }
+        }
         Expr::FunctionTableEntry { index, .. } => fold_expr(index, targets),
         _ => {}
     }
@@ -164,6 +189,7 @@ fn fold_expr(expr: &mut Expr, targets: &HashMap<u64, u64>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ast::{CatchClause, OriginSet};
     use crate::ir::types::VReg;
 
     fn function(body: Vec<Stmt>) -> Function {
@@ -196,6 +222,67 @@ mod tests {
                 src: Expr::Addr(0x4028),
             }]
         );
+    }
+
+    #[test]
+    fn an_attributed_pointer_load_keeps_its_instruction_owner() {
+        let targets = HashMap::from([(0x3fe8u64, 0x4028u64)]);
+        let mut f = function(vec![Stmt::Assign {
+            dst: VReg::phys("rax"),
+            src: Expr::Deref {
+                addr: Box::new(Expr::Addr(0x3fe8)),
+                size: 8,
+            },
+        }
+        .with_origins(OriginSet::one(0x1010))]);
+
+        fold_got_pointer_loads(&mut f, &targets);
+
+        assert!(matches!(
+            f.body[0].semantic(),
+            Stmt::Assign {
+                src: Expr::Addr(0x4028),
+                ..
+            }
+        ));
+        assert_eq!(f.body[0].origins(), Some(&OriginSet::one(0x1010)));
+    }
+
+    #[test]
+    fn exception_and_transfer_expressions_share_the_got_fold_surface() {
+        let targets = HashMap::from([(0x3fe8u64, 0x4028u64)]);
+        let load = || Expr::Deref {
+            addr: Box::new(Expr::Addr(0x3fe8)),
+            size: 8,
+        };
+        let mut f = function(vec![Stmt::TryCatch {
+            try_body: vec![Stmt::Throw { value: load() }],
+            catches: vec![CatchClause {
+                type_name: "void *".into(),
+                binding: VReg::phys("caught"),
+                body: vec![Stmt::IndirectGoto { target: load() }],
+            }],
+        }
+        .with_origins(OriginSet::one(0x1020))]);
+
+        fold_got_pointer_loads(&mut f, &targets);
+
+        let Stmt::TryCatch { try_body, catches } = f.body[0].semantic() else {
+            unreachable!()
+        };
+        assert!(matches!(
+            try_body.as_slice(),
+            [Stmt::Throw {
+                value: Expr::Addr(0x4028)
+            }]
+        ));
+        assert!(matches!(
+            catches[0].body.as_slice(),
+            [Stmt::IndirectGoto {
+                target: Expr::Addr(0x4028)
+            }]
+        ));
+        assert_eq!(f.body[0].origins(), Some(&OriginSet::one(0x1020)));
     }
 
     #[test]

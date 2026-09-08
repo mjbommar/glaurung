@@ -273,10 +273,20 @@ pub(super) fn discover_function(
             // has to be named here or a stale bound would size the next table.
             if matches!(arch, BArch::ARM) {
                 if let Some(defined) = arm_defined_register(&ins) {
-                    dispatch.kill_register(defined);
+                    if !dispatch.models_arm_definition(&ins) {
+                        dispatch.kill_register(defined);
+                    }
                 }
             }
-            dispatch.observe(&ins);
+            observe_dispatch_instruction(
+                &mut dispatch,
+                facts.image,
+                data,
+                arch,
+                bits,
+                &ins,
+                cur_va,
+            );
             let end_va = cur_va.saturating_add(ins.length as u64);
             if is_code_padding_terminator(&ins.mnemonic, arch) {
                 blocks.insert(start_va, (end_va, instrs));
@@ -291,8 +301,9 @@ pub(super) fn discover_function(
             // `ldr pc, [rBase, rIdx, lsl #2]` is an unconditional indirect
             // branch, and the mnemonic alone cannot say so either. Without this
             // the sweep decodes the table it reads as instructions.
-            let arm_table_dispatch =
-                matches!(arch, BArch::ARM) && !is_ret && arm_ldr_pc_table_dispatch(&ins);
+            let arm_table_dispatch = matches!(arch, BArch::ARM)
+                && !is_ret
+                && (arm_ldr_pc_table_dispatch(&ins) || arm_add_pc_table_dispatch(&ins));
             if arm_table_dispatch {
                 is_branch = true;
             }
@@ -367,6 +378,14 @@ pub(super) fn discover_function(
                             tgt,
                             dispatch.export_addresses(),
                         );
+                        if let Some(kind) = guard_taken_bound(&ins.mnemonic, arch) {
+                            if let Some(proof) = dispatch.export_guard_bounds(kind) {
+                                let mut bounds = dispatch.export_bounds();
+                                bounds.tighten_with(&proof);
+                                index_bounds.insert(tgt, bounds);
+                                guard_edge_bounds.insert(tgt, proof);
+                            }
+                        }
                     }
                 } else if unconditional {
                     if let Some(tgt) = indirect_memory_target(facts.image, data, &ins, bits) {

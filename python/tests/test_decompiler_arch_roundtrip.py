@@ -844,6 +844,376 @@ def test_aarch64_optimized_indirect_tail_dispatch_round_trips(tmp_path: Path) ->
 
 
 @pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_aarch64_o2_compact_signed_byte_switch_round_trips(tmp_path: Path) -> None:
+    """GCC's LDRB/SXTB branch table must contribute every dense switch arm."""
+    if shutil.which(A.TARGETS["aarch64"].cc) is None:
+        pytest.skip(f"{A.TARGETS['aarch64'].cc} is not installed on this host")
+    fixture = "206_aarch64_wide_dispatch"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-aarch64-O2.so"
+    ok, error = A._cross_build("aarch64", source, "O2", target)
+    assert ok, error
+    reference = tmp_path / f"{fixture}-host-O2.so"
+    ok, error = A._reference_build(source, "O2", reference)
+    assert ok, error
+
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane="aarch64:O2",
+        native_cc=A.native_cc("aarch64"),
+        only={"dense_dispatch"},
+    )
+
+    assert results["dense_dispatch"]["status"] == "pass", results
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_i386_o2_got_relative_switches_round_trip(tmp_path: Path) -> None:
+    """GCC i386 PIC offsets are relative to the GOT base, not their table."""
+    if shutil.which(A.TARGETS["i386"].cc) is None or shutil.which("qemu-i386") is None:
+        pytest.skip("32-bit gcc multilib and qemu-i386 are required")
+    fixture = "206_aarch64_wide_dispatch"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-i386-O2.so"
+    ok, error = A._cross_build("i386", source, "O2", target)
+    assert ok, error
+    reference = tmp_path / f"{fixture}-host-O2.so"
+    ok, error = A._reference_build(source, "O2", reference)
+    assert ok, error
+
+    functions = {"dense_dispatch", "dispatch_in_loop"}
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane="i386:O2",
+        native_cc=A.native_cc("i386"),
+        only=functions,
+    )
+
+    assert {
+        function: results[function]["status"] for function in sorted(functions)
+    } == {function: "pass" for function in sorted(functions)}, results
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_a32_o2_pc_relative_byte_switch_round_trips(tmp_path: Path) -> None:
+    """GCC A32 PIC byte offsets are relative to pc at the terminal add."""
+    arch = "armv7_a32"
+    if shutil.which(A.TARGETS[arch].cc) is None or shutil.which("qemu-arm") is None:
+        pytest.skip("ARM hard-float cross compiler and qemu-arm are required")
+    fixture = "206_aarch64_wide_dispatch"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-{arch}-O2.so"
+    ok, error = A._cross_build(arch, source, "O2", target)
+    assert ok, error
+    reference = tmp_path / f"{fixture}-host-O2.so"
+    ok, error = A._reference_build(source, "O2", reference)
+    assert ok, error
+
+    functions = {"dense_dispatch"}
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane=f"{arch}:O2",
+        native_cc=A.native_cc(arch),
+        native_runner=A.native_runner(arch),
+        only=functions,
+    )
+
+    assert {
+        function: results[function]["status"] for function in sorted(functions)
+    } == {function: "pass" for function in sorted(functions)}, results
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.parametrize("arch", ["armv7", "armv7_a32"])
+def test_arm32_o2_wide_selector_uses_both_aapcs_entry_words(
+    tmp_path: Path, arch: str
+) -> None:
+    """A uint64_t parameter is r0:r1, not r0 plus an undefined local."""
+    if shutil.which(A.TARGETS[arch].cc) is None or shutil.which("qemu-arm") is None:
+        pytest.skip("ARM hard-float cross compiler and qemu-arm are required")
+    fixture = "215_switch_on_wide_selector"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-{arch}-O2.so"
+    ok, error = A._cross_build(arch, source, "O2", target)
+    assert ok, error
+    reference = tmp_path / f"{fixture}-host-O2.so"
+    ok, error = A._reference_build(source, "O2", reference)
+    assert ok, error
+
+    functions = {"wide_selector_dense", "wide_selector_high_labels"}
+    addresses = D.exported_functions(str(target))
+    decompiled = D.decompiled_many_c(
+        str(target), [addresses[function] for function in sorted(functions)]
+    )
+    for function in sorted(functions):
+        recovered = decompiled[addresses[function]]
+        assert "unsigned long long op" in recovered, recovered
+        assert re.search(r"\bop\s*>>\s*32\b", recovered), recovered
+
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane=f"{arch}:O2",
+        native_cc=A.native_cc(arch),
+        native_runner=A.native_runner(arch),
+        only=functions,
+        decompiled_by_va=decompiled,
+    )
+    assert {
+        function: results[function]["status"] for function in sorted(functions)
+    } == {function: "pass" for function in sorted(functions)}, results
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.parametrize(
+    ("optimization", "functions"),
+    [
+        (
+            "O0",
+            {"wide_selector_dense", "wide_selector_high_labels", "wide_selector_mixed"},
+        ),
+        ("O2", {"wide_selector_dense", "wide_selector_high_labels"}),
+    ],
+)
+def test_i386_wide_selector_uses_both_cdecl_stack_words(
+    tmp_path: Path, optimization: str, functions: set[str]
+) -> None:
+    """A cdecl uint64_t stack argument is one source value, not two locals."""
+    arch = "i386"
+    if shutil.which(A.TARGETS[arch].cc) is None or shutil.which("qemu-i386") is None:
+        pytest.skip("i386 cross compiler and qemu-i386 are required")
+    fixture = "215_switch_on_wide_selector"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-{arch}-{optimization}.so"
+    ok, error = A._cross_build(arch, source, optimization, target)
+    assert ok, error
+    reference = tmp_path / f"{fixture}-host-{optimization}.so"
+    ok, error = A._reference_build(source, optimization, reference)
+    assert ok, error
+
+    addresses = D.exported_functions(str(target))
+    decompiled = D.decompiled_many_c(
+        str(target), [addresses[function] for function in sorted(functions)]
+    )
+    for function in sorted(functions):
+        recovered = decompiled[addresses[function]]
+        assert "unsigned long long op" in recovered, recovered
+        # An exposed high-word projection proves the two cdecl words were
+        # joined, but the stronger final form is a direct use of the composed
+        # 64-bit argument.  The execution differential below proves both words
+        # affect the result, so do not require the machine-level `>> 32`
+        # artifact to survive source cleanup.
+        assert len(re.findall(r"\bop\b", recovered)) >= 2, recovered
+        assert not re.search(r"\bstack_\d+\b", recovered), recovered
+
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane=f"{arch}:{optimization}",
+        native_cc=A.native_cc(arch),
+        native_runner=A.native_runner(arch),
+        only=functions,
+        decompiled_by_va=decompiled,
+    )
+    assert {
+        function: results[function]["status"] for function in sorted(functions)
+    } == {function: "pass" for function in sorted(functions)}, results
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_i386_o2_wide_guard_recovers_one_source_comparison(tmp_path: Path) -> None:
+    """Two cdecl dword comparisons are one uint64_t range predicate."""
+    arch = "i386"
+    if shutil.which(A.TARGETS[arch].cc) is None:
+        pytest.skip("i386 cross compiler is required")
+    fixture = "215_switch_on_wide_selector"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-{arch}-O2.so"
+    ok, error = A._cross_build(arch, source, "O2", target)
+    assert ok, error
+
+    functions = D.exported_functions(str(target))
+    recovered = D.decompiled_c(str(target), functions["wide_selector_mixed"])
+    assert recovered is not None
+    assert re.search(r"\bop\)?\s*<=\s*\(unsigned long\)\(5\)", recovered), recovered
+    assert not re.search(r"\b5\)?\s*<\s*\(unsigned long\)\(op\)", recovered), recovered
+    assert "0 - var8" not in recovered, recovered
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_a32_o2_loop_byte_switch_round_trips_in_shadow_v2(tmp_path: Path) -> None:
+    """Discovery and typed transport reach the structurer that owns loop latches."""
+    arch = "armv7_a32"
+    if shutil.which(A.TARGETS[arch].cc) is None or shutil.which("qemu-arm") is None:
+        pytest.skip("ARM hard-float cross compiler and qemu-arm are required")
+    fixture = "206_aarch64_wide_dispatch"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-{arch}-O2.so"
+    ok, error = A._cross_build(arch, source, "O2", target)
+    assert ok, error
+    reference = tmp_path / f"{fixture}-host-O2.so"
+    ok, error = A._reference_build(source, "O2", reference)
+    assert ok, error
+
+    functions = {"dispatch_in_loop"}
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane=f"{arch}:O2:shadow-v2",
+        native_cc=A.native_cc(arch),
+        native_runner=A.native_runner(arch),
+        only=functions,
+        shadow_v2=True,
+    )
+
+    assert results["dispatch_in_loop"]["status"] == "pass", results
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_a32_o2_loop_byte_switch_round_trips_in_v1(tmp_path: Path) -> None:
+    """Production locally owns every switch-case backedge inside the loop."""
+    arch = "armv7_a32"
+    if shutil.which(A.TARGETS[arch].cc) is None or shutil.which("qemu-arm") is None:
+        pytest.skip("ARM hard-float cross compiler and qemu-arm are required")
+    fixture = "206_aarch64_wide_dispatch"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-{arch}-O2.so"
+    ok, error = A._cross_build(arch, source, "O2", target)
+    assert ok, error
+    reference = tmp_path / f"{fixture}-host-O2.so"
+    ok, error = A._reference_build(source, "O2", reference)
+    assert ok, error
+
+    function_va = D.exported_functions(str(target))["dispatch_in_loop"]
+    decompiled = D.decompiled_many_c(str(target), [function_va])
+    recovered = decompiled[function_va]
+    assert re.search(r"\bvar1\b", recovered) is None, recovered
+    assert re.search(r"\bvar12\b", recovered) is None, recovered
+    assert "continue;" in recovered, recovered
+    assert "default:" in recovered, recovered
+    assert "goto " not in recovered, recovered
+
+    results = D.run(
+        str(target),
+        str(source),
+        fixture,
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane=f"{arch}:O2",
+        native_cc=A.native_cc(arch),
+        native_runner=A.native_runner(arch),
+        only={"dispatch_in_loop"},
+        decompiled_by_va=decompiled,
+    )
+
+    assert results["dispatch_in_loop"]["status"] == "pass", results
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_a32_raw_switch_private_diamond_stays_inside_its_case(tmp_path: Path) -> None:
+    """A predecessor-closed branching handler is owned by its typed case."""
+    arch = "armv7_a32"
+    if shutil.which(A.TARGETS[arch].cc) is None or shutil.which("qemu-arm") is None:
+        pytest.skip("ARM hard-float cross compiler and qemu-arm are required")
+    source = ROOT / "python" / "tests" / "fixtures" / "raw_switch_private_diamond.c"
+    target = tmp_path / "raw-switch-private-diamond-armv7-a32-O2.so"
+    ok, error = A._cross_build(arch, source, "O2", target)
+    assert ok, error
+    reference = tmp_path / "raw-switch-private-diamond-host-O2.so"
+    ok, error = A._reference_build(source, "O2", reference)
+    assert ok, error
+
+    function = "raw_switch_private_diamond"
+    function_va = D.exported_functions(str(target))[function]
+    decompiled = D.decompiled_many_c(str(target), [function_va])
+    recovered = decompiled[function_va]
+    assert "switch (" in recovered, recovered
+    assert "case 0:" in recovered, recovered
+    assert "if (" in recovered, recovered
+    assert re.search(r"acc\s*(?:<\s*7|<=\s*6)", recovered), recovered
+    assert "goto " not in recovered, recovered
+
+    results = D.run(
+        str(target),
+        str(source),
+        "raw_switch_private_diamond",
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        reference_so=str(reference),
+        lane=f"{arch}:O2",
+        native_cc=A.native_cc(arch),
+        native_runner=A.native_runner(arch),
+        only={function},
+    )
+
+    assert results[function]["status"] == "pass", results
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_a32_multiple_wide_byte_switches_decline_without_crashing(
+    tmp_path: Path,
+) -> None:
+    """Four 48-entry tables may exceed v1's shape budget, never its stack."""
+    arch = "armv7_a32"
+    if shutil.which(A.TARGETS[arch].cc) is None:
+        pytest.skip("ARM hard-float cross compiler is required")
+    fixture = "43_base64"
+    source = ROOT / "tests" / "decompiler_fixtures" / "src" / f"{fixture}.c"
+    target = tmp_path / f"{fixture}-{arch}-O2.so"
+    ok, error = A._cross_build(arch, source, "O2", target)
+    assert ok, error
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "glaurung.cli",
+            "decompile",
+            str(target),
+            "--func",
+            "base64_decode",
+            "--style",
+            "decbench",
+        ],
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "base64_decode" in completed.stdout
+
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
 def test_aarch64_optimized_readonly_switch_results_round_trip(tmp_path: Path) -> None:
     """A terminating range guard must make the following table load portable."""
     if shutil.which(A.TARGETS["aarch64"].cc) is None:

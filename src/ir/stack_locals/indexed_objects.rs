@@ -8,8 +8,8 @@ use std::collections::{HashMap, HashSet};
 
 use super::{
     alloc_name, body_falls_through, is_arm_frame_pointer, is_stack_pointer_reg, merge_stack_deltas,
-    resolved_memory_address, stack_delta_after_assignment, stack_word_size, SlotKey, SlotNames,
-    SlotVal, StackContext,
+    parameter_slot_for_coordinate, resolved_memory_address, stack_delta_after_assignment,
+    stack_word_size, SlotKey, SlotNames, SlotVal, StackContext,
 };
 use crate::ir::ast::{Expr, Stmt};
 use crate::ir::types::VReg;
@@ -45,6 +45,9 @@ pub(super) fn seed_indexed_stack_objects(
             }
         }
         match expr {
+            Expr::Origin { expr, .. } => {
+                collect_expr(expr, sp_delta, ctx, address_defs, starts)
+            }
             Expr::Deref { addr, .. } => collect_expr(addr, sp_delta, ctx, address_defs, starts),
             Expr::Call { target, args, .. } => {
                 collect_expr(target, sp_delta, ctx, address_defs, starts);
@@ -100,7 +103,10 @@ pub(super) fn seed_indexed_stack_objects(
         starts: &mut Vec<(String, i64, u8)>,
     ) -> Option<i64> {
         for stmt in body {
-            match stmt {
+            match stmt.semantic() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::Assign { dst, src } => {
                     // AAPCS uses r7/r11/fp arithmetic to restore SP in the
                     // epilogue. At this pre-value-folding stage the constant
@@ -366,6 +372,7 @@ pub(super) fn seed_indexed_stack_objects(
         // because both observe the same indexed start.
         map.entry(key).or_insert_with(|| SlotVal {
             name,
+            parameter_slot: parameter_slot_for_coordinate(base, *start, ctx),
             declared_size: 1,
             span_size: 1,
             observed_read: false,
@@ -407,6 +414,9 @@ pub(super) fn collect_read_stack_slots(
             }
         }
         match expr {
+            Expr::Origin { expr, .. } => {
+                collect_expr(expr, sp_delta, ctx, address_defs, reads)
+            }
             Expr::Deref { addr, .. } => collect_expr(addr, sp_delta, ctx, address_defs, reads),
             Expr::Call { target, args, .. } => {
                 collect_expr(target, sp_delta, ctx, address_defs, reads);
@@ -462,7 +472,10 @@ pub(super) fn collect_read_stack_slots(
         reads: &mut Vec<(String, i64, u8)>,
     ) -> Option<i64> {
         for stmt in body {
-            match stmt {
+            match stmt.semantic() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::Assign { dst, src } => {
                     collect_expr(src, sp_delta, ctx, address_defs, reads);
                     if is_stack_pointer_reg(dst, ctx) {

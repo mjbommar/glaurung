@@ -18,7 +18,7 @@
 //! genuinely the machine's return slot rather than a coalesced local — belongs
 //! to [`crate::ir::direct_output`] and is asked there, not restated here.
 
-use super::{is_promoted_local, Expr, Function, Stmt};
+use super::{is_promoted_local, Expr, Function, OriginSet, Stmt};
 use crate::ir::types::VReg;
 
 /// Collapse `result = E; [comments]; return result;` into a direct `return E`,
@@ -31,28 +31,46 @@ use crate::ir::types::VReg;
 /// comments/Nops may intervene, so the expression stays at the same observable
 /// point and no state-changing operation is crossed.
 pub(super) fn fold_returns(body: &mut Vec<Stmt>) {
+    fold_returns_where(body, &crate::ir::direct_output::is_exact_return_storage);
+}
+
+pub(super) fn fold_returns_with_identities(
+    body: &mut Vec<Stmt>,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    fold_returns_where(body, &|value| {
+        crate::ir::direct_output::is_exact_return_storage(value)
+            && (!matches!(value, VReg::Phys(name) if name == "ret")
+                || identities.is_result_role(value))
+    });
+}
+
+fn fold_returns_where(body: &mut Vec<Stmt>, is_result: &impl Fn(&VReg) -> bool) {
     // Recurse first so inner bodies are folded before we inspect an outer
     // fall-through return.
     for s in body.iter_mut() {
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
                 ..
             } => {
-                fold_returns(then_body);
+                fold_returns_where(then_body, is_result);
                 if let Some(eb) = else_body {
-                    fold_returns(eb);
+                    fold_returns_where(eb, is_result);
                 }
             }
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => fold_returns(body),
-            Stmt::For { body, .. } => fold_returns(body),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                fold_returns_where(body, is_result)
+            }
+            Stmt::For { body, .. } => fold_returns_where(body, is_result),
             Stmt::Switch { cases, default, .. } => {
                 for (_, body) in cases.iter_mut() {
-                    fold_returns(body);
+                    fold_returns_where(body, is_result);
                 }
                 if let Some(b) = default {
-                    fold_returns(b);
+                    fold_returns_where(b, is_result);
                 }
             }
             _ => {}
@@ -61,31 +79,48 @@ pub(super) fn fold_returns(body: &mut Vec<Stmt>) {
 
     let mut i = 0;
     while i < body.len() {
-        let Some(dst) = (match &body[i] {
-            Stmt::Assign { dst, .. } if crate::ir::direct_output::is_exact_return_storage(dst) => {
-                Some(dst.clone())
-            }
+        let Some(dst) = (match body[i].semantic() {
+            Stmt::Assign { dst, .. } if is_result(dst) => Some(dst.clone()),
             _ => None,
         }) else {
             i += 1;
             continue;
         };
         let mut return_index = i + 1;
-        while matches!(body.get(return_index), Some(Stmt::Comment(_) | Stmt::Nop)) {
+        while body
+            .get(return_index)
+            .is_some_and(|statement| matches!(statement.semantic(), Stmt::Comment(_) | Stmt::Nop))
+        {
             return_index += 1;
         }
-        let fold_here = match body.get(return_index) {
-            Some(Stmt::Return { value: None }) => true,
-            Some(Stmt::Return {
-                value: Some(Expr::Reg(returned)),
-            }) => returned == &dst,
-            _ => false,
+        let returned_value_origins = match body.get(return_index).map(Stmt::semantic) {
+            Some(Stmt::Return { value: None }) => Some(None),
+            Some(Stmt::Return { value: Some(value) }) => match value.semantic() {
+                Expr::Reg(returned) if returned == &dst => Some(value.origins().cloned()),
+                _ => None,
+            },
+            _ => None,
         };
-        if fold_here {
-            let Stmt::Assign { src, .. } = body.remove(i) else {
+        if let Some(returned_value_origins) = returned_value_origins {
+            let (definition, definition_origins) = body.remove(i).into_semantic_with_origins();
+            let Stmt::Assign { mut src, .. } = definition else {
                 unreachable!()
             };
-            body[return_index - 1] = Stmt::Return { value: Some(src) };
+            if let Some(origins) = &definition_origins {
+                src.merge_origins(origins);
+            }
+            if let Some(origins) = &returned_value_origins {
+                src.merge_origins(origins);
+            }
+            let (_, return_origins) = std::mem::replace(&mut body[return_index - 1], Stmt::Nop)
+                .into_semantic_with_origins();
+            let origins = match (definition_origins, return_origins) {
+                (Some(left), Some(right)) => Some(left.union(&right)),
+                (Some(origins), None) | (None, Some(origins)) => Some(origins),
+                (None, None) => None,
+            };
+            body[return_index - 1] =
+                Stmt::Return { value: Some(src) }.with_optional_origins(origins);
             continue;
         }
         i += 1;
@@ -97,27 +132,48 @@ pub(super) fn fold_returns(body: &mut Vec<Stmt>) {
 /// assignment may still identify a shared switch destination while the CFG is
 /// being reconstructed, but it is redundant in the final source AST.
 pub(crate) fn remove_redundant_return_constant_assignments(body: &mut Vec<Stmt>) {
+    remove_redundant_return_constant_assignments_where(body, &|dst| {
+        crate::ir::direct_output::is_return_reg(dst)
+    });
+}
+
+/// Identity-aware form used by the production source-preparation path.
+pub(crate) fn remove_redundant_return_constant_assignments_with_identities(
+    body: &mut Vec<Stmt>,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    remove_redundant_return_constant_assignments_where(body, &|dst| {
+        crate::ir::direct_output::is_return_reg(dst)
+            && (!matches!(dst, VReg::Phys(name) if name == "ret") || identities.is_result_role(dst))
+    });
+}
+
+fn remove_redundant_return_constant_assignments_where(
+    body: &mut Vec<Stmt>,
+    is_result: &impl Fn(&VReg) -> bool,
+) {
     for stmt in body.iter_mut() {
-        match stmt {
+        match stmt.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
                 ..
             } => {
-                remove_redundant_return_constant_assignments(then_body);
+                remove_redundant_return_constant_assignments_where(then_body, is_result);
                 if let Some(else_body) = else_body {
-                    remove_redundant_return_constant_assignments(else_body);
+                    remove_redundant_return_constant_assignments_where(else_body, is_result);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                remove_redundant_return_constant_assignments(body);
+                remove_redundant_return_constant_assignments_where(body, is_result);
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, case_body) in cases {
-                    remove_redundant_return_constant_assignments(case_body);
+                    remove_redundant_return_constant_assignments_where(case_body, is_result);
                 }
                 if let Some(default_body) = default {
-                    remove_redundant_return_constant_assignments(default_body);
+                    remove_redundant_return_constant_assignments_where(default_body, is_result);
                 }
             }
             _ => {}
@@ -126,29 +182,45 @@ pub(crate) fn remove_redundant_return_constant_assignments(body: &mut Vec<Stmt>)
 
     let mut index = 0;
     while index < body.len() {
-        let assigned = match &body[index] {
-            Stmt::Assign {
-                dst,
-                src: Expr::Const(value),
-            } if crate::ir::direct_output::is_return_reg(dst) => Some(*value),
+        let assigned = match body[index].semantic() {
+            Stmt::Assign { dst, src } if is_result(dst) => match src.semantic() {
+                Expr::Const(value) => Some((*value, src.origins().cloned())),
+                _ => None,
+            },
             _ => None,
         };
-        let Some(assigned) = assigned else {
+        let Some((assigned, expression_origins)) = assigned else {
             index += 1;
             continue;
         };
         let mut return_index = index + 1;
-        while matches!(body.get(return_index), Some(Stmt::Comment(_) | Stmt::Nop)) {
+        while body
+            .get(return_index)
+            .is_some_and(|statement| matches!(statement.semantic(), Stmt::Comment(_) | Stmt::Nop))
+        {
             return_index += 1;
         }
-        let identical_return = matches!(
-            body.get(return_index),
-            Some(Stmt::Return {
-                value: Some(Expr::Const(returned)),
-            }) if *returned == assigned
-        );
+        let identical_return = body.get(return_index).is_some_and(|statement| {
+            let Stmt::Return { value: Some(value) } = statement.semantic() else {
+                return false;
+            };
+            matches!(value.semantic(), Expr::Const(returned) if *returned == assigned)
+        });
         if identical_return {
+            let assignment_origins = match (body[index].origins(), expression_origins) {
+                (Some(statement), Some(expression)) => Some(statement.union(&expression)),
+                (Some(origins), None) => Some(origins.clone()),
+                (None, Some(origins)) => Some(origins),
+                (None, None) => None,
+            };
             body.remove(index);
+            if let Some(origins) = assignment_origins {
+                let returned = &mut body[return_index - 1];
+                if let Stmt::Return { value: Some(value) } = returned.semantic_mut() {
+                    value.merge_origins(&origins);
+                }
+                returned.merge_origins(&origins);
+            }
             continue;
         }
         index += 1;
@@ -171,6 +243,14 @@ pub fn fold_exhaustive_switch_returns(function: &mut Function) {
     fold_exhaustive_switch_returns_body(&mut function.body);
 }
 
+pub(crate) fn fold_exhaustive_switch_returns_with_identities(
+    function: &mut Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    fold_returns_with_identities(&mut function.body, identities);
+    fold_exhaustive_switch_returns_body(&mut function.body);
+}
+
 /// Move a joined result return into terminating arms of an exhaustive `if` tree.
 ///
 /// Both arms must end by defining the exact returned value (possibly through
@@ -186,9 +266,18 @@ pub fn fold_exhaustive_if_returns(function: &mut Function) {
     fold_exhaustive_if_returns_body(&mut function.body);
 }
 
+pub(crate) fn fold_exhaustive_if_returns_with_identities(
+    function: &mut Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    fold_returns_with_identities(&mut function.body, identities);
+    fold_exhaustive_if_returns_body(&mut function.body);
+}
+
 fn fold_exhaustive_if_returns_body(body: &mut Vec<Stmt>) {
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -217,14 +306,14 @@ fn fold_exhaustive_if_returns_body(body: &mut Vec<Stmt>) {
     let mut index = 0;
     while index + 1 < body.len() {
         let mut return_index = index + 1;
-        while match body.get(return_index) {
+        while match body.get(return_index).map(Stmt::semantic) {
             Some(Stmt::Nop) => true,
             Some(Stmt::Comment(text)) => text.starts_with("x86-64 epilogue:"),
             _ => false,
         } {
             return_index += 1;
         }
-        let Some((result, return_template)) = (match body.get(return_index) {
+        let Some((result, return_template)) = (match body.get(return_index).map(Stmt::semantic) {
             Some(Stmt::Return { value: Some(value) }) => {
                 cast_chain_root_reg(value).map(|result| (result.clone(), value.clone()))
             }
@@ -233,26 +322,39 @@ fn fold_exhaustive_if_returns_body(body: &mut Vec<Stmt>) {
             index += 1;
             continue;
         };
+        let (candidate, if_origins) = body[index].clone().into_semantic_with_origins();
         let Stmt::If {
             cond,
             mut then_body,
             else_body: Some(mut else_body),
-        } = body[index].clone()
+        } = candidate
         else {
             index += 1;
             continue;
         };
+        let join_origins = origins_in_range(body, index + 1, return_index + 1);
         let fallthrough_body = else_body.clone();
-        if !turn_terminal_result_into_return(&mut then_body, &result, &return_template) {
+        if !turn_terminal_result_into_return(
+            &mut then_body,
+            &result,
+            &return_template,
+            &join_origins,
+        ) {
             index += 1;
             continue;
         }
-        if !turn_terminal_result_into_return(&mut else_body, &result, &return_template) {
+        if !turn_terminal_result_into_return(
+            &mut else_body,
+            &result,
+            &return_template,
+            &join_origins,
+        ) {
             body[index] = Stmt::If {
                 cond,
                 then_body,
                 else_body: None,
-            };
+            }
+            .with_optional_origins(if_origins);
             body.splice(index + 1..index + 1, fallthrough_body);
             index += 1;
             continue;
@@ -262,7 +364,8 @@ fn fold_exhaustive_if_returns_body(body: &mut Vec<Stmt>) {
             cond,
             then_body,
             else_body: Some(else_body),
-        };
+        }
+        .with_optional_origins(if_origins);
         body.drain(index + 1..=return_index);
         index += 1;
     }
@@ -270,7 +373,8 @@ fn fold_exhaustive_if_returns_body(body: &mut Vec<Stmt>) {
 
 fn fold_exhaustive_switch_returns_body(body: &mut Vec<Stmt>) {
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -302,10 +406,13 @@ fn fold_exhaustive_switch_returns_body(body: &mut Vec<Stmt>) {
         // They carry no state, so they do not invalidate an otherwise immediate
         // switch-result join.
         let mut return_index = index + 1;
-        while matches!(body.get(return_index), Some(Stmt::Comment(_) | Stmt::Nop)) {
+        while body
+            .get(return_index)
+            .is_some_and(|statement| matches!(statement.semantic(), Stmt::Comment(_) | Stmt::Nop))
+        {
             return_index += 1;
         }
-        let Some((result, return_template)) = (match body.get(return_index) {
+        let Some((result, return_template)) = (match body.get(return_index).map(Stmt::semantic) {
             Some(Stmt::Return { value: Some(value) }) => {
                 cast_chain_root_reg(value).map(|result| (result.clone(), value.clone()))
             }
@@ -314,20 +421,26 @@ fn fold_exhaustive_switch_returns_body(body: &mut Vec<Stmt>) {
             index += 1;
             continue;
         };
+        let (candidate, switch_origins) = body[index].clone().into_semantic_with_origins();
         let Stmt::Switch {
             discriminant,
             mut cases,
             default: Some(mut default),
-        } = body[index].clone()
+        } = candidate
         else {
             index += 1;
             continue;
         };
 
+        let join_origins = origins_in_range(body, index + 1, return_index + 1);
         if !cases.iter_mut().all(|(_, case_body)| {
-            turn_terminal_result_into_return(case_body, &result, &return_template)
-        }) || !turn_terminal_result_into_return(&mut default, &result, &return_template)
-        {
+            turn_terminal_result_into_return(case_body, &result, &return_template, &join_origins)
+        }) || !turn_terminal_result_into_return(
+            &mut default,
+            &result,
+            &return_template,
+            &join_origins,
+        ) {
             index += 1;
             continue;
         }
@@ -336,14 +449,15 @@ fn fold_exhaustive_switch_returns_body(body: &mut Vec<Stmt>) {
             discriminant,
             cases,
             default: Some(default),
-        };
+        }
+        .with_optional_origins(switch_origins);
         body.remove(return_index);
         index += 1;
     }
 }
 
 fn cast_chain_root_reg(expr: &Expr) -> Option<&VReg> {
-    match expr {
+    match expr.semantic() {
         Expr::Reg(reg) => Some(reg),
         Expr::Cast { expr, .. } => cast_chain_root_reg(expr),
         _ => None,
@@ -352,6 +466,9 @@ fn cast_chain_root_reg(expr: &Expr) -> Option<&VReg> {
 
 fn apply_return_cast_template(template: &Expr, result: &VReg, value: Expr) -> Option<Expr> {
     match template {
+        Expr::Origin { origins, expr } => {
+            Some(apply_return_cast_template(expr, result, value)?.with_origins(origins.clone()))
+        }
         Expr::Reg(reg) if reg == result => Some(value),
         Expr::Cast {
             signed,
@@ -370,32 +487,55 @@ fn turn_terminal_result_into_return(
     body: &mut Vec<Stmt>,
     result: &VReg,
     return_template: &Expr,
+    join_origins: &OriginSet,
 ) -> bool {
-    if matches!(body.last(), Some(Stmt::Break)) {
-        body.pop();
+    let mut return_origins = join_origins.clone();
+    if body
+        .last()
+        .is_some_and(|statement| matches!(statement.semantic(), Stmt::Break))
+    {
+        if let Some(origins) = body
+            .pop()
+            .and_then(|statement| statement.origins().cloned())
+        {
+            return_origins.merge(&origins);
+        }
     }
     let Some(last) = body.last_mut() else {
         return false;
     };
-    match last {
+    let value_origins = last.origins().cloned();
+    match last.semantic_mut() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { dst, src } if dst == result => {
-            let Some(value) = apply_return_cast_template(return_template, result, src.clone())
-            else {
+            let mut source = src.clone();
+            if let Some(origins) = &value_origins {
+                source.merge_origins(origins);
+            }
+            let Some(value) = apply_return_cast_template(return_template, result, source) else {
                 return false;
             };
-            *last = Stmt::Return { value: Some(value) };
+            *last.semantic_mut() = Stmt::Return { value: Some(value) };
+            last.merge_origins(&return_origins);
             true
         }
-        Stmt::Store {
-            addr: Expr::Reg(dst),
-            src,
-            ..
-        } if dst == result && matches!(&*dst, VReg::Phys(name) if is_promoted_local(name)) => {
-            let Some(value) = apply_return_cast_template(return_template, result, src.clone())
-            else {
+        Stmt::Store { addr, src, .. }
+            if matches!(addr.semantic(), Expr::Reg(dst)
+                if dst == result
+                    && matches!(dst, VReg::Phys(name) if is_promoted_local(name))) =>
+        {
+            let mut source = src.clone();
+            if let Some(origins) = &value_origins {
+                source.merge_origins(origins);
+            }
+            if let Some(origins) = addr.origins() {
+                source.merge_origins(origins);
+            }
+            let Some(value) = apply_return_cast_template(return_template, result, source) else {
                 return false;
             };
-            *last = Stmt::Return { value: Some(value) };
+            *last.semantic_mut() = Stmt::Return { value: Some(value) };
+            last.merge_origins(&return_origins);
             true
         }
         Stmt::Return { .. } => true,
@@ -406,9 +546,17 @@ fn turn_terminal_result_into_return(
         } => {
             let mut converted_then = then_body.clone();
             let mut converted_else = else_body.clone();
-            if !turn_terminal_result_into_return(&mut converted_then, result, return_template)
-                || !turn_terminal_result_into_return(&mut converted_else, result, return_template)
-            {
+            if !turn_terminal_result_into_return(
+                &mut converted_then,
+                result,
+                return_template,
+                &return_origins,
+            ) || !turn_terminal_result_into_return(
+                &mut converted_else,
+                result,
+                return_template,
+                &return_origins,
+            ) {
                 return false;
             }
             *then_body = converted_then;
@@ -419,9 +567,18 @@ fn turn_terminal_result_into_return(
     }
 }
 
+fn origins_in_range(body: &[Stmt], start: usize, end: usize) -> OriginSet {
+    body[start..end]
+        .iter()
+        .filter_map(Stmt::origins)
+        .fold(OriginSet::empty(), |origins, next| origins.union(next))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ssa::SsaValue;
+    use std::collections::HashMap;
 
     #[test]
     fn return_fold_collapses_an_exact_ssa_result_carrier() {
@@ -446,6 +603,94 @@ mod tests {
     }
 
     #[test]
+    fn return_fold_does_not_trust_an_unowned_ret_spelling() {
+        let mut body = vec![
+            Stmt::Assign {
+                dst: VReg::phys("ret"),
+                src: Expr::Const(42),
+            },
+            Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("ret"))),
+            },
+        ];
+
+        fold_returns_with_identities(
+            &mut body,
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
+
+        assert_eq!(body.len(), 2);
+    }
+
+    #[test]
+    fn return_fold_accepts_a_pipeline_owned_ret_role() {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            VReg::phys("rax"),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 1,
+            },
+        );
+        identities =
+            identities.with_role_aliases(&HashMap::from([("rax".to_string(), "ret".to_string())]));
+        let mut body = vec![
+            Stmt::Assign {
+                dst: VReg::phys("ret"),
+                src: Expr::Const(42),
+            },
+            Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("ret"))),
+            },
+        ];
+
+        fold_returns_with_identities(&mut body, &identities);
+
+        assert_eq!(
+            body,
+            vec![Stmt::Return {
+                value: Some(Expr::Const(42)),
+            }]
+        );
+    }
+
+    #[test]
+    fn attributed_return_fold_moves_definition_owner_to_returned_expression() {
+        let definition_owner = OriginSet::one(0x1000);
+        let returned_value_owner = OriginSet::one(0x1002);
+        let return_owner = OriginSet::one(0x1004);
+        let mut body = vec![
+            Stmt::Assign {
+                dst: VReg::phys("rax#7"),
+                src: Expr::Const(42),
+            }
+            .with_origins(definition_owner.clone()),
+            Stmt::Return {
+                value: Some(
+                    Expr::Reg(VReg::phys("rax#7")).with_origins(returned_value_owner.clone()),
+                ),
+            }
+            .with_origins(return_owner.clone()),
+        ];
+
+        fold_returns(&mut body);
+
+        assert_eq!(body.len(), 1);
+        assert_eq!(
+            body[0].origins(),
+            Some(&definition_owner.union(&return_owner))
+        );
+        let Stmt::Return { value: Some(value) } = body[0].semantic() else {
+            panic!("expected folded return: {body:#?}")
+        };
+        assert!(matches!(value.semantic(), Expr::Const(42)));
+        assert_eq!(
+            value.origins(),
+            Some(&definition_owner.union(&returned_value_owner))
+        );
+    }
+
+    #[test]
     fn late_return_cleanup_removes_redundant_identical_constant_assignment() {
         let mut body = vec![
             Stmt::Assign {
@@ -465,6 +710,383 @@ mod tests {
                 value: Some(Expr::Const(-1)),
             }]
         );
+    }
+
+    #[test]
+    fn late_return_cleanup_does_not_trust_an_unowned_ret_spelling() {
+        let mut body = vec![
+            Stmt::Assign {
+                dst: VReg::phys("ret"),
+                src: Expr::Const(-1),
+            },
+            Stmt::Return {
+                value: Some(Expr::Const(-1)),
+            },
+        ];
+
+        remove_redundant_return_constant_assignments_with_identities(
+            &mut body,
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
+
+        assert_eq!(body.len(), 2);
+    }
+
+    #[test]
+    fn late_return_cleanup_accepts_a_pipeline_owned_ret_role() {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            VReg::phys("rax"),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 1,
+            },
+        );
+        identities =
+            identities.with_role_aliases(&HashMap::from([("rax".to_string(), "ret".to_string())]));
+        let mut body = vec![
+            Stmt::Assign {
+                dst: VReg::phys("ret"),
+                src: Expr::Const(-1),
+            },
+            Stmt::Return {
+                value: Some(Expr::Const(-1)),
+            },
+        ];
+
+        remove_redundant_return_constant_assignments_with_identities(&mut body, &identities);
+
+        assert_eq!(
+            body,
+            vec![Stmt::Return {
+                value: Some(Expr::Const(-1)),
+            }]
+        );
+    }
+
+    #[test]
+    fn attributed_late_return_cleanup_moves_assignment_owner_to_return() {
+        let mut body = vec![
+            Stmt::Assign {
+                dst: VReg::phys("ret"),
+                src: Expr::Const(-1),
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(0x1010)),
+            Stmt::Return {
+                value: Some(Expr::Const(-1)),
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(0x1014)),
+        ];
+
+        remove_redundant_return_constant_assignments(&mut body);
+
+        assert_eq!(body.len(), 1);
+        let Stmt::Return { value: Some(value) } = body[0].semantic() else {
+            panic!("expected retained constant return: {body:#?}")
+        };
+        assert!(matches!(value.semantic(), Expr::Const(-1)));
+        assert_eq!(
+            body[0].origins(),
+            Some(&crate::ir::ast::OriginSet::from_addresses([0x1010, 0x1014]))
+        );
+        assert_eq!(
+            value.origins(),
+            Some(&crate::ir::ast::OriginSet::one(0x1010))
+        );
+    }
+
+    #[test]
+    fn attributed_late_return_cleanup_recognizes_expression_carriers() {
+        let mut body = vec![
+            Stmt::Assign {
+                dst: VReg::phys("ret"),
+                src: Expr::Const(-1).with_origins(crate::ir::ast::OriginSet::one(0x100c)),
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(0x1010)),
+            Stmt::Return {
+                value: Some(Expr::Const(-1).with_origins(crate::ir::ast::OriginSet::one(0x1012))),
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(0x1014)),
+        ];
+
+        remove_redundant_return_constant_assignments(&mut body);
+
+        assert_eq!(body.len(), 1, "the redundant assignment must be removed");
+        let Stmt::Return { value: Some(value) } = body[0].semantic() else {
+            panic!("expected retained constant return: {body:#?}")
+        };
+        assert!(matches!(value.semantic(), Expr::Const(-1)));
+        let removed_origins = crate::ir::ast::OriginSet::from_addresses([0x100c, 0x1010]);
+        assert_eq!(
+            body[0].origins(),
+            Some(&crate::ir::ast::OriginSet::from_addresses([
+                0x100c, 0x1010, 0x1014,
+            ]))
+        );
+        assert_eq!(
+            value.origins(),
+            Some(&removed_origins.union(&crate::ir::ast::OriginSet::one(0x1012)))
+        );
+    }
+
+    #[test]
+    fn attributed_exhaustive_if_duplicates_join_owners_into_each_return() {
+        let result = VReg::phys("rax#1");
+        let mut function = Function {
+            name: "classify".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Reg(VReg::phys("arg0")),
+                    then_body: vec![Stmt::Assign {
+                        dst: result.clone(),
+                        src: Expr::Const(1),
+                    }
+                    .with_origins(crate::ir::ast::OriginSet::one(0x1004))],
+                    else_body: Some(vec![Stmt::Assign {
+                        dst: result.clone(),
+                        src: Expr::Const(2),
+                    }
+                    .with_origins(crate::ir::ast::OriginSet::one(0x1008))]),
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(0x1000)),
+                Stmt::Comment("x86-64 epilogue: restore rbp".into())
+                    .with_origins(crate::ir::ast::OriginSet::one(0x100c)),
+                Stmt::Return {
+                    value: Some(Expr::Reg(result)),
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(0x1010)),
+            ],
+        };
+
+        fold_exhaustive_if_returns(&mut function);
+
+        assert_eq!(
+            function.body.len(),
+            1,
+            "join did not fold: {:#?}",
+            function.body
+        );
+        assert_eq!(
+            function.body[0].origins(),
+            Some(&crate::ir::ast::OriginSet::one(0x1000))
+        );
+        let Stmt::If {
+            then_body,
+            else_body: Some(else_body),
+            ..
+        } = function.body[0].semantic()
+        else {
+            panic!("expected attributed exhaustive if: {:#?}", function.body);
+        };
+        assert_eq!(
+            then_body[0].origins(),
+            Some(&crate::ir::ast::OriginSet::from_addresses([
+                0x1004, 0x100c, 0x1010
+            ]))
+        );
+        assert_eq!(
+            else_body[0].origins(),
+            Some(&crate::ir::ast::OriginSet::from_addresses([
+                0x1008, 0x100c, 0x1010
+            ]))
+        );
+        let Stmt::Return {
+            value: Some(then_value),
+        } = then_body[0].semantic()
+        else {
+            panic!("expected attributed then return: {then_body:#?}")
+        };
+        let Stmt::Return {
+            value: Some(else_value),
+        } = else_body[0].semantic()
+        else {
+            panic!("expected attributed else return: {else_body:#?}")
+        };
+        assert_eq!(then_value.origins(), Some(&OriginSet::one(0x1004)));
+        assert_eq!(else_value.origins(), Some(&OriginSet::one(0x1008)));
+    }
+
+    #[test]
+    fn attributed_exhaustive_if_recognizes_return_expression_carrier() {
+        let result = VReg::phys("rax#1");
+        let return_value_owner = OriginSet::one(0x1010);
+        let mut function = Function {
+            name: "classify".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Reg(VReg::phys("arg0")),
+                    then_body: vec![Stmt::Assign {
+                        dst: result.clone(),
+                        src: Expr::Const(1),
+                    }],
+                    else_body: Some(vec![Stmt::Assign {
+                        dst: result.clone(),
+                        src: Expr::Const(2),
+                    }]),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(result).with_origins(return_value_owner.clone())),
+                },
+            ],
+        };
+
+        fold_exhaustive_if_returns(&mut function);
+
+        assert_eq!(function.body.len(), 1, "the shared return must be folded");
+        let Stmt::If {
+            then_body,
+            else_body: Some(else_body),
+            ..
+        } = function.body[0].semantic()
+        else {
+            panic!("expected exhaustive if: {:#?}", function.body)
+        };
+        for arm in [then_body, else_body] {
+            let Stmt::Return { value: Some(value) } = arm[0].semantic() else {
+                panic!("expected folded arm return: {arm:#?}")
+            };
+            assert_eq!(value.origins(), Some(&return_value_owner));
+        }
+    }
+
+    #[test]
+    fn attributed_exhaustive_if_recognizes_promoted_store_target_carriers() {
+        let result = VReg::phys("local_0");
+        let then_target_owner = OriginSet::one(0x1004);
+        let else_target_owner = OriginSet::one(0x1008);
+        let mut function = Function {
+            name: "classify".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Reg(VReg::phys("arg0")),
+                    then_body: vec![Stmt::Store {
+                        addr: Expr::Reg(result.clone()).with_origins(then_target_owner.clone()),
+                        src: Expr::Const(1),
+                        size: 4,
+                    }],
+                    else_body: Some(vec![Stmt::Store {
+                        addr: Expr::Reg(result.clone()).with_origins(else_target_owner.clone()),
+                        src: Expr::Const(2),
+                        size: 4,
+                    }]),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(result)),
+                },
+            ],
+        };
+
+        fold_exhaustive_if_returns(&mut function);
+
+        assert_eq!(function.body.len(), 1, "the shared return must be folded");
+        let Stmt::If {
+            then_body,
+            else_body: Some(else_body),
+            ..
+        } = function.body[0].semantic()
+        else {
+            panic!("expected exhaustive if: {:#?}", function.body)
+        };
+        for (arm, owner) in [
+            (then_body, &then_target_owner),
+            (else_body, &else_target_owner),
+        ] {
+            let Stmt::Return { value: Some(value) } = arm[0].semantic() else {
+                panic!("expected folded arm return: {arm:#?}")
+            };
+            assert_eq!(value.origins(), Some(owner));
+        }
+    }
+
+    #[test]
+    fn attributed_exhaustive_switch_duplicates_join_owners_into_each_return() {
+        let result = VReg::phys("rax#1");
+        let mut function = Function {
+            name: "dispatch".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Switch {
+                    discriminant: Expr::Reg(VReg::phys("arg0")),
+                    cases: vec![(
+                        Some(0),
+                        vec![
+                            Stmt::Assign {
+                                dst: result.clone(),
+                                src: Expr::Const(10),
+                            }
+                            .with_origins(crate::ir::ast::OriginSet::one(0x1004)),
+                            Stmt::Break.with_origins(crate::ir::ast::OriginSet::one(0x1008)),
+                        ],
+                    )],
+                    default: Some(vec![Stmt::Assign {
+                        dst: result.clone(),
+                        src: Expr::Const(-1),
+                    }
+                    .with_origins(crate::ir::ast::OriginSet::one(0x100c))]),
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(0x1000)),
+                Stmt::Comment("x86-64 epilogue: restore rbp".into())
+                    .with_origins(crate::ir::ast::OriginSet::one(0x1010)),
+                Stmt::Return {
+                    value: Some(Expr::Reg(result)),
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(0x1014)),
+            ],
+        };
+
+        fold_exhaustive_switch_returns(&mut function);
+
+        assert_eq!(
+            function.body.len(),
+            2,
+            "join did not fold: {:#?}",
+            function.body
+        );
+        assert_eq!(
+            function.body[0].origins(),
+            Some(&crate::ir::ast::OriginSet::one(0x1000))
+        );
+        let Stmt::Switch {
+            cases,
+            default: Some(default),
+            ..
+        } = function.body[0].semantic()
+        else {
+            panic!(
+                "expected attributed exhaustive switch: {:#?}",
+                function.body
+            );
+        };
+        assert_eq!(
+            cases[0].1[0].origins(),
+            Some(&crate::ir::ast::OriginSet::from_addresses([
+                0x1004, 0x1008, 0x1010, 0x1014
+            ]))
+        );
+        assert_eq!(
+            default[0].origins(),
+            Some(&crate::ir::ast::OriginSet::from_addresses([
+                0x100c, 0x1010, 0x1014
+            ]))
+        );
+        let Stmt::Return {
+            value: Some(case_value),
+        } = cases[0].1[0].semantic()
+        else {
+            panic!("expected attributed case return: {:#?}", cases[0].1)
+        };
+        let Stmt::Return {
+            value: Some(default_value),
+        } = default[0].semantic()
+        else {
+            panic!("expected attributed default return: {default:#?}")
+        };
+        assert_eq!(case_value.origins(), Some(&OriginSet::one(0x1004)));
+        assert_eq!(default_value.origins(), Some(&OriginSet::one(0x100c)));
+        assert!(matches!(function.body[1].semantic(), Stmt::Comment(_)));
     }
 
     #[test]

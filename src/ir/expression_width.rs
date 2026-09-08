@@ -9,6 +9,7 @@ use crate::ir::ast::Expr;
 /// Widest byte width explicitly established by an expression.
 pub(crate) fn explicit_expression_width(expression: &Expr) -> Option<u8> {
     match expression {
+        Expr::Origin { expr, .. } => explicit_expression_width(expr),
         Expr::Deref { size, .. }
         | Expr::Select { width: size, .. }
         | Expr::WideArithmetic { width: size, .. } => Some(*size),
@@ -42,6 +43,7 @@ pub(crate) fn explicit_expression_width(expression: &Expr) -> Option<u8> {
 /// extension at the wider width can carry meaningful high bits.
 pub(crate) fn can_carry_bits_above(expression: &Expr, narrow_width: u8) -> bool {
     match expression {
+        Expr::Origin { expr, .. } => can_carry_bits_above(expr, narrow_width),
         Expr::Cast {
             signed,
             width,

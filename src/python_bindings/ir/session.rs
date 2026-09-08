@@ -6,6 +6,10 @@ use std::sync::{Mutex, MutexGuard};
 
 use pyo3::prelude::*;
 
+use super::pipeline::{
+    AnalysisBudget, CalleeBudget, CfgBudget, DecompileRequest, DiscoveryBudget, RenderOptions,
+    SizeBudget, TypeBudget,
+};
 use super::{decompile_at_session, load_program_session};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -129,6 +133,30 @@ impl PyDecompilerSession {
         ])
     }
 
+    /// Session-local program-fact ownership, exposed as counts for stable Python shape.
+    #[getter]
+    fn program_fact_cache_stats(&self) -> HashMap<&'static str, u64> {
+        let stats = self.session.program_fact_cache_stats();
+        HashMap::from([
+            (
+                "call_graph_entries",
+                u64::try_from(stats.call_graph_entries).unwrap_or(u64::MAX),
+            ),
+            (
+                "environment_entries",
+                u64::try_from(stats.environment_entries).unwrap_or(u64::MAX),
+            ),
+            (
+                "type_artifacts_initialized",
+                u64::from(stats.type_artifacts_initialized),
+            ),
+            (
+                "symbol_artifacts_initialized",
+                u64::from(stats.symbol_artifacts_initialized),
+            ),
+        ])
+    }
+
     /// Session-local exact rendered-artifact cache counters.
     #[getter]
     fn artifact_cache_stats(&self) -> HashMap<&'static str, u64> {
@@ -172,26 +200,46 @@ impl PyDecompilerSession {
             }
         }
 
-        let artifact = decompile_at_session(
+        let result = decompile_at_session(
             py,
             &self.session,
             &self.path,
-            key.func_va,
-            max_blocks,
-            max_instructions,
-            timeout_ms,
-            types,
-            style,
-            pdb_cache,
-            max_functions,
-            // The session render cache is keyed on `key`, which carries no KB
-            // state, so serving an overlaid render from it would return a stale
-            // name after a rename. This path stays KB-blind until the cache key
-            // includes the overlay; `decompile_at_py` is the wired entry point.
-            None,
-            None,
-            None,
+            DecompileRequest {
+                va: key.func_va,
+                analysis_budget: AnalysisBudget {
+                    discovery: DiscoveryBudget {
+                        max_functions,
+                        total_timeout_ms: 0,
+                    },
+                    cfg: CfgBudget {
+                        max_blocks,
+                        max_instructions,
+                        timeout_ms,
+                    },
+                    callee: CalleeBudget::default(),
+                    types: TypeBudget::default(),
+                    size: SizeBudget::from_instruction_and_output_limits(
+                        max_instructions,
+                        max_functions,
+                    ),
+                },
+                render_options: RenderOptions {
+                    types,
+                    style,
+                    shadow_v2: false,
+                    pdb_cache,
+                    // The session render cache is keyed on `key`, which carries
+                    // no KB state, so serving an overlaid render from it would
+                    // return a stale name after a rename. This path stays
+                    // KB-blind until the cache key includes the overlay;
+                    // `decompile_at_py` is the wired entry point.
+                    analyst_names: None,
+                    analyst_locals: None,
+                    analyst_prototype: None,
+                },
+            },
         )?;
+        let artifact = result.pseudocode;
         if cacheable {
             return Ok(self.rendered.install(key, artifact));
         }

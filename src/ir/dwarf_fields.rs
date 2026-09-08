@@ -7,7 +7,7 @@
 //! member.  The renderer remains responsible only for spelling that semantic
 //! field access as C.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::debug::dwarf::{DwarfType, DwarfTypeKind};
 use crate::ir::ast::{Expr, Function, PdbFieldHint, Stmt};
@@ -46,6 +46,7 @@ pub fn annotate_function_fields(
             );
         }
     }
+    let parameter_pointer_roles = pointer_types.keys().cloned().collect::<HashSet<_>>();
 
     // Pointer identity is monotone here: the AST's high variables are already
     // value-numbered, and only an authoritative parameter, an exact copy/cast,
@@ -62,7 +63,7 @@ pub fn annotate_function_fields(
     loop {
         let invalid = pointer_types
             .iter()
-            .filter(|(register, _)| !is_parameter_role(register))
+            .filter(|(register, _)| !parameter_pointer_roles.contains(*register))
             .filter_map(|(register, type_name)| {
                 (!all_definitions_compatible(
                     &function.body,
@@ -92,12 +93,6 @@ pub fn annotate_function_fields(
     pointer_types
 }
 
-fn is_parameter_role(register: &VReg) -> bool {
-    matches!(register, VReg::Phys(name) if name.strip_prefix("arg").is_some_and(|suffix| {
-        !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
-    }))
-}
-
 fn all_definitions_compatible(
     body: &[Stmt],
     target: &VReg,
@@ -123,7 +118,8 @@ fn visit_definitions<'a>(
     visitor: &mut impl FnMut(Option<&'a Expr>),
 ) {
     for statement in body {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } if dst == target => visitor(Some(src)),
             Stmt::Store {
                 addr: Expr::Reg(dst),
@@ -202,7 +198,8 @@ fn infer_body(
 ) -> bool {
     let mut changed = false;
     for statement in body {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
                 if let Some(name) = pointer_source_type(src, layouts, pointer_width, pointer_types)
                 {
@@ -378,7 +375,8 @@ fn annotate_body(
     definitions: &mut HashMap<VReg, Expr>,
 ) {
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
                 annotate_expr(src, layouts, pointer_width, pointer_types, definitions);
                 if expression_reads(src, dst) {
@@ -626,6 +624,9 @@ fn annotate_expr(
     definitions: &HashMap<VReg, Expr>,
 ) {
     match expression {
+        Expr::Origin { expr, .. } => {
+            annotate_expr(expr, layouts, pointer_width, pointer_types, definitions)
+        }
         Expr::Deref { addr, size } => {
             annotate_expr(addr, layouts, pointer_width, pointer_types, definitions);
             annotate_address(
@@ -961,7 +962,7 @@ fn invalidate_registers(written: &[VReg], definitions: &mut HashMap<VReg, Expr>)
 }
 
 fn collect_written_registers(statement: &Stmt, written: &mut Vec<VReg>) {
-    match statement {
+    match statement.semantic() {
         Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => written.push(dst.clone()),
         Stmt::Call { dst: Some(dst), .. } => written.push(dst.clone()),
         Stmt::If {
@@ -1022,6 +1023,7 @@ fn collect_written_registers(statement: &Stmt, written: &mut Vec<VReg>) {
 mod tests {
     use super::*;
     use crate::debug::dwarf::DwarfField;
+    use crate::ir::ast::OriginSet;
     use crate::ir::call_contracts::CallPrototypeAuthority;
 
     fn node_layout() -> DwarfType {
@@ -1500,5 +1502,49 @@ mod tests {
                 ..
             } if base == &VReg::phys("arg0")
         ));
+    }
+
+    #[test]
+    fn arg_spelling_outside_the_prototype_is_not_a_parameter_identity() {
+        let impostor = VReg::phys("arg99");
+        let mut function = Function {
+            name: "stale_parameter_role".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: impostor.clone(),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                },
+                Stmt::Assign {
+                    dst: impostor.clone(),
+                    src: Expr::Const(7),
+                },
+            ],
+        };
+
+        let pointer_types =
+            annotate_function_fields(&mut function, Some(&node_prototype()), &[node_layout()], 8);
+
+        assert!(!pointer_types.contains_key(&impostor));
+    }
+
+    #[test]
+    fn attributed_writes_are_visible_to_definition_invalidation() {
+        let target = VReg::phys("var0");
+        let statement = Stmt::If {
+            cond: Expr::Const(1),
+            then_body: vec![Stmt::Assign {
+                dst: target.clone(),
+                src: Expr::Const(7),
+            }
+            .with_origins(OriginSet::one(0x1014))],
+            else_body: None,
+        }
+        .with_origins(OriginSet::one(0x1010));
+        let mut written = Vec::new();
+
+        collect_written_registers(&statement, &mut written);
+
+        assert_eq!(written, vec![target]);
     }
 }

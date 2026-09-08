@@ -12,8 +12,9 @@
 
 use crate::ir::ast::{Expr, Stmt};
 use crate::ir::types::VReg;
+use crate::ir::value_number::ValueIdentities;
 
-use super::{arg_slots, mark_arg_writes_in_stmt, slot_of, CallConv};
+use super::{arg_slots, mark_arg_writes_in_stmt_with_identities, slot_of, CallConv};
 
 fn storage_slot_count(arch: CallConv) -> usize {
     arg_slots(arch).len() + crate::ir::abi::sse_argument_registers(arch).len()
@@ -97,7 +98,13 @@ impl EnclosingSlots {
     /// reaching a labelled join or crossing an explicit transfer means nothing
     /// about the value entering the following statement can be proved from
     /// what came before it.
-    pub(super) fn advance(blocked: &mut [bool], statement: &Stmt, arch: CallConv) {
+    pub(super) fn advance(
+        blocked: &mut [bool],
+        statement: &Stmt,
+        arch: CallConv,
+        identities: Option<&ValueIdentities>,
+    ) {
+        let statement = statement.semantic();
         if matches!(
             statement,
             Stmt::Label(_)
@@ -109,7 +116,7 @@ impl EnclosingSlots {
             blocked.fill(true);
             return;
         }
-        mark_arg_writes_in_stmt(statement, arch, blocked);
+        mark_arg_writes_in_stmt_with_identities(statement, arch, blocked, identities);
     }
 
     /// Fold one statement of the enclosing prefix into the per-slot reaching
@@ -136,7 +143,10 @@ impl EnclosingSlots {
         reaching: &mut [Option<Expr>],
         statement: &Stmt,
         arch: CallConv,
+        identities: Option<&ValueIdentities>,
     ) {
+        let statement_origins = statement.origins().cloned();
+        let statement = statement.semantic();
         if matches!(
             statement,
             Stmt::Label(_)
@@ -148,27 +158,44 @@ impl EnclosingSlots {
             reaching.iter_mut().for_each(|slot| *slot = None);
             return;
         }
-        if let Stmt::Assign {
-            dst: dst @ VReg::Phys(name),
-            ..
-        } = statement
-        {
+        if let Stmt::Assign { dst, .. } = statement {
+            let storage = match identities {
+                Some(identities) => identities.exact(dst).and_then(|identity| {
+                    let name = identity.canonical_physical_base()?;
+                    Some((name.to_string(), identity.version > 0))
+                }),
+                None => {
+                    let VReg::Phys(name) = dst else {
+                        return;
+                    };
+                    Some((name.clone(), name.contains('#')))
+                }
+            };
+            let Some((name, versioned)) = storage else {
+                return;
+            };
             // A scalar lane is not a definition of the complete SSE argument
             // carrier. Recording `xmm1_d1` as the reaching value for an exact
             // `xmm1` parameter would pass four bytes of unrelated upper-lane
             // residue as a double. Lane writes still block the carrier below;
             // they simply cannot prove its complete value.
-            let complete_storage = !crate::ir::abi::ssa_base(name).contains("_d");
+            let complete_storage = !name.contains("_d");
             if let Some(slot) = complete_storage
-                .then(|| storage_slot_of(arch, name.as_str()))
+                .then(|| storage_slot_of(arch, &name))
                 .flatten()
             {
                 if let Some(reaching) = reaching.get_mut(slot) {
-                    *reaching = name.contains('#').then(|| Expr::Reg(dst.clone()));
+                    *reaching = versioned.then(|| {
+                        let mut value = Expr::Reg(dst.clone());
+                        if let Some(origins) = statement_origins.as_ref() {
+                            value.merge_origins(origins);
+                        }
+                        value
+                    });
                 }
                 return;
             }
-            if crate::ir::abi::sse_argument_slot_of(arch, name).is_some() {
+            if crate::ir::abi::sse_argument_slot_of(arch, &name).is_some() {
                 // Packed-view decomposition defines lane identities from the
                 // complete carrier; it does not overwrite that carrier. Keep
                 // the last whole-register proof and ignore these derived defs.
@@ -180,7 +207,7 @@ impl EnclosingSlots {
             return;
         }
         let mut written = vec![false; reaching.len()];
-        mark_arg_writes_in_stmt(statement, arch, &mut written);
+        mark_arg_writes_in_stmt_with_identities(statement, arch, &mut written, identities);
         for (slot, written) in written.into_iter().enumerate() {
             if written {
                 reaching[slot] = None;

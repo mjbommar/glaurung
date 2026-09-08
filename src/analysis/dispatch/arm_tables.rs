@@ -69,10 +69,60 @@ pub struct ArmWordTableBranch {
 // stays one type while its ARM knowledge lives beside the ARM types it reads.
 // ---------------------------------------------------------------------------
 
-use super::{canon, DispatchTracker, ThumbTableBranch, Val};
+use super::{canon, ArmByteTableBranch, DispatchTracker, ThumbTableBranch, Val};
 use crate::core::instruction::{Instruction, OperandKind};
 
 impl DispatchTracker {
+    /// Whether the ARM-specific interpreter has an exact model for operand
+    /// zero.  The CFG walker checks this before its conservative ARM write
+    /// kill so read/modify/write forms can consume the old value.
+    pub fn models_arm_definition(&self, ins: &Instruction) -> bool {
+        self.arm_pc_literal_load(ins).is_some()
+            || self.arm_adr_target(ins).is_some()
+            || self.arm_byte_table_load_fact(ins).is_some()
+    }
+
+    /// Locate the word read by an exact ARM `ldr rD, [pc, #imm]` literal load.
+    /// The caller owns the image and supplies the word through
+    /// [`Self::materialize_arm_pc_relative_offset`].
+    pub fn arm_pc_literal_load<'a>(&self, ins: &'a Instruction) -> Option<(&'a str, u64)> {
+        let mnemonic = ins.mnemonic.to_ascii_lowercase();
+        let stem = mnemonic
+            .strip_suffix(".w")
+            .or_else(|| mnemonic.strip_suffix(".n"))
+            .unwrap_or(&mnemonic);
+        if stem != "ldr" {
+            return None;
+        }
+        let destination = ins.operands.first()?.register.as_deref()?;
+        if destination.eq_ignore_ascii_case("pc") {
+            return None;
+        }
+        let memory = ins
+            .operands
+            .iter()
+            .find(|operand| matches!(operand.kind, OperandKind::Memory))?;
+        if memory.index.is_some()
+            || !memory
+                .base
+                .as_deref()
+                .is_some_and(|base| base.eq_ignore_ascii_case("pc"))
+        {
+            return None;
+        }
+        let displacement = u64::try_from(memory.displacement.unwrap_or(0)).ok()?;
+        let literal_va = self
+            .arm_pc_mode?
+            .pc_value(ins.address.value)?
+            .checked_add(displacement)?;
+        Some((destination, literal_va))
+    }
+
+    /// Record the exact unsigned word read from a PC-relative ARM literal.
+    pub fn materialize_arm_pc_relative_offset(&mut self, register: &str, offset: u32) {
+        self.set(register, Val::ArmPcRelativeOffset(u64::from(offset)));
+    }
+
     /// The address an ARM `add rD, pc, #imm` (the assembler's `adr`)
     /// materialises, or `None` when this is not that instruction or the
     /// execution state was never declared.
@@ -97,8 +147,10 @@ impl DispatchTracker {
         //
         // Matching only the second is why this rule originally recognised a
         // hand-written A32 reproduction and none of the real firmware.
-        let immediate = match stem {
-            "adr" if ins.operands.len() == 2 => ins.operands.get(1)?.immediate?,
+        let offset = match stem {
+            "adr" if ins.operands.len() == 2 => {
+                u64::try_from(ins.operands.get(1)?.immediate?).ok()?
+            }
             "add" if ins.operands.len() == 3 => {
                 // Operand 1 must be `pc` itself. A tracked register that merely
                 // HOLDS a code address is a different fact and must not take
@@ -111,7 +163,16 @@ impl DispatchTracker {
                 {
                     return None;
                 }
-                ins.operands.get(2)?.immediate?
+                let operand = ins.operands.get(2)?;
+                if let Some(immediate) = operand.immediate {
+                    u64::try_from(immediate).ok()?
+                } else {
+                    let register = operand.register.as_deref()?;
+                    let Val::ArmPcRelativeOffset(offset) = self.get(register)? else {
+                        return None;
+                    };
+                    offset
+                }
             }
             _ => return None,
         };
@@ -119,8 +180,93 @@ impl DispatchTracker {
         // mnemonic; a negative immediate here is a decode this rule does not
         // model, and inventing a table start for it would be worse than
         // declining.
-        let immediate = u64::try_from(immediate).ok()?;
-        mode.pc_value(ins.address.value)?.checked_add(immediate)
+        mode.pc_value(ins.address.value)?.checked_add(offset)
+    }
+
+    /// Track the byte selected from an A32 PIC table.
+    pub fn observe_arm_byte_table_load(&mut self, ins: &Instruction) -> bool {
+        if !matches!(self.arm_pc_mode, Some(ArmPcMode::A32)) {
+            return false;
+        }
+        let mnemonic = ins.mnemonic.to_ascii_lowercase();
+        if mnemonic != "ldrb" {
+            return false;
+        }
+        let Some((destination, table, bound)) = self.arm_byte_table_load_fact(ins) else {
+            if let Some(destination) = ins
+                .operands
+                .first()
+                .and_then(|operand| operand.register.as_deref())
+            {
+                self.clear(destination);
+            }
+            return true;
+        };
+        self.set(destination, Val::ArmByteOffset { table, bound });
+        true
+    }
+
+    fn arm_byte_table_load_fact<'a>(
+        &self,
+        ins: &'a Instruction,
+    ) -> Option<(&'a str, u64, Option<u64>)> {
+        if !matches!(self.arm_pc_mode, Some(ArmPcMode::A32))
+            || !ins.mnemonic.eq_ignore_ascii_case("ldrb")
+        {
+            return None;
+        }
+        let destination = ins.operands.first()?.register.as_deref()?;
+        let memory = ins
+            .operands
+            .iter()
+            .find(|operand| matches!(operand.kind, OperandKind::Memory))?;
+        if memory.displacement.unwrap_or(0) != 0 || memory.scale.unwrap_or(1) != 1 {
+            return None;
+        }
+        let Val::Addr(table) = memory.base.as_deref().and_then(|base| self.get(base))? else {
+            return None;
+        };
+        let bound = memory
+            .index
+            .as_deref()
+            .and_then(|index| self.bounded.get(&canon(index)).copied());
+        Some((destination, table, bound))
+    }
+
+    /// Recognise A32 `add pc, pc, rOffset, lsl #2` after an indexed byte load.
+    pub fn arm_byte_table_branch(&self, ins: &Instruction) -> Option<ArmByteTableBranch> {
+        if !matches!(self.arm_pc_mode, Some(ArmPcMode::A32))
+            || !ins.mnemonic.eq_ignore_ascii_case("add")
+            || ins.operands.len() != 3
+        {
+            return None;
+        }
+        let register_named = |index: usize, name: &str| {
+            ins.operands
+                .get(index)
+                .and_then(|operand| operand.register.as_deref())
+                .is_some_and(|register| register.eq_ignore_ascii_case(name))
+        };
+        if !register_named(0, "pc") || !register_named(1, "pc") {
+            return None;
+        }
+        let offset = ins.operands.get(2)?;
+        if offset.scale != Some(4) {
+            return None;
+        }
+        let register = offset.register.as_deref()?;
+        let Val::ArmByteOffset { table, bound } = self.get(register)? else {
+            return None;
+        };
+        let target_base = ArmPcMode::A32.pc_value(ins.address.value)?;
+        let entry_count = bound
+            .and_then(|maximum| usize::try_from(maximum).ok())
+            .and_then(|maximum| maximum.checked_add(1));
+        Some(ArmByteTableBranch {
+            table_va: table,
+            target_base,
+            entry_count,
+        })
     }
 
     /// Recognise an ARM `ldr pc, [rBase, rIdx, lsl #2]` and report its table.

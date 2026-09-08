@@ -242,7 +242,8 @@ fn fold_body(
     let mut nonnegative = inherited_nonnegative.clone();
     let mut current_guard = active_guard.cloned();
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign {
                 dst: VReg::Phys(dst),
                 src,
@@ -492,6 +493,7 @@ fn fold_expr(
         return;
     }
     match expression {
+        Expr::Origin { expr, .. } => fold_expr(expr, data, aliases, bounds, active_guard),
         Expr::Deref { addr, size } => {
             fold_expr(addr, data, aliases, bounds, active_guard);
             if let Some(text) =

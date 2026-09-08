@@ -171,13 +171,15 @@ fn audit_change_report(pass: &str, changed: bool, before: &Function, after: &Fun
 /// richer bodies needs an effect proof this local propagation pass does not
 /// attempt.
 fn is_exact_return_guard(then_body: &[Stmt], else_body: &Option<Vec<Stmt>>) -> bool {
-    else_body.is_none() && matches!(then_body, [Stmt::Return { .. }])
+    else_body.is_none()
+        && matches!(then_body, [statement] if matches!(statement.semantic(), Stmt::Return { .. }))
 }
 
 fn propagate_run(stmts: &mut [Stmt], changed: &mut bool) -> Copies {
     let mut copies = Copies::new();
     for s in stmts.iter_mut() {
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
                 *changed |= subst(src, &copies);
                 invalidate(&mut copies, dst);
@@ -191,7 +193,7 @@ fn propagate_run(stmts: &mut [Stmt], changed: &mut bool) -> Copies {
                 *changed |= subst_store_addr(addr, &copies);
                 *changed |= subst(src, &copies);
                 // A store to a bare promoted local writes that variable.
-                if let Expr::Reg(r) = addr {
+                if let Expr::Reg(r) = addr.semantic() {
                     invalidate(&mut copies, r);
                 }
             }
@@ -292,7 +294,8 @@ fn propagate_run(stmts: &mut [Stmt], changed: &mut bool) -> Copies {
 fn propagate_run_counted(stmts: &mut [Stmt], reads: &RegMap<usize>, changed: &mut bool) -> Copies {
     let mut copies = Copies::new();
     for s in stmts.iter_mut() {
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
                 *changed |= subst(src, &copies);
                 invalidate(&mut copies, dst);
@@ -315,8 +318,8 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &RegMap<usize>, changed: &mu
                             // materialize a full-width temporary and preserve
                             // load-before-store ordering across sibling XMM
                             // moves.
-                            && !matches!(src, Expr::Deref { size: 16, .. })
-                            && !matches!(src, Expr::Unknown(_)));
+                            && !matches!(src.semantic(), Expr::Deref { size: 16, .. })
+                            && !matches!(src.semantic(), Expr::Unknown(_)));
                     if record {
                         copies.insert(dst.clone(), src.clone());
                     }
@@ -325,7 +328,7 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &RegMap<usize>, changed: &mu
             Stmt::Store { addr, src, size } => {
                 *changed |= subst_store_addr(addr, &copies);
                 *changed |= subst(src, &copies);
-                if let Expr::Reg(r) = addr {
+                if let Expr::Reg(r) = addr.semantic() {
                     invalidate(&mut copies, r);
                 }
                 // The store may alias a pending single-use load; folding that
@@ -424,11 +427,66 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &RegMap<usize>, changed: &mu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::ast::{Function, Stmt};
+    use crate::ir::ast::{Function, OriginSet, Stmt};
     use crate::ir::types::{BinOp, CmpOp, VReg};
 
     fn reg(n: &str) -> VReg {
         VReg::phys(n)
+    }
+
+    #[test]
+    fn attributed_pure_value_propagates_without_losing_its_origin() {
+        let owner = OriginSet::one(0x1000);
+        let mut function = Function {
+            name: "attributed_copy".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("local_4"),
+                    src: Expr::Const(7).with_origins(owner.clone()),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("local_4"))),
+                },
+            ],
+        };
+
+        propagate_copies(&mut function);
+
+        assert!(matches!(
+            function.body.as_slice(),
+            [_, Stmt::Return { value: Some(value) }]
+                if matches!(value.semantic(), Expr::Const(7))
+                    && value.origins() == Some(&owner)
+        ));
+    }
+
+    #[test]
+    fn substitution_unions_attributed_use_and_definition() {
+        let destination = reg("var0");
+        let definition_owner = OriginSet::one(0x1000);
+        let use_owner = OriginSet::one(0x1004);
+        let copies = Copies::single(
+            destination.clone(),
+            Expr::Const(7).with_origins(definition_owner.clone()),
+        );
+        let mut use_expression = Expr::Reg(destination).with_origins(use_owner.clone());
+
+        assert!(subst(&mut use_expression, &copies));
+
+        assert!(matches!(use_expression.semantic(), Expr::Const(7)));
+        assert_eq!(
+            use_expression.origins(),
+            Some(&definition_owner.union(&use_owner)),
+            "the replacement must have one canonical carrier for both contributors"
+        );
+        let Expr::Origin { expr, .. } = &use_expression else {
+            panic!("expected one ownership carrier: {use_expression:#?}")
+        };
+        assert!(
+            !matches!(expr.as_ref(), Expr::Origin { .. }),
+            "copy substitution must not create nested origin carriers"
+        );
     }
 
     #[test]
@@ -564,6 +622,95 @@ mod tests {
     }
 
     #[test]
+    fn attributed_store_target_invalidates_an_earlier_snapshot() {
+        let local = reg("local_0");
+        let snapshot = reg("var0");
+        let mut function = Function {
+            name: "snapshot".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: snapshot.clone(),
+                    src: Expr::Reg(local.clone()),
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(local.clone())
+                        .with_origins(crate::ir::ast::OriginSet::one(0x1010)),
+                    src: Expr::Const(1),
+                    size: 4,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(snapshot.clone())),
+                },
+            ],
+        };
+
+        propagate_copies(&mut function);
+
+        let Stmt::Return { value: Some(value) } =
+            function.body.last().expect("retained return").semantic()
+        else {
+            panic!("expected returned snapshot: {:#?}", function.body)
+        };
+        assert!(
+            matches!(value.semantic(), Expr::Reg(register) if register == &snapshot),
+            "the pre-store snapshot must not become the post-store local: {value:#?}"
+        );
+    }
+
+    #[test]
+    fn attributed_wide_load_is_not_scalarized_at_its_single_use() {
+        let loaded = reg("var0");
+        let wide_load = Expr::Deref {
+            addr: Box::new(Expr::Reg(reg("arg0"))),
+            size: 16,
+        }
+        .with_origins(crate::ir::ast::OriginSet::one(0x1020));
+        let mut function = Function {
+            name: "wide_load".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: loaded.clone(),
+                    src: wide_load.clone(),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(loaded.clone())),
+                },
+            ],
+        };
+
+        propagate_copies(&mut function);
+
+        assert_eq!(function.body.len(), 2, "the wide definition must remain");
+        assert!(matches!(
+            function.body[0].semantic(),
+            Stmt::Assign { dst, src } if dst == &loaded && src == &wide_load
+        ));
+        assert!(matches!(
+            function.body[1].semantic(),
+            Stmt::Return { value: Some(value) }
+                if matches!(value.semantic(), Expr::Reg(register) if register == &loaded)
+        ));
+    }
+
+    #[test]
+    fn attributed_promoted_store_target_is_not_counted_as_a_read() {
+        let local = reg("local_0");
+        let function = Function {
+            name: "write_local".into(),
+            entry_va: 0,
+            body: vec![Stmt::Store {
+                addr: Expr::Reg(local.clone()).with_origins(crate::ir::ast::OriginSet::one(0x1030)),
+                src: Expr::Const(1),
+                size: 4,
+            }],
+        };
+
+        assert_eq!(register_read_count(&function, &local), 0);
+    }
+
+    #[test]
     fn a_pointer_scratch_store_does_not_become_a_promoted_local_assignment() {
         // Stack promotion overloads a bare promoted-local Store address as an
         // assignment to that local. `address = local_20; *address = value` is
@@ -612,6 +759,56 @@ mod tests {
             "the indirect store must retain an address expression: {:#?}",
             function.body
         );
+    }
+
+    #[test]
+    fn an_attributed_pointer_scratch_store_stays_indirect() {
+        let address = reg("ret");
+        let local = reg("local_20");
+        let source_owner = crate::ir::ast::OriginSet::one(0x1048);
+        let mut function = Function {
+            name: "write_output".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: address.clone(),
+                    src: Expr::Reg(local).with_origins(source_owner.clone()),
+                },
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(address),
+                        index: None,
+                        scale: 1,
+                        disp: 0,
+                        segment: None,
+                    },
+                    src: Expr::Const(7),
+                    size: 4,
+                },
+            ],
+        };
+
+        propagate_copies(&mut function);
+
+        let [Stmt::Store { addr, .. }] = function.body.as_slice() else {
+            panic!(
+                "expected one surviving indirect store: {:#?}",
+                function.body
+            );
+        };
+        assert!(
+            matches!(
+                addr.semantic(),
+                Expr::Lea {
+                    base: Some(store_address),
+                    index: None,
+                    disp: 0,
+                    ..
+                } if store_address == &reg("local_20")
+            ),
+            "provenance must not change an indirect write into a local assignment: {addr:#?}"
+        );
+        assert_eq!(addr.origins(), Some(&source_owner));
     }
 
     #[test]
@@ -885,7 +1082,18 @@ mod tests {
             !dump.contains("FlagValue"),
             "flag algebra stayed opaque:\n{dump}"
         );
-        assert_eq!(dump.matches("op: Slt").count(), 2, "{dump}");
+        // Both selects used the exact same recovered predicate. Once the outer
+        // false arm is selected, the inner predicate is necessarily false too,
+        // so the unreachable `2` arm and its duplicate comparison disappear.
+        assert_eq!(dump.matches("op: Slt").count(), 1, "{dump}");
+        assert!(
+            dump.contains("if_true: Const(\n                    1"),
+            "{dump}"
+        );
+        assert!(
+            dump.contains("if_false: Const(\n                    3"),
+            "{dump}"
+        );
     }
 
     #[test]
@@ -1207,6 +1415,19 @@ mod tests {
         assert!(
             load_folds_across_store(frame_slot("local_10", 0), frame_slot("local_10", 8)),
             "order of the two disjoint slots must not matter"
+        );
+    }
+
+    #[test]
+    fn attributed_disjoint_frame_slots_still_fold_the_pending_load() {
+        let load_addr =
+            frame_slot("local_10", 8).with_origins(crate::ir::ast::OriginSet::one(0x1040));
+        let store_addr =
+            frame_slot("local_10", 0).with_origins(crate::ir::ast::OriginSet::one(0x1044));
+
+        assert!(
+            load_folds_across_store(load_addr, store_addr),
+            "provenance must not hide disjoint constant offsets"
         );
     }
 

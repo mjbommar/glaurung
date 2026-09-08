@@ -52,9 +52,10 @@
 
 use crate::ir::abi::{hfa_return_tag, split_bank_return_tag, sse_pair_return_tag, ReturnClass};
 use crate::ir::ast::{Expr, Function, Stmt};
-use crate::ir::call_args::CallConv;
+use crate::ir::call_args::{register_is_storage, CallConv};
 use crate::ir::types::{BinOp, VReg};
 use crate::ir::types_recover::RecoveredPrototype;
+use crate::ir::value_number::ValueIdentities;
 
 /// What a multi-bank result contract requires of the frame object that holds it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,6 +148,15 @@ pub fn materialize_register_split_returns(
     cc: CallConv,
     prototype: Option<&RecoveredPrototype>,
 ) -> bool {
+    materialize_register_split_returns_with_identities(function, cc, prototype, None)
+}
+
+pub fn materialize_register_split_returns_with_identities(
+    function: &mut Function,
+    cc: CallConv,
+    prototype: Option<&RecoveredPrototype>,
+    identities: Option<&ValueIdentities>,
+) -> bool {
     let Some(prototype) = prototype else {
         return false;
     };
@@ -157,7 +167,11 @@ pub fn materialize_register_split_returns(
         return false;
     }
 
-    materialize_register_returns(function, RegisterReturnContract::Split { integer_first })
+    materialize_register_returns(
+        function,
+        RegisterReturnContract::Split { integer_first },
+        identities,
+    )
 }
 
 /// Materialise a register-resident System V `xmm0:xmm1` result as one object.
@@ -174,6 +188,15 @@ pub fn materialize_register_sse_pair_returns(
     cc: CallConv,
     prototype: Option<&RecoveredPrototype>,
 ) -> bool {
+    materialize_register_sse_pair_returns_with_identities(function, cc, prototype, None)
+}
+
+pub fn materialize_register_sse_pair_returns_with_identities(
+    function: &mut Function,
+    cc: CallConv,
+    prototype: Option<&RecoveredPrototype>,
+    identities: Option<&ValueIdentities>,
+) -> bool {
     let Some(prototype) = prototype else {
         return false;
     };
@@ -184,7 +207,11 @@ pub fn materialize_register_sse_pair_returns(
         return false;
     }
 
-    materialize_register_returns(function, RegisterReturnContract::SsePair { high_bytes })
+    materialize_register_returns(
+        function,
+        RegisterReturnContract::SsePair { high_bytes },
+        identities,
+    )
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -208,37 +235,38 @@ impl RegisterReturnContract {
         }
     }
 
-    fn part(self, register: &VReg) -> Option<RegisterPart> {
+    fn part(self, register: &VReg, identities: Option<&ValueIdentities>) -> Option<RegisterPart> {
         match self {
-            Self::Split { integer_first } => match result_bank(register)? {
+            Self::Split { integer_first } => match result_bank(register, identities)? {
                 ResultBank::Integer if integer_first => Some(RegisterPart::Low),
                 ResultBank::Integer => Some(RegisterPart::High),
                 ResultBank::Sse if integer_first => Some(RegisterPart::High),
                 ResultBank::Sse => Some(RegisterPart::Low),
             },
-            Self::SsePair { .. } => {
-                let VReg::Phys(name) = register else {
-                    return None;
-                };
-                match crate::ir::abi::ssa_base(name) {
-                    "xmm0" => Some(RegisterPart::Low),
-                    "xmm1" => Some(RegisterPart::High),
-                    _ => None,
-                }
+            Self::SsePair { .. } if register_is_storage(register, "xmm0", identities) => {
+                Some(RegisterPart::Low)
             }
+            Self::SsePair { .. } if register_is_storage(register, "xmm1", identities) => {
+                Some(RegisterPart::High)
+            }
+            Self::SsePair { .. } => None,
         }
     }
 
-    fn projected_part(self, expression: &Expr) -> Option<RegisterPart> {
+    fn projected_part(
+        self,
+        expression: &Expr,
+        identities: Option<&ValueIdentities>,
+    ) -> Option<RegisterPart> {
         match self {
-            Self::Split { integer_first } => match expression_bank(expression)? {
+            Self::Split { integer_first } => match expression_bank(expression, identities)? {
                 ResultBank::Integer if integer_first => Some(RegisterPart::Low),
                 ResultBank::Integer => Some(RegisterPart::High),
                 ResultBank::Sse if integer_first => Some(RegisterPart::High),
                 ResultBank::Sse => Some(RegisterPart::Low),
             },
             Self::SsePair { .. } => match expression {
-                Expr::Reg(register) => self.part(register),
+                Expr::Reg(register) => self.part(register, identities),
                 _ => None,
             },
         }
@@ -252,11 +280,20 @@ impl RegisterReturnContract {
     }
 }
 
-fn materialize_register_returns(function: &mut Function, contract: RegisterReturnContract) -> bool {
+fn materialize_register_returns(
+    function: &mut Function,
+    contract: RegisterReturnContract,
+    identities: Option<&ValueIdentities>,
+) -> bool {
     let object = VReg::phys(contract.object_name());
     let mut body = function.body.clone();
-    let Some(_) = materialize_register_body(&mut body, &object, contract, RegisterParts::default())
-    else {
+    let Some(_) = materialize_register_body(
+        &mut body,
+        &object,
+        contract,
+        RegisterParts::default(),
+        identities,
+    ) else {
         return false;
     };
     function.body = body;
@@ -289,22 +326,27 @@ fn materialize_register_body(
     object: &VReg,
     contract: RegisterReturnContract,
     incoming: RegisterParts,
+    identities: Option<&ValueIdentities>,
 ) -> Option<RegisterParts> {
     let mut reaching = incoming;
     let mut output = Vec::with_capacity(body.len() + 3);
-    for mut statement in std::mem::take(body) {
+    for statement in std::mem::take(body) {
+        let (mut statement, owner) = statement.into_semantic_with_origins();
         match &mut statement {
-            Stmt::Assign { dst, .. } if contract.part(dst).is_some() => {
+            Stmt::Assign { dst, .. } if contract.part(dst, identities).is_some() => {
                 let captured = dst.clone();
-                let part = contract.part(dst).expect("checked above");
-                output.push(statement);
-                output.push(register_part_store(
-                    object,
-                    contract.object_size(),
-                    part,
-                    contract.part_size(part),
-                    Expr::Reg(captured),
-                ));
+                let part = contract.part(dst, identities).expect("checked above");
+                output.push(statement.with_optional_origins(owner.clone()));
+                output.push(
+                    register_part_store(
+                        object,
+                        contract.object_size(),
+                        part,
+                        contract.part_size(part),
+                        Expr::Reg(captured),
+                    )
+                    .with_optional_origins(owner),
+                );
                 set_part(&mut reaching, part, true);
                 continue;
             }
@@ -312,16 +354,19 @@ fn materialize_register_body(
                 // Every call clobbers both result banks. Its attributed
                 // destination can immediately define one new bank.
                 reaching = RegisterParts::default();
-                if let Some(part) = dst.as_ref().and_then(|dst| contract.part(dst)) {
+                if let Some(part) = dst.as_ref().and_then(|dst| contract.part(dst, identities)) {
                     let captured = dst.clone().expect("checked above");
-                    output.push(statement);
-                    output.push(register_part_store(
-                        object,
-                        contract.object_size(),
-                        part,
-                        contract.part_size(part),
-                        Expr::Reg(captured),
-                    ));
+                    output.push(statement.with_optional_origins(owner.clone()));
+                    output.push(
+                        register_part_store(
+                            object,
+                            contract.object_size(),
+                            part,
+                            contract.part_size(part),
+                            Expr::Reg(captured),
+                        )
+                        .with_optional_origins(owner),
+                    );
                     set_part(&mut reaching, part, true);
                     continue;
                 }
@@ -331,11 +376,12 @@ fn materialize_register_body(
                 else_body,
                 ..
             } => {
-                let then_out = materialize_register_body(then_body, object, contract, reaching)?;
+                let then_out =
+                    materialize_register_body(then_body, object, contract, reaching, identities)?;
                 let else_out = match else_body {
-                    Some(else_body) => {
-                        materialize_register_body(else_body, object, contract, reaching)?
-                    }
+                    Some(else_body) => materialize_register_body(
+                        else_body, object, contract, reaching, identities,
+                    )?,
                     None => reaching,
                 };
                 reaching = then_out.intersect(else_out);
@@ -344,16 +390,18 @@ fn materialize_register_body(
                 // A loop may execute zero times, so only the incoming capture
                 // is guaranteed after it. Returns inside the loop are checked
                 // against their own path while traversing the body.
-                let _ = materialize_register_body(body, object, contract, reaching)?;
+                let _ = materialize_register_body(body, object, contract, reaching, identities)?;
             }
             Stmt::Switch { cases, default, .. } => {
                 let mut exits = Vec::with_capacity(cases.len() + 1);
                 for (_, case) in cases {
-                    exits.push(materialize_register_body(case, object, contract, reaching)?);
+                    exits.push(materialize_register_body(
+                        case, object, contract, reaching, identities,
+                    )?);
                 }
                 exits.push(match default {
                     Some(default) => {
-                        materialize_register_body(default, object, contract, reaching)?
+                        materialize_register_body(default, object, contract, reaching, identities)?
                     }
                     None => reaching,
                 });
@@ -364,7 +412,7 @@ fn materialize_register_body(
             }
             Stmt::TryCatch { try_body, catches } => {
                 let mut exits = vec![materialize_register_body(
-                    try_body, object, contract, reaching,
+                    try_body, object, contract, reaching, identities,
                 )?];
                 for catch in catches {
                     exits.push(materialize_register_body(
@@ -372,6 +420,7 @@ fn materialize_register_body(
                         object,
                         contract,
                         reaching,
+                        identities,
                     )?);
                 }
                 reaching = exits
@@ -388,43 +437,49 @@ fn materialize_register_body(
                 // also accepting Clang's SSE-selected projection.
                 if let Some((part, projected)) = value.as_ref().and_then(|value| {
                     contract
-                        .projected_part(value)
+                        .projected_part(value, identities)
                         .map(|part| (part, value.clone()))
                 }) {
-                    output.push(register_part_store(
-                        object,
-                        contract.object_size(),
-                        part,
-                        contract.part_size(part),
-                        projected,
-                    ));
+                    output.push(
+                        register_part_store(
+                            object,
+                            contract.object_size(),
+                            part,
+                            contract.part_size(part),
+                            projected,
+                        )
+                        .with_optional_origins(owner.clone()),
+                    );
                     set_part(&mut reaching, part, true);
                 }
                 if !reaching.complete() {
                     return None;
                 }
-                output.push(Stmt::Return {
-                    value: Some(Expr::Deref {
-                        addr: Box::new(Expr::StackAddr {
-                            object: object.clone(),
-                            size: contract.object_size(),
+                output.push(
+                    Stmt::Return {
+                        value: Some(Expr::Deref {
+                            addr: Box::new(Expr::StackAddr {
+                                object: object.clone(),
+                                size: contract.object_size(),
+                            }),
+                            size: 8,
                         }),
-                        size: 8,
-                    }),
-                });
+                    }
+                    .with_optional_origins(owner),
+                );
                 continue;
             }
             Stmt::Label(_) | Stmt::Goto { .. } | Stmt::IndirectGoto { .. } => {
                 reaching = RegisterParts::default();
             }
             Stmt::Pop { target } => {
-                if let Some(part) = contract.part(target) {
+                if let Some(part) = contract.part(target, identities) {
                     set_part(&mut reaching, part, false);
                 }
             }
             _ => {}
         }
-        output.push(statement);
+        output.push(statement.with_optional_origins(owner));
     }
     *body = output;
     Some(reaching)
@@ -442,14 +497,16 @@ enum RegisterPart {
     High,
 }
 
-fn result_bank(register: &VReg) -> Option<ResultBank> {
-    let VReg::Phys(name) = register else {
-        return None;
-    };
-    let name = crate::ir::abi::ssa_base(name);
-    if crate::ir::abi::integer_return_registers(CallConv::SysVAmd64).contains(&name) {
+fn result_bank(register: &VReg, identities: Option<&ValueIdentities>) -> Option<ResultBank> {
+    if crate::ir::abi::integer_return_registers(CallConv::SysVAmd64)
+        .iter()
+        .any(|storage| register_is_storage(register, storage, identities))
+    {
         Some(ResultBank::Integer)
-    } else if crate::ir::abi::float_return_registers(CallConv::SysVAmd64).contains(&name) {
+    } else if crate::ir::abi::float_return_registers(CallConv::SysVAmd64)
+        .iter()
+        .any(|storage| register_is_storage(register, storage, identities))
+    {
         Some(ResultBank::Sse)
     } else {
         None
@@ -458,11 +515,12 @@ fn result_bank(register: &VReg) -> Option<ResultBank> {
 
 /// The exact scalar result bank an expression's outer operation belongs to.
 /// Unknown/pointer-like shapes are deliberately refused rather than guessed.
-fn expression_bank(expression: &Expr) -> Option<ResultBank> {
+fn expression_bank(expression: &Expr, identities: Option<&ValueIdentities>) -> Option<ResultBank> {
     use crate::ir::ast::ScalarType;
 
     match expression {
-        Expr::Reg(register) => result_bank(register),
+        Expr::Origin { expr, .. } => expression_bank(expr, identities),
+        Expr::Reg(register) => result_bank(register, identities),
         Expr::FloatConst { .. } => Some(ResultBank::Sse),
         Expr::NumericConvert { to, .. } => Some(match to {
             ScalarType::Float(_) => ResultBank::Sse,
@@ -549,7 +607,7 @@ pub fn bank_return_c_type(
 /// Whether every `return` in `body` is the exact whole-object load this module
 /// installs, and all of them name the same object.
 fn every_return_loads_one_object(body: &[Stmt], seen: &mut Option<(VReg, u16)>) -> bool {
-    body.iter().all(|statement| match statement {
+    body.iter().all(|statement| match statement.semantic() {
         Stmt::Return { value } => {
             let Some(Expr::Deref { addr, .. }) = value else {
                 return false;
@@ -602,7 +660,7 @@ fn scan_returns(
     any: &mut bool,
 ) -> bool {
     for statement in body {
-        match statement {
+        match statement.semantic() {
             Stmt::Assign { dst, src } => match stack_object_load(src) {
                 Some(object) => {
                     locals.insert(dst.clone(), object);
@@ -667,7 +725,7 @@ fn scan_returns(
 /// Replace each `return` with the whole-object load.
 fn rewrite_returns(body: &mut [Stmt], object: &VReg, size: u16) {
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
             Stmt::Return { value } => {
                 *value = Some(Expr::Deref {
                     addr: Box::new(Expr::StackAddr {
@@ -695,7 +753,7 @@ fn rewrite_returns(body: &mut [Stmt], object: &VReg, size: u16) {
 /// pass would declare a two-bank result over an object only the first bank was
 /// ever written to, and hand back whatever the frame happened to hold.
 fn stores_second_bank(body: &[Stmt], object: &VReg, contract: BankContract) -> bool {
-    body.iter().any(|statement| match statement {
+    body.iter().any(|statement| match statement.semantic() {
         Stmt::Store { addr, .. } => stack_object_offset(addr).is_some_and(|(base, _, offset)| {
             base == *object
                 && offset >= i64::from(contract.second_bank)
@@ -739,7 +797,7 @@ fn stack_object_offset(expr: &Expr) -> Option<(VReg, u16, i64)> {
 
 /// The statement lists a compound statement owns.
 fn nested_bodies(statement: &Stmt) -> Vec<&[Stmt]> {
-    match statement {
+    match statement.semantic() {
         Stmt::If {
             then_body,
             else_body,
@@ -765,7 +823,7 @@ fn nested_bodies(statement: &Stmt) -> Vec<&[Stmt]> {
 /// [`nested_bodies`], for a rewrite.
 fn nested_bodies_mut(statement: &mut Stmt) -> Vec<&mut Vec<Stmt>> {
     let mut bodies: Vec<&mut Vec<Stmt>> = Vec::new();
-    match statement {
+    match statement.semantic_mut() {
         Stmt::If {
             then_body,
             else_body,
@@ -801,6 +859,7 @@ fn nested_bodies_mut(statement: &mut Stmt) -> Vec<&mut Vec<Stmt>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ast::OriginSet;
     use crate::ir::types_recover::{RecoveredOutputKind, RecoveredPrototype};
 
     fn object() -> VReg {
@@ -876,6 +935,37 @@ mod tests {
             &mut f,
             CallConv::SysVAmd64,
             Some(&declared)
+        ));
+        assert_eq!(
+            bank_return_c_type(&f.body, CallConv::SysVAmd64, Some(&declared)),
+            Some("struct __glaurung_sse_pair")
+        );
+    }
+
+    #[test]
+    fn attributed_stack_bank_return_is_composed_without_losing_its_owner() {
+        let return_owner = OriginSet::from_addresses([0x1030, 0x1010]);
+        let mut f = function(vec![
+            store(0, 16).with_origins(OriginSet::one(0x1000)),
+            store(8, 16).with_origins(OriginSet::one(0x1008)),
+            Stmt::Return {
+                value: Some(load(0, 16)),
+            }
+            .with_origins(return_owner.clone()),
+        ]);
+        let declared = prototype(ReturnClass::SsePair { high_bytes: 8 });
+
+        assert!(compose_bank_returns(
+            &mut f,
+            CallConv::SysVAmd64,
+            Some(&declared)
+        ));
+        assert_eq!(f.body[2].origins(), Some(&return_owner));
+        assert!(matches!(
+            f.body[2].semantic(),
+            Stmt::Return {
+                value: Some(Expr::Deref { addr, .. })
+            } if matches!(addr.as_ref(), Expr::StackAddr { size: 16, .. })
         ));
         assert_eq!(
             bank_return_c_type(&f.body, CallConv::SysVAmd64, Some(&declared)),
@@ -1103,6 +1193,86 @@ mod tests {
                 value: Some(Expr::Deref { addr, .. })
             }) if matches!(addr.as_ref(), Expr::StackAddr { size: 16, .. })
         ));
+    }
+
+    #[test]
+    fn register_return_banks_use_exact_identity_not_display_spelling() {
+        let mut identities = ValueIdentities::default();
+        for (numbered, base) in [
+            ("opaque_integer", "rax"),
+            ("opaque_sse_low", "xmm0"),
+            ("opaque_sse_high", "xmm1"),
+            ("xmm1#looks_high", "rax"),
+        ] {
+            identities.record(
+                VReg::phys(numbered),
+                crate::ir::ssa::SsaValue {
+                    base: VReg::phys(base),
+                    version: 4,
+                },
+            );
+        }
+
+        let mut split = function(vec![
+            register_assignment("opaque_sse_low", 40),
+            register_assignment("opaque_integer", 17),
+            bare_return(Expr::Reg(VReg::phys("opaque_integer"))),
+        ]);
+        assert!(materialize_register_split_returns_with_identities(
+            &mut split,
+            CallConv::SysVAmd64,
+            Some(&split_prototype(true)),
+            Some(&identities),
+        ));
+
+        let sse_body = |high: &str| {
+            function(vec![
+                register_assignment("opaque_sse_low", 10),
+                register_assignment(high, 20),
+                Stmt::Return { value: None },
+            ])
+        };
+        let mut exact = sse_body("opaque_sse_high");
+        assert!(materialize_register_sse_pair_returns_with_identities(
+            &mut exact,
+            CallConv::SysVAmd64,
+            Some(&sse_pair_prototype(8)),
+            Some(&identities),
+        ));
+        let mut misleading = sse_body("xmm1#looks_high");
+        assert!(!materialize_register_sse_pair_returns_with_identities(
+            &mut misleading,
+            CallConv::SysVAmd64,
+            Some(&sse_pair_prototype(8)),
+            Some(&identities),
+        ));
+    }
+
+    #[test]
+    fn attributed_register_result_duplicates_exact_owners_onto_materialization() {
+        let low_owner = OriginSet::from_addresses([0x2004, 0x2000]);
+        let high_owner = OriginSet::one(0x2008);
+        let return_owner = OriginSet::one(0x200c);
+        let mut f = function(vec![
+            register_assignment("xmm0#4", 40).with_origins(high_owner.clone()),
+            register_assignment("eax#5", 17).with_origins(low_owner.clone()),
+            bare_return(Expr::Reg(VReg::phys("eax#5"))).with_origins(return_owner.clone()),
+        ]);
+        let declared = split_prototype(true);
+
+        assert!(materialize_register_split_returns(
+            &mut f,
+            CallConv::SysVAmd64,
+            Some(&declared)
+        ));
+        assert_eq!(f.body.len(), 6);
+        assert_eq!(f.body[0].origins(), Some(&high_owner));
+        assert_eq!(f.body[1].origins(), Some(&high_owner));
+        assert_eq!(f.body[2].origins(), Some(&low_owner));
+        assert_eq!(f.body[3].origins(), Some(&low_owner));
+        assert_eq!(f.body[4].origins(), Some(&return_owner));
+        assert_eq!(f.body[5].origins(), Some(&return_owner));
+        assert!(matches!(f.body[5].semantic(), Stmt::Return { .. }));
     }
 
     #[test]

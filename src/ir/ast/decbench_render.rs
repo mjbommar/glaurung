@@ -28,7 +28,7 @@ use super::dwarf_render_types::{
 };
 use super::{
     callee_display_name, collect_idents_stmt, dec_global_name, dec_global_object_bytes,
-    dec_global_scalar_width, dec_global_symbol_size, dec_plan, insert_local, parse_arg_index,
+    dec_global_scalar_width, dec_global_symbol_size, dec_plan, insert_local, parameter_index,
     recover_named_call_prototypes, sanitize_c_ident, width_ctype, write_stmt_dec, DecIdents,
     DeclarationInputs, DeclarationPlan, Function, LocalDeclaration, DEC_FUNCTION_STATIC_LOCALS,
     DEC_GLOBAL_ADDRS, DEC_GLOBAL_SCALARS, DEC_INLINE_SCALAR_DECLS, DEC_NAMED_CALL_PROTOTYPES,
@@ -38,7 +38,7 @@ use super::{
 
 fn statement_writes_register(statement: &super::Stmt, target: &VReg) -> bool {
     use super::Stmt;
-    match statement {
+    match statement.semantic() {
         Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => dst == target,
         Stmt::Store {
             addr: super::Expr::Reg(dst),
@@ -115,7 +115,7 @@ fn inline_scalar_declarations(
         }
         let target = VReg::phys(name);
         for (index, statement) in body.iter().enumerate() {
-            let source = match statement {
+            let source = match statement.semantic() {
                 super::Stmt::Assign { dst, src } if dst == &target => Some(src),
                 super::Stmt::Store {
                     addr: super::Expr::Reg(dst),
@@ -124,8 +124,8 @@ fn inline_scalar_declarations(
                 } if dst == &target => Some(src),
                 _ => None,
             };
-            let for_source = match statement {
-                super::Stmt::For { init, .. } => match init.as_ref() {
+            let for_source = match statement.semantic() {
+                super::Stmt::For { init, .. } => match init.semantic() {
                     super::Stmt::Assign { dst, src } if dst == &target => Some(src),
                     super::Stmt::Store {
                         addr: super::Expr::Reg(dst),
@@ -304,6 +304,36 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     dwarf_pointer_types: &std::collections::HashMap<VReg, String>,
     dwarf_local_types: &std::collections::HashMap<String, String>,
 ) -> String {
+    render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types_and_parameter_names_and_identities(
+        f,
+        tm,
+        width_tm,
+        output_kind,
+        declared_prototype,
+        declared_parameter_names,
+        dwarf_types,
+        pointer_width,
+        dwarf_pointer_types,
+        dwarf_local_types,
+        None,
+    )
+}
+
+/// Pipeline-owned typed renderer with opaque SSA identity evidence.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types_and_parameter_names_and_identities(
+    f: &Function,
+    tm: Option<&TypeMap>,
+    width_tm: Option<&TypeMap>,
+    output_kind: crate::ir::types_recover::RecoveredOutputKind,
+    declared_prototype: Option<&CallPrototype>,
+    declared_parameter_names: Option<&[Option<String>]>,
+    dwarf_types: &[crate::debug::dwarf::DwarfType],
+    pointer_width: u8,
+    dwarf_pointer_types: &std::collections::HashMap<VReg, String>,
+    dwarf_local_types: &std::collections::HashMap<String, String>,
+    value_identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> String {
     let source_locals = dwarf_local_types
         .keys()
         .cloned()
@@ -313,7 +343,7 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     let dwarf_type_env = crate::ir::dwarf_type_env::DwarfTypeEnv::new(dwarf_types);
     let mut ids = DecIdents::default();
     for s in &f.body {
-        collect_idents_stmt(s, &mut ids);
+        collect_idents_stmt(s, &mut ids, value_identities);
     }
     let mut function_static_locals = DEC_FUNCTION_STATIC_LOCALS.with(|locals| {
         locals
@@ -387,7 +417,7 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     if let Some(tm) = tm {
         for (v, _) in tm.iter() {
             if let VReg::Phys(n) = v {
-                if let Some(idx) = parse_arg_index(n) {
+                if let Some(idx) = parameter_index(n, value_identities) {
                     arg_count = arg_count.max(idx + 1);
                 }
             }
@@ -700,6 +730,7 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
         ids: &ids,
         body: &f.body,
         tm,
+        value_identities,
         width_tm,
         output_kind,
         declared_prototype,
@@ -1007,6 +1038,7 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     });
 
     // Body.
+    super::dec_render::begin_line_mapping_collection(&out);
     for s in &f.body {
         write_stmt_dec(s, &mut out, 1);
     }
@@ -1031,4 +1063,122 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     // by the caller that owns the render (`python_bindings::ir::decbench_text`)
     // and released by that same caller, so this projection only reads it.
     out
+}
+
+#[cfg(test)]
+mod identity_census_tests {
+    use super::*;
+    use crate::ir::ast::{Expr, Stmt};
+
+    fn render_census_identity(
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) -> String {
+        let function = Function {
+            name: "census_identity".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("arg0"),
+                    src: Expr::Const(7),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("arg0"))),
+                },
+            ],
+        };
+        render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types_and_parameter_names_and_identities(
+            &function,
+            None,
+            None,
+            crate::ir::types_recover::RecoveredOutputKind::Unknown,
+            None,
+            None,
+            &[],
+            8,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+            identities,
+        )
+    }
+
+    #[test]
+    fn identifier_census_does_not_trust_an_unowned_arg_spelling() {
+        let identities = crate::ir::value_number::ValueIdentities::default();
+        let text = render_census_identity(Some(&identities));
+
+        assert!(text.contains("long census_identity(void)"), "{text}");
+        assert!(text.contains("    long arg0;"), "{text}");
+    }
+
+    #[test]
+    fn identifier_census_keeps_an_owned_parameter_slot() {
+        let identities = crate::ir::value_number::ValueIdentities::default()
+            .with_role_aliases_and_parameter_slots(
+                &std::collections::HashMap::new(),
+                &std::collections::HashSet::from([0]),
+            );
+        let text = render_census_identity(Some(&identities));
+
+        assert!(text.contains("long census_identity(long arg0)"), "{text}");
+        assert!(!text.contains("    long arg0;"), "{text}");
+    }
+
+    #[test]
+    fn identifier_census_keeps_legacy_spelling_without_a_sidecar() {
+        let text = render_census_identity(None);
+
+        assert!(text.contains("long census_identity(long arg0)"), "{text}");
+        assert!(!text.contains("    long arg0;"), "{text}");
+    }
+
+    fn render_stack_address_identity(
+        identities: &crate::ir::value_number::ValueIdentities,
+    ) -> String {
+        let function = Function {
+            name: "stack_address_identity".into(),
+            entry_va: 0,
+            body: vec![Stmt::Return {
+                value: Some(Expr::StackAddr {
+                    object: VReg::phys("arg0"),
+                    size: 4,
+                }),
+            }],
+        };
+        render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types_and_parameter_names_and_identities(
+            &function,
+            None,
+            None,
+            crate::ir::types_recover::RecoveredOutputKind::Unknown,
+            None,
+            None,
+            &[],
+            8,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+            Some(identities),
+        )
+    }
+
+    #[test]
+    fn stack_address_rendering_does_not_trust_an_unowned_arg_spelling() {
+        let identities = crate::ir::value_number::ValueIdentities::default();
+        let text = render_stack_address_identity(&identities);
+
+        assert!(text.contains("    unsigned char arg0[4];"), "{text}");
+        assert!(text.contains("&arg0[0]"), "{text}");
+        assert!(!text.contains("(void *)(arg0)"), "{text}");
+    }
+
+    #[test]
+    fn stack_address_rendering_keeps_an_owned_parameter_slot() {
+        let identities = crate::ir::value_number::ValueIdentities::default()
+            .with_role_aliases_and_parameter_slots(
+                &std::collections::HashMap::new(),
+                &std::collections::HashSet::from([0]),
+            );
+        let text = render_stack_address_identity(&identities);
+
+        assert!(!text.contains("unsigned char arg0[4]"), "{text}");
+        assert!(text.contains("(void *)(arg0)"), "{text}");
+    }
 }

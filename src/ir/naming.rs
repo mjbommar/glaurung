@@ -106,6 +106,34 @@ pub fn apply_role_names_with_parameter_roles(
     param_slots: &std::collections::HashSet<usize>,
     parameter_roles: &HashMap<String, usize>,
 ) -> HashMap<String, String> {
+    apply_role_names_impl(f, cc, param_slots, parameter_roles, None)
+}
+
+/// Apply role names while trusting only stack-parameter identities published
+/// by stack promotion, rather than parsing an arbitrary `argN` spelling.
+pub(crate) fn apply_role_names_with_parameter_roles_and_stack_parameters(
+    f: &mut Function,
+    cc: CallConv,
+    param_slots: &std::collections::HashSet<usize>,
+    parameter_roles: &HashMap<String, usize>,
+    stack_parameter_roles: &HashMap<String, usize>,
+) -> HashMap<String, String> {
+    apply_role_names_impl(
+        f,
+        cc,
+        param_slots,
+        parameter_roles,
+        Some(stack_parameter_roles),
+    )
+}
+
+fn apply_role_names_impl(
+    f: &mut Function,
+    cc: CallConv,
+    param_slots: &std::collections::HashSet<usize>,
+    parameter_roles: &HashMap<String, usize>,
+    stack_parameter_roles: Option<&HashMap<String, usize>>,
+) -> HashMap<String, String> {
     // Build the role map: raw name → friendly name. We build it up-front so
     // that every substitution is consistent across the function.
     let mut role: HashMap<String, String> = HashMap::new();
@@ -152,7 +180,7 @@ pub fn apply_role_names_with_parameter_roles(
     // so scalar/unmaterialised returns retain the longstanding role mapping.
     let materialized_sse_pair = collect_first_appearance_phys(&f.body)
         .iter()
-        .any(|name| crate::ir::abi::ssa_base(name) == "sse_pair_return_object");
+        .any(|name| name.as_str() == "sse_pair_return_object");
     if !materialized_sse_pair {
         for name in return_reg_aliases(cc) {
             // `ret` only wins if no arg-slot already claimed the name (x0 case
@@ -180,7 +208,11 @@ pub fn apply_role_names_with_parameter_roles(
         // function's own seventh argument into an undefined scratch local — the
         // signature would still grow (arity comes from the highest `argN`), so the
         // parameter would be declared and then never read.
-        if parse_arg_index(name).is_some() {
+        let is_stack_parameter = match stack_parameter_roles {
+            Some(roles) => roles.contains_key(name),
+            None => parse_arg_index(name).is_some(),
+        };
+        if is_stack_parameter {
             return;
         }
         if role.contains_key(name) {
@@ -228,7 +260,7 @@ pub fn apply_canonical_loop_local_names(f: &mut Function) -> HashMap<String, Str
     }
 
     fn local_assignment(statement: &Stmt) -> Option<(&str, &Expr)> {
-        match statement {
+        match statement.semantic() {
             Stmt::Assign {
                 dst: VReg::Phys(name),
                 src,
@@ -253,7 +285,7 @@ pub fn apply_canonical_loop_local_names(f: &mut Function) -> HashMap<String, Str
     }
 
     fn has_additive_update(body: &[Stmt], name: &str) -> bool {
-        body.iter().any(|statement| match statement {
+        body.iter().any(|statement| match statement.semantic() {
             Stmt::If {
                 then_body,
                 else_body,
@@ -278,7 +310,7 @@ pub fn apply_canonical_loop_local_names(f: &mut Function) -> HashMap<String, Str
     for (loop_index, statement) in f.body.iter().enumerate() {
         let Stmt::For {
             init, step, body, ..
-        } = statement
+        } = statement.semantic()
         else {
             continue;
         };
@@ -382,7 +414,8 @@ pub(crate) fn valid_authoritative_local_name(name: &str) -> bool {
 
 fn collect_direct_return_carriers(body: &[Stmt], out: &mut Vec<String>) {
     for statement in body {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Return {
                 value: Some(Expr::Reg(VReg::Phys(name))),
             } => out.push(name.clone()),
@@ -455,7 +488,8 @@ fn live_in_arg_slots(body: &[Stmt], cc: CallConv) -> std::collections::HashSet<u
 /// order: the reads of a statement are reported before its write. Memory stores
 /// write memory, not a register, so their operands are all reads.
 fn walk_stmt_rw(s: &Stmt, cb: &mut impl FnMut(&str, bool)) {
-    match s {
+    match s.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { dst, src } => {
             walk_expr_phys(src, &mut |n| cb(n, false));
             if let VReg::Phys(n) = dst {
@@ -574,7 +608,8 @@ fn collect_first_appearance_phys(body: &[Stmt]) -> Vec<String> {
 }
 
 fn walk_stmt_phys(s: &Stmt, cb: &mut impl FnMut(&str)) {
-    match s {
+    match s.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::IndirectGoto { target } => walk_expr_phys(target, cb),
         Stmt::Assign { dst, src } => {
             if let VReg::Phys(n) = dst {
@@ -679,6 +714,7 @@ fn walk_stmt_phys(s: &Stmt, cb: &mut impl FnMut(&str)) {
 
 fn walk_expr_phys(e: &Expr, cb: &mut impl FnMut(&str)) {
     match e {
+        Expr::Origin { expr, .. } => walk_expr_phys(expr, cb),
         Expr::Reg(VReg::Phys(n)) => cb(n),
         Expr::StackAddr {
             object: VReg::Phys(n),
@@ -742,6 +778,7 @@ fn rename_vreg(v: &mut VReg, role: &HashMap<String, String>) {
 
 fn rewrite_expr(e: &mut Expr, role: &HashMap<String, String>) {
     match e {
+        Expr::Origin { expr, .. } => rewrite_expr(expr, role),
         Expr::Reg(v) => rename_vreg(v, role),
         Expr::StackAddr { object, .. } => rename_vreg(object, role),
         Expr::Const(_)
@@ -792,7 +829,8 @@ fn rewrite_expr(e: &mut Expr, role: &HashMap<String, String>) {
 
 fn rewrite_body(body: &mut [Stmt], role: &HashMap<String, String>) {
     for s in body.iter_mut() {
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::IndirectGoto { target } => rewrite_expr(target, role),
             Stmt::Assign { dst, src } => {
                 rename_vreg(dst, role);
@@ -947,6 +985,36 @@ mod tests {
     }
 
     #[test]
+    fn origin_wrapped_ssa_return_carrier_keeps_the_output_role() {
+        let mut function = Function {
+            name: "f".into(),
+            entry_va: 0x1010,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("xmm0#7"),
+                    src: Expr::Const(42),
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(0x1010)),
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("xmm0#7"))),
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(0x1014)),
+            ],
+        };
+
+        apply_role_names(&mut function, CallConv::SysVAmd64);
+
+        assert!(matches!(
+            function.body[0].semantic(),
+            Stmt::Assign { dst, .. } if dst == &reg("ret")
+        ));
+        assert!(matches!(
+            function.body[1].semantic(),
+            Stmt::Return { value: Some(Expr::Reg(returned)) } if returned == &reg("ret")
+        ));
+    }
+
+    #[test]
     fn materialized_sse_pair_keeps_integer_and_sse_scratch_identities_distinct() {
         let object = reg("sse_pair_return_object");
         let mut f = Function {
@@ -995,6 +1063,36 @@ mod tests {
             converted_source, integer,
             "the conversion must still read EAX's value"
         );
+    }
+
+    #[test]
+    fn sse_pair_object_requires_its_exact_producer_owned_name() {
+        let mut function = Function {
+            name: "misleading_sse_pair_object".into(),
+            entry_va: 0x1028,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("xmm0"),
+                    src: Expr::Const(7),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Deref {
+                        addr: Box::new(Expr::StackAddr {
+                            object: reg("sse_pair_return_object#fake"),
+                            size: 12,
+                        }),
+                        size: 8,
+                    }),
+                },
+            ],
+        };
+
+        apply_role_names(&mut function, CallConv::SysVAmd64);
+
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Assign { dst, .. } if dst == &reg("ret")
+        ));
     }
 
     #[test]
@@ -1141,6 +1239,58 @@ mod tests {
                 src: Expr::Const(1)
             }
         );
+    }
+
+    #[test]
+    fn production_naming_does_not_trust_an_unowned_arg_spelling() {
+        let mut function = Function {
+            name: "unowned_arg_spelling".into(),
+            entry_va: 0,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Reg(reg("arg99"))),
+            }],
+        };
+
+        apply_role_names_with_parameter_roles_and_stack_parameters(
+            &mut function,
+            CallConv::SysVAmd64,
+            &std::collections::HashSet::from([99]),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Return {
+                value: Some(Expr::Reg(value)),
+            } if value == &reg("var0")
+        ));
+    }
+
+    #[test]
+    fn production_naming_preserves_a_proven_stack_parameter_role() {
+        let mut function = Function {
+            name: "owned_stack_parameter".into(),
+            entry_va: 0,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Reg(reg("arg6"))),
+            }],
+        };
+
+        apply_role_names_with_parameter_roles_and_stack_parameters(
+            &mut function,
+            CallConv::SysVAmd64,
+            &std::collections::HashSet::from([6]),
+            &HashMap::new(),
+            &HashMap::from([("arg6".to_string(), 6)]),
+        );
+
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Return {
+                value: Some(Expr::Reg(value)),
+            } if value == &reg("arg6")
+        ));
     }
 
     #[test]
@@ -1336,6 +1486,87 @@ mod tests {
         assert!(text.contains("%sum = 0"), "{text}");
         assert!(text.contains("for (%i = 0;"), "{text}");
         assert!(text.contains("%sum = (%sum + strlen())"), "{text}");
+    }
+
+    #[test]
+    fn canonical_loop_names_see_through_origins_without_reassigning_them() {
+        use crate::ir::ast::OriginSet;
+
+        let accumulator_owner = OriginSet::one(0x1000);
+        let loop_owner = OriginSet::from_addresses([0x1004, 0x1008, 0x100c]);
+        let init_owner = OriginSet::one(0x1004);
+        let update_owner = OriginSet::one(0x1008);
+        let step_owner = OriginSet::one(0x100c);
+        let mut function = Function {
+            name: "sum_loop".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(reg("stack_4")),
+                    src: Expr::Const(0),
+                    size: 4,
+                }
+                .with_origins(accumulator_owner.clone()),
+                Stmt::For {
+                    init: Box::new(
+                        Stmt::Store {
+                            addr: Expr::Reg(reg("stack_5")),
+                            src: Expr::Const(0),
+                            size: 4,
+                        }
+                        .with_origins(init_owner.clone()),
+                    ),
+                    cond: Expr::Cmp {
+                        op: crate::ir::types::CmpOp::Slt,
+                        lhs: Box::new(Expr::Reg(reg("stack_5"))),
+                        rhs: Box::new(Expr::Reg(reg("arg0"))),
+                    },
+                    step: Box::new(
+                        Stmt::Store {
+                            addr: Expr::Reg(reg("stack_5")),
+                            src: Expr::Bin {
+                                op: crate::ir::types::BinOp::Add,
+                                lhs: Box::new(Expr::Reg(reg("stack_5"))),
+                                rhs: Box::new(Expr::Const(1)),
+                            },
+                            size: 4,
+                        }
+                        .with_origins(step_owner.clone()),
+                    ),
+                    body: vec![Stmt::Store {
+                        addr: Expr::Reg(reg("stack_4")),
+                        src: Expr::Bin {
+                            op: crate::ir::types::BinOp::Add,
+                            lhs: Box::new(Expr::Reg(reg("stack_4"))),
+                            rhs: Box::new(Expr::Const(7)),
+                        },
+                        size: 4,
+                    }
+                    .with_origins(update_owner.clone())],
+                }
+                .with_origins(loop_owner.clone()),
+            ],
+        };
+
+        let roles = apply_canonical_loop_local_names(&mut function);
+
+        assert_eq!(roles.get("stack_5").map(String::as_str), Some("i"));
+        assert_eq!(roles.get("stack_4").map(String::as_str), Some("sum"));
+        assert_eq!(function.body[0].origins(), Some(&accumulator_owner));
+        assert_eq!(function.body[1].origins(), Some(&loop_owner));
+        let Stmt::For {
+            init, step, body, ..
+        } = function.body[1].semantic()
+        else {
+            panic!("expected origin-wrapped for loop");
+        };
+        assert_eq!(init.origins(), Some(&init_owner));
+        assert_eq!(step.origins(), Some(&step_owner));
+        assert_eq!(body[0].origins(), Some(&update_owner));
+        let text = render(&function);
+        assert!(text.contains("%sum = 0"), "{text}");
+        assert!(text.contains("for (%i = 0;"), "{text}");
+        assert!(text.contains("%sum = (%sum + 7)"), "{text}");
     }
 
     #[test]

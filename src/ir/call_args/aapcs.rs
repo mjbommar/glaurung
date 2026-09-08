@@ -15,8 +15,9 @@
 
 use crate::ir::ast::{Expr, Stmt};
 use crate::ir::types::VReg;
+use crate::ir::value_number::ValueIdentities;
 
-use super::{ssa_base, CallConv};
+use super::{register_is_storage, ssa_base, CallConv};
 
 /// Exact core-register arity of a fixed AAPCS32 library call.
 ///
@@ -29,7 +30,7 @@ use super::{ssa_base, CallConv};
 /// variadic, and otherwise unrepresentable layouts stay on the conservative
 /// evidence-only path until the ABI layout model can describe them exactly.
 pub(super) fn known_arm_core_register_arity(statement: &Stmt) -> Option<usize> {
-    let name = match statement {
+    let name = match statement.semantic() {
         Stmt::Call {
             target: Expr::Named { name, .. },
             ..
@@ -61,7 +62,7 @@ pub(super) fn known_arm_core_register_arity(statement: &Stmt) -> Option<usize> {
 /// Stack-spilled and variadic layouts are withheld until the AST models their
 /// outgoing storage explicitly.
 pub(super) fn known_arm_hard_float_layout(statement: &Stmt) -> Option<Vec<VReg>> {
-    let name = match statement {
+    let name = match statement.semantic() {
         Stmt::Call {
             target: Expr::Named { name, .. },
             ..
@@ -159,6 +160,50 @@ fn arm_hard_float_slot_of(name: &str) -> Option<usize> {
         .position(|aliases| aliases.contains(&base))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum ArmArgumentStorage {
+    Vfp(usize),
+    Core,
+    Other,
+}
+
+fn arm_argument_storage(
+    register: &VReg,
+    identities: Option<&ValueIdentities>,
+) -> Option<ArmArgumentStorage> {
+    let classify = |register: &VReg| match register {
+        VReg::Phys(name) => arm_hard_float_slot_of(name)
+            .map(ArmArgumentStorage::Vfp)
+            .or_else(|| {
+                crate::ir::abi::argument_slot_of(CallConv::Arm, name)
+                    .is_some()
+                    .then_some(ArmArgumentStorage::Core)
+            })
+            .unwrap_or(ArmArgumentStorage::Other),
+        _ => ArmArgumentStorage::Other,
+    };
+    match identities {
+        Some(identities) => {
+            let Some(candidates) = identities.candidates(register) else {
+                return Some(ArmArgumentStorage::Other);
+            };
+            let classes = candidates
+                .iter()
+                .map(|identity| {
+                    identity
+                        .canonical_physical_base()
+                        .map(|name| classify(&VReg::phys(name)))
+                        .unwrap_or(ArmArgumentStorage::Other)
+                })
+                .collect::<std::collections::BTreeSet<_>>();
+            (classes.len() == 1)
+                .then(|| classes.first().copied())
+                .flatten()
+        }
+        None => Some(classify(register)),
+    }
+}
+
 /// Fold a proven pure-VFP call setup.
 ///
 /// AAPCS-VFP has two independent allocation banks, so flattening r0-r3 and
@@ -166,7 +211,16 @@ fn arm_hard_float_slot_of(name: &str) -> Option<usize> {
 /// handles the unambiguous case: a contiguous s0..sN setup with no core-bank
 /// argument write in the same setup window. Mixed calls remain on the existing
 /// core-bank path until a recovered callee prototype supplies source order.
-pub(super) fn fold_one_arm_hard_float_call(body: &mut Vec<Stmt>, call_idx: usize) -> bool {
+#[cfg(test)]
+fn fold_one_arm_hard_float_call(body: &mut Vec<Stmt>, call_idx: usize) -> bool {
+    fold_one_arm_hard_float_call_with_identities(body, call_idx, None)
+}
+
+pub(super) fn fold_one_arm_hard_float_call_with_identities(
+    body: &mut Vec<Stmt>,
+    call_idx: usize,
+    identities: Option<&ValueIdentities>,
+) -> bool {
     let slots = crate::ir::abi::arm_hard_float_argument_slots();
     let mut found: Vec<Option<(usize, Expr)>> = vec![None; slots.len()];
     let mut saw_vfp = false;
@@ -175,19 +229,24 @@ pub(super) fn fold_one_arm_hard_float_call(body: &mut Vec<Stmt>, call_idx: usize
 
     while index > 0 {
         index -= 1;
-        match &body[index] {
-            Stmt::Assign {
-                dst: VReg::Phys(name),
-                src,
-            } => {
-                if let Some(slot) = arm_hard_float_slot_of(name) {
+        match body[index].semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
+            Stmt::Assign { dst, src } => {
+                let Some(storage) = arm_argument_storage(dst, identities) else {
+                    return false;
+                };
+                if let ArmArgumentStorage::Vfp(slot) = storage {
                     saw_vfp = true;
                     if found[slot].is_none() {
-                        found[slot] = Some((index, src.clone()));
+                        let mut argument = src.clone();
+                        if let Some(origins) = body[index].origins() {
+                            argument.merge_origins(origins);
+                        }
+                        found[slot] = Some((index, argument));
                     }
                     continue;
                 }
-                if crate::ir::abi::argument_slot_of(CallConv::Arm, name).is_some() {
+                if storage == ArmArgumentStorage::Core {
                     saw_core = true;
                 }
                 if saw_vfp {
@@ -220,7 +279,7 @@ pub(super) fn fold_one_arm_hard_float_call(body: &mut Vec<Stmt>, call_idx: usize
         .collect();
     if let Stmt::Call {
         args: call_args, ..
-    } = &mut body[call_idx]
+    } = body[call_idx].semantic_mut()
     {
         *call_args = args;
     } else {
@@ -231,6 +290,14 @@ pub(super) fn fold_one_arm_hard_float_call(body: &mut Vec<Stmt>, call_idx: usize
         .iter()
         .map(|slot| slot.as_ref().expect("checked contiguous VFP prefix").0)
         .collect();
+    let consumed_origins = used
+        .iter()
+        .filter_map(|index| body[*index].origins())
+        .cloned()
+        .reduce(|left, right| left.union(&right));
+    if let Some(origins) = consumed_origins.as_ref() {
+        body[call_idx].merge_origins(origins);
+    }
     used.sort_unstable_by(|left, right| right.cmp(left));
     for statement in used {
         body.remove(statement);
@@ -273,10 +340,20 @@ pub(super) fn aapcs_integer_stack_suffix(layout: &[VReg]) -> Option<usize> {
 /// then require one nearest 4-byte store for every offset `0,4,..`; a call,
 /// control boundary, stack-pointer write, unrelated store, duplicate, or gap
 /// rejects the whole candidate.
-pub(super) fn outgoing_aapcs_stack_area(
+#[cfg(test)]
+fn outgoing_aapcs_stack_area(
     body: &[Stmt],
     call_index: usize,
     expected_args: usize,
+) -> Option<(Vec<Expr>, Vec<usize>)> {
+    outgoing_aapcs_stack_area_with_identities(body, call_index, expected_args, None)
+}
+
+pub(super) fn outgoing_aapcs_stack_area_with_identities(
+    body: &[Stmt],
+    call_index: usize,
+    expected_args: usize,
+    identities: Option<&ValueIdentities>,
 ) -> Option<(Vec<Expr>, Vec<usize>)> {
     if expected_args == 0 {
         return None;
@@ -286,32 +363,34 @@ pub(super) fn outgoing_aapcs_stack_area(
     let mut cursor = call_index;
     while cursor > 0 {
         let index = cursor - 1;
-        match &body[index] {
+        match body[index].semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Store { addr, src, size: 4 } => {
                 let disp = match addr {
-                    Expr::Reg(VReg::Phys(base)) if ssa_base(base) == "sp" => 0,
+                    Expr::Reg(base) if register_is_storage(base, "sp", identities) => 0,
                     Expr::Lea {
-                        base: Some(VReg::Phys(base)),
+                        base: Some(base),
                         index: None,
                         disp,
                         ..
-                    } if ssa_base(base) == "sp" => *disp,
+                    } if register_is_storage(base, "sp", identities) => *disp,
                     _ => return None,
                 };
                 if disp < 0 || disp >= expected_bytes || disp % 4 != 0 {
                     return None;
                 }
-                if by_offset.insert(disp, (index, src.clone())).is_some() {
+                let mut value = src.clone();
+                if let Some(origins) = body[index].origins() {
+                    value.merge_origins(origins);
+                }
+                if by_offset.insert(disp, (index, value)).is_some() {
                     return None;
                 }
                 if by_offset.len() == expected_args {
                     break;
                 }
             }
-            Stmt::Assign {
-                dst: VReg::Phys(name),
-                ..
-            } if ssa_base(name) == "sp" => return None,
+            Stmt::Assign { dst, .. } if register_is_storage(dst, "sp", identities) => return None,
             Stmt::Assign { .. } => {}
             Stmt::Comment(_) | Stmt::Nop => {}
             // Do not cross a prior call/control boundary or an unproved memory
@@ -338,6 +417,7 @@ pub(super) fn outgoing_aapcs_stack_area(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ast::OriginSet;
 
     fn reg(n: &str) -> VReg {
         VReg::phys(n)
@@ -353,6 +433,187 @@ mod tests {
             dst: None,
             call_spec: None,
         }
+    }
+
+    #[test]
+    fn attributed_calls_retain_their_locked_aapcs_contracts() {
+        let memset = call_to("memset@plt").with_origins(OriginSet::one(0x1000));
+        assert_eq!(known_arm_core_register_arity(&memset), Some(3));
+
+        let asinf = call_to("asinf").with_origins(OriginSet::one(0x1004));
+        assert_eq!(known_arm_hard_float_layout(&asinf), Some(vec![reg("s0")]));
+    }
+
+    #[test]
+    fn pure_vfp_setup_uses_exact_identity_not_display_spelling() {
+        let setup = |name: &str| {
+            vec![
+                Stmt::Assign {
+                    dst: reg(name),
+                    src: Expr::Const(7),
+                },
+                call_to("callee"),
+            ]
+        };
+        let mut identities = ValueIdentities::default();
+        identities.record(
+            reg("opaque_vfp"),
+            crate::ir::ssa::SsaValue {
+                base: reg("s0"),
+                version: 2,
+            },
+        );
+        identities.record(
+            reg("s0#2"),
+            crate::ir::ssa::SsaValue {
+                base: reg("r0"),
+                version: 2,
+            },
+        );
+
+        let mut exact = setup("opaque_vfp");
+        assert!(fold_one_arm_hard_float_call_with_identities(
+            &mut exact,
+            1,
+            Some(&identities),
+        ));
+        assert!(matches!(&exact[..], [Stmt::Call { args, .. }] if args == &vec![Expr::Const(7)]));
+
+        let mut misleading = setup("s0#2");
+        assert!(!fold_one_arm_hard_float_call_with_identities(
+            &mut misleading,
+            1,
+            Some(&identities),
+        ));
+        assert!(
+            matches!(&misleading[..], [Stmt::Assign { .. }, Stmt::Call { args, .. }] if args.is_empty())
+        );
+    }
+
+    #[test]
+    fn attributed_pure_vfp_setup_folds_into_the_call_owner() {
+        let first_owner = OriginSet::one(0x1010);
+        let second_owner = OriginSet::one(0x1014);
+        let mut body = vec![
+            Stmt::Assign {
+                dst: reg("s0#1"),
+                src: Expr::FloatConst {
+                    bits: 1.0f32.to_bits() as u64,
+                    width: 4,
+                },
+            }
+            .with_origins(first_owner.clone()),
+            Stmt::Assign {
+                dst: reg("s1#1"),
+                src: Expr::FloatConst {
+                    bits: 2.0f32.to_bits() as u64,
+                    width: 4,
+                },
+            }
+            .with_origins(second_owner.clone()),
+            call_to("float_pair").with_origins(OriginSet::one(0x1018)),
+        ];
+
+        assert!(fold_one_arm_hard_float_call(&mut body, 2));
+
+        assert_eq!(body.len(), 1);
+        let Stmt::Call { args, .. } = body[0].semantic() else {
+            panic!("folded statement is not a call: {body:#?}");
+        };
+        assert_eq!(args.len(), 2);
+        assert!(matches!(
+            args[0].semantic(),
+            Expr::FloatConst { bits, width: 4 } if *bits == 1.0f32.to_bits() as u64
+        ));
+        assert!(matches!(
+            args[1].semantic(),
+            Expr::FloatConst { bits, width: 4 } if *bits == 2.0f32.to_bits() as u64
+        ));
+        assert_eq!(args[0].origins(), Some(&first_owner));
+        assert_eq!(args[1].origins(), Some(&second_owner));
+        assert_eq!(
+            body[0].origins().expect("folded call owner").addresses(),
+            &[0x1010, 0x1014, 0x1018]
+        );
+    }
+
+    #[test]
+    fn attributed_aapcs_stack_area_is_recognized() {
+        let store = |disp, value, va| {
+            Stmt::Store {
+                addr: Expr::Lea {
+                    base: Some(reg("sp")),
+                    index: None,
+                    scale: 1,
+                    disp,
+                    segment: None,
+                },
+                src: Expr::Const(value),
+                size: 4,
+            }
+            .with_origins(OriginSet::one(va))
+        };
+        let body = vec![
+            store(4, 6, 0x1020),
+            store(0, 5, 0x1024),
+            call_to("callee").with_origins(OriginSet::one(0x1028)),
+        ];
+
+        assert_eq!(
+            outgoing_aapcs_stack_area(&body, 2, 2),
+            Some((
+                vec![
+                    Expr::Const(5).with_origins(OriginSet::one(0x1024)),
+                    Expr::Const(6).with_origins(OriginSet::one(0x1020)),
+                ],
+                vec![1, 0],
+            ))
+        );
+    }
+
+    #[test]
+    fn aapcs_stack_area_uses_exact_identity_not_display_spelling() {
+        let store = |base: &str| Stmt::Store {
+            addr: Expr::Lea {
+                base: Some(reg(base)),
+                index: None,
+                scale: 1,
+                disp: 0,
+                segment: None,
+            },
+            src: Expr::Const(5),
+            size: 4,
+        };
+        let mut identities = ValueIdentities::default();
+        identities.record(
+            reg("opaque_sp"),
+            crate::ir::ssa::SsaValue {
+                base: reg("sp"),
+                version: 2,
+            },
+        );
+        identities.record(
+            reg("sp#2"),
+            crate::ir::ssa::SsaValue {
+                base: reg("r4"),
+                version: 2,
+            },
+        );
+
+        assert!(outgoing_aapcs_stack_area_with_identities(
+            &[store("opaque_sp"), call_to("callee")],
+            1,
+            1,
+            Some(&identities),
+        )
+        .is_some());
+        assert!(outgoing_aapcs_stack_area_with_identities(
+            &[store("sp#2"), call_to("callee")],
+            1,
+            1,
+            Some(&identities),
+        )
+        .is_none());
     }
 
     #[test]

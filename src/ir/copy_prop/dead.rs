@@ -35,7 +35,8 @@ pub(super) fn dead_store_runs(body: &mut Vec<Stmt>) -> bool {
     let mut last_write: RegMap<usize> = RegMap::default();
     let mut dead: Vec<usize> = Vec::new();
     for (i, s) in body.iter().enumerate() {
-        match s {
+        match s.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
                 // Reads in `src` consume any pending write of those regs. The
                 // histogram this used to build was thrown away after its keys
@@ -86,7 +87,8 @@ pub(super) fn dead_store_runs(body: &mut Vec<Stmt>) -> bool {
     }
     // Recurse into nested bodies.
     for s in body.iter_mut() {
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -132,7 +134,7 @@ fn remove_dead(body: &mut Vec<Stmt>, reads: &RegMap<usize>) -> bool {
         // A lazy select may contain a value-producing call. Preserve that
         // effect even when the scratch result is never read; all other current
         // assignment sources are removable when their destination is dead.
-        if let Stmt::Assign { dst, src } = s {
+        if let Stmt::Assign { dst, src } = s.semantic() {
             if is_scratch_reg(dst)
                 && reads.get(dst).copied().unwrap_or(0) == 0
                 && !src.contains_call()
@@ -144,7 +146,8 @@ fn remove_dead(body: &mut Vec<Stmt>, reads: &RegMap<usize>) -> bool {
         true
     });
     for s in body.iter_mut() {
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,

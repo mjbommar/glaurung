@@ -28,7 +28,9 @@ use crate::ir::types_recover::{TypeHint, TypeMap};
 #[cfg(test)]
 use crate::ir::call_contracts::{CallPrototypeAuthority, CallSiteSpec};
 #[cfg(test)]
-use crate::ir::structure::Region;
+use crate::ir::structure::{
+    Region, SwitchCaseEvidence, SwitchDefaultEvidence, SwitchEvidence, SwitchEvidenceProvenance,
+};
 #[cfg(test)]
 use crate::ir::types::{CallTarget, LlirFunction, MemOp, Op, Value};
 
@@ -61,6 +63,7 @@ mod lower_conds;
 mod lower_ops;
 mod lower_region;
 mod named_calls;
+mod origin;
 mod param_spills;
 mod prepare;
 mod return_ctype;
@@ -71,6 +74,7 @@ pub use c_render::render_c;
 pub use ctx_render::{render, render_with_types};
 // The DecBench front door keeps its `ast::render_decbench*` paths: `mod tests`,
 // the `ast_tests/` files and `python_bindings::ir` all name it there.
+pub(crate) use decbench_render::render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types_and_parameter_names_and_identities;
 pub use decbench_render::{
     render_decbench, render_decbench_typed, render_decbench_typed_with_output,
     render_decbench_typed_with_output_and_prototype,
@@ -80,21 +84,34 @@ pub use decbench_render::{
 };
 pub(crate) use dwarf_render_types::dwarf_prototype_type_is_renderable;
 pub(crate) use lower_conds::negate_cmp_expr;
-pub use lower_region::lower;
+pub use lower_region::{lower, lower_with_identities};
+pub use origin::OriginSet;
+
+pub(crate) fn take_decbench_line_mappings() -> Vec<(usize, OriginSet)> {
+    dec_render::take_line_mappings()
+}
+#[cfg(test)]
+pub(crate) use prepare::prepare_for_decbench_with_output_and_protected_locals;
 pub(crate) use prepare::{
-    drop_machine_frame_comments, prepare_for_decbench_with_output_and_protected_locals,
+    drop_machine_frame_comments, prepare_for_decbench_with_output_and_protected_locals_and_report,
 };
 pub use prepare::{
     prepare_for_decbench, prepare_for_decbench_with_output, settle_copies_and_constants,
 };
-pub(crate) use return_folds::remove_redundant_return_constant_assignments;
 pub use return_folds::{fold_exhaustive_if_returns, fold_exhaustive_switch_returns};
+pub(crate) use return_folds::{
+    fold_exhaustive_if_returns_with_identities, fold_exhaustive_switch_returns_with_identities,
+    remove_redundant_return_constant_assignments,
+    remove_redundant_return_constant_assignments_with_identities,
+};
 
 #[cfg(test)]
 pub(crate) use abi_widths::refine_decbench_abi_widths;
+pub(crate) use abi_widths::refine_decbench_abi_widths_with_identities;
 pub(crate) use abi_widths::refine_decbench_abi_widths_with_value_widths;
 pub(crate) use return_ctype::{
-    declared_int_type, fold_typed_return_abi_extensions, infer_return_ctype, inferred_return_width,
+    declared_int_type, declared_int_type_with_identities, fold_typed_return_abi_extensions,
+    infer_return_ctype, inferred_return_width,
 };
 
 // Kept nameable as `ast::X` for the siblings and test modules that still reach
@@ -115,7 +132,7 @@ use lower_ops::ScalarFloatOperation;
 #[cfg(test)]
 use lower_region::deduplicate_labels;
 use named_calls::recover_named_call_prototypes;
-use return_folds::fold_returns;
+use return_folds::{fold_returns, fold_returns_with_identities};
 
 use dec_render::write_stmt_dec;
 use declaration_plan::{DeclarationInputs, DeclarationPlan, LocalDeclaration};
@@ -207,6 +224,13 @@ impl WideArithmetic {
 /// subexpressions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
+    /// A value expression and the machine instructions that contributed to it.
+    /// Rewrites retain, union, or clone this carrier under the same provenance
+    /// rules as [`Stmt::Origin`].
+    Origin {
+        origins: OriginSet,
+        expr: Box<Expr>,
+    },
     Reg(VReg),
     Const(i64),
     /// Exact IEEE-754 literal payload recovered from a floating-point machine
@@ -365,6 +389,83 @@ pub enum Expr {
 }
 
 impl Expr {
+    /// Attach instruction ownership without creating nested carriers.
+    pub fn with_origins(self, origins: OriginSet) -> Self {
+        match self {
+            Self::Origin {
+                origins: existing,
+                expr,
+            } => Self::Origin {
+                origins: existing.union(&origins),
+                expr,
+            },
+            expr => Self::Origin {
+                origins,
+                expr: Box::new(expr),
+            },
+        }
+    }
+
+    /// Instruction ownership attached directly to this expression node.
+    pub fn origins(&self) -> Option<&OriginSet> {
+        match self {
+            Self::Origin { origins, .. } => Some(origins),
+            _ => None,
+        }
+    }
+
+    /// Expression meaning with any ownership carrier removed.
+    pub fn semantic(&self) -> &Self {
+        match self {
+            Self::Origin { expr, .. } => expr.semantic(),
+            expression => expression,
+        }
+    }
+
+    /// Mutable expression meaning with any ownership carrier removed.
+    pub fn semantic_mut(&mut self) -> &mut Self {
+        match self {
+            Self::Origin { expr, .. } => expr.semantic_mut(),
+            expression => expression,
+        }
+    }
+
+    /// Split semantic meaning from its canonical ownership carrier.
+    pub fn into_semantic_with_origins(self) -> (Self, Option<OriginSet>) {
+        match self {
+            Self::Origin { origins, expr } => {
+                let (expression, nested) = expr.into_semantic_with_origins();
+                let origins = nested.map_or(origins.clone(), |other| origins.union(&other));
+                (expression, Some(origins))
+            }
+            expression => (expression, None),
+        }
+    }
+
+    /// Restore optional ownership returned by [`Self::into_semantic_with_origins`].
+    pub fn with_optional_origins(self, origins: Option<OriginSet>) -> Self {
+        match origins {
+            Some(origins) => self.with_origins(origins),
+            None => self,
+        }
+    }
+
+    /// Union another contributor into this node without nesting carriers.
+    pub fn merge_origins(&mut self, origins: &OriginSet) {
+        if origins.is_empty() {
+            return;
+        }
+        match self {
+            Self::Origin {
+                origins: existing, ..
+            } => existing.merge(origins),
+            expression => {
+                let semantic = std::mem::replace(expression, Self::Unknown(String::new()));
+                *expression = semantic.with_origins(origins.clone());
+            }
+        }
+    }
+
     /// Return whether evaluating this expression can invoke a callee.
     ///
     /// Calls may be nested in a lazy select arm. Passes that delete, duplicate,
@@ -372,6 +473,7 @@ impl Expr {
     /// [`Stmt::Assign`] source is pure.
     pub(crate) fn contains_call(&self) -> bool {
         match self {
+            Self::Origin { expr, .. } => expr.contains_call(),
             Self::Call { .. } => true,
             Self::Deref { addr, .. }
             | Self::Un { src: addr, .. }
@@ -405,6 +507,7 @@ impl Expr {
     /// of its recursively nested operands.
     pub(crate) fn contains_reg(&self, target: &VReg) -> bool {
         match self {
+            Self::Origin { expr, .. } => expr.contains_reg(target),
             Self::Reg(reg) => reg == target,
             Self::StackAddr { object, .. } => object == target,
             Self::Deref { addr, .. } => addr.contains_reg(target),
@@ -490,6 +593,13 @@ impl ScalarType {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
+    /// An ordinary statement and the machine instructions that contributed to
+    /// it. Rewrites preserve this wrapper, union it when nodes are combined,
+    /// and clone it exactly when a proved tail is duplicated.
+    Origin {
+        origins: OriginSet,
+        stmt: Box<Stmt>,
+    },
     Assign {
         dst: VReg,
         src: Expr,
@@ -615,6 +725,91 @@ pub enum Stmt {
     },
 }
 
+impl Stmt {
+    /// Attach provenance, unioning rather than nesting if already attributed.
+    pub fn with_origins(self, origins: OriginSet) -> Self {
+        match self {
+            Self::Origin {
+                origins: existing,
+                stmt,
+            } => Self::Origin {
+                origins: existing.union(&origins),
+                stmt,
+            },
+            stmt => Self::Origin {
+                origins,
+                stmt: Box::new(stmt),
+            },
+        }
+    }
+
+    /// Machine instructions contributing to this statement, when attributed.
+    pub fn origins(&self) -> Option<&OriginSet> {
+        match self {
+            Self::Origin { origins, .. } => Some(origins),
+            _ => None,
+        }
+    }
+
+    /// The semantic node below any provenance wrapper.
+    pub fn semantic(&self) -> &Self {
+        match self {
+            Self::Origin { stmt, .. } => stmt.semantic(),
+            statement => statement,
+        }
+    }
+
+    /// Mutable semantic node access that keeps provenance around replacements.
+    pub fn semantic_mut(&mut self) -> &mut Self {
+        match self {
+            Self::Origin { stmt, .. } => stmt.semantic_mut(),
+            statement => statement,
+        }
+    }
+
+    /// Consume a statement into its semantic node and optional provenance.
+    ///
+    /// This is the ownership-preserving counterpart of [`Self::semantic`]: a
+    /// pass that rebuilds a whole statement can transform the semantic node
+    /// and then restore the returned origins with [`Self::with_optional_origins`].
+    pub fn into_semantic_with_origins(self) -> (Self, Option<OriginSet>) {
+        match self {
+            Self::Origin { origins, stmt } => {
+                let (statement, nested) = stmt.into_semantic_with_origins();
+                let origins = nested.map_or(origins.clone(), |other| origins.union(&other));
+                (statement, Some(origins))
+            }
+            statement => (statement, None),
+        }
+    }
+
+    /// Restore optional provenance after an ownership-taking rewrite.
+    pub fn with_optional_origins(self, origins: Option<OriginSet>) -> Self {
+        match origins {
+            Some(origins) => self.with_origins(origins),
+            None => self,
+        }
+    }
+
+    /// Union provenance into this statement without exposing or nesting its
+    /// carrier. This is used when a rewrite consumes one statement into
+    /// another, such as expression reconstruction.
+    pub fn merge_origins(&mut self, origins: &OriginSet) {
+        if origins.is_empty() {
+            return;
+        }
+        match self {
+            Self::Origin {
+                origins: existing, ..
+            } => existing.merge(origins),
+            _ => {
+                let statement = std::mem::replace(self, Self::Nop);
+                *self = statement.with_origins(origins.clone());
+            }
+        }
+    }
+}
+
 /// Find switch cases whose entire body is a jump into a labelled suffix owned
 /// by another arm. C can express that CFG directly by placing the redirected
 /// `case` label at the existing label inside the owner arm. Keeping this as a
@@ -626,14 +821,17 @@ pub(crate) fn switch_suffix_case_labels(
     let direct_labels: std::collections::HashSet<u64> = cases
         .iter()
         .flat_map(|(_, body)| body.iter())
-        .filter_map(|stmt| match stmt {
+        .filter_map(|stmt| match stmt.semantic() {
             Stmt::Label(target) => Some(*target),
             _ => None,
         })
         .collect();
     let mut suffixes = std::collections::BTreeMap::<u64, Vec<i64>>::new();
     for (label, body) in cases {
-        let (Some(label), [Stmt::Goto { target }]) = (label, body.as_slice()) else {
+        let (Some(label), [statement]) = (label, body.as_slice()) else {
+            continue;
+        };
+        let Stmt::Goto { target } = statement.semantic() else {
             continue;
         };
         if direct_labels.contains(target) {
@@ -899,6 +1097,8 @@ fn ctype_for(ident: &str, tm: Option<&TypeMap>) -> &'static str {
 struct DecIdents {
     /// Highest `argN` index seen (drives the synthesised signature arity).
     max_arg: Option<usize>,
+    /// Displayed roles paired with their identity-proved source-parameter slot.
+    parameter_roles: std::collections::BTreeMap<String, usize>,
     /// Every non-argument identifier that will appear in the body. Synthetic
     /// values retain their stable lexical order.
     locals: std::collections::BTreeSet<String>,
@@ -985,6 +1185,16 @@ pub(crate) fn parse_arg_index(name: &str) -> Option<usize> {
     (index < 1024).then_some(index)
 }
 
+fn parameter_index(
+    name: &str,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<usize> {
+    match identities {
+        Some(identities) => identities.parameter_slot(&VReg::phys(name)),
+        None => parse_arg_index(name),
+    }
+}
+
 fn is_generated_temporary(name: &str) -> bool {
     is_high_variable(name)
         || name.strip_prefix('t').is_some_and(|digits| {
@@ -1035,10 +1245,15 @@ fn sanitize_comment(s: &str) -> String {
 
 /// Record the (sanitised) spelling of a single register operand as either an
 /// argument (updating `max_arg`) or a local.
-fn collect_reg(v: &VReg, ids: &mut DecIdents) {
+fn collect_reg(
+    v: &VReg,
+    ids: &mut DecIdents,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     let spelling = match v {
         VReg::Phys(n) => {
-            if let Some(idx) = parse_arg_index(n) {
+            if let Some(idx) = parameter_index(n, identities) {
+                ids.parameter_roles.insert(n.clone(), idx);
                 ids.max_arg = Some(ids.max_arg.map_or(idx, |m| m.max(idx)));
                 return;
             }
@@ -1081,9 +1296,14 @@ fn remove_local(ids: &mut DecIdents, spelling: &str) {
     ids.source_local_order.retain(|local| local != spelling);
 }
 
-fn local_reg_spelling(v: &VReg) -> Option<String> {
+fn local_reg_spelling(
+    v: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<String> {
     match v {
-        VReg::Phys(name) if parse_arg_index(name).is_none() => Some(sanitize_c_ident(name)),
+        VReg::Phys(name) if parameter_index(name, identities).is_none() => {
+            Some(sanitize_c_ident(name))
+        }
         VReg::Phys(_) => None,
         VReg::Temp(index) => Some(format!("t{index}")),
         VReg::Flag(flag) => Some(flag_ident(flag).to_string()),
@@ -1091,13 +1311,18 @@ fn local_reg_spelling(v: &VReg) -> Option<String> {
     }
 }
 
-fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
+fn collect_idents_expr(
+    e: &Expr,
+    ids: &mut DecIdents,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     match e {
-        Expr::Reg(v) => collect_reg(v, ids),
+        Expr::Origin { expr, .. } => collect_idents_expr(expr, ids, identities),
+        Expr::Reg(v) => collect_reg(v, ids, identities),
         Expr::StackAddr { object, size } => {
-            collect_reg(object, ids);
+            collect_reg(object, ids, identities);
             if let VReg::Phys(name) = object {
-                if parse_arg_index(name).is_none() {
+                if parameter_index(name, identities).is_none() {
                     let name = sanitize_c_ident(name);
                     ids.stack_objects
                         .entry(name)
@@ -1124,36 +1349,36 @@ fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
             targets,
             ..
         } => {
-            collect_idents_expr(index, ids);
+            collect_idents_expr(index, ids, identities);
             ids.function_tables
                 .entry(*table_va)
                 .or_insert_with(|| (table_name.clone(), targets.clone()));
         }
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
             if let Some(b) = base {
-                collect_reg(b, ids);
+                collect_reg(b, ids, identities);
             }
             if let Some(i) = index {
-                collect_reg(i, ids);
+                collect_reg(i, ids, identities);
             }
         }
         Expr::Deref { addr, size } => {
             if let Some(address) = direct_global_address(addr) {
                 note_global_address(address, u32::from(*size), ids);
             }
-            collect_idents_expr(addr, ids);
+            collect_idents_expr(addr, ids, identities);
         }
         Expr::Call { target, args, .. } => {
             if !matches!(target.as_ref(), Expr::Named { .. }) {
-                collect_idents_expr(target, ids);
+                collect_idents_expr(target, ids, identities);
             }
             for argument in args {
-                collect_idents_expr(argument, ids);
+                collect_idents_expr(argument, ids, identities);
             }
         }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-            collect_idents_expr(lhs, ids);
-            collect_idents_expr(rhs, ids);
+            collect_idents_expr(lhs, ids, identities);
+            collect_idents_expr(rhs, ids, identities);
         }
         Expr::Select {
             cond,
@@ -1161,30 +1386,38 @@ fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
             if_false,
             ..
         } => {
-            collect_idents_expr(cond, ids);
-            collect_idents_expr(if_true, ids);
-            collect_idents_expr(if_false, ids);
+            collect_idents_expr(cond, ids, identities);
+            collect_idents_expr(if_true, ids, identities);
+            collect_idents_expr(if_false, ids, identities);
         }
-        Expr::Un { src, .. } => collect_idents_expr(src, ids),
+        Expr::Un { src, .. } => collect_idents_expr(src, ids, identities),
         Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
-            collect_idents_expr(expr, ids)
+            collect_idents_expr(expr, ids, identities)
         }
         Expr::WideArithmetic { args, .. } => {
             for argument in args {
-                collect_idents_expr(argument, ids);
+                collect_idents_expr(argument, ids, identities);
             }
         }
     }
 }
 
-fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
+fn collect_idents_stmt(
+    s: &Stmt,
+    ids: &mut DecIdents,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     ids.statement_count = ids.statement_count.saturating_add(1);
     match s {
+        Stmt::Origin { stmt, .. } => {
+            ids.statement_count = ids.statement_count.saturating_sub(1);
+            collect_idents_stmt(stmt, ids, identities);
+        }
         Stmt::Assign { dst, src } => {
-            collect_reg(dst, ids);
+            collect_reg(dst, ids, identities);
             if matches!(src, Expr::Deref { size: 16, .. }) {
                 let spelling = match dst {
-                    VReg::Phys(name) if parse_arg_index(name).is_none() => {
+                    VReg::Phys(name) if parameter_index(name, identities).is_none() => {
                         Some(sanitize_c_ident(name))
                     }
                     VReg::Temp(index) => Some(format!("t{index}")),
@@ -1196,14 +1429,14 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
                     ids.wide_locals.insert(spelling);
                 }
             }
-            collect_idents_expr(src, ids);
+            collect_idents_expr(src, ids, identities);
         }
         Stmt::Store { addr, src, size } => {
             if let Some(address) = direct_global_address(addr) {
                 note_global_address(address, u32::from(*size), ids);
             }
-            collect_idents_expr(addr, ids);
-            collect_idents_expr(src, ids);
+            collect_idents_expr(addr, ids, identities);
+            collect_idents_expr(src, ids, identities);
         }
         Stmt::Call {
             target,
@@ -1232,16 +1465,16 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
                     ids.calls_stack_check = true;
                 }
             } else {
-                collect_idents_expr(target, ids);
+                collect_idents_expr(target, ids, identities);
             }
             for a in args {
-                collect_idents_expr(a, ids);
+                collect_idents_expr(a, ids, identities);
             }
             // The destination is assigned here, so it needs a declaration.
             if let Some(d) = dst {
-                collect_reg(d, ids);
+                collect_reg(d, ids, identities);
                 if let (Some(spelling), Some(call_spec)) =
-                    (local_reg_spelling(d), call_spec.as_ref())
+                    (local_reg_spelling(d, identities), call_spec.as_ref())
                 {
                     let recovered = call_spec.call_prototype.return_type.clone();
                     ids.call_result_types
@@ -1257,7 +1490,7 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
         }
         Stmt::Return { value } => {
             if let Some(e) = value {
-                collect_idents_expr(e, ids);
+                collect_idents_expr(e, ids, identities);
             }
         }
         Stmt::If {
@@ -1265,20 +1498,20 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
             then_body,
             else_body,
         } => {
-            collect_idents_expr(cond, ids);
+            collect_idents_expr(cond, ids, identities);
             for s in then_body {
-                collect_idents_stmt(s, ids);
+                collect_idents_stmt(s, ids, identities);
             }
             if let Some(eb) = else_body {
                 for s in eb {
-                    collect_idents_stmt(s, ids);
+                    collect_idents_stmt(s, ids, identities);
                 }
             }
         }
         Stmt::While { cond, body } => {
-            collect_idents_expr(cond, ids);
+            collect_idents_expr(cond, ids, identities);
             for s in body {
-                collect_idents_stmt(s, ids);
+                collect_idents_stmt(s, ids, identities);
             }
         }
         Stmt::For {
@@ -1287,33 +1520,33 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
             step,
             body,
         } => {
-            collect_idents_stmt(init, ids);
-            collect_idents_expr(cond, ids);
+            collect_idents_stmt(init, ids, identities);
+            collect_idents_expr(cond, ids, identities);
             for s in body {
-                collect_idents_stmt(s, ids);
+                collect_idents_stmt(s, ids, identities);
             }
-            collect_idents_stmt(step, ids);
+            collect_idents_stmt(step, ids, identities);
         }
         Stmt::DoWhile { body, cond } => {
             for s in body {
-                collect_idents_stmt(s, ids);
+                collect_idents_stmt(s, ids, identities);
             }
-            collect_idents_expr(cond, ids);
+            collect_idents_expr(cond, ids, identities);
         }
         Stmt::Switch {
             discriminant,
             cases,
             default,
         } => {
-            collect_idents_expr(discriminant, ids);
+            collect_idents_expr(discriminant, ids, identities);
             for (_, body) in cases {
                 for s in body {
-                    collect_idents_stmt(s, ids);
+                    collect_idents_stmt(s, ids, identities);
                 }
             }
             if let Some(b) = default {
                 for s in b {
-                    collect_idents_stmt(s, ids);
+                    collect_idents_stmt(s, ids, identities);
                 }
             }
         }
@@ -1326,16 +1559,16 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
         }
         Stmt::IndirectGoto { target } => {
             ids.unresolved_transfer_count = ids.unresolved_transfer_count.saturating_add(1);
-            collect_idents_expr(target, ids);
+            collect_idents_expr(target, ids, identities);
         }
-        Stmt::Throw { value } => collect_idents_expr(value, ids),
+        Stmt::Throw { value } => collect_idents_expr(value, ids, identities),
         Stmt::TryCatch { try_body, catches } => {
             for statement in try_body {
-                collect_idents_stmt(statement, ids);
+                collect_idents_stmt(statement, ids, identities);
             }
             for catch in catches {
                 for statement in &catch.body {
-                    collect_idents_stmt(statement, ids);
+                    collect_idents_stmt(statement, ids, identities);
                 }
                 if let VReg::Phys(name) = &catch.binding {
                     remove_local(ids, &sanitize_c_ident(name));
@@ -1370,7 +1603,7 @@ pub(crate) struct HealthIdentifiers {
 pub(crate) fn health_identifiers(function: &Function) -> HealthIdentifiers {
     let mut identifiers = DecIdents::default();
     for statement in &function.body {
-        collect_idents_stmt(statement, &mut identifiers);
+        collect_idents_stmt(statement, &mut identifiers, None);
     }
     HealthIdentifiers {
         parameters: identifiers.max_arg.map_or(0, |index| index + 1),
@@ -2467,13 +2700,13 @@ function f @ 0x1000 {
             !lowered
                 .body
                 .iter()
-                .any(|stmt| matches!(stmt, Stmt::Goto { target: 0x1010 })),
+                .any(|stmt| matches!(stmt.semantic(), Stmt::Goto { target: 0x1010 })),
             "a jump to the next emitted region is redundant: {:#?}",
             lowered.body
         );
         assert!(
             lowered.body.iter().any(|stmt| {
-                matches!(stmt, Stmt::Assign { dst, .. } if *dst == VReg::phys("outer_index"))
+                matches!(stmt.semantic(), Stmt::Assign { dst, .. } if *dst == VReg::phys("outer_index"))
             }),
             "the following region's body must remain reachable: {:#?}",
             lowered.body
@@ -2524,7 +2757,7 @@ function f @ 0x1000 {
         let latch = lowered.body.windows(2).any(|pair| {
             matches!(pair[0], Stmt::Label(0x1030))
                 && matches!(
-                    &pair[1],
+                    pair[1].semantic(),
                     Stmt::Assign { dst, .. } if *dst == VReg::phys("index")
                 )
         });
@@ -2547,7 +2780,15 @@ function f @ 0x1000 {
                 }],
                 vec![0x1010, 0x1020, 0x1030],
             ),
-            (0x1010, vec![Op::Jump { target: 0x1000 }], vec![0x1000]),
+            (
+                0x1010,
+                vec![Op::CondJump {
+                    cond: VReg::Flag(Flag::Z),
+                    target: 0x1000,
+                    inverted: false,
+                }],
+                vec![0x1020, 0x1000],
+            ),
             (0x1020, vec![Op::Return], vec![]),
             (0x1030, vec![Op::Return], vec![]),
         ]);
@@ -2556,6 +2797,9 @@ function f @ 0x1000 {
                 header: 0,
                 blocks: vec![0, 1],
                 exits: vec![2, 3],
+                switch: None,
+                switch_guard: None,
+                switch_inline_regions: Vec::new(),
             },
             Region::Unstructured(vec![2, 3]),
         ]);
@@ -2574,7 +2818,10 @@ function f @ 0x1000 {
             default,
         }) = body
             .iter()
-            .find(|statement| matches!(statement, Stmt::Switch { .. }))
+            .find_map(|statement| match statement.semantic() {
+                switch @ Stmt::Switch { .. } => Some(switch),
+                _ => None,
+            })
         else {
             panic!("expected typed switch inside raw loop: {body:#?}");
         };
@@ -2583,26 +2830,40 @@ function f @ 0x1000 {
             cases,
             &vec![
                 (Some(0), vec![Stmt::Goto { target: 0x1010 }]),
-                (Some(1), vec![Stmt::Goto { target: 0x1020 }]),
                 (Some(2), vec![Stmt::Goto { target: 0x1030 }]),
             ]
         );
-        assert!(default.is_none());
+        assert_eq!(default, &Some(vec![Stmt::Goto { target: 0x1020 }]));
+        let latch_has_continue = body.iter().any(|statement| {
+            matches!(
+                statement.semantic(),
+                Stmt::If { then_body, .. } if then_body.iter().any(|inner| matches!(inner.semantic(), Stmt::Continue))
+            )
+        });
+        assert!(
+            latch_has_continue,
+            "the owned latch-to-header edge must become continue: {body:#?}"
+        );
         assert!(
             !body
                 .iter()
-                .any(|statement| matches!(statement, Stmt::IndirectGoto { .. })),
+                .any(|statement| matches!(statement.semantic(), Stmt::Goto { target } if *target == 0x1000)),
+            "no explicit raw-loop header goto may survive: {body:#?}"
+        );
+        assert!(
+            !body
+                .iter()
+                .any(|statement| matches!(statement.semantic(), Stmt::IndirectGoto { .. })),
             "the switch replaces the computed machine transfer: {body:#?}"
         );
     }
 
     #[test]
-    fn a_raw_dispatch_loop_coalesces_guard_default_table_slots() {
-        // PIC switch tables commonly point every unused in-range slot at the
-        // same block as the preceding bounds guard. Rendering each hole as a
-        // separate C case preserves execution but invents source CFG nodes.
-        // Once the guard proves the shared default target, those slots can be
-        // represented exactly by one `default` arm.
+    fn a_raw_dispatch_loop_uses_typed_case_values_and_guard_only_default() {
+        // The CFG evidence, not successor position, owns source-level case
+        // values. The bounds guard's default need not also appear among the
+        // dispatch successors; retaining SwitchEvidence on RawLoop is what
+        // makes both facts available to AST lowering.
         let lf = mk_cfg(vec![
             (
                 0x1000,
@@ -2619,18 +2880,60 @@ function f @ 0x1000 {
                     target: Value::Reg(VReg::phys("target")),
                     index: Some(Value::Reg(VReg::phys("state"))),
                 }],
-                vec![0x1020, 0x1050, 0x1030, 0x1050],
+                vec![0x1020, 0x1030],
             ),
-            (0x1020, vec![Op::Jump { target: 0x1000 }], vec![0x1000]),
+            (
+                0x1020,
+                vec![Op::CondJump {
+                    cond: VReg::Flag(Flag::Z),
+                    target: 0x1040,
+                    inverted: false,
+                }],
+                vec![0x1040, 0x1060],
+            ),
             (0x1030, vec![Op::Jump { target: 0x1000 }], vec![0x1000]),
-            (0x1040, vec![Op::Return], vec![]),
+            (0x1040, vec![Op::Nop], vec![0x1070]),
             (0x1050, vec![Op::Return], vec![]),
+            (0x1060, vec![Op::Nop], vec![0x1070]),
+            (0x1070, vec![Op::Jump { target: 0x1000 }], vec![0x1000]),
         ]);
         let region = Region::Seq(vec![
             Region::RawLoop {
                 header: 0,
-                blocks: vec![0, 1, 2, 3],
+                blocks: vec![0, 1, 2, 3, 4, 6, 7],
                 exits: vec![5],
+                switch: Some(SwitchEvidence {
+                    dispatch: 1,
+                    cases: vec![
+                        SwitchCaseEvidence {
+                            target: 2,
+                            values: vec![10, 12],
+                        },
+                        SwitchCaseEvidence {
+                            target: 3,
+                            values: vec![42],
+                        },
+                    ],
+                    default: Some(SwitchDefaultEvidence {
+                        guard: 0,
+                        target: 5,
+                        dispatch: Some(1),
+                        taken: true,
+                    }),
+                    complete: true,
+                    provenance: SwitchEvidenceProvenance::TypedCfgEdges,
+                }),
+                switch_guard: Some(0),
+                switch_inline_regions: vec![
+                    crate::ir::structure::RawSwitchInlineRegion {
+                        entry: 2,
+                        blocks: vec![2, 4, 6, 7],
+                    },
+                    crate::ir::structure::RawSwitchInlineRegion {
+                        entry: 3,
+                        blocks: vec![3],
+                    },
+                ],
             },
             Region::Block(5),
         ]);
@@ -2643,20 +2946,57 @@ function f @ 0x1000 {
         else {
             panic!("expected raw while loop: {:#?}", lowered.body);
         };
-        let Some(Stmt::Switch { cases, default, .. }) = body
-            .iter()
-            .find(|statement| matches!(statement, Stmt::Switch { .. }))
+        let Some(Stmt::Switch { cases, default, .. }) =
+            body.iter()
+                .find_map(|statement| match statement.semantic() {
+                    switch @ Stmt::Switch { .. } => Some(switch),
+                    _ => None,
+                })
         else {
             panic!("expected typed switch inside raw loop: {body:#?}");
         };
-        assert_eq!(
-            cases,
-            &vec![
-                (Some(0), vec![Stmt::Goto { target: 0x1020 }]),
-                (Some(2), vec![Stmt::Goto { target: 0x1030 }]),
-            ]
+        assert_eq!(cases[0], (Some(10), Vec::new()));
+        assert_eq!(cases[1].0, Some(12));
+        assert_eq!(cases[2].0, Some(42));
+        assert!(
+            cases[1]
+                .1
+                .iter()
+                .any(|stmt| matches!(stmt.semantic(), Stmt::If { .. })),
+            "the private branch must remain inside the case body: {:#?}",
+            cases[1].1
         );
+        for target in [0x1040, 0x1060, 0x1070] {
+            assert!(
+                cases[1]
+                    .1
+                    .iter()
+                    .any(|stmt| matches!(stmt.semantic(), Stmt::Label(label) if *label == target)),
+                "private branch target {target:#x} must be defined inside its case: {:#?}",
+                cases[1].1
+            );
+        }
+        assert!(cases[1]
+            .1
+            .iter()
+            .any(|stmt| matches!(stmt.semantic(), Stmt::Continue)));
+        assert!(cases[2]
+            .1
+            .iter()
+            .any(|stmt| matches!(stmt.semantic(), Stmt::Continue)));
         assert_eq!(default, &Some(vec![Stmt::Goto { target: 0x1050 }]));
+        assert!(
+            !body
+                .iter()
+                .any(|statement| matches!(statement, Stmt::If { .. })),
+            "the proven range guard must be absorbed into the typed switch: {body:#?}"
+        );
+        assert!(
+            !body.iter().any(|statement| {
+                matches!(statement, Stmt::Label(target) if matches!(*target, 0x1020 | 0x1030 | 0x1040 | 0x1060 | 0x1070))
+            }),
+            "private handler regions must be emitted in their case arms: {body:#?}"
+        );
     }
 
     #[test]
@@ -2699,14 +3039,14 @@ function f @ 0x1000 {
         };
 
         let lowered = lower(&lf, &region, "latch_target");
-        let Stmt::DoWhile { body, .. } = &lowered.body[0] else {
+        let Stmt::DoWhile { body, .. } = lowered.body[0].semantic() else {
             panic!("expected do-while: {:#?}", lowered.body);
         };
         let label = body
             .iter()
-            .position(|statement| matches!(statement, Stmt::Label(0x1010)));
+            .position(|statement| matches!(statement.semantic(), Stmt::Label(0x1010)));
         let latch = body.iter().position(
-            |statement| matches!(statement, Stmt::Assign { dst, .. } if *dst == VReg::phys("latch_value")),
+            |statement| matches!(statement.semantic(), Stmt::Assign { dst, .. } if *dst == VReg::phys("latch_value")),
         );
 
         assert_eq!(
@@ -2718,7 +3058,7 @@ function f @ 0x1000 {
                 .body
                 .iter()
                 .skip(1)
-                .any(|statement| matches!(statement, Stmt::Label(0x1010))),
+                .any(|statement| matches!(statement.semantic(), Stmt::Label(0x1010))),
             "the latch target escaped the loop: {:#?}",
             lowered.body
         );
@@ -2810,13 +3150,13 @@ function f @ 0x1000 {
         ]);
 
         let lowered = lower(&lf, &region, "switch_join");
-        let Some(Stmt::Switch { cases, .. }) = lowered.body.first() else {
+        let Some(Stmt::Switch { cases, .. }) = lowered.body.first().map(Stmt::semantic) else {
             panic!("expected switch first: {:#?}", lowered.body)
         };
         assert!(
             cases.iter().all(|(_, body)| !body
                 .iter()
-                .any(|stmt| matches!(stmt, Stmt::Goto { target: 0x1040 }))),
+                .any(|stmt| matches!(stmt.semantic(), Stmt::Goto { target: 0x1040 }))),
             "case-to-join edges must fall through: {:#?}",
             lowered.body
         );
@@ -2824,7 +3164,7 @@ function f @ 0x1000 {
             lowered
                 .body
                 .iter()
-                .any(|stmt| matches!(stmt, Stmt::Return { .. })),
+                .any(|stmt| matches!(stmt.semantic(), Stmt::Return { .. })),
             "the shared return must remain after the switch: {:#?}",
             lowered.body
         );
@@ -2855,6 +3195,34 @@ function f @ 0x1000 {
             "a nested clone must not own the shared label: {body:#?}"
         );
         assert!(matches!(body[1], Stmt::Label(0x2000)));
+    }
+
+    #[test]
+    fn duplicate_origin_wrapped_labels_keep_the_shallow_destination() {
+        let mut body = vec![
+            Stmt::Switch {
+                discriminant: Expr::Reg(VReg::phys("state")),
+                cases: vec![(
+                    Some(0),
+                    vec![Stmt::Label(0x2000).with_origins(OriginSet::one(0x2000))],
+                )],
+                default: None,
+            }
+            .with_origins(OriginSet::one(0x1000)),
+            Stmt::Label(0x2000).with_origins(OriginSet::one(0x2000)),
+            Stmt::Return { value: None }.with_origins(OriginSet::one(0x2004)),
+        ];
+
+        deduplicate_labels(&mut body);
+
+        let Stmt::Switch { cases, .. } = body[0].semantic() else {
+            panic!("expected switch")
+        };
+        assert!(!cases[0]
+            .1
+            .iter()
+            .any(|statement| matches!(statement.semantic(), Stmt::Label(0x2000))));
+        assert!(matches!(body[1].semantic(), Stmt::Label(0x2000)));
     }
 
     #[test]
@@ -3082,14 +3450,14 @@ function f @ 0x1000 {
 
         assert!(
             matches!(
-                lowered.first(),
+                lowered.first().map(Stmt::semantic),
                 Some(Stmt::Assign { dst, .. }) if dst == &cf
             ),
             "hoisting the branch consumed a predicate still read later: {lowered:#?}"
         );
         assert!(
             matches!(
-                lowered.get(1),
+                lowered.get(1).map(Stmt::semantic),
                 Some(Stmt::If {
                     cond: Expr::Cmp { op: CmpOp::Ult, .. },
                     ..
@@ -5185,6 +5553,39 @@ function f @ 0x1000 {
         assert!(
             text.contains("float square(void)"),
             "a bare machine return overrode the recovered prototype:\n{text}"
+        );
+    }
+
+    #[test]
+    fn origin_wrapped_scalar_return_overrides_a_stale_pointer_hint() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let f = Function {
+            name: "wrapped_integer_return".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("ret"),
+                    src: Expr::Const(-1),
+                }
+                .with_origins(OriginSet::one(0x1000)),
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("ret"))),
+                }
+                .with_origins(OriginSet::one(0x1004)),
+            ],
+        };
+        let mut tm = TypeMap::default();
+        tm.upsert_public(VReg::phys("ret"), TypeHint::Pointer { pointee_width: 1 });
+
+        refine_decbench_abi_widths(&f, &mut tm);
+
+        assert_eq!(
+            tm.get(&VReg::phys("ret")),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            })
         );
     }
 
@@ -10131,6 +10532,61 @@ function f @ 0x1000 {
         );
     }
 
+    #[test]
+    fn signed_machine_comparison_casts_an_authoritative_unsigned_parameter_per_use() {
+        let function = Function {
+            name: "signed_edge".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Cmp {
+                    op: CmpOp::Slt,
+                    lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                    rhs: Box::new(Expr::Const(0x1_0000_0000)),
+                }),
+            }],
+        };
+        let prototype = CallPrototype {
+            return_type: "int32_t".into(),
+            parameter_types: vec!["uint64_t".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+
+        let rendered = render_decbench_typed_with_output_and_prototype(
+            &function,
+            None,
+            None,
+            crate::ir::types_recover::RecoveredOutputKind::Direct,
+            Some(&prototype),
+        );
+
+        assert!(
+            rendered.contains("int32_t signed_edge(uint64_t arg0)"),
+            "the authoritative boundary type changed:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("(long)(arg0) < 0x100000000"),
+            "the signed machine edge lost its per-use interpretation:\n{rendered}"
+        );
+
+        let recovered = CallPrototype {
+            authority: CallPrototypeAuthority::Recovered,
+            ..prototype
+        };
+        let rendered = render_decbench_typed_with_output_and_prototype(
+            &function,
+            None,
+            None,
+            crate::ir::types_recover::RecoveredOutputKind::Direct,
+            Some(&recovered),
+        );
+        assert!(
+            !rendered.contains("(long)(arg0)"),
+            "an inferred declaration must not trigger the authoritative-source exception:\n\
+             {rendered}"
+        );
+    }
+
     /// One `_Bool`-returning function, rendered against a declared prototype.
     fn render_bool_return(value: Expr) -> String {
         let function = Function {
@@ -11126,6 +11582,81 @@ function f @ 0x1000 {
 
         assert!(rendered.contains("    int local_4 = 0;"), "{rendered}");
         assert_eq!(rendered.matches("int local_4").count(), 1, "{rendered}");
+    }
+
+    #[test]
+    fn attributed_first_scalar_definition_becomes_its_declaration_initializer() {
+        let local = VReg::phys("local_4");
+        let function = Function {
+            name: "initialise".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: local.clone(),
+                    src: Expr::Const(0),
+                }
+                .with_origins(OriginSet::one(0x1010)),
+                Stmt::Return {
+                    value: Some(Expr::Reg(local.clone())),
+                }
+                .with_origins(OriginSet::one(0x1014)),
+            ],
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            local,
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        let rendered = render_decbench_typed(&function, Some(&types), None);
+
+        assert!(rendered.contains("    int local_4 = 0;"), "{rendered}");
+        assert_eq!(rendered.matches("int local_4").count(), 1, "{rendered}");
+    }
+
+    #[test]
+    fn decbench_render_exposes_deterministic_statement_line_mappings() {
+        let local = VReg::phys("local_4");
+        let function = Function {
+            name: "mapped".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: local.clone(),
+                    src: Expr::Const(7),
+                }
+                .with_origins(OriginSet::from_addresses([0x1010, 0x1004, 0x1010])),
+                Stmt::Return {
+                    value: Some(Expr::Reg(local.clone())),
+                }
+                .with_origins(OriginSet::one(0x1010)),
+            ],
+        };
+
+        let rendered = render_decbench(&function);
+        let mappings = take_decbench_line_mappings();
+
+        assert_eq!(mappings.len(), 2);
+        assert_eq!(mappings[0].1.addresses(), &[0x1004, 0x1010]);
+        assert_eq!(mappings[1].1.addresses(), &[0x1010]);
+        assert!(mappings[0].0 < mappings[1].0);
+        assert!(
+            rendered
+                .lines()
+                .nth(mappings[0].0 - 1)
+                .is_some_and(|line| line.contains("local_4 = 7")),
+            "{rendered}"
+        );
+        assert!(
+            rendered
+                .lines()
+                .nth(mappings[1].0 - 1)
+                .is_some_and(|line| line.contains("return local_4")),
+            "{rendered}"
+        );
     }
 
     #[test]

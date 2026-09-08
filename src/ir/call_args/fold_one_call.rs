@@ -24,16 +24,20 @@ use crate::ir::types::VReg;
 
 use super::{
     aapcs_core_register_arity, aapcs_integer_stack_suffix, arg_slots, direct_call_target_va,
-    fold_one_arm_hard_float_call, fold_one_cdecl32_call, fold_one_recovered_layout_call,
-    fold_one_recovered_layout_call_with_live_ins, fold_one_table_call, incoming_arg_expr,
-    is_frame_coordinate_storage, is_pure_arg_normalisation, is_stable_frame_arg_definition,
+    fold_one_arm_hard_float_call_with_identities, fold_one_cdecl32_call,
+    fold_one_recovered_layout_call, fold_one_recovered_layout_call_with_live_ins,
+    fold_one_table_call, has_numbered_identity, is_frame_coordinate_storage,
+    is_pure_arg_normalisation, is_stable_frame_arg_definition_with_identities,
     known_arm_core_register_arity, known_arm_hard_float_layout,
-    layout_matches_abi_allocation_order, mark_arg_reads_in_expr, mark_arg_reads_in_stmt,
-    mark_arg_writes_in_stmt, outgoing_aapcs_stack_area, outgoing_stack_cleanup,
-    outgoing_sysv_stack_area, outgoing_sysv_stack_push, reads_reg_in_expr,
-    resolve_captured_definition, resolve_captured_definition_in, return_reg, return_value_is_read,
-    slot_of, ssa_base, stack_pointer_sub_width, substitute_exact_reg, table_call_may_use_layout,
-    versioned_operand_is_reassigned, CallConv, CalleeLayouts, EnclosingSlots, KEEP_ARG_SETUP,
+    layout_matches_abi_allocation_order, mark_arg_reads_in_expr_with_identities,
+    mark_arg_reads_in_stmt_with_identities, mark_arg_writes_in_stmt_with_identities,
+    outgoing_aapcs_stack_area_with_identities, outgoing_stack_cleanup_with_identities,
+    outgoing_sysv_stack_area, outgoing_sysv_stack_push_with_identities, reads_reg_in_expr,
+    register_argument_slot, register_is_entry_return_storage, register_is_return_storage,
+    register_is_storage, resolve_captured_definition, resolve_captured_definition_in, return_reg,
+    ssa_base, stack_pointer_sub_width_with_identities, substitute_exact_reg,
+    table_call_may_use_layout, versioned_operand_is_reassigned, CallConv, CalleeLayouts,
+    EnclosingSlots, KEEP_ARG_SETUP,
 };
 
 pub(super) fn fold_one_call(
@@ -44,11 +48,12 @@ pub(super) fn fold_one_call(
     callee_layouts: CalleeLayouts<'_>,
     enclosing: &EnclosingSlots,
     string_pool: &std::collections::HashMap<u64, String>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
     let incoming_overrides = enclosing.overrides.as_slice();
     let format_proven_arity = format_proven_arity(body, call_idx, arch, string_pool);
     if arch == CallConv::Cdecl32 {
-        fold_one_cdecl32_call(body, call_idx);
+        fold_one_cdecl32_call(body, call_idx, identities);
         return;
     }
     // Before any register-liveness recovery: a call through a proven
@@ -60,7 +65,15 @@ pub(super) fn fold_one_call(
     if let Some(layout) =
         table_call_may_use_layout(&body[call_idx], arch, callee_layouts.table_entry)
     {
-        if fold_one_table_call(body, call_idx, arch, &layout, param_slots, enclosing) {
+        if fold_one_table_call(
+            body,
+            call_idx,
+            arch,
+            &layout,
+            param_slots,
+            enclosing,
+            identities,
+        ) {
             return;
         }
     }
@@ -84,11 +97,13 @@ pub(super) fn fold_one_call(
         .then(|| {
             recovered_layout
                 .and_then(|layout| aapcs_integer_stack_suffix(layout))
-                .and_then(|count| outgoing_aapcs_stack_area(body, call_idx, count))
+                .and_then(|count| {
+                    outgoing_aapcs_stack_area_with_identities(body, call_idx, count, identities)
+                })
         })
         .flatten();
     if let Some(layout) = recovered_layout.filter(|_| aapcs_stack.is_none()) {
-        if fold_one_recovered_layout_call(body, call_idx, layout) {
+        if fold_one_recovered_layout_call(body, call_idx, layout, identities) {
             return;
         }
         if fold_one_recovered_layout_call_with_live_ins(
@@ -98,6 +113,7 @@ pub(super) fn fold_one_call(
             layout,
             param_slots,
             enclosing,
+            identities,
         ) {
             return;
         }
@@ -107,6 +123,7 @@ pub(super) fn fold_one_call(
             arch,
             layout,
             callee_layouts.direct_prototypes,
+            identities,
         ) {
             return;
         }
@@ -118,7 +135,12 @@ pub(super) fn fold_one_call(
         // after any intervening write or call.
         let mut blocked_live_ins = vec![false; arg_slots(arch).len()];
         for statement in &body[..call_idx] {
-            mark_arg_writes_in_stmt(statement, arch, &mut blocked_live_ins);
+            mark_arg_writes_in_stmt_with_identities(
+                statement,
+                arch,
+                &mut blocked_live_ins,
+                identities,
+            );
         }
         let reaching_inputs = layout
             .iter()
@@ -139,7 +161,7 @@ pub(super) fn fold_one_call(
             })
             .collect::<Option<Vec<_>>>();
         if let Some(arguments) = reaching_inputs {
-            if let Stmt::Call { args, .. } = &mut body[call_idx] {
+            if let Stmt::Call { args, .. } = body[call_idx].semantic_mut() {
                 *args = arguments;
             }
             return;
@@ -150,7 +172,7 @@ pub(super) fn fold_one_call(
         // a tail call). Keep the current register values explicit instead of
         // degrading the proven fixed-arity call to `callee(void)`.
         if matches!(arch, CallConv::Arm | CallConv::ArmHardFloat) {
-            if let Stmt::Call { args, .. } = &mut body[call_idx] {
+            if let Stmt::Call { args, .. } = body[call_idx].semantic_mut() {
                 if args.is_empty() {
                     *args = layout.iter().cloned().map(Expr::Reg).collect();
                 }
@@ -164,13 +186,13 @@ pub(super) fn fold_one_call(
             .filter(|_| known_arm_core_arity.is_none())
         {
             if !layout.is_empty() {
-                let _ = fold_one_recovered_layout_call(body, call_idx, layout);
+                let _ = fold_one_recovered_layout_call(body, call_idx, layout, identities);
             }
             // A locked fixed-arity declaration is stronger than a scratch
             // register prefix even when the setup was not locally foldable.
             return;
         }
-        if fold_one_arm_hard_float_call(body, call_idx) {
+        if fold_one_arm_hard_float_call_with_identities(body, call_idx, identities) {
             return;
         }
     }
@@ -179,7 +201,7 @@ pub(super) fn fold_one_call(
     let mut read_between: Vec<bool> = vec![false; arg_slots(arch).len()];
     let mut blocked_incoming: Vec<bool> = vec![false; arg_slots(arch).len()];
     let preallocated_stack = (arch == CallConv::SysVAmd64)
-        .then(|| outgoing_sysv_stack_area(body, call_idx))
+        .then(|| outgoing_sysv_stack_area(body, call_idx, identities))
         .flatten();
     let proven_aapcs_stack = aapcs_stack.is_some();
     let (mut stack_args, mut stack_setup_indices) = aapcs_stack
@@ -214,7 +236,7 @@ pub(super) fn fold_one_call(
         // failure block). Reaching definitions across CFG edges require dataflow
         // proof; this local backward fold deliberately stops here.
         if matches!(
-            &body[i],
+            body[i].semantic(),
             Stmt::Label(_)
                 | Stmt::Goto { .. }
                 | Stmt::IndirectGoto { .. }
@@ -232,11 +254,17 @@ pub(super) fn fold_one_call(
             break;
         }
         if arch == CallConv::SysVAmd64 && preallocated_stack.is_none() {
-            if let Some((value, width)) = outgoing_sysv_stack_push(body, i) {
-                stack_args.push(value.clone());
+            if let Some((value, width)) =
+                outgoing_sysv_stack_push_with_identities(body, i, identities)
+            {
+                let mut argument = value.clone();
+                if let Some(origins) = body[i].origins() {
+                    argument.merge_origins(origins);
+                }
+                stack_args.push(argument);
                 stack_arg_bytes += width;
                 stack_setup_indices.extend([i, i - 1]);
-                mark_arg_reads_in_expr(value, arch, &mut read_between);
+                mark_arg_reads_in_expr_with_identities(value, arch, &mut read_between, identities);
                 i -= 1;
                 continue;
             }
@@ -246,7 +274,7 @@ pub(super) fn fold_one_call(
             // every candidate push untouched.
             if !stack_args.is_empty()
                 && stack_padding.is_none()
-                && stack_pointer_sub_width(&body[i]) == Some(8)
+                && stack_pointer_sub_width_with_identities(&body[i], identities) == Some(8)
             {
                 stack_padding = Some(i);
                 continue;
@@ -255,24 +283,36 @@ pub(super) fn fold_one_call(
             // sequence. Without this boundary a first call with six register
             // arguments could mistake `push rbp` for a seventh argument.
             if matches!(
-                &body[i],
+                body[i].semantic(),
                 Stmt::Assign {
                     dst: VReg::Phys(frame),
                     src: Expr::Reg(VReg::Phys(stack)),
-                } if matches!(ssa_base(frame), "ebp" | "rbp")
-                    && matches!(ssa_base(stack), "esp" | "rsp")
+                } if (register_is_storage(&VReg::Phys(frame.clone()), "ebp", identities)
+                    || register_is_storage(&VReg::Phys(frame.clone()), "rbp", identities))
+                    && (register_is_storage(&VReg::Phys(stack.clone()), "esp", identities)
+                        || register_is_storage(&VReg::Phys(stack.clone()), "rsp", identities))
             ) {
                 break;
             }
         }
-        let stop = matches!(&body[i], Stmt::Call { .. });
-        if let Stmt::Assign { dst, src } = &body[i] {
-            if let VReg::Phys(name) = dst {
-                if let Some(slot) = slot_of(arch, name.as_str()) {
+        let stop = matches!(body[i].semantic(), Stmt::Call { .. });
+        let statement_origins = body[i].origins().cloned();
+        if let Stmt::Assign { dst, src } = body[i].semantic() {
+            let mut attributed_source = src.clone();
+            if let Some(origins) = &statement_origins {
+                attributed_source.merge_origins(origins);
+            }
+            if matches!(dst, VReg::Phys(_)) {
+                if let Some(slot) = register_argument_slot(arch, dst, identities) {
                     if known_arm_core_arity.is_some_and(|arity| slot >= arity) {
                         // The fixed declaration proves this is caller-local
                         // scratch state, not an additional call argument.
-                        mark_arg_reads_in_expr(src, arch, &mut read_between);
+                        mark_arg_reads_in_expr_with_identities(
+                            src,
+                            arch,
+                            &mut read_between,
+                            identities,
+                        );
                         continue;
                     }
                     if found[slot].is_none() {
@@ -281,8 +321,10 @@ pub(super) fn fold_one_call(
                         // one does, folding this assignment would leave a
                         // dangling reference in the higher slot's expr.
                         let substitutable = (is_pure_arg_normalisation(src)
-                            || is_stable_frame_arg_definition(src, body, i, call_idx))
-                            && !versioned_operand_is_reassigned(src, body, i, call_idx);
+                            || is_stable_frame_arg_definition_with_identities(
+                                src, body, i, call_idx, identities,
+                            ))
+                            && !versioned_operand_is_reassigned(src, body, i, call_idx, identities);
                         let feeds_captured_register_argument = found
                             .iter()
                             .any(|f| f.as_ref().is_some_and(|(_, e)| reads_reg_in_expr(e, dst)));
@@ -291,10 +333,11 @@ pub(super) fn fold_one_call(
                             .any(|argument| reads_reg_in_expr(argument, dst))
                             && substitutable
                             && (proven_aapcs_stack
-                                || outgoing_stack_cleanup(
+                                || outgoing_stack_cleanup_with_identities(
                                     body,
                                     call_idx,
                                     stack_arg_bytes + stack_padding.map_or(0, |_| 8),
+                                    identities,
                                 )
                                 .is_some());
                         // Preserve the existing statement-rooted dependency
@@ -303,7 +346,7 @@ pub(super) fn fold_one_call(
                         // dependent call arguments must move together.
                         if feeds_captured_register_argument && feeds_balanced_stack_argument {
                             for (_, argument) in found.iter_mut().flatten() {
-                                let _ = substitute_exact_reg(argument, dst, src);
+                                let _ = substitute_exact_reg(argument, dst, &attributed_source);
                             }
                         }
                         let would_dangle =
@@ -326,28 +369,41 @@ pub(super) fn fold_one_call(
                             // lets an older shadowed r2/r3 definition masquerade
                             // as the call argument.
                             found[slot] = Some((KEEP_ARG_SETUP, Expr::Reg(dst.clone())));
-                            mark_arg_reads_in_expr(src, arch, &mut read_between);
+                            mark_arg_reads_in_expr_with_identities(
+                                src,
+                                arch,
+                                &mut read_between,
+                                identities,
+                            );
                             continue;
                         }
                         if !would_dangle && (!read_between[slot] || feeds_balanced_stack_argument) {
                             // Keep the setup where it stands when moving it to
                             // the call would read a value written after it; the
                             // call then names the argument register instead.
-                            found[slot] = if versioned_operand_is_reassigned(src, body, i, call_idx)
-                            {
+                            found[slot] = if phase_sensitive_stack_read(
+                                src, body, i, call_idx, arch, identities,
+                            ) || versioned_operand_is_reassigned(
+                                src, body, i, call_idx, identities,
+                            ) {
                                 Some((KEEP_ARG_SETUP, Expr::Reg(dst.clone())))
                             } else {
-                                Some((i, src.clone()))
+                                Some((i, attributed_source.clone()))
                             };
                             if feeds_balanced_stack_argument {
                                 for argument in &mut stack_args {
-                                    let _ = substitute_exact_reg(argument, dst, src);
+                                    let _ = substitute_exact_reg(argument, dst, &attributed_source);
                                 }
                             }
                         } else {
                             blocked_incoming[slot] = true;
                         }
-                        mark_arg_reads_in_expr(src, arch, &mut read_between);
+                        mark_arg_reads_in_expr_with_identities(
+                            src,
+                            arch,
+                            &mut read_between,
+                            identities,
+                        );
                         continue;
                     }
                     // An older SSA definition may feed the captured value for
@@ -361,20 +417,27 @@ pub(super) fn fold_one_call(
                         continue;
                     }
                     let substitutable = (is_pure_arg_normalisation(src)
-                        || is_stable_frame_arg_definition(src, body, i, call_idx))
-                        && !versioned_operand_is_reassigned(src, body, i, call_idx);
+                        || is_stable_frame_arg_definition_with_identities(
+                            src, body, i, call_idx, identities,
+                        ))
+                        && !versioned_operand_is_reassigned(src, body, i, call_idx, identities);
                     let feeds_captured_argument = resolve_captured_definition(
                         &mut found,
                         &mut stack_args,
                         dst,
-                        src,
+                        &attributed_source,
                         substitutable,
                     );
                     if feeds_captured_argument {
                         if !substitutable {
                             opaque_reaching_defs.insert(dst.clone());
                         }
-                        mark_arg_reads_in_expr(src, arch, &mut read_between);
+                        mark_arg_reads_in_expr_with_identities(
+                            src,
+                            arch,
+                            &mut read_between,
+                            identities,
+                        );
                         continue;
                     }
                     if found[slot]
@@ -387,7 +450,12 @@ pub(super) fn fold_one_call(
                         // that argument and need not block the search for a
                         // still-missing lower slot (notably x0's preceding-call
                         // result behind x1#1 -> x1#2 normalisation).
-                        mark_arg_reads_in_expr(src, arch, &mut read_between);
+                        mark_arg_reads_in_expr_with_identities(
+                            src,
+                            arch,
+                            &mut read_between,
+                            identities,
+                        );
                         continue;
                     }
                     if proven_aapcs_stack || known_arm_core_arity.is_some() {
@@ -399,7 +467,12 @@ pub(super) fn fold_one_call(
                         // the still-missing leading slots; calls, control-flow
                         // boundaries, unproved stores, and stack gaps were
                         // already rejected by the area proof above.
-                        mark_arg_reads_in_expr(src, arch, &mut read_between);
+                        mark_arg_reads_in_expr_with_identities(
+                            src,
+                            arch,
+                            &mut read_between,
+                            identities,
+                        );
                         continue;
                     }
                     // An unrelated second assignment to the same ABI slot is a
@@ -435,37 +508,50 @@ pub(super) fn fold_one_call(
                 // AAPCS resolves stack coordinates against a live `sp`, and
                 // folding a definition into one rewrites `sp + 12` into the
                 // whole frame-adjust chain.
-                let versioned_stack_capture =
-                    name.contains('#') && matches!(arch, CallConv::SysVAmd64 | CallConv::Win64);
-                if (!name.contains('#') || versioned_stack_capture)
-                    && !is_frame_coordinate_storage(arch, name)
+                let numbered = has_numbered_identity(dst, identities);
+                let numbered_stack_capture =
+                    numbered && matches!(arch, CallConv::SysVAmd64 | CallConv::Win64);
+                if (!numbered || numbered_stack_capture)
+                    && !is_frame_coordinate_storage(arch, dst, identities)
                 {
                     if opaque_reaching_defs.contains(dst) {
                         continue;
                     }
                     let substitutable = (is_pure_arg_normalisation(src)
-                        || is_stable_frame_arg_definition(src, body, i, call_idx))
-                        && !versioned_operand_is_reassigned(src, body, i, call_idx);
+                        || is_stable_frame_arg_definition_with_identities(
+                            src, body, i, call_idx, identities,
+                        ))
+                        && !versioned_operand_is_reassigned(src, body, i, call_idx, identities);
                     if resolve_captured_definition_in(
                         &mut found,
                         &mut stack_args,
                         dst,
-                        src,
+                        &attributed_source,
                         substitutable,
-                        !name.contains('#'),
+                        !numbered,
                     ) {
                         if !substitutable {
                             opaque_reaching_defs.insert(dst.clone());
                         }
-                        mark_arg_reads_in_expr(src, arch, &mut read_between);
+                        mark_arg_reads_in_expr_with_identities(
+                            src,
+                            arch,
+                            &mut read_between,
+                            identities,
+                        );
                         continue;
                     }
                 }
             }
-            mark_arg_reads_in_expr(src, arch, &mut read_between);
+            mark_arg_reads_in_expr_with_identities(src, arch, &mut read_between, identities);
         } else {
-            mark_arg_reads_in_stmt(&body[i], arch, &mut read_between);
-            mark_arg_writes_in_stmt(&body[i], arch, &mut blocked_incoming);
+            mark_arg_reads_in_stmt_with_identities(&body[i], arch, &mut read_between, identities);
+            mark_arg_writes_in_stmt_with_identities(
+                &body[i],
+                arch,
+                &mut blocked_incoming,
+                identities,
+            );
         }
         if stop {
             // A preceding call defines the ABI return register. Captured
@@ -480,11 +566,10 @@ pub(super) fn fold_one_call(
             // this branch was skipped and `call_into_spill` kept none of its
             // eight arguments. `is_return_register` tolerates the `#version`
             // suffix, which is what makes the versioned spelling recognisable.
-            let return_register = match &body[i] {
+            let return_register = match body[i].semantic() {
                 Stmt::Call {
-                    dst: Some(VReg::Phys(name)),
-                    ..
-                } if crate::ir::abi::is_return_register(arch, name) => VReg::phys(name),
+                    dst: Some(result), ..
+                } if register_is_return_storage(arch, result, identities) => result.clone(),
                 _ => VReg::phys(return_reg(arch)),
             };
             // ABI arguments form a contiguous prefix. If the current call has
@@ -508,18 +593,11 @@ pub(super) fn fold_one_call(
                     .any(|argument| reads_reg_in_expr(argument, &return_register))
                 || forwards_return_to_slot_zero;
             if consumes_return {
-                let existing_result = match &body[i] {
+                let existing_result = match body[i].semantic() {
                     Stmt::Call { dst, .. } => dst.clone(),
                     _ => None,
                 }
-                .filter(|result| {
-                    !matches!(
-                        result,
-                        VReg::Phys(name)
-                            if crate::ir::abi::is_return_register(arch, name)
-                                && !name.contains('#')
-                    )
-                });
+                .filter(|result| !register_is_entry_return_storage(arch, result, identities));
                 let result = existing_result
                     .unwrap_or_else(|| VReg::phys(format!("{}#call_result_{i}", return_reg(arch))));
                 let replacement = Expr::Reg(result.clone());
@@ -537,7 +615,10 @@ pub(super) fn fold_one_call(
                     // with the bare architectural spelling, and renaming that
                     // later as the caller's `arg0` loses the producer result.
                     for statement in body.iter_mut().take(call_idx).skip(i + 1) {
-                        match statement {
+                        match statement.semantic_mut() {
+                            Stmt::Origin { .. } => {
+                                unreachable!("semantic statement cannot be an origin wrapper")
+                            }
                             Stmt::Assign { src, .. } => {
                                 let _ = substitute_exact_reg(src, &return_register, &replacement);
                             }
@@ -550,7 +631,7 @@ pub(super) fn fold_one_call(
                     }
                     found[0] = Some((KEEP_ARG_SETUP, replacement));
                 }
-                if let Stmt::Call { dst, .. } = &mut body[i] {
+                if let Stmt::Call { dst, .. } = body[i].semantic_mut() {
                     *dst = Some(result);
                 }
             }
@@ -600,9 +681,9 @@ pub(super) fn fold_one_call(
             && enclosing.entry_value_reaches(0)
             && !body[..call_idx]
                 .iter()
-                .any(|statement| matches!(statement, Stmt::Call { .. }))
+                .any(|statement| matches!(statement.semantic(), Stmt::Call { .. }))
             && matches!(
-                &body[call_idx],
+                body[call_idx].semantic(),
                 Stmt::Call {
                     target: Expr::Named { .. },
                     args,
@@ -610,7 +691,12 @@ pub(super) fn fold_one_call(
                     ..
                 } if args.is_empty()
                     && (dst.is_some()
-                        || return_value_is_read(body, call_idx, return_reg(arch)))
+                        || super::return_attribution::return_value_is_read_with_identities(
+                            body,
+                            call_idx,
+                            return_reg(arch),
+                            identities,
+                        ))
             );
         if first_direct_value_call {
             // SysV integer parameter slots are contiguous. A proven slot one
@@ -625,7 +711,7 @@ pub(super) fn fold_one_call(
             let incoming = incoming_overrides
                 .first()
                 .and_then(Clone::clone)
-                .or_else(|| incoming_arg_expr(arch, 0, body))
+                .or_else(|| super::incoming_arg_expr_with_identities(arch, 0, body, identities))
                 .or_else(|| enclosing.live_ins.first().and_then(Clone::clone))
                 .unwrap_or_else(|| {
                     Expr::Reg(VReg::phys(
@@ -636,7 +722,7 @@ pub(super) fn fold_one_call(
                             .unwrap_or("rdi"),
                     ))
                 });
-            if let Stmt::Call { args, .. } = &mut body[call_idx] {
+            if let Stmt::Call { args, .. } = body[call_idx].semantic_mut() {
                 *args = vec![incoming];
             }
         }
@@ -663,7 +749,9 @@ pub(super) fn fold_one_call(
                 let Some(expr) = incoming_overrides
                     .get(slot_idx)
                     .and_then(Clone::clone)
-                    .or_else(|| incoming_arg_expr(arch, slot_idx, body))
+                    .or_else(|| {
+                        super::incoming_arg_expr_with_identities(arch, slot_idx, body, identities)
+                    })
                     // A call nested in a branch arm sees only that arm. The
                     // function-wide spelling is the same live-in value, and
                     // `blocked_incoming` — seeded from the enclosing scope —
@@ -698,7 +786,8 @@ pub(super) fn fold_one_call(
         } else {
             let padding_bytes = stack_padding.map_or(0, |_| 8);
             let expected_cleanup = stack_arg_bytes + padding_bytes;
-            if let Some(cleanup_indices) = outgoing_stack_cleanup(body, call_idx, expected_cleanup)
+            if let Some(cleanup_indices) =
+                outgoing_stack_cleanup_with_identities(body, call_idx, expected_cleanup, identities)
             {
                 args_out.extend(stack_args);
                 used_stmt_indices.extend(stack_setup_indices);
@@ -711,14 +800,114 @@ pub(super) fn fold_one_call(
     }
 
     // Splice the args in.
-    if let Stmt::Call { args, .. } = &mut body[call_idx] {
+    if let Stmt::Call { args, .. } = body[call_idx].semantic_mut() {
         *args = args_out;
     }
 
     // Remove the folded assigns. Sort descending to keep call_idx valid.
+    let consumed_origins = used_stmt_indices
+        .iter()
+        .filter_map(|index| body[*index].origins())
+        .cloned()
+        .reduce(|left, right| left.union(&right));
+    if let Some(origins) = consumed_origins.as_ref() {
+        body[call_idx].merge_origins(origins);
+    }
     used_stmt_indices.sort_by(|a, b| b.cmp(a));
     for idx in used_stmt_indices {
         body.remove(idx);
+    }
+}
+
+/// Does moving this load to the call cross a stack-coordinate phase change?
+///
+/// A local backward fold may safely inline ordinary pure expressions. A load
+/// through the current stack pointer is different: an epilogue adjustment
+/// between the load and call changes what the same textual address means. Keep
+/// that exact definition statement-rooted. Other impure expressions retain the
+/// established behavior until a general memory/reaching-definition model can
+/// classify them.
+fn phase_sensitive_stack_read(
+    source: &Expr,
+    body: &[Stmt],
+    definition_index: usize,
+    call_index: usize,
+    arch: CallConv,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    let Expr::Deref { addr, .. } = source else {
+        return false;
+    };
+    let stack_names: &[&str] = match arch {
+        CallConv::SysVAmd64 | CallConv::Win64 => &["rsp"],
+        CallConv::Cdecl32 => &["esp", "rsp"],
+        CallConv::Arm | CallConv::ArmHardFloat | CallConv::Aarch64 => &["sp"],
+    };
+    let reads_stack = stack_names
+        .iter()
+        .any(|name| expr_reads_storage(addr, name, identities));
+    reads_stack
+        && body[(definition_index + 1).min(call_index)..call_index]
+            .iter()
+            .any(|statement| {
+                matches!(
+                    statement.semantic(),
+                    Stmt::Assign { dst, .. }
+                        if stack_names
+                            .iter()
+                            .any(|name| register_is_storage(dst, name, identities))
+                )
+            })
+}
+
+fn expr_reads_storage(
+    expression: &Expr,
+    storage: &str,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    match expression {
+        Expr::Origin { expr, .. } => expr_reads_storage(expr, storage, identities),
+        Expr::Reg(register) => register_is_storage(register, storage, identities),
+        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => base
+            .iter()
+            .chain(index.iter())
+            .any(|register| register_is_storage(register, storage, identities)),
+        Expr::Deref { addr, .. } => expr_reads_storage(addr, storage, identities),
+        Expr::Call { target, args, .. } => {
+            expr_reads_storage(target, storage, identities)
+                || args
+                    .iter()
+                    .any(|argument| expr_reads_storage(argument, storage, identities))
+        }
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            expr_reads_storage(lhs, storage, identities)
+                || expr_reads_storage(rhs, storage, identities)
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            expr_reads_storage(cond, storage, identities)
+                || expr_reads_storage(if_true, storage, identities)
+                || expr_reads_storage(if_false, storage, identities)
+        }
+        Expr::Un { src, .. } => expr_reads_storage(src, storage, identities),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+            expr_reads_storage(expr, storage, identities)
+        }
+        Expr::FunctionTableEntry { index, .. } => expr_reads_storage(index, storage, identities),
+        Expr::WideArithmetic { args, .. } => args
+            .iter()
+            .any(|argument| expr_reads_storage(argument, storage, identities)),
+        Expr::Const(_)
+        | Expr::FloatConst { .. }
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::StackAddr { .. }
+        | Expr::Unknown(_) => false,
     }
 }
 
@@ -737,6 +926,7 @@ fn forward_proven_sysv_sse_pair(
     arch: CallConv,
     layout: &[VReg],
     prototypes: Option<&std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> bool {
     if arch != CallConv::SysVAmd64
         || layout.len() != 2
@@ -765,7 +955,8 @@ fn forward_proven_sysv_sse_pair(
     };
 
     for statement in body[..call_idx].iter().rev() {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Call { .. } => {
                 let Some(producer_va) = direct_call_target_va(statement) else {
                     return false;
@@ -778,18 +969,13 @@ fn forward_proven_sysv_sse_pair(
                 if producer_high < high_bytes {
                     return false;
                 }
-                if let Stmt::Call { args, .. } = &mut body[call_idx] {
+                if let Stmt::Call { args, .. } = body[call_idx].semantic_mut() {
                     *args = layout.iter().cloned().map(Expr::Reg).collect();
                     return true;
                 }
                 return false;
             }
-            Stmt::Assign {
-                dst: VReg::Phys(name),
-                ..
-            } if matches!(ssa_base(name), "xmm0" | "xmm1")
-                || crate::ir::abi::sse_pair_result_lane_offset(arch, name).is_some() =>
-            {
+            Stmt::Assign { dst, .. } if register_is_sse_pair_storage(arch, dst, identities) => {
                 return false;
             }
             Stmt::Comment(text) if text.contains("asm:") => return false,
@@ -808,6 +994,37 @@ fn forward_proven_sysv_sse_pair(
         }
     }
     false
+}
+
+fn register_is_sse_pair_storage(
+    arch: CallConv,
+    register: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    let is_exact_pair_storage = |register: &VReg| {
+        let VReg::Phys(name) = register else {
+            return false;
+        };
+        matches!(name.as_str(), "xmm0" | "xmm1")
+            || crate::ir::abi::sse_pair_result_lanes(arch)
+                .iter()
+                .any(|(lane, _)| lane == name)
+    };
+    match identities {
+        Some(identities) => identities.candidates(register).is_some_and(|candidates| {
+            !candidates.is_empty()
+                && candidates
+                    .iter()
+                    .all(|identity| is_exact_pair_storage(&identity.base))
+        }),
+        None => {
+            let VReg::Phys(name) = register else {
+                return false;
+            };
+            matches!(ssa_base(name), "xmm0" | "xmm1")
+                || crate::ir::abi::sse_pair_result_lane_offset(arch, name).is_some()
+        }
+    }
 }
 
 fn float_parameter_bytes(c_type: &str) -> Option<u8> {
@@ -838,7 +1055,7 @@ fn format_proven_arity(
     let Stmt::Call {
         target: Expr::Named { name, .. },
         ..
-    } = body.get(call_idx)?
+    } = body.get(call_idx)?.semantic()
     else {
         return None;
     };
@@ -856,7 +1073,8 @@ fn format_proven_arity(
         _ => return None,
     };
     for statement in body[..call_idx].iter().rev() {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign {
                 dst: VReg::Phys(register),
                 src,

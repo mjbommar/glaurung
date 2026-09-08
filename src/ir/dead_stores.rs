@@ -35,6 +35,20 @@ pub fn eliminate_dead_stores(f: &mut Function, cc: CallConv) {
     prune_adjacent_overwritten_promoted_stores(f);
 }
 
+/// Run dead-store elimination with pipeline-owned result-role authority.
+pub fn eliminate_dead_stores_with_identities(
+    f: &mut Function,
+    cc: CallConv,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    let mut ret_regs = return_reg_aliases(cc);
+    if !identities.is_result_role(&VReg::phys("ret")) {
+        ret_regs.retain(|name| *name != "ret");
+    }
+    eliminate_body(&mut f.body, &ret_regs);
+    prune_adjacent_overwritten_promoted_stores(f);
+}
+
 /// Remove a pure promoted-stack write immediately shadowed by an equal-width write.
 ///
 /// `push rax; mov [rsp], rcx` is a common clang-cl spelling for reserving one
@@ -47,6 +61,7 @@ pub fn eliminate_dead_stores(f: &mut Function, cc: CallConv) {
 fn prune_adjacent_overwritten_promoted_stores(function: &mut Function) {
     fn discardable_source(expression: &Expr) -> bool {
         match expression {
+            Expr::Origin { expr, .. } => discardable_source(expr),
             Expr::Reg(_)
             | Expr::Const(_)
             | Expr::FloatConst { .. }
@@ -74,7 +89,7 @@ fn prune_adjacent_overwritten_promoted_stores(function: &mut Function) {
             addr: Expr::Reg(slot),
             src,
             size,
-        } = statement
+        } = statement.semantic()
         else {
             return None;
         };
@@ -85,7 +100,10 @@ fn prune_adjacent_overwritten_promoted_stores(function: &mut Function) {
 
     fn prune(body: &mut Vec<Stmt>) {
         for statement in body.iter_mut() {
-            match statement {
+            match statement.semantic_mut() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::If {
                     then_body,
                     else_body,
@@ -127,7 +145,7 @@ fn prune_adjacent_overwritten_promoted_stores(function: &mut Function) {
                     continue;
                 }
                 let Some(second) = (first + 1..body.len())
-                    .find(|index| !matches!(body[*index], Stmt::Comment(_) | Stmt::Nop))
+                    .find(|index| !matches!(body[*index].semantic(), Stmt::Comment(_) | Stmt::Nop))
                 else {
                     continue;
                 };
@@ -161,7 +179,7 @@ fn prune_adjacent_overwritten_promoted_stores(function: &mut Function) {
 pub fn drop_globally_unused_call_results(f: &mut Function) {
     fn collect(body: &[Stmt], out: &mut HashSet<VReg>) {
         for statement in body {
-            match statement {
+            match statement.semantic() {
                 Stmt::Call { dst: Some(dst), .. } => {
                     out.insert(dst.clone());
                 }
@@ -204,7 +222,7 @@ pub fn drop_globally_unused_call_results(f: &mut Function) {
 
     fn clear(body: &mut [Stmt], unused: &HashSet<VReg>) {
         for statement in body {
-            match statement {
+            match statement.semantic_mut() {
                 Stmt::Call { dst, .. } if dst.as_ref().is_some_and(|dst| unused.contains(dst)) => {
                     *dst = None;
                 }
@@ -272,7 +290,7 @@ fn return_reg_aliases(cc: CallConv) -> Vec<&'static str> {
 fn eliminate_body(body: &mut Vec<Stmt>, ret_regs: &[&str]) {
     // Recurse first so inner bodies drive their own analyses.
     for s in body.iter_mut() {
-        match s {
+        match s.semantic_mut() {
             Stmt::If {
                 then_body,
                 else_body,
@@ -301,13 +319,13 @@ fn eliminate_body(body: &mut Vec<Stmt>, ret_regs: &[&str]) {
         // side effect and appear after naming collapses two aliases onto
         // the same role-name (e.g. `%edi` and `%rdi` both becoming `%arg0`).
         if matches!(
-            &body[i],
+            body[i].semantic(),
             Stmt::Assign { dst, src: Expr::Reg(r) } if dst == r
         ) {
             body.remove(i);
             continue;
         }
-        let dst = match &body[i] {
+        let dst = match body[i].semantic() {
             Stmt::Assign { dst, src } => match dst {
                 // Only regular register writes are considered. Flag writes
                 // are handled elsewhere.
@@ -348,14 +366,14 @@ fn is_dead_from(body: &[Stmt], start: usize, dst: &VReg, ret_regs: &[&str]) -> b
 
         // An assignment that overwrites dst without reading it first kills
         // the earlier store.
-        if let Stmt::Assign { dst: d2, .. } = s {
+        if let Stmt::Assign { dst: d2, .. } = s.semantic() {
             if d2 == dst {
                 return true;
             }
         }
 
         // A call in the body is treated as writing the return register.
-        if matches!(s, Stmt::Call { .. }) {
+        if matches!(s.semantic(), Stmt::Call { .. }) {
             if let VReg::Phys(name) = dst {
                 if ret_regs.iter().any(|r| r == name) {
                     return true;
@@ -376,7 +394,7 @@ fn is_dead_from(body: &[Stmt], start: usize, dst: &VReg, ret_regs: &[&str]) -> b
         // live to be safe (except Return whose value obviously reads some
         // reg already covered by `stmt_reads`).
         if matches!(
-            s,
+            s.semantic(),
             Stmt::Return { .. }
                 | Stmt::Goto { .. }
                 | Stmt::IndirectGoto { .. }
@@ -403,7 +421,7 @@ fn drop_unread_abi_zeros(body: &mut Vec<Stmt>) {
     let candidates: Vec<usize> = body
         .iter()
         .enumerate()
-        .filter_map(|(i, s)| match s {
+        .filter_map(|(i, s)| match s.semantic() {
             Stmt::Assign {
                 dst: VReg::Phys(name),
                 src: Expr::Const(0),
@@ -415,7 +433,7 @@ fn drop_unread_abi_zeros(body: &mut Vec<Stmt>) {
     for &i in &candidates {
         let name = if let Stmt::Assign {
             dst: VReg::Phys(n), ..
-        } = &body[i]
+        } = body[i].semantic()
         {
             n.clone()
         } else {
@@ -463,7 +481,16 @@ fn drop_unread_abi_zeros(body: &mut Vec<Stmt>) {
 /// call itself — it walks forward and stops at the first nested `If`, and these
 /// stores sit above all of a function's control flow.
 pub fn prune_callee_saved_spills(f: &mut Function, cc: CallConv) {
-    prune_callee_saved_spills_with_scope(f, cc, false);
+    prune_callee_saved_spills_with_scope(f, cc, false, None);
+}
+
+/// Remove top-level callee saves using exact SSA entry-value authority.
+pub fn prune_callee_saved_spills_with_identities(
+    f: &mut Function,
+    cc: CallConv,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    prune_callee_saved_spills_with_scope(f, cc, false, Some(identities));
 }
 
 /// Remove otherwise-dead callee saves nested by an experimental region tree.
@@ -472,17 +499,34 @@ pub fn prune_callee_saved_spills(f: &mut Function, cc: CallConv) {
 /// must opt in only when the selected region has independent verification;
 /// register-looking nested assignments are not sufficient global provenance.
 pub fn prune_callee_saved_spills_nested(f: &mut Function, cc: CallConv) {
-    prune_callee_saved_spills_with_scope(f, cc, true);
+    prune_callee_saved_spills_with_scope(f, cc, true, None);
 }
 
-fn prune_callee_saved_spills_with_scope(f: &mut Function, cc: CallConv, recursive: bool) {
+/// Remove nested callee saves using exact SSA entry-value authority.
+pub fn prune_callee_saved_spills_nested_with_identities(
+    f: &mut Function,
+    cc: CallConv,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    prune_callee_saved_spills_with_scope(f, cc, true, Some(identities));
+}
+
+fn prune_callee_saved_spills_with_scope(
+    f: &mut Function,
+    cc: CallConv,
+    recursive: bool,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     fn visit_statements(body: &[Stmt], recursive: bool, visit: &mut impl FnMut(&Stmt)) {
         for statement in body {
             visit(statement);
             if !recursive {
                 continue;
             }
-            match statement {
+            match statement.semantic() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::If {
                     then_body,
                     else_body,
@@ -529,13 +573,16 @@ fn prune_callee_saved_spills_with_scope(f: &mut Function, cc: CallConv, recursiv
     // it is still addressed. Both render identically as `stack_2 = rbp;`, so
     // matching only one silently left half the spills in place.
     let spilled_slot = |stmt: &Stmt| -> Option<VReg> {
-        match stmt {
+        match stmt.semantic() {
+            Stmt::Origin { .. } => {
+                unreachable!("semantic statement cannot be an origin wrapper")
+            }
             Stmt::Assign {
                 dst,
                 src: Expr::Reg(source),
             } if is_saved_frame_slot(dst)
-                || is_arm_saved_register_local(dst, source, cc)
-                || is_x86_saved_register_local(dst, source, cc) =>
+                || is_arm_saved_register_local(dst, source, cc, identities)
+                || is_x86_saved_register_local(dst, source, cc, identities) =>
             {
                 Some(dst.clone())
             }
@@ -544,8 +591,8 @@ fn prune_callee_saved_spills_with_scope(f: &mut Function, cc: CallConv, recursiv
                 src: Expr::Reg(source),
                 ..
             } if is_saved_frame_slot(slot)
-                || is_arm_saved_register_local(slot, source, cc)
-                || is_x86_saved_register_local(slot, source, cc) =>
+                || is_arm_saved_register_local(slot, source, cc, identities)
+                || is_x86_saved_register_local(slot, source, cc, identities) =>
             {
                 Some(slot.clone())
             }
@@ -559,7 +606,10 @@ fn prune_callee_saved_spills_with_scope(f: &mut Function, cc: CallConv, recursiv
     // That is the whole callee-save idiom: save at entry, restore at exit,
     // never observe it in between.
     let restore_of = |stmt: &Stmt, slot: &VReg| -> Option<VReg> {
-        match stmt {
+        match stmt.semantic() {
+            Stmt::Origin { .. } => {
+                unreachable!("semantic statement cannot be an origin wrapper")
+            }
             Stmt::Assign {
                 dst,
                 src: Expr::Reg(src),
@@ -637,7 +687,10 @@ fn prune_callee_saved_spills_with_scope(f: &mut Function, cc: CallConv, recursiv
         ) {
             if recursive {
                 for statement in body.iter_mut() {
-                    match statement {
+                    match statement.semantic_mut() {
+                        Stmt::Origin { .. } => {
+                            unreachable!("semantic statement cannot be an origin wrapper")
+                        }
                         Stmt::If {
                             then_body,
                             else_body,
@@ -655,11 +708,11 @@ fn prune_callee_saved_spills_with_scope(f: &mut Function, cc: CallConv, recursiv
                             init, step, body, ..
                         } => {
                             if removable(init.as_ref(), doomed_slots, spilled_slot, restore_of) {
-                                **init = Stmt::Nop;
+                                *init.semantic_mut() = Stmt::Nop;
                             }
                             prune_body(body, true, doomed_slots, spilled_slot, restore_of);
                             if removable(step.as_ref(), doomed_slots, spilled_slot, restore_of) {
-                                **step = Stmt::Nop;
+                                *step.semantic_mut() = Stmt::Nop;
                             }
                         }
                         Stmt::Switch { cases, default, .. } => {
@@ -852,7 +905,8 @@ fn is_saved_frame_slot(v: &VReg) -> bool {
 /// Recursive AST walks must use this view; pairing it with [`stmt_reads`]
 /// would count the same nested restore once for every enclosing control node.
 fn stmt_reads_direct(statement: &Stmt, register: &VReg) -> bool {
-    match statement {
+    match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { src, .. } => expr_reads(src, register),
         Stmt::Store { addr, src, .. } => expr_reads(addr, register) || expr_reads(src, register),
         Stmt::Call { target, args, .. } => {
@@ -891,27 +945,27 @@ fn stmt_reads_direct(statement: &Stmt, register: &VReg) -> bool {
 /// exception to the ARM calling conventions, entry SSA versions, and the
 /// architectural callee-save/return-address registers keeps an arbitrary
 /// `local_4 = r0` source spill outside the machine-frame cleanup.
-fn is_arm_saved_register_local(slot: &VReg, source: &VReg, cc: CallConv) -> bool {
+fn is_arm_saved_register_local(
+    slot: &VReg,
+    source: &VReg,
+    cc: CallConv,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     if !matches!(cc, CallConv::Arm | CallConv::ArmHardFloat) {
         return false;
     }
     let VReg::Phys(slot_name) = slot else {
         return false;
     };
-    let VReg::Phys(source_name) = source else {
-        return false;
-    };
     if !slot_name.starts_with("local_") {
         return false;
     }
-    let (base, version) = source_name
-        .split_once('#')
-        .map_or((source_name.as_str(), None), |(base, version)| {
-            (base, Some(version))
-        });
-    if !matches!(version, None | Some("0")) {
-        return false;
+    if identities.is_some_and(|identities| identities.is_machine_saved_slot(slot)) {
+        return true;
     }
+    let Some(base) = entry_value_base(source, identities) else {
+        return false;
+    };
     if matches!(base, "fp" | "lr" | "r14") {
         return true;
     }
@@ -928,7 +982,12 @@ fn is_arm_saved_register_local(slot: &VReg, source: &VReg, cc: CallConv) -> bool
 /// not a source parameter.  Restrict this exception to the unversioned/SSA-zero
 /// entry value; a later definition held in the same architectural register is
 /// ordinary recovered program state and must remain visible.
-fn is_x86_saved_register_local(slot: &VReg, source: &VReg, cc: CallConv) -> bool {
+fn is_x86_saved_register_local(
+    slot: &VReg,
+    source: &VReg,
+    cc: CallConv,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     if !matches!(
         cc,
         CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Cdecl32
@@ -938,23 +997,72 @@ fn is_x86_saved_register_local(slot: &VReg, source: &VReg, cc: CallConv) -> bool
     let VReg::Phys(slot_name) = slot else {
         return false;
     };
-    let VReg::Phys(source_name) = source else {
-        return false;
-    };
     if !slot_name.starts_with("local_") {
         return false;
     }
-    let (base, version) = source_name
-        .split_once('#')
-        .map_or((source_name.as_str(), None), |(base, version)| {
-            (base, Some(version))
-        });
-    matches!(version, None | Some("0"))
-        && matches!(base, "rbx" | "rbp" | "r12" | "r13" | "r14" | "r15")
+    if identities.is_some_and(|identities| identities.is_machine_saved_slot(slot)) {
+        return true;
+    }
+    entry_value_base(source, identities)
+        .is_some_and(|base| matches!(base, "rbx" | "rbp" | "r12" | "r13" | "r14" | "r15"))
+}
+
+fn entry_value_base<'a>(
+    source: &'a VReg,
+    identities: Option<&'a crate::ir::value_number::ValueIdentities>,
+) -> Option<&'a str> {
+    match identities {
+        Some(identities) => {
+            let identity = identities.exact(source)?;
+            if identity.version != 0 {
+                return None;
+            }
+            let VReg::Phys(base) = &identity.base else {
+                return None;
+            };
+            Some(base)
+        }
+        None => {
+            let VReg::Phys(name) = source else {
+                return None;
+            };
+            let (base, version) = name
+                .split_once('#')
+                .map_or((name.as_str(), None), |(base, version)| {
+                    (base, Some(version))
+                });
+            matches!(version, None | Some("0")).then_some(base)
+        }
+    }
+}
+
+/// Whether an exact SSA value is ABI machine state present at function entry.
+pub(crate) fn is_entry_callee_saved_value(
+    source: &VReg,
+    cc: CallConv,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> bool {
+    let Some(base) = entry_value_base(source, Some(identities)) else {
+        return false;
+    };
+    match cc {
+        CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Cdecl32 => {
+            matches!(base, "rbx" | "rbp" | "r12" | "r13" | "r14" | "r15")
+        }
+        CallConv::Arm | CallConv::ArmHardFloat => {
+            matches!(base, "fp" | "lr" | "r14")
+                || base
+                    .strip_prefix('r')
+                    .and_then(|index| index.parse::<u8>().ok())
+                    .is_some_and(|index| (4..=11).contains(&index))
+        }
+        CallConv::Aarch64 => false,
+    }
 }
 
 pub(crate) fn stmt_reads(s: &Stmt, dst: &VReg) -> bool {
-    match s {
+    match s.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { src, .. } => expr_reads(src, dst),
         Stmt::Store { addr, src, .. } => expr_reads(addr, dst) || expr_reads(src, dst),
         Stmt::Call { target, args, .. } => {
@@ -1026,7 +1134,7 @@ pub(crate) fn stmt_reads(s: &Stmt, dst: &VReg) -> bool {
 }
 
 fn contains_nested_read(s: &Stmt, dst: &VReg) -> bool {
-    match s {
+    match s.semantic() {
         Stmt::If {
             then_body,
             else_body,
@@ -1056,7 +1164,7 @@ fn contains_nested_read(s: &Stmt, dst: &VReg) -> bool {
 /// at least one path, even when the nested body does not itself read it.
 fn contains_nested_exit(statement: &Stmt) -> bool {
     fn body_exits(body: &[Stmt]) -> bool {
-        body.iter().any(|statement| match statement {
+        body.iter().any(|statement| match statement.semantic() {
             Stmt::Return { .. }
             | Stmt::Goto { .. }
             | Stmt::IndirectGoto { .. }
@@ -1083,7 +1191,7 @@ fn contains_nested_exit(statement: &Stmt) -> bool {
         })
     }
 
-    match statement {
+    match statement.semantic() {
         Stmt::If {
             then_body,
             else_body,
@@ -1107,6 +1215,7 @@ fn contains_nested_exit(statement: &Stmt) -> bool {
 
 fn expr_reads(e: &Expr, dst: &VReg) -> bool {
     match e {
+        Expr::Origin { expr, .. } => expr_reads(expr, dst),
         Expr::Reg(r) => r == dst,
         Expr::StackAddr { object, .. } => object == dst,
         Expr::Const(_)
@@ -1141,7 +1250,9 @@ fn expr_reads(e: &Expr, dst: &VReg) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::ast::{Expr, Function, Stmt};
+    use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
+    use crate::ir::ssa::SsaValue;
+    use std::collections::HashMap;
 
     fn reg(n: &str) -> VReg {
         VReg::phys(n)
@@ -1168,6 +1279,63 @@ mod tests {
         if let Stmt::Assign { src, .. } = &f.body[0] {
             assert_eq!(*src, Expr::Const(2));
         }
+    }
+
+    fn local_ret_around_call() -> Function {
+        Function {
+            name: "local_ret_around_call".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("ret"),
+                    src: Expr::Const(1),
+                },
+                Stmt::Call {
+                    dst: None,
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "foo".into(),
+                    },
+                    args: vec![],
+                    call_spec: None,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("ret"))),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn call_does_not_kill_an_unowned_ret_spelling() {
+        let mut function = local_ret_around_call();
+
+        eliminate_dead_stores_with_identities(
+            &mut function,
+            CallConv::SysVAmd64,
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
+
+        assert!(matches!(function.body.first(), Some(Stmt::Assign { .. })));
+    }
+
+    #[test]
+    fn call_kills_a_pipeline_owned_ret_role() {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            reg("rax"),
+            SsaValue {
+                base: reg("rax"),
+                version: 1,
+            },
+        );
+        identities =
+            identities.with_role_aliases(&HashMap::from([("rax".to_string(), "ret".to_string())]));
+        let mut function = local_ret_around_call();
+
+        eliminate_dead_stores_with_identities(&mut function, CallConv::SysVAmd64, &identities);
+
+        assert!(matches!(function.body.first(), Some(Stmt::Call { .. })));
     }
 
     #[test]
@@ -1285,6 +1453,33 @@ mod tests {
 
         assert!(matches!(f.body.first(), Some(Stmt::Call { dst: None, .. })));
         assert!(matches!(f.body.last(), Some(Stmt::Return { .. })));
+    }
+
+    #[test]
+    fn attributed_unused_call_result_becomes_effect_only_without_losing_owner() {
+        let owner = OriginSet::one(0x1010);
+        let mut function = Function {
+            name: "owned_call".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "puts".into(),
+                },
+                args: Vec::new(),
+                dst: Some(reg("var0")),
+                call_spec: None,
+            }
+            .with_origins(owner.clone())],
+        };
+
+        drop_globally_unused_call_results(&mut function);
+
+        assert!(matches!(
+            function.body[0].semantic(),
+            Stmt::Call { dst: None, .. }
+        ));
+        assert_eq!(function.body[0].origins(), Some(&owner));
     }
 
     #[test]
@@ -1482,6 +1677,38 @@ mod tests {
     }
 
     #[test]
+    fn attributed_nested_exit_keeps_the_value_reaching_that_exit() {
+        let mut function = Function {
+            name: "owned_break".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("result"),
+                    src: Expr::Const(1),
+                },
+                Stmt::If {
+                    cond: Expr::Reg(reg("stop")),
+                    then_body: vec![Stmt::Break.with_origins(OriginSet::one(0x1014))],
+                    else_body: None,
+                }
+                .with_origins(OriginSet::one(0x1010)),
+                Stmt::Assign {
+                    dst: reg("result"),
+                    src: Expr::Const(2),
+                },
+            ],
+        };
+
+        eliminate_dead_stores(&mut function, CallConv::SysVAmd64);
+
+        assert_eq!(
+            function.body.len(),
+            3,
+            "the break path needs the first value"
+        );
+    }
+
+    #[test]
     fn loop_value_before_conditional_break_is_not_dead() {
         // The first assignment reaches the return when the loop breaks before
         // the later overwrite. Treating a nested `break` as transparent made
@@ -1550,6 +1777,27 @@ mod tests {
         eliminate_dead_stores(&mut f, CallConv::SysVAmd64);
         assert_eq!(f.body.len(), 1);
         assert!(matches!(&f.body[0], Stmt::Call { .. }));
+    }
+
+    #[test]
+    fn attributed_self_assign_is_removed() {
+        let mut function = Function {
+            name: "owned_self_assign".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: Expr::Reg(reg("rax")),
+                }
+                .with_origins(OriginSet::one(0x1010)),
+                Stmt::Return { value: None },
+            ],
+        };
+
+        eliminate_dead_stores(&mut function, CallConv::SysVAmd64);
+
+        assert_eq!(function.body.len(), 1);
+        assert!(matches!(function.body[0].semantic(), Stmt::Return { .. }));
     }
 
     #[test]
@@ -1806,6 +2054,92 @@ mod tests {
                     dst: reg("r15#5"),
                     src: Expr::Reg(reg("local_8")),
                 },
+                Stmt::Return {
+                    value: Some(Expr::Const(7)),
+                },
+            ],
+        };
+
+        prune_callee_saved_spills(&mut f, CallConv::SysVAmd64);
+
+        assert_eq!(
+            f.body,
+            vec![Stmt::Return {
+                value: Some(Expr::Const(7))
+            }]
+        );
+    }
+
+    #[test]
+    fn typed_callee_save_cleanup_requires_an_entry_identity() {
+        let candidate = || Function {
+            name: "typed_frame".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("local_8"),
+                    src: Expr::Reg(reg("opaque")),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+        let mut unowned = candidate();
+        prune_callee_saved_spills_with_identities(
+            &mut unowned,
+            CallConv::SysVAmd64,
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
+        assert_eq!(unowned.body.len(), 2, "unowned spelling was deleted");
+
+        let mut entry_identities = crate::ir::value_number::ValueIdentities::default();
+        entry_identities.record(
+            reg("opaque"),
+            crate::ir::ssa::SsaValue {
+                base: reg("r15"),
+                version: 0,
+            },
+        );
+        let mut entry = candidate();
+        prune_callee_saved_spills_with_identities(
+            &mut entry,
+            CallConv::SysVAmd64,
+            &entry_identities,
+        );
+        assert_eq!(entry.body, vec![Stmt::Return { value: None }]);
+
+        let mut later_identities = crate::ir::value_number::ValueIdentities::default();
+        later_identities.record(
+            reg("opaque"),
+            crate::ir::ssa::SsaValue {
+                base: reg("r15"),
+                version: 3,
+            },
+        );
+        let mut later = candidate();
+        prune_callee_saved_spills_with_identities(
+            &mut later,
+            CallConv::SysVAmd64,
+            &later_identities,
+        );
+        assert_eq!(later.body.len(), 2, "later SSA value was deleted");
+    }
+
+    #[test]
+    fn origin_wrapped_x86_callee_save_and_restore_are_removed() {
+        let mut f = Function {
+            name: "wrapped_stack_clash_frame".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("local_8"),
+                    src: Expr::Reg(reg("r12")),
+                }
+                .with_origins(OriginSet::one(0x1000)),
+                Stmt::Assign {
+                    dst: reg("r12#9"),
+                    src: Expr::Reg(reg("local_8")),
+                }
+                .with_origins(OriginSet::one(0x1010)),
                 Stmt::Return {
                     value: Some(Expr::Const(7)),
                 },

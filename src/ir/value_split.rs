@@ -41,7 +41,8 @@ pub(crate) fn definition_exceeds_live_in_width(
     live_in_width: u8,
 ) -> bool {
     fn body_has_wider_definition(body: &[Stmt], register: &VReg, live_in_width: u8) -> bool {
-        body.iter().any(|statement| match statement {
+        body.iter().any(|statement| match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
                 dst == register && can_carry_bits_above(src, live_in_width)
             }
@@ -214,6 +215,7 @@ impl Splitter {
 
     fn rename_expr(&self, e: &mut Expr, state: &SplitState) {
         match e {
+            Expr::Origin { expr, .. } => self.rename_expr(expr, state),
             Expr::Reg(v) => self.rename_reg(v, state),
             Expr::StackAddr { object, .. } => self.rename_reg(object, state),
             Expr::Const(_)
@@ -346,6 +348,7 @@ impl Splitter {
 
     fn walk_stmt(&self, s: &mut Stmt, state: &mut SplitState) {
         match s {
+            Stmt::Origin { stmt, .. } => self.walk_stmt(stmt, state),
             Stmt::If {
                 cond,
                 then_body,
@@ -429,6 +432,7 @@ impl Splitter {
                 let scratch_definition = self.scratch_definition_slot(s, state);
 
                 match s {
+                    Stmt::Origin { .. } => unreachable!("origin wrapper handled above"),
                     Stmt::Assign { dst, src } => {
                         self.rename_expr(src, state);
                         if scratch_definition.is_some() {
@@ -935,6 +939,26 @@ mod tests {
             !definition_exceeds_live_in_width(&ordinary, &reg("x0"), 4),
             "an untyped same-width parameter update is not proof of a new role"
         );
+    }
+
+    #[test]
+    fn attributed_wider_definition_remains_role_split_evidence() {
+        let function = Function {
+            name: "mul_widen".into(),
+            entry_va: 0,
+            body: vec![Stmt::Assign {
+                dst: reg("x0"),
+                src: Expr::Select {
+                    cond: Box::new(Expr::Const(1)),
+                    if_true: Box::new(Expr::Reg(reg("x0#1"))),
+                    if_false: Box::new(Expr::Reg(reg("x1#1"))),
+                    width: 8,
+                },
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(0x1000))],
+        };
+
+        assert!(definition_exceeds_live_in_width(&function, &reg("x0"), 4));
     }
 
     /// A definition on one structured path must not rename a live-in read on

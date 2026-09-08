@@ -102,6 +102,13 @@ fn collect_named_call_observations(
             _ => {}
         }
         match statement {
+            Stmt::Origin { stmt, .. } => collect_named_call_observations(
+                std::slice::from_ref(stmt.as_ref()),
+                current_name,
+                observations,
+                authoritative,
+                conflicts,
+            ),
             Stmt::Call {
                 target,
                 args,
@@ -326,6 +333,7 @@ fn collect_named_call_expr(
         };
     }
     match expression {
+        Expr::Origin { expr, .. } => visit!(expr),
         Expr::Call {
             target,
             args,

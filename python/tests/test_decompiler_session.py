@@ -102,6 +102,51 @@ def test_diagnostics_bypass_rendered_artifact_cache(
     }
 
 
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_session_reuses_program_facts_across_explicit_discovery_budgets(
+    tmp_path: Path,
+) -> None:
+    """Budget-specific discovery must not duplicate compatible program facts."""
+    binary, address = _build_fixture(tmp_path)
+    session = g.ir.DecompilerSession(str(binary))
+
+    assert session.program_fact_cache_stats == {
+        "call_graph_entries": 0,
+        "environment_entries": 0,
+        "type_artifacts_initialized": 0,
+        "symbol_artifacts_initialized": 0,
+    }
+
+    one_function = session.decompile_at(
+        address, style="decbench", max_functions=1
+    )
+    two_functions = session.decompile_at(
+        address, style="decbench", max_functions=2
+    )
+
+    assert one_function == two_functions
+    assert session.discovery_cache_stats == {
+        "entries": 2,
+        "evictions": 0,
+        "hits": 0,
+        "misses": 2,
+    }
+    assert session.program_fact_cache_stats == {
+        "call_graph_entries": 2,
+        "environment_entries": 1,
+        "type_artifacts_initialized": 1,
+        "symbol_artifacts_initialized": 1,
+    }
+
+    session.clear_caches()
+    assert session.program_fact_cache_stats == {
+        "call_graph_entries": 0,
+        "environment_entries": 0,
+        "type_artifacts_initialized": 1,
+        "symbol_artifacts_initialized": 1,
+    }
+
+
 def test_session_rejects_an_unparseable_image(tmp_path: Path) -> None:
     """Construction fails before retaining a session for invalid input."""
     invalid = tmp_path / "not-an-object"

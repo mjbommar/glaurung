@@ -22,7 +22,7 @@
 //! to [`Expr::StackAddr`] so the C renderer passes `&local_N`, never arithmetic
 //! on an uninitialised `rbp`/`rsp` local.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::call_args::CallConv;
@@ -48,7 +48,7 @@ use address_recovery::{
 };
 use coordinate_flow::{collect_label_stack_deltas, collect_stack_address_defs};
 use indexed_objects::{collect_read_stack_slots, seed_indexed_stack_objects};
-use rewrite::{reconcile_late_address_taken_objects, rewrite_body};
+use rewrite::{reconcile_late_address_taken_objects, rewrite_body, RewriteEvidence};
 
 const STACK_BASES: &[&str] = &["rsp", "esp", "sp", "rbp", "ebp", "bp", "x29", "w29", "fp"];
 const FRAME_POINTER_BASES: &[&str] = &["rbp", "ebp", "bp", "x29", "w29", "fp"];
@@ -80,6 +80,10 @@ struct SlotKey {
 #[derive(Debug, Clone)]
 struct SlotVal {
     name: String,
+    /// Source-parameter slot proved from this storage coordinate and ABI.
+    /// Kept independently of `name` so later rewrites never recover semantic
+    /// ownership by parsing presentation spelling such as `arg0`.
+    parameter_slot: Option<usize>,
     declared_size: u8,
     span_size: u8,
     /// A read proves that this slot is independently live, so it bounds an
@@ -155,6 +159,10 @@ pub struct StackLocalFacts {
     pub sizes: HashMap<String, u8>,
     pub source_types: HashMap<String, String>,
     pub source_names: HashMap<String, String>,
+    /// Source-parameter slot proven for each promoted stack identity.
+    pub parameter_slots: HashMap<String, usize>,
+    /// Promoted storage proven to hold an ABI callee-saved entry value.
+    pub machine_saved_slots: HashSet<String>,
     /// Frame coordinate `(base, disp)` each promoted name was minted from.
     ///
     /// This is the join MIR evidence needs. MIR memory objects are keyed by
@@ -172,6 +180,59 @@ pub struct StackLocalFacts {
     /// both render as `stack_top`), and binding object evidence through an
     /// ambiguous name would attach a proven fact to the wrong variable.
     pub frame_coordinates: HashMap<String, (String, i64)>,
+}
+
+/// Remove no-op stores created when late copy propagation rejoins a promoted
+/// stack load with the same promoted object.
+///
+/// A bare-register AST store can also mean `*pointer = value`, so spelling is
+/// not enough authority to delete it. Only names published by stack promotion
+/// are eligible here.
+pub(crate) fn prune_promoted_self_stores(
+    function: &mut Function,
+    promoted_slots: &HashMap<String, u8>,
+) {
+    fn prune(body: &mut Vec<Stmt>, promoted_slots: &HashMap<String, u8>) {
+        body.retain_mut(|statement| {
+            match statement.semantic_mut() {
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    prune(then_body, promoted_slots);
+                    if let Some(else_body) = else_body {
+                        prune(else_body, promoted_slots);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                    prune(body, promoted_slots);
+                }
+                Stmt::For { body, .. } => prune(body, promoted_slots),
+                Stmt::Switch { cases, default, .. } => {
+                    for (_, case_body) in cases {
+                        prune(case_body, promoted_slots);
+                    }
+                    if let Some(default) = default {
+                        prune(default, promoted_slots);
+                    }
+                }
+                _ => {}
+            }
+            let promoted_self_store = match statement.semantic() {
+                Stmt::Store { addr, src, .. } => match (addr.semantic(), src.semantic()) {
+                    (Expr::Reg(VReg::Phys(destination)), Expr::Reg(VReg::Phys(source))) => {
+                        destination == source && promoted_slots.contains_key(destination)
+                    }
+                    _ => false,
+                },
+                _ => false,
+            };
+            !promoted_self_store
+        });
+    }
+
+    prune(&mut function.body, promoted_slots);
 }
 
 /// Overlay analyst-chosen stack-variable names and types onto the recovered
@@ -311,23 +372,41 @@ fn is_arm_frame_pointer(name: &str, ctx: StackContext) -> bool {
 /// than a dereference of whatever pointer the caller left in `r7`, and it is
 /// the piece ARM32's Thumb mode was missing: `entry_sp` reached A32's `fp`
 /// through [`STACK_BASES`] and never reached Thumb's `r7` at all.
-fn arm_frame_register(body: &[Stmt], cc: Option<CallConv>) -> Option<&'static str> {
+fn register_has_storage(
+    register: &VReg,
+    expected: &str,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    crate::ir::call_args::register_is_storage(register, expected, identities)
+}
+
+fn arm_frame_register(
+    body: &[Stmt],
+    cc: Option<CallConv>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<&'static str> {
     if !matches!(cc, Some(CallConv::Arm | CallConv::ArmHardFloat)) {
         return None;
     }
-    fn derived_from_the_stack_pointer(src: &Expr) -> bool {
+    fn derived_from_the_stack_pointer(
+        src: &Expr,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) -> bool {
         match src {
-            Expr::Reg(VReg::Phys(name)) => crate::ir::abi::ssa_base(name) == "sp",
+            Expr::Reg(register) => register_has_storage(register, "sp", identities),
             Expr::Lea {
-                base: Some(VReg::Phys(name)),
+                base: Some(register),
                 index: None,
                 ..
-            } => crate::ir::abi::ssa_base(name) == "sp",
+            } => register_has_storage(register, "sp", identities),
             Expr::Bin {
                 op: crate::ir::types::BinOp::Add | crate::ir::types::BinOp::Sub,
                 lhs,
                 rhs,
-            } => matches!(rhs.as_ref(), Expr::Const(_)) && derived_from_the_stack_pointer(lhs),
+            } => {
+                matches!(rhs.as_ref(), Expr::Const(_))
+                    && derived_from_the_stack_pointer(lhs, identities)
+            }
             _ => false,
         }
     }
@@ -335,33 +414,30 @@ fn arm_frame_register(body: &[Stmt], cc: Option<CallConv>) -> Option<&'static st
     // assumes for x86. A frame register first assigned inside a branch is not a
     // frame establishment this pass will trust.
     body.iter().find_map(|statement| {
-        let Stmt::Assign {
-            dst: VReg::Phys(dst),
-            src,
-        } = statement
-        else {
+        let Stmt::Assign { dst, src } = statement.semantic() else {
             return None;
         };
-        let candidate = match crate::ir::abi::ssa_base(dst) {
-            "fp" => "fp",
-            "r7" => "r7",
-            "r11" => "r11",
-            _ => return None,
-        };
-        derived_from_the_stack_pointer(src).then_some(candidate)
+        let candidate = ["fp", "r7", "r11"]
+            .into_iter()
+            .find(|candidate| register_has_storage(dst, candidate, identities))?;
+        derived_from_the_stack_pointer(src, identities).then_some(candidate)
     })
 }
 
 /// Whether the function's first assignment to x86's nominal frame register
 /// makes it an ordinary callee-saved value instead of establishing a frame.
-fn rbp_is_repurposed(body: &[Stmt], cc: Option<CallConv>) -> bool {
+fn rbp_is_repurposed(
+    body: &[Stmt],
+    cc: Option<CallConv>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     if !matches!(
         cc,
         Some(CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Cdecl32)
     ) {
         return false;
     }
-    frame_pointer_assignment(body).is_some_and(|establishes| !establishes)
+    frame_pointer_assignment(body, identities).is_some_and(|establishes| !establishes)
 }
 
 /// Whether the body establishes an x86 frame pointer.
@@ -369,33 +445,37 @@ fn rbp_is_repurposed(body: &[Stmt], cc: Option<CallConv>) -> bool {
 /// This is NOT `!rbp_is_repurposed`: a function that never writes `rbp` at all
 /// (the ordinary frame-pointer-omitted `-O2` shape) repurposes nothing and
 /// establishes nothing.
-fn frame_pointer_is_established(body: &[Stmt], cc: Option<CallConv>) -> bool {
+fn frame_pointer_is_established(
+    body: &[Stmt],
+    cc: Option<CallConv>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     matches!(
         cc,
         Some(CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Cdecl32)
-    ) && frame_pointer_assignment(body) == Some(true)
+    ) && frame_pointer_assignment(body, identities) == Some(true)
 }
 
 /// `Some(true)` when the first assignment to x86's nominal frame register comes
 /// from the stack pointer, `Some(false)` when it comes from anything else, and
 /// `None` when the register is never assigned.
-fn frame_pointer_assignment(body: &[Stmt]) -> Option<bool> {
+fn frame_pointer_assignment(
+    body: &[Stmt],
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<bool> {
     for statement in body {
-        let Stmt::Assign {
-            dst: VReg::Phys(dst),
-            src,
-        } = statement
-        else {
+        let Stmt::Assign { dst, src } = statement.semantic() else {
             continue;
         };
-        if !matches!(crate::ir::abi::ssa_base(dst), "rbp" | "ebp" | "bp") {
+        if !["rbp", "ebp", "bp"]
+            .into_iter()
+            .any(|base| register_has_storage(dst, base, identities))
+        {
             continue;
         }
-        return Some(matches!(
-            src,
-            Expr::Reg(VReg::Phys(stack))
-                if matches!(crate::ir::abi::ssa_base(stack), "rsp" | "esp" | "sp")
-        ));
+        return Some(matches!(src, Expr::Reg(stack) if ["rsp", "esp", "sp"]
+            .into_iter()
+            .any(|base| register_has_storage(stack, base, identities))));
     }
     None
 }
@@ -480,16 +560,43 @@ pub fn promote_stack_locals_with_facts(
     parameter_count: Option<usize>,
     object_hints: &[StackObjectHint],
 ) -> StackLocalFacts {
+    promote_stack_locals_with_optional_identities(f, cc, parameter_count, object_hints, None)
+}
+
+/// Promote stack storage while retaining exact SSA ownership of machine saves.
+pub(crate) fn promote_stack_locals_with_facts_and_identities(
+    f: &mut Function,
+    cc: Option<CallConv>,
+    parameter_count: Option<usize>,
+    object_hints: &[StackObjectHint],
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> StackLocalFacts {
+    promote_stack_locals_with_optional_identities(
+        f,
+        cc,
+        parameter_count,
+        object_hints,
+        Some(identities),
+    )
+}
+
+fn promote_stack_locals_with_optional_identities(
+    f: &mut Function,
+    cc: Option<CallConv>,
+    parameter_count: Option<usize>,
+    object_hints: &[StackObjectHint],
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> StackLocalFacts {
     let mut map: HashMap<SlotKey, SlotVal> = HashMap::new();
     let mut names = SlotNames::default();
     let ctx = StackContext {
         cc,
-        rbp_repurposed: rbp_is_repurposed(&f.body, cc),
-        frame_pointer_established: frame_pointer_is_established(&f.body, cc),
-        arm_frame_register: arm_frame_register(&f.body, cc),
+        rbp_repurposed: rbp_is_repurposed(&f.body, cc, identities),
+        frame_pointer_established: frame_pointer_is_established(&f.body, cc, identities),
+        arm_frame_register: arm_frame_register(&f.body, cc, identities),
         parameter_count,
     };
-    address_aliases::expand(&mut f.body, ctx);
+    address_aliases::expand_with_identities(&mut f.body, ctx, identities);
     for hint in object_hints {
         let Some((hint_base, hint_disp)) = rebased_hint_coordinate(hint, ctx) else {
             continue;
@@ -531,6 +638,7 @@ pub fn promote_stack_locals_with_facts(
             })
             .or_insert(SlotVal {
                 name,
+                parameter_slot: parameter_slot_for_coordinate(&hint_base, hint_disp, ctx),
                 declared_size: scalar_size.unwrap_or(1),
                 span_size: scalar_size.unwrap_or(1),
                 observed_read: false,
@@ -576,6 +684,11 @@ pub fn promote_stack_locals_with_facts(
     );
     let read_slots = collect_read_stack_slots(&f.body, ctx, &address_defs, &label_deltas);
     let mut sp_delta = Some(0i64);
+    let mut machine_saved_slots = HashSet::new();
+    let mut evidence = RewriteEvidence {
+        identities,
+        machine_saved_slots: &mut machine_saved_slots,
+    };
     rewrite_body(
         &mut f.body,
         &mut map,
@@ -585,6 +698,7 @@ pub fn promote_stack_locals_with_facts(
         &address_defs,
         &label_deltas,
         &read_slots,
+        &mut evidence,
     );
     reconcile_late_address_taken_objects(&mut f.body, &map);
     // Several machine SlotKeys can intentionally collapse to one source-level
@@ -593,9 +707,12 @@ pub fn promote_stack_locals_with_facts(
     // iteration order choose the declaration width, so identical inputs could
     // alternate between `char` and `long` across processes.
     let mut facts = StackLocalFacts::default();
+    facts.machine_saved_slots = machine_saved_slots;
     // Names withheld from `frame_coordinates` because two machine slot keys
     // reached them; see the field's documentation.
     let mut ambiguous_coordinates: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    let mut ambiguous_parameter_slots: std::collections::HashSet<String> =
         std::collections::HashSet::new();
     for (key, slot) in map {
         let name = slot.name;
@@ -612,6 +729,22 @@ pub fn promote_stack_locals_with_facts(
                 ambiguous_coordinates.insert(name.clone());
             }
             std::collections::hash_map::Entry::Occupied(_) => {}
+        }
+        if let Some(parameter_slot) = slot.parameter_slot {
+            match facts.parameter_slots.entry(name.clone()) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    if !ambiguous_parameter_slots.contains(&name) {
+                        entry.insert(parameter_slot);
+                    }
+                }
+                std::collections::hash_map::Entry::Occupied(entry)
+                    if entry.get() != &parameter_slot =>
+                {
+                    entry.remove();
+                    ambiguous_parameter_slots.insert(name.clone());
+                }
+                std::collections::hash_map::Entry::Occupied(_) => {}
+            }
         }
         facts
             .sizes
@@ -720,7 +853,7 @@ fn body_falls_through(body: &[Stmt]) -> bool {
     let Some(last) = body.last() else {
         return true;
     };
-    match last {
+    match last.semantic() {
         Stmt::Return { .. } | Stmt::Goto { .. } | Stmt::IndirectGoto { .. } => false,
         Stmt::If {
             then_body,
@@ -729,6 +862,50 @@ fn body_falls_through(body: &[Stmt]) -> bool {
         } => body_falls_through(then_body) || else_body.as_deref().is_none_or(body_falls_through),
         _ => true,
     }
+}
+
+fn parameter_slot_for_coordinate(base: &str, disp: i64, ctx: StackContext) -> Option<usize> {
+    if base == "entry_sp" {
+        let (register_arguments, stride) = match ctx.cc {
+            Some(CallConv::Arm | CallConv::ArmHardFloat) => (4usize, 4i64),
+            Some(CallConv::Aarch64) => (8usize, 8i64),
+            _ => return None,
+        };
+        if disp >= 0 && disp % stride == 0 {
+            let candidate = register_arguments + usize::try_from(disp / stride).ok()?;
+            return ctx
+                .parameter_count
+                .is_some_and(|count| candidate < count)
+                .then_some(candidate);
+        }
+        return None;
+    }
+    if is_frame_pointer(base) && disp > 0 {
+        let (register_arguments, first, stride) = ctx.cc.and_then(stack_arg_layout)?;
+        if disp >= first && (disp - first) % stride == 0 {
+            let candidate = register_arguments + usize::try_from((disp - first) / stride).ok()?;
+            return ctx
+                .parameter_count
+                .is_none_or(|count| candidate < count)
+                .then_some(candidate);
+        }
+        return None;
+    }
+    if base == "entry_rsp" {
+        let (register_arguments, first, stride) = match ctx.cc {
+            Some(CallConv::SysVAmd64) => (6usize, 8i64, 8i64),
+            Some(CallConv::Cdecl32) => (0usize, 4i64, 4i64),
+            _ => return None,
+        };
+        if disp >= first && (disp - first) % stride == 0 {
+            let candidate = register_arguments + usize::try_from((disp - first) / stride).ok()?;
+            return ctx
+                .parameter_count
+                .is_none_or(|count| candidate < count)
+                .then_some(candidate);
+        }
+    }
+    None
 }
 
 fn alloc_name(base: &str, disp: i64, names: &mut SlotNames, ctx: StackContext) -> String {
@@ -753,20 +930,8 @@ fn alloc_name(base: &str, disp: i64, names: &mut SlotNames, ctx: StackContext) -
     // `entry_sp+0` has no such anchor, and without the bound an
     // outgoing-argument slot would be renamed into a parameter that does not
     // exist.
-    if base == "entry_sp" {
-        let stacked = match ctx.cc {
-            Some(CallConv::Arm | CallConv::ArmHardFloat) => Some((4usize, 4i64)),
-            Some(CallConv::Aarch64) => Some((8usize, 8i64)),
-            _ => None,
-        };
-        if let Some((register_arguments, stride)) = stacked {
-            if disp >= 0 && disp % stride == 0 {
-                let candidate = register_arguments + (disp / stride) as usize;
-                if ctx.parameter_count.is_some_and(|count| candidate < count) {
-                    return format!("arg{candidate}");
-                }
-            }
-        }
+    if let Some(parameter_slot) = parameter_slot_for_coordinate(base, disp, ctx) {
+        return format!("arg{parameter_slot}");
     }
     if disp == 0 {
         return "stack_top".to_string();
@@ -810,39 +975,12 @@ fn alloc_name(base: &str, disp: i64, names: &mut SlotNames, ctx: StackContext) -
     // verifier reports for `sum_arg7`..`sum_arg10` (`stack_0 is read but never
     // defined`) — and leaves it out of the signature, so the recompiled function
     // reads uninitialised memory instead of its own argument.
-    if is_frame_pointer(base) && disp > 0 {
-        if let Some((reg_args, first, stride)) = ctx.cc.and_then(stack_arg_layout) {
-            if disp >= first && (disp - first) % stride == 0 {
-                let candidate = reg_args + ((disp - first) / stride) as usize;
-                if ctx.parameter_count.is_none_or(|count| candidate < count) {
-                    return format!("arg{candidate}");
-                }
-            }
-        }
-    }
     // A frame-pointer-omitted x86 function addresses incoming stack arguments
     // relative to the architectural entry stack pointer.  The return address
     // occupies the first machine word: SysV AMD64's stacked arguments therefore
     // start at entry_rsp+8 after six register arguments, while cdecl32 starts at
     // entry_esp+4 and has no integer register arguments.  `esp` is normalised to
     // the canonical `entry_rsp` spelling above so both modes share slot identity.
-    if base == "entry_rsp" {
-        match ctx.cc {
-            Some(CallConv::SysVAmd64) if disp >= 8 && (disp - 8) % 8 == 0 => {
-                let candidate = 6 + ((disp - 8) / 8) as usize;
-                if ctx.parameter_count.is_none_or(|count| candidate < count) {
-                    return format!("arg{candidate}");
-                }
-            }
-            Some(CallConv::Cdecl32) if disp >= 4 && (disp - 4) % 4 == 0 => {
-                let candidate = ((disp - 4) / 4) as usize;
-                if ctx.parameter_count.is_none_or(|count| candidate < count) {
-                    return format!("arg{candidate}");
-                }
-            }
-            _ => {}
-        }
-    }
     // Positive offsets from the entry stack pointer are the caller's
     // outgoing-argument / scratch area, and anything whose offset-bearing name
     // was already claimed by another anchor lands here too.
@@ -881,7 +1019,7 @@ mod overlap_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::ast::{Function, Stmt};
+    use crate::ir::ast::{Function, OriginSet, Stmt};
 
     /// EPIC 3 prerequisite: the promoted-local name must be joinable back to the
     /// frame coordinate it was minted from.
@@ -990,6 +1128,26 @@ mod tests {
     fn reg(n: &str) -> VReg {
         VReg::phys(n)
     }
+
+    #[test]
+    fn promoted_self_store_is_removed_but_pointer_self_store_is_preserved() {
+        let self_store = |name: &str| Stmt::Store {
+            addr: Expr::Reg(reg(name)),
+            src: Expr::Reg(reg(name)),
+            size: 8,
+        };
+        let mut function = Function {
+            name: "self_store".into(),
+            entry_va: 0,
+            body: vec![self_store("local_1028"), self_store("pointer")],
+        };
+        let promoted = HashMap::from([("local_1028".to_string(), 8)]);
+
+        prune_promoted_self_stores(&mut function, &promoted);
+
+        assert_eq!(function.body, vec![self_store("pointer")]);
+    }
+
     fn lea(base: &str, disp: i64) -> Expr {
         Expr::Lea {
             base: Some(reg(base)),
@@ -1393,7 +1551,7 @@ mod tests {
             }],
         };
 
-        promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+        let facts = promote_stack_locals_with_facts(&mut f, Some(CallConv::SysVAmd64), None, &[]);
 
         assert!(
             matches!(
@@ -1403,6 +1561,7 @@ mod tests {
             "expected an assignment to arg6, got {:?}",
             f.body[0]
         );
+        assert_eq!(facts.parameter_slots.get("arg6"), Some(&6));
     }
 
     #[test]
@@ -2361,6 +2520,69 @@ mod tests {
     }
 
     #[test]
+    fn origin_wrapped_stack_alias_still_promotes_an_indexed_object() {
+        let holder = reg("r8#1");
+        let mut f = Function {
+            name: "graph_bfs_shape".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(104)),
+                    },
+                }
+                .with_origins(OriginSet::one(0x1000)),
+                Stmt::Assign {
+                    dst: holder.clone(),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Add,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(64)),
+                    },
+                }
+                .with_origins(OriginSet::one(0x1004)),
+                Stmt::Assign {
+                    dst: reg("eax"),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Lea {
+                            base: Some(reg("rax#9")),
+                            index: Some(holder),
+                            scale: 1,
+                            disp: 0,
+                            segment: None,
+                        }),
+                        size: 1,
+                    },
+                }
+                .with_origins(OriginSet::one(0x1008)),
+            ],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        assert!(matches!(
+            f.body[1].semantic(),
+            Stmt::Assign {
+                src: Expr::StackAddr { size: 40, .. },
+                ..
+            }
+        ));
+        assert!(matches!(
+            f.body[2].semantic(),
+            Stmt::Assign {
+                src: Expr::Deref { addr, size: 1 },
+                ..
+            } if matches!(addr.as_ref(), Expr::Bin { lhs, .. }
+                if matches!(lhs.as_ref(), Expr::StackAddr { size: 40, .. }))
+        ));
+        assert_eq!(f.body[1].origins(), Some(&OriginSet::one(0x1004)));
+        assert_eq!(f.body[2].origins(), Some(&OriginSet::one(0x1008)));
+    }
+
+    #[test]
     fn copied_stack_base_unifies_a_contiguous_initialized_array() {
         let mut body = vec![Stmt::Assign {
             dst: reg("rsp"),
@@ -2945,6 +3167,50 @@ mod tests {
         assert!(
             sizes.is_empty(),
             "repurposed rbp invented locals: {sizes:?}"
+        );
+    }
+
+    #[test]
+    fn frame_anchor_detection_uses_exact_identity_not_display_spelling() {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for (numbered, base) in [
+            ("opaque_frame", "rbp"),
+            ("opaque_stack", "rsp"),
+            ("rbp#looks_like_frame", "rax"),
+            ("rsp#looks_like_stack", "rsi"),
+            ("opaque_arm_frame", "r7"),
+            ("opaque_arm_stack", "sp"),
+        ] {
+            identities.record(
+                reg(numbered),
+                crate::ir::ssa::SsaValue {
+                    base: reg(base),
+                    version: 3,
+                },
+            );
+        }
+        let x86 = vec![
+            Stmt::Assign {
+                dst: reg("rbp#looks_like_frame"),
+                src: Expr::Reg(reg("rsp#looks_like_stack")),
+            },
+            Stmt::Assign {
+                dst: reg("opaque_frame"),
+                src: Expr::Reg(reg("opaque_stack")),
+            },
+        ];
+        let arm = vec![Stmt::Assign {
+            dst: reg("opaque_arm_frame"),
+            src: Expr::Reg(reg("opaque_arm_stack")),
+        }];
+
+        assert_eq!(
+            frame_pointer_assignment(&x86, Some(&identities)),
+            Some(true)
+        );
+        assert_eq!(
+            arm_frame_register(&arm, Some(CallConv::Arm), Some(&identities)),
+            Some("r7")
         );
     }
 
@@ -4355,6 +4621,7 @@ mod tests {
             key.clone(),
             SlotVal {
                 name: "local_a8".into(),
+                parameter_slot: None,
                 declared_size: 1,
                 span_size: 1,
                 observed_read: false,

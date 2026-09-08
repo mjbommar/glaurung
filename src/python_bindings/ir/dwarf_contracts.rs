@@ -307,12 +307,27 @@ enum RegisterLocalRole {
     Bound(String),
 }
 
+/// Return the exact architectural storage carried by a numbered value.
+///
+/// A display name is presentation, not identity. Coalesced values with more
+/// than one SSA candidate deliberately return `None` through `exact`.
+fn exact_machine_register<'a>(
+    register: &crate::ir::types::VReg,
+    identities: &'a crate::ir::value_number::ValueIdentities,
+) -> Option<&'a str> {
+    let crate::ir::types::VReg::Phys(name) = &identities.exact(register)?.base else {
+        return None;
+    };
+    Some(name)
+}
+
 /// Score every numbered value that uses the local's register inside its live
 /// ranges and keep the single strongest, if there is one.
 fn resolve_register_local_role(
     local: &crate::debug::dwarf::DwarfRegisterLocal,
     numbered: &crate::ir::types::LlirFunction,
     role_names: &std::collections::HashMap<String, String>,
+    identities: &crate::ir::value_number::ValueIdentities,
     arch: crate::core::binary::Arch,
 ) -> RegisterLocalRole {
     let mut counts = std::collections::HashMap::<String, usize>::new();
@@ -334,13 +349,13 @@ fn resolve_register_local_role(
             let (_definition, registers) = crate::ir::use_def::def_uses(&instruction.op);
             let mut seen_roles = std::collections::HashSet::new();
             for register in registers {
-                let crate::ir::types::VReg::Phys(raw_name) = register else {
+                let crate::ir::types::VReg::Phys(raw_name) = &register else {
                     continue;
                 };
-                if crate::ir::abi::ssa_base(&raw_name) != machine_register {
+                if exact_machine_register(&register, identities) != Some(machine_register) {
                     continue;
                 }
-                let Some(role) = role_names.get(&raw_name) else {
+                let Some(role) = role_names.get(raw_name) else {
                     continue;
                 };
                 if seen_roles.insert(role.clone()) {
@@ -447,6 +462,8 @@ pub(super) fn merge_dwarf_register_local_facts(
     contract: Option<&DwarfPrototypeContract>,
     numbered: &crate::ir::types::LlirFunction,
     role_names: &std::collections::HashMap<String, String>,
+    identities: &crate::ir::value_number::ValueIdentities,
+    parameter_slots: &std::collections::HashSet<usize>,
     arch: crate::core::binary::Arch,
     cc: crate::ir::call_args::CallConv,
     type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
@@ -461,11 +478,15 @@ pub(super) fn merge_dwarf_register_local_facts(
             if local.locations.is_empty() {
                 RegisterLocalRole::Unbound
             } else {
-                resolve_register_local_role(local, numbered, role_names, arch)
+                resolve_register_local_role(local, numbered, role_names, identities, arch)
             }
         })
         .collect::<Vec<_>>();
     let preferred = widest_claimant_per_role(&contract.register_locals, &roles, cc, type_env);
+    let parameter_roles = parameter_slots
+        .iter()
+        .map(|slot| format!("arg{slot}"))
+        .collect::<std::collections::HashSet<_>>();
 
     for (index, local) in contract.register_locals.iter().enumerate() {
         let role = match &roles[index] {
@@ -485,7 +506,7 @@ pub(super) fn merge_dwarf_register_local_facts(
             continue;
         }
         if !crate::ir::naming::valid_authoritative_local_name(&local.source_name)
-            || crate::ir::ast::parse_arg_index(&role).is_some()
+            || parameter_roles.contains(&role)
             || facts.source_names.contains_key(&role)
             || facts.source_types.contains_key(&role)
             || facts
@@ -493,7 +514,9 @@ pub(super) fn merge_dwarf_register_local_facts(
                 .values()
                 .any(|name| name == &local.source_name)
             || (local.c_type.contains('*')
-                && register_role_has_out_of_range_use(local, &role, numbered, role_names, arch))
+                && register_role_has_out_of_range_use(
+                    local, &role, numbered, role_names, identities, arch,
+                ))
         {
             continue;
         }
@@ -526,6 +549,7 @@ fn register_role_has_out_of_range_use(
     role: &str,
     numbered: &crate::ir::types::LlirFunction,
     role_names: &std::collections::HashMap<String, String>,
+    identities: &crate::ir::value_number::ValueIdentities,
     arch: crate::core::binary::Arch,
 ) -> bool {
     let predecessor_tolerance = match arch {
@@ -540,13 +564,18 @@ fn register_role_has_out_of_range_use(
         .any(|instruction| {
             let (_definition, uses) = crate::ir::use_def::def_uses(&instruction.op);
             uses.into_iter().any(|register| {
-                let crate::ir::types::VReg::Phys(raw_name) = register else {
+                let crate::ir::types::VReg::Phys(raw_name) = &register else {
                     return false;
                 };
-                if role_names.get(&raw_name).map(String::as_str) != Some(role) {
+                if role_names.get(raw_name).map(String::as_str) != Some(role) {
                     return false;
                 }
-                let machine_register = crate::ir::abi::ssa_base(&raw_name);
+                let Some(machine_register) = exact_machine_register(&register, identities) else {
+                    // A pointer local may be renamed only when every use of
+                    // its role can be attributed to one exact machine value.
+                    // Ambiguity is evidence against the lifetime proof.
+                    return true;
+                };
                 let relevant_locations = local.locations.iter().filter(|location| {
                     dwarf_machine_register(arch, location.register) == Some(machine_register)
                 });
@@ -837,6 +866,175 @@ pub(super) fn dwarf_render_prototype(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn register_local_merge_uses_parameter_slots_not_arg_spelling() {
+        use crate::core::binary::Arch;
+        use crate::debug::dwarf::{DwarfRegisterLocal, DwarfRegisterLocation, DwarfReturnType};
+        use crate::ir::call_args::CallConv;
+        use crate::ir::ssa::SsaValue;
+        use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
+
+        let local = DwarfRegisterLocal {
+            source_name: "counter".to_string(),
+            c_type: "int".to_string(),
+            locations: vec![DwarfRegisterLocation {
+                start: 0x100,
+                end: 0x110,
+                register: 4,
+            }],
+        };
+        let contract = super::DwarfPrototypeContract {
+            function_name: Some("example".to_string()),
+            prototyped: true,
+            variadic: false,
+            parameter_types: Vec::new(),
+            parameter_names: Vec::new(),
+            return_type: DwarfReturnType::Void,
+            stack_objects: Vec::new(),
+            register_locals: vec![local],
+            static_locals: Vec::new(),
+        };
+        let opaque = VReg::phys("opaque-value");
+        let numbered = LlirFunction {
+            entry_va: 0x100,
+            blocks: vec![LlirBlock {
+                start_va: 0x100,
+                end_va: 0x110,
+                instrs: vec![LlirInstr {
+                    va: 0x108,
+                    op: Op::Assign {
+                        dst: VReg::phys("sink"),
+                        src: Value::Reg(opaque.clone()),
+                    },
+                }],
+                succs: Vec::new(),
+            }],
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            opaque,
+            SsaValue {
+                base: VReg::phys("r4"),
+                version: 7,
+            },
+        );
+        let mut facts = crate::ir::stack_locals::StackLocalFacts::default();
+
+        super::merge_dwarf_register_local_facts(
+            &mut facts,
+            Some(&contract),
+            &numbered,
+            &std::collections::HashMap::from([("opaque-value".to_string(), "arg99".to_string())]),
+            &identities,
+            &std::collections::HashSet::new(),
+            Arch::ARM,
+            CallConv::Arm,
+            None,
+        );
+
+        assert_eq!(
+            facts.source_names.get("arg99").map(String::as_str),
+            Some("counter")
+        );
+        assert_eq!(
+            facts.source_types.get("arg99").map(String::as_str),
+            Some("int")
+        );
+
+        let mut protected_facts = crate::ir::stack_locals::StackLocalFacts::default();
+        super::merge_dwarf_register_local_facts(
+            &mut protected_facts,
+            Some(&contract),
+            &numbered,
+            &std::collections::HashMap::from([("opaque-value".to_string(), "arg99".to_string())]),
+            &identities,
+            &std::collections::HashSet::from([99]),
+            Arch::ARM,
+            CallConv::Arm,
+            None,
+        );
+
+        assert!(!protected_facts.source_names.contains_key("arg99"));
+        assert!(!protected_facts.source_types.contains_key("arg99"));
+    }
+
+    #[test]
+    fn register_local_role_uses_opaque_identity_not_numbered_spelling() {
+        use crate::core::binary::Arch;
+        use crate::debug::dwarf::{DwarfRegisterLocal, DwarfRegisterLocation};
+        use crate::ir::ssa::SsaValue;
+        use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
+
+        let local = DwarfRegisterLocal {
+            source_name: "counter".to_string(),
+            c_type: "int".to_string(),
+            locations: vec![DwarfRegisterLocation {
+                start: 0x100,
+                end: 0x110,
+                register: 4,
+            }],
+        };
+        let opaque = VReg::phys("opaque-value");
+        let numbered = LlirFunction {
+            entry_va: 0x100,
+            blocks: vec![LlirBlock {
+                start_va: 0x100,
+                end_va: 0x110,
+                instrs: vec![LlirInstr {
+                    va: 0x108,
+                    op: Op::Assign {
+                        dst: VReg::phys("sink"),
+                        src: Value::Reg(opaque.clone()),
+                    },
+                }],
+                succs: Vec::new(),
+            }],
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            opaque,
+            SsaValue {
+                base: VReg::phys("r4"),
+                version: 7,
+            },
+        );
+
+        assert!(matches!(
+            super::resolve_register_local_role(
+                &local,
+                &numbered,
+                &std::collections::HashMap::from([(
+                    "opaque-value".to_string(),
+                    "var1".to_string(),
+                )]),
+                &identities,
+                Arch::ARM,
+            ),
+            super::RegisterLocalRole::Bound(role) if role == "var1"
+        ));
+
+        identities.record(
+            VReg::phys("opaque-value"),
+            SsaValue {
+                base: VReg::phys("r5"),
+                version: 8,
+            },
+        );
+        assert!(!matches!(
+            super::resolve_register_local_role(
+                &local,
+                &numbered,
+                &std::collections::HashMap::from([(
+                    "opaque-value".to_string(),
+                    "var1".to_string(),
+                )]),
+                &identities,
+                Arch::ARM,
+            ),
+            super::RegisterLocalRole::Bound(_)
+        ));
+    }
+
     #[test]
     fn rust_fixed_width_scalars_have_standalone_c_spellings() {
         assert_eq!(super::standalone_dwarf_type("i32"), "int");

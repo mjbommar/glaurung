@@ -1,6 +1,6 @@
 //! Recover call-driven pre-tested loops without putting effects in expressions.
 
-use crate::ir::ast::{negate_cmp_expr, Expr, Stmt};
+use crate::ir::ast::{negate_cmp_expr, Expr, OriginSet, Stmt};
 
 /// Rotate exact effectful loop headers into an initial seed and latch update.
 ///
@@ -16,7 +16,7 @@ use crate::ir::ast::{negate_cmp_expr, Expr, Stmt};
 /// they could bypass or re-enter the synthesized latch update.
 pub(crate) fn rotate_effectful_call_headers(stmts: &mut Vec<Stmt>) {
     for statement in stmts.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
             Stmt::If {
                 then_body,
                 else_body,
@@ -60,15 +60,18 @@ pub(crate) fn rotate_effectful_call_headers(stmts: &mut Vec<Stmt>) {
 }
 
 fn effectful_call_header_candidate(statement: &Stmt) -> Option<(Stmt, Stmt)> {
-    let Stmt::While { cond, body } = statement else {
+    let Stmt::While { cond, body } = statement.semantic() else {
         return None;
     };
     if !matches!(cond, Expr::Const(1)) {
         return None;
     }
-    let [header @ Stmt::Call {
+    let [header, guard, remainder @ ..] = body.as_slice() else {
+        return None;
+    };
+    let Stmt::Call {
         dst: Some(result), ..
-    }, guard, remainder @ ..] = body.as_slice()
+    } = header.semantic()
     else {
         return None;
     };
@@ -76,11 +79,11 @@ fn effectful_call_header_candidate(statement: &Stmt) -> Option<(Stmt, Stmt)> {
         cond: exit_condition,
         then_body,
         else_body: None,
-    } = guard
+    } = guard.semantic()
     else {
         return None;
     };
-    if then_body.as_slice() != [Stmt::Break]
+    if !matches!(then_body.as_slice(), [only] if matches!(only.semantic(), Stmt::Break))
         || !exit_condition.contains_reg(result)
         || remainder.iter().any(has_explicit_loop_jump)
     {
@@ -89,17 +92,22 @@ fn effectful_call_header_candidate(statement: &Stmt) -> Option<(Stmt, Stmt)> {
 
     let mut rotated_body = remainder.to_vec();
     rotated_body.push(header.clone());
+    let origins = [statement, guard]
+        .into_iter()
+        .filter_map(Stmt::origins)
+        .fold(OriginSet::empty(), |origins, next| origins.union(next));
     Some((
         header.clone(),
         Stmt::While {
             cond: negate_cmp_expr(exit_condition.clone()),
             body: rotated_body,
-        },
+        }
+        .with_optional_origins((!origins.is_empty()).then_some(origins)),
     ))
 }
 
 fn has_explicit_loop_jump(statement: &Stmt) -> bool {
-    match statement {
+    match statement.semantic() {
         Stmt::Label(_) | Stmt::Goto { .. } | Stmt::IndirectGoto { .. } => true,
         Stmt::If {
             then_body,
@@ -202,6 +210,27 @@ mod tests {
                     body: vec![consume, next],
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn attributed_effectful_header_preserves_composed_origins() {
+        let next = iterator_call().with_origins(OriginSet::one(0x1000));
+        let guard = exit_guard().with_origins(OriginSet::one(0x1004));
+        let loop_origins = OriginSet::one(0x1010);
+        let mut body = vec![Stmt::While {
+            cond: Expr::Const(1),
+            body: vec![next, guard, Stmt::Nop.with_origins(OriginSet::one(0x1008))],
+        }
+        .with_origins(loop_origins)];
+
+        rotate_effectful_call_headers(&mut body);
+
+        assert_eq!(body.len(), 2);
+        assert!(matches!(body[1].semantic(), Stmt::While { .. }));
+        assert_eq!(
+            body[1].origins().expect("rotated-loop origins").addresses(),
+            &[0x1004, 0x1010]
         );
     }
 

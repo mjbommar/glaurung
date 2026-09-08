@@ -36,9 +36,10 @@
 //! keeps exactly the behaviour it has today.
 
 use crate::ir::ast::{Expr, Function, Stmt};
-use crate::ir::call_args::CallConv;
+use crate::ir::call_args::{register_is_storage, CallConv};
 use crate::ir::stack_locals::StackObjectHint;
 use crate::ir::types::{BinOp, VReg};
+use crate::ir::value_number::ValueIdentities;
 use std::collections::HashMap;
 
 /// The declared buffer size of a call that returns through `x8`, or `None`.
@@ -65,34 +66,61 @@ fn sysv_hidden_result_bytes(
 /// Only the two the ABI defines: the stack pointer and the frame pointer. A
 /// coordinate against anything else is not one `stack_locals` keys a slot with,
 /// so following it would produce a hint for storage nothing promotes.
-fn frame_base(name: &str) -> Option<&'static str> {
-    match crate::ir::abi::ssa_base(name) {
-        "sp" => Some("sp"),
-        "fp" | "x29" => Some("x29"),
-        "rsp" => Some("rsp"),
-        "rbp" => Some("rbp"),
-        _ => None,
+fn frame_base(register: &VReg, identities: Option<&ValueIdentities>) -> Option<&'static str> {
+    [
+        ("sp", "sp"),
+        ("fp", "x29"),
+        ("x29", "x29"),
+        ("rsp", "rsp"),
+        ("rbp", "rbp"),
+    ]
+    .into_iter()
+    .find_map(|(storage, coordinate)| {
+        register_is_storage(register, storage, identities).then_some(coordinate)
+    })
+}
+
+fn storage_key(register: &VReg, identities: Option<&ValueIdentities>) -> Option<String> {
+    match identities {
+        Some(identities) => {
+            let candidates = identities.candidates(register)?;
+            let mut bases = candidates
+                .iter()
+                .map(crate::ir::ssa::SsaValue::canonical_physical_base);
+            let first = bases.next()??.to_string();
+            bases
+                .all(|base| base == Some(first.as_str()))
+                .then_some(first)
+        }
+        None => match register {
+            VReg::Phys(name) => Some(crate::ir::abi::ssa_base(name).to_string()),
+            _ => None,
+        },
     }
 }
 
 /// Resolve an expression to a frame coordinate, following copies recorded so far.
-fn frame_address(expr: &Expr, known: &HashMap<String, (String, i64)>) -> Option<(String, i64)> {
+fn frame_address(
+    expr: &Expr,
+    known: &HashMap<String, (String, i64)>,
+    identities: Option<&ValueIdentities>,
+) -> Option<(String, i64)> {
     match expr {
-        Expr::Reg(VReg::Phys(name)) => frame_base(name)
+        Expr::Reg(register) => frame_base(register, identities)
             .map(|base| (base.to_string(), 0))
-            .or_else(|| known.get(crate::ir::abi::ssa_base(name)).cloned()),
+            .or_else(|| storage_key(register, identities).and_then(|key| known.get(&key).cloned())),
         Expr::Lea {
-            base: Some(VReg::Phys(name)),
+            base: Some(register),
             index: None,
             disp,
             segment: None,
             ..
-        } => frame_base(name).map(|base| (base.to_string(), *disp)),
+        } => frame_base(register, identities).map(|base| (base.to_string(), *disp)),
         Expr::Bin {
             op: BinOp::Add,
             lhs,
             rhs,
-        } => match (frame_address(lhs, known), rhs.as_ref()) {
+        } => match (frame_address(lhs, known, identities), rhs.as_ref()) {
             (Some((base, offset)), Expr::Const(delta)) => {
                 Some((base, offset.saturating_add(*delta)))
             }
@@ -103,10 +131,16 @@ fn frame_address(expr: &Expr, known: &HashMap<String, (String, i64)>) -> Option<
 }
 
 /// The promoted stack object an expression names, if it is one.
-fn promoted_object(expr: &Expr, known: &HashMap<String, VReg>) -> Option<VReg> {
+fn promoted_object(
+    expr: &Expr,
+    known: &HashMap<String, VReg>,
+    identities: Option<&ValueIdentities>,
+) -> Option<VReg> {
     match expr {
         Expr::StackAddr { object, .. } => Some(object.clone()),
-        Expr::Reg(VReg::Phys(name)) => known.get(crate::ir::abi::ssa_base(name)).cloned(),
+        Expr::Reg(register) => {
+            storage_key(register, identities).and_then(|key| known.get(&key).cloned())
+        }
         _ => None,
     }
 }
@@ -114,7 +148,8 @@ fn promoted_object(expr: &Expr, known: &HashMap<String, VReg>) -> Option<VReg> {
 /// The statement lists a compound statement owns.
 fn nested_bodies(statement: &mut Stmt) -> Vec<&mut Vec<Stmt>> {
     let mut bodies: Vec<&mut Vec<Stmt>> = Vec::new();
-    match statement {
+    match statement.semantic_mut() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::If {
             then_body,
             else_body,
@@ -163,10 +198,18 @@ fn nested_bodies(statement: &mut Stmt) -> Vec<&mut Vec<Stmt>> {
 /// every compound statement. Fail-closed on purpose: a coordinate that survived
 /// a call would be this reader inventing a buffer, and `x8` is caller-saved.
 pub fn indirect_result_buffer_hints(f: &Function, cc: CallConv) -> Vec<StackObjectHint> {
+    indirect_result_buffer_hints_with_identities(f, cc, None)
+}
+
+pub fn indirect_result_buffer_hints_with_identities(
+    f: &Function,
+    cc: CallConv,
+    identities: Option<&ValueIdentities>,
+) -> Vec<StackObjectHint> {
     let mut hints = Vec::new();
     match cc {
-        CallConv::Aarch64 => collect_hints(&f.body, &mut hints),
-        CallConv::SysVAmd64 => collect_sysv_hints(&f.body, 0, &mut hints),
+        CallConv::Aarch64 => collect_hints(&f.body, &mut hints, identities),
+        CallConv::SysVAmd64 => collect_sysv_hints(&f.body, 0, &mut hints, identities),
         _ => {}
     }
     hints
@@ -175,34 +218,38 @@ pub fn indirect_result_buffer_hints(f: &Function, cc: CallConv) -> Vec<StackObje
 /// Record the object named by a SysV memory-return call's hidden first argument.
 /// Argument reconstruction has already folded setup copies, so accept only a
 /// direct frame coordinate in the argument expression and otherwise decline.
-fn sysv_entry_frame_address(expr: &Expr, stack_delta: i64) -> Option<(String, i64)> {
+fn sysv_entry_frame_address(
+    expr: &Expr,
+    stack_delta: i64,
+    identities: Option<&ValueIdentities>,
+) -> Option<(String, i64)> {
     match expr {
-        Expr::Reg(VReg::Phys(name)) if crate::ir::abi::ssa_base(name) == "rsp" => {
+        Expr::Reg(register) if register_is_storage(register, "rsp", identities) => {
             Some(("entry_rsp".to_string(), stack_delta))
         }
         Expr::Lea {
-            base: Some(VReg::Phys(name)),
+            base: Some(base),
             index: None,
             disp,
             segment: None,
             ..
-        } if crate::ir::abi::ssa_base(name) == "rsp" => {
+        } if register_is_storage(base, "rsp", identities) => {
             Some(("entry_rsp".to_string(), stack_delta.saturating_add(*disp)))
         }
         _ => None,
     }
 }
 
-fn sysv_stack_adjustment(statement: &Stmt) -> Option<i64> {
+fn sysv_stack_adjustment(statement: &Stmt, identities: Option<&ValueIdentities>) -> Option<i64> {
     let Stmt::Assign {
         dst: VReg::Phys(dst),
         src: Expr::Bin { op, lhs, rhs },
-    } = statement
+    } = statement.semantic()
     else {
         return None;
     };
-    if crate::ir::abi::ssa_base(dst) != "rsp"
-        || !matches!(lhs.as_ref(), Expr::Reg(VReg::Phys(src)) if crate::ir::abi::ssa_base(src) == "rsp")
+    if !register_is_storage(&VReg::Phys(dst.clone()), "rsp", identities)
+        || !matches!(lhs.as_ref(), Expr::Reg(src) if register_is_storage(src, "rsp", identities))
     {
         return None;
     }
@@ -216,19 +263,25 @@ fn sysv_stack_adjustment(statement: &Stmt) -> Option<i64> {
     }
 }
 
-fn collect_sysv_hints(body: &[Stmt], mut stack_delta: i64, hints: &mut Vec<StackObjectHint>) {
+fn collect_sysv_hints(
+    body: &[Stmt],
+    mut stack_delta: i64,
+    hints: &mut Vec<StackObjectHint>,
+    identities: Option<&ValueIdentities>,
+) {
     for statement in body {
-        if let Some(adjustment) = sysv_stack_adjustment(statement) {
+        if let Some(adjustment) = sysv_stack_adjustment(statement, identities) {
             stack_delta = stack_delta.saturating_add(adjustment);
         }
         if let Stmt::Call {
             args, call_spec, ..
-        } = statement
+        } = statement.semantic()
         {
             if let (Some(bytes), Some((base, disp))) = (
                 sysv_hidden_result_bytes(call_spec.as_ref()),
-                args.first()
-                    .and_then(|argument| sysv_entry_frame_address(argument, stack_delta)),
+                args.first().and_then(|argument| {
+                    sysv_entry_frame_address(argument, stack_delta, identities)
+                }),
             ) {
                 hints.push(StackObjectHint {
                     base,
@@ -241,32 +294,33 @@ fn collect_sysv_hints(body: &[Stmt], mut stack_delta: i64, hints: &mut Vec<Stack
                 });
             }
         }
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
                 ..
             } => {
-                collect_sysv_hints(then_body, stack_delta, hints);
+                collect_sysv_hints(then_body, stack_delta, hints, identities);
                 if let Some(else_body) = else_body {
-                    collect_sysv_hints(else_body, stack_delta, hints);
+                    collect_sysv_hints(else_body, stack_delta, hints, identities);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                collect_sysv_hints(body, stack_delta, hints);
+                collect_sysv_hints(body, stack_delta, hints, identities);
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, body) in cases {
-                    collect_sysv_hints(body, stack_delta, hints);
+                    collect_sysv_hints(body, stack_delta, hints, identities);
                 }
                 if let Some(default) = default {
-                    collect_sysv_hints(default, stack_delta, hints);
+                    collect_sysv_hints(default, stack_delta, hints, identities);
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                collect_sysv_hints(try_body, stack_delta, hints);
+                collect_sysv_hints(try_body, stack_delta, hints, identities);
                 for catch in catches {
-                    collect_sysv_hints(&catch.body, stack_delta, hints);
+                    collect_sysv_hints(&catch.body, stack_delta, hints, identities);
                 }
             }
             _ => {}
@@ -274,19 +328,23 @@ fn collect_sysv_hints(body: &[Stmt], mut stack_delta: i64, hints: &mut Vec<Stack
     }
 }
 
-fn collect_hints(body: &[Stmt], hints: &mut Vec<StackObjectHint>) {
+fn collect_hints(
+    body: &[Stmt],
+    hints: &mut Vec<StackObjectHint>,
+    identities: Option<&ValueIdentities>,
+) {
     let mut known: HashMap<String, (String, i64)> = HashMap::new();
     for statement in body {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
-                let resolved = frame_address(src, &known);
-                if let VReg::Phys(name) = dst {
+                let resolved = frame_address(src, &known, identities);
+                if let Some(base) = storage_key(dst, identities) {
                     // SSA versions are stripped: the map answers "what does
                     // THIS REGISTER hold", and `x8#1` is a version of `x8`.
-                    let base = crate::ir::abi::ssa_base(name);
                     match resolved {
-                        Some(address) => known.insert(base.to_string(), address),
-                        None => known.remove(base),
+                        Some(address) => known.insert(base.clone(), address),
+                        None => known.remove(&base),
                     };
                 }
             }
@@ -312,29 +370,29 @@ fn collect_hints(body: &[Stmt], hints: &mut Vec<StackObjectHint>) {
                 else_body,
                 ..
             } => {
-                collect_hints(then_body, hints);
+                collect_hints(then_body, hints, identities);
                 if let Some(else_body) = else_body {
-                    collect_hints(else_body, hints);
+                    collect_hints(else_body, hints, identities);
                 }
                 known.clear();
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                collect_hints(body, hints);
+                collect_hints(body, hints, identities);
                 known.clear();
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, body) in cases {
-                    collect_hints(body, hints);
+                    collect_hints(body, hints, identities);
                 }
                 if let Some(default) = default {
-                    collect_hints(default, hints);
+                    collect_hints(default, hints, identities);
                 }
                 known.clear();
             }
             Stmt::TryCatch { try_body, catches } => {
-                collect_hints(try_body, hints);
+                collect_hints(try_body, hints, identities);
                 for catch in catches {
-                    collect_hints(&catch.body, hints);
+                    collect_hints(&catch.body, hints, identities);
                 }
                 known.clear();
             }
@@ -352,24 +410,32 @@ fn collect_hints(body: &[Stmt], hints: &mut Vec<StackObjectHint>) {
 ///
 /// Returns how many calls were bound, so the pass is observable.
 pub fn bind_indirect_result_buffers(f: &mut Function, cc: CallConv) -> usize {
+    bind_indirect_result_buffers_with_identities(f, cc, None)
+}
+
+pub fn bind_indirect_result_buffers_with_identities(
+    f: &mut Function,
+    cc: CallConv,
+    identities: Option<&ValueIdentities>,
+) -> usize {
     let mut bound = 0;
     if matches!(cc, CallConv::Aarch64) {
-        bind_bodies(&mut f.body, &mut bound);
+        bind_bodies(&mut f.body, &mut bound, identities);
     }
     bound
 }
 
-fn bind_bodies(body: &mut Vec<Stmt>, bound: &mut usize) {
+fn bind_bodies(body: &mut Vec<Stmt>, bound: &mut usize, identities: Option<&ValueIdentities>) {
     let mut known: HashMap<String, VReg> = HashMap::new();
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
-                let resolved = promoted_object(src, &known);
-                if let VReg::Phys(name) = dst {
-                    let base = crate::ir::abi::ssa_base(name);
+                let resolved = promoted_object(src, &known, identities);
+                if let Some(base) = storage_key(dst, identities) {
                     match resolved {
-                        Some(object) => known.insert(base.to_string(), object),
-                        None => known.remove(base),
+                        Some(object) => known.insert(base.clone(), object),
+                        None => known.remove(&base),
                     };
                 }
             }
@@ -384,7 +450,7 @@ fn bind_bodies(body: &mut Vec<Stmt>, bound: &mut usize) {
             }
             _ => {
                 for nested in nested_bodies(statement) {
-                    bind_bodies(nested, bound);
+                    bind_bodies(nested, bound, identities);
                 }
                 known.clear();
             }
@@ -395,6 +461,7 @@ fn bind_bodies(body: &mut Vec<Stmt>, bound: &mut usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ast::OriginSet;
     use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority, CallSiteSpec};
 
     fn indirect_spec(bytes: u16) -> Option<CallSiteSpec> {
@@ -436,12 +503,14 @@ mod tests {
                         lhs: Box::new(Expr::Reg(VReg::phys("sp"))),
                         rhs: Box::new(Expr::Const(16)),
                     },
-                },
+                }
+                .with_origins(OriginSet::one(0x1000)),
                 Stmt::Assign {
                     dst: VReg::phys("x8"),
                     src: Expr::Reg(VReg::phys("x0")),
-                },
-                call(indirect_spec(20), None),
+                }
+                .with_origins(OriginSet::one(0x1004)),
+                call(indirect_spec(20), None).with_origins(OriginSet::one(0x1008)),
             ],
         };
         let hints = indirect_result_buffer_hints(&f, CallConv::Aarch64);
@@ -476,7 +545,7 @@ mod tests {
         let f = Function {
             name: "caller".to_string(),
             entry_va: 0x1000,
-            body: vec![hidden_call],
+            body: vec![hidden_call.with_origins(OriginSet::one(0x1010))],
         };
 
         let hints = indirect_result_buffer_hints(&f, CallConv::SysVAmd64);
@@ -504,6 +573,112 @@ mod tests {
         assert_eq!(hints.len(), 1);
         assert_eq!((hints[0].base.as_str(), hints[0].disp), ("sp", 0));
         assert_eq!(hints[0].size, 32);
+    }
+
+    #[test]
+    fn indirect_result_storage_uses_exact_identity_not_display_spelling() {
+        let mut identities = ValueIdentities::default();
+        identities.record(
+            VReg::phys("opaque_x8"),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("x8"),
+                version: 3,
+            },
+        );
+        identities.record(
+            VReg::phys("opaque_sp"),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("sp"),
+                version: 2,
+            },
+        );
+        identities.record(
+            VReg::phys("x8#looks_like_result_storage"),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("x0"),
+                version: 3,
+            },
+        );
+        identities.record(
+            VReg::phys("malformed_identity_base"),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("x8#not_canonical"),
+                version: 3,
+            },
+        );
+
+        let hinted = |dst: &str| Function {
+            name: "caller".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys(dst),
+                    src: Expr::Reg(VReg::phys("opaque_sp")),
+                },
+                call(indirect_spec(32), None),
+            ],
+        };
+        let exact = indirect_result_buffer_hints_with_identities(
+            &hinted("opaque_x8"),
+            CallConv::Aarch64,
+            Some(&identities),
+        );
+        assert_eq!(exact.len(), 1);
+        assert_eq!((exact[0].base.as_str(), exact[0].disp), ("sp", 0));
+        assert!(indirect_result_buffer_hints_with_identities(
+            &hinted("x8#looks_like_result_storage"),
+            CallConv::Aarch64,
+            Some(&identities),
+        )
+        .is_empty());
+        assert!(indirect_result_buffer_hints_with_identities(
+            &hinted("malformed_identity_base"),
+            CallConv::Aarch64,
+            Some(&identities),
+        )
+        .is_empty());
+
+        let promoted = |dst: &str| Function {
+            name: "caller".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys(dst),
+                    src: Expr::StackAddr {
+                        object: VReg::phys("local_30"),
+                        size: 32,
+                    },
+                },
+                call(indirect_spec(32), None),
+            ],
+        };
+        let mut exact = promoted("opaque_x8");
+        assert_eq!(
+            bind_indirect_result_buffers_with_identities(
+                &mut exact,
+                CallConv::Aarch64,
+                Some(&identities),
+            ),
+            1
+        );
+        let mut misleading = promoted("x8#looks_like_result_storage");
+        assert_eq!(
+            bind_indirect_result_buffers_with_identities(
+                &mut misleading,
+                CallConv::Aarch64,
+                Some(&identities),
+            ),
+            0
+        );
+        let mut malformed = promoted("malformed_identity_base");
+        assert_eq!(
+            bind_indirect_result_buffers_with_identities(
+                &mut malformed,
+                CallConv::Aarch64,
+                Some(&identities),
+            ),
+            0
+        );
     }
 
     /// THE REFUSALS. A buffer this reader cannot prove must not be invented:
@@ -575,15 +750,17 @@ mod tests {
                         object: VReg::phys("local_30"),
                         size: 20,
                     },
-                },
-                call(spec, None),
+                }
+                .with_origins(OriginSet::one(0x1020)),
+                call(spec, None).with_origins(OriginSet::one(0x1024)),
             ],
         };
         let mut f = promoted(indirect_spec(20));
         assert_eq!(bind_indirect_result_buffers(&mut f, CallConv::Aarch64), 1);
         assert!(
-            matches!(&f.body[1], Stmt::Call { dst: Some(VReg::Phys(name)), .. } if name == "local_30")
+            matches!(f.body[1].semantic(), Stmt::Call { dst: Some(VReg::Phys(name)), .. } if name == "local_30")
         );
+        assert_eq!(f.body[1].origins(), Some(&OriginSet::one(0x1024)));
         // The negative: an ordinary scalar callee keeps its destination
         // untouched even with a frame address sitting in `x8`.
         let mut scalar = promoted(None);
@@ -591,7 +768,10 @@ mod tests {
             bind_indirect_result_buffers(&mut scalar, CallConv::Aarch64),
             0
         );
-        assert!(matches!(&scalar.body[1], Stmt::Call { dst: None, .. }));
+        assert!(matches!(
+            scalar.body[1].semantic(),
+            Stmt::Call { dst: None, .. }
+        ));
         // And no other convention binds anything.
         let mut other = promoted(indirect_spec(20));
         assert_eq!(

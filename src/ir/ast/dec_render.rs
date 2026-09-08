@@ -51,16 +51,73 @@ use super::{
     binop_sym_c, callee_display_name, cmpop_sym_c, dec_global_name, dec_global_scalar_width,
     dec_int_type, dec_plan, dec_ptr_arg_type, dec_ptr_width, declared_reg_ctype,
     direct_global_address, expr_machine_width, flag_ident, int_ctype,
-    normalize_wrapped_scaled_index_constant, parse_arg_index, sanitize_c_ident,
-    signed_shift_operand, target_int_ctype, unop_sym, width_ctype, write_float_literal, Expr,
-    PdbFieldHint, ScalarType, WideArithmetic, DEC_GLOBAL_ADDRS, DEC_NAMED_CALL_PROTOTYPES,
-    DEC_POINTER_WIDTH, DEC_RENDERABLE_STRUCTS, DEC_SEMANTIC_WIDE_CAST, DEC_STRUCT_PTR_TYPES,
-    DEC_WIDE_LOCALS,
+    normalize_wrapped_scaled_index_constant, sanitize_c_ident, signed_shift_operand,
+    target_int_ctype, unop_sym, width_ctype, write_float_literal, Expr, OriginSet, PdbFieldHint,
+    ScalarType, WideArithmetic, DEC_GLOBAL_ADDRS, DEC_NAMED_CALL_PROTOTYPES, DEC_POINTER_WIDTH,
+    DEC_RENDERABLE_STRUCTS, DEC_SEMANTIC_WIDE_CAST, DEC_STRUCT_PTR_TYPES, DEC_WIDE_LOCALS,
 };
 
 mod stmt;
 
 pub(super) use stmt::write_stmt_dec;
+
+#[derive(Default)]
+struct LineMappingCollector {
+    last_offset: usize,
+    line_number: usize,
+    mappings: std::collections::BTreeMap<usize, OriginSet>,
+}
+
+thread_local! {
+    static DEC_LINE_MAPPINGS: std::cell::RefCell<Option<LineMappingCollector>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+pub(super) fn begin_line_mapping_collection(rendered_prefix: &str) {
+    DEC_LINE_MAPPINGS.with(|slot| {
+        *slot.borrow_mut() = Some(LineMappingCollector {
+            last_offset: rendered_prefix.len(),
+            line_number: rendered_prefix
+                .bytes()
+                .filter(|byte| *byte == b'\n')
+                .count()
+                + 1,
+            mappings: std::collections::BTreeMap::new(),
+        });
+    });
+}
+
+pub(super) fn record_line_mapping(rendered: &str, origins: &OriginSet) {
+    if origins.is_empty() {
+        return;
+    }
+    DEC_LINE_MAPPINGS.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let Some(collector) = slot.as_mut() else {
+            return;
+        };
+        collector.line_number += rendered[collector.last_offset..]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count();
+        collector.last_offset = rendered.len();
+        collector
+            .mappings
+            .entry(collector.line_number)
+            .and_modify(|existing| existing.merge(origins))
+            .or_insert_with(|| origins.clone());
+    });
+}
+
+pub(crate) fn take_line_mappings() -> Vec<(usize, OriginSet)> {
+    DEC_LINE_MAPPINGS.with(|slot| {
+        slot.borrow_mut()
+            .take()
+            .map(|collector| collector.mappings.into_iter().collect())
+            .unwrap_or_default()
+    })
+}
 
 fn dec_is_global_addr(address: u64) -> bool {
     DEC_GLOBAL_ADDRS.with(|addresses| addresses.borrow().contains(&address))
@@ -481,12 +538,9 @@ fn write_scaled_pointer_offset_dec(op: BinOp, lhs: &Expr, rhs: &Expr, out: &mut 
 fn write_reg_lvalue_dec(v: &VReg, out: &mut String) {
     match v {
         VReg::Phys(n) => {
-            if let Some(idx) = parse_arg_index(n) {
-                let displayed = dec_plan(|plan| {
-                    plan.displayed_parameter(n)
-                        .map(str::to_string)
-                        .unwrap_or_else(|| format!("arg{idx}"))
-                });
+            if let Some(displayed) =
+                dec_plan(|plan| plan.displayed_parameter(n).map(str::to_string))
+            {
                 out.push_str(&displayed);
             } else {
                 out.push_str(&sanitize_c_ident(n));
@@ -743,9 +797,11 @@ fn write_wide_arithmetic_dec(op: WideArithmetic, args: &[Expr], width: u8, out: 
 
 fn write_expr_dec(e: &Expr, out: &mut String) {
     match e {
+        Expr::Origin { expr, .. } => write_expr_dec(expr, out),
         Expr::Reg(v) => write_reg_dec(v, out),
         Expr::StackAddr { object, .. } => {
-            if matches!(object, VReg::Phys(name) if parse_arg_index(name).is_some()) {
+            if matches!(object, VReg::Phys(name) if dec_plan(|plan| plan.parameter_slot(name).is_some()))
+            {
                 out.push_str("(void *)(");
                 write_reg_lvalue_dec(object, out);
                 out.push(')');
@@ -1032,6 +1088,13 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
                     // The declaration already expresses the narrow signed
                     // value, and the literal fits that type. C's usual
                     // conversions therefore preserve the comparison.
+                } else if matches!(op, CmpOp::Slt | CmpOp::Sle)
+                    && write_declared_unsigned_as_signed_comparison_operand(lhs, out)
+                {
+                    // The machine relation is signed even though stronger
+                    // declaration evidence keeps this value unsigned at the
+                    // function boundary. State the machine interpretation at
+                    // this use rather than changing the declaration.
                 } else if !matches!(op, CmpOp::Eq | CmpOp::Ne)
                     || !matches!(rhs.as_ref(), Expr::Const(0))
                     || !write_direct_pointer_value_dec(lhs, out)
@@ -1043,6 +1106,10 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
                     && write_value_preserving_signed_comparison_operand(rhs, lhs, out)
                 {
                     // Symmetric constant-on-the-left form.
+                } else if matches!(op, CmpOp::Slt | CmpOp::Sle)
+                    && write_declared_unsigned_as_signed_comparison_operand(rhs, out)
+                {
+                    // Symmetric declared-unsigned operand.
                 } else if !matches!(op, CmpOp::Eq | CmpOp::Ne)
                     || !matches!(lhs.as_ref(), Expr::Const(0))
                     || !write_direct_pointer_value_dec(rhs, out)
@@ -1399,6 +1466,32 @@ fn write_value_preserving_signed_comparison_operand(
     true
 }
 
+/// Render the signed interpretation carried by a machine comparison without
+/// weakening an authoritative unsigned declaration.
+///
+/// A compiler may legally lower an unsigned source switch with a signed tree
+/// edge when the surrounding partition proves the values on that edge. If the
+/// recovered signature correctly remains `uint64_t`, printing the direct C
+/// comparison would apply C's unsigned conversions and change the edge for
+/// values such as `UINT64_MAX`. The comparison operator is per-use evidence;
+/// make that use signed at the exact declared width and leave the declaration
+/// authority untouched.
+fn write_declared_unsigned_as_signed_comparison_operand(
+    expression: &Expr,
+    out: &mut String,
+) -> bool {
+    let Expr::Reg(register @ VReg::Phys(name)) = expression else {
+        return false;
+    };
+    let Some((false, width)) = dec_plan(|plan| plan.authoritative_integer_parameter(name)) else {
+        return false;
+    };
+    let _ = write!(out, "({})(", target_int_ctype(true, width));
+    write_reg_dec(register, out);
+    out.push(')');
+    true
+}
+
 fn signed_constant_fits(constant: i64, width: u8) -> bool {
     let bits = u32::from(width) * 8;
     if bits == 0 {
@@ -1477,7 +1570,8 @@ fn call_argument_pointer_ctype(arg: &Expr) -> Option<String> {
         // `(void *)(argN)` and every other frame object as `&local_N[0]` over
         // an `unsigned char local_N[..]` declaration.
         Expr::StackAddr { object, .. } => Some(
-            if matches!(object, VReg::Phys(name) if parse_arg_index(name).is_some()) {
+            if matches!(object, VReg::Phys(name) if dec_plan(|plan| plan.parameter_slot(name).is_some()))
+            {
                 "void *".to_string()
             } else {
                 "unsigned char *".to_string()
@@ -2199,6 +2293,7 @@ fn printf_variadic_parameter_types(target: &Expr, args: &[Expr]) -> Option<Vec<O
 
 fn expression_has_pointer_representation(expr: &Expr) -> bool {
     match expr {
+        Expr::Origin { expr, .. } => expression_has_pointer_representation(expr),
         Expr::Reg(register @ VReg::Phys(name)) => {
             declared_reg_ctype(register).ends_with('*') || dec_is_stack_object(name)
         }

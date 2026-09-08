@@ -31,8 +31,21 @@ enum ValueClass {
 /// definitions is a strict convergence bound. Scalar facts remain the job of
 /// width-aware LLIR recovery, which has stronger signedness evidence.
 pub(crate) fn refine_pointer_high_variables(function: &Function, types: &mut TypeMap) {
+    refine_pointer_high_variables_with_identities(function, types, None);
+}
+
+/// Refine source-value pointers using opaque SSA identity when available.
+///
+/// Exact identities let the pass recognize values independently of their
+/// presentation spelling. Ambiguous identities remain ineligible.
+pub(crate) fn refine_pointer_high_variables_with_identities(
+    function: &Function,
+    types: &mut TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     let mut definitions: HashMap<String, Vec<Definition>> = HashMap::new();
     collect_definitions(&function.body, &mut definitions);
+    refine_exact_unsigned_constants(&function.body, &definitions, types, identities);
     let object_model = infer_from_ast(function);
     if std::env::var_os("GLAURUNG_DUMP_PASSES").is_some() {
         eprintln!("\n===== inferred memory objects =====\n{object_model:#?}");
@@ -72,6 +85,7 @@ pub(crate) fn refine_pointer_high_variables(function: &Function, types: &mut Typ
         &unsafe_uses,
         &object_model,
         types,
+        identities,
     );
     // Add/sub can be either integer arithmetic or valid C pointer arithmetic.
     // Resolve the candidate pointer classes first, then reject any additive use
@@ -89,7 +103,68 @@ pub(crate) fn refine_pointer_high_variables(function: &Function, types: &mut Typ
             &validated_unsafe_uses,
             &object_model,
             types,
+            identities,
         );
+    }
+}
+
+/// Correct a narrow signed declaration only when the prepared value graph
+/// proves both halves of the unsigned interpretation.
+///
+/// A positive immediate whose high bit is set is an exact machine bit pattern,
+/// but is not representable by the corresponding signed C type.  That alone is
+/// deliberately insufficient evidence: the same bits may denote a negative
+/// value.  Retype the value only when every definition has that exact shape and
+/// every use either enters explicitly unsigned widening arithmetic or is
+/// compared in a wider signed domain that can represent the complete narrow
+/// unsigned range. This keeps the decision per-value and use-backed instead of
+/// making all high-bit literals globally unsigned.
+fn refine_exact_unsigned_constants(
+    body: &[Stmt],
+    definitions: &HashMap<String, Vec<Definition>>,
+    types: &mut TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
+    let mut candidates: Vec<_> = types
+        .iter()
+        .filter_map(|(register, hint)| match (register, hint) {
+            (
+                VReg::Phys(name),
+                TypeHint::Int {
+                    signed: true,
+                    width,
+                },
+            ) if exact_value_role(name, identities) && *width < 8 => Some((name.clone(), *width)),
+            _ => None,
+        })
+        .collect();
+    candidates.sort_unstable();
+
+    for (name, width) in candidates {
+        let Some(value_definitions) = definitions.get(&name) else {
+            continue;
+        };
+        if value_definitions.is_empty()
+            || !value_definitions
+                .iter()
+                .all(|definition| definition.is_unsigned_high_bit_literal(width))
+        {
+            continue;
+        }
+        let mut uses = 0usize;
+        if body_uses_preserve_positive_value(body, &name, width, types, &mut uses) && uses != 0 {
+            types.force_int_signedness(VReg::phys(&name), false);
+        }
+    }
+}
+
+fn exact_value_role(
+    name: &str,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    match identities {
+        Some(identities) => identities.exact(&VReg::phys(name)).is_some(),
+        None => is_high_variable(name),
     }
 }
 
@@ -99,15 +174,16 @@ fn refine_pointer_facts(
     unsafe_uses: &HashSet<String>,
     object_model: &MemoryObjectModel,
     types: &mut TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
-    refine_authoritative_pointer_values(body, definitions, unsafe_uses, types);
+    refine_authoritative_pointer_values(body, definitions, unsafe_uses, types, identities);
 
     for _ in 0..=definitions.len() {
         let object_values_learned =
             refine_object_cursor_values(definitions, unsafe_uses, object_model, types);
         let mut learned = Vec::new();
         for (name, defs) in definitions {
-            if !is_source_value_local(name)
+            if !is_source_value_local_with_identities(name, identities)
                 || unsafe_uses.contains(name)
                 || defs
                     .iter()
@@ -116,7 +192,7 @@ fn refine_pointer_facts(
             {
                 continue;
             }
-            let Some(width) = compatible_pointer_definitions(defs, types) else {
+            let Some(width) = compatible_pointer_definitions(defs, types, identities) else {
                 continue;
             };
             learned.push((
@@ -235,10 +311,15 @@ fn refine_authoritative_pointer_values(
     definitions: &HashMap<String, Vec<Definition>>,
     unsafe_uses: &HashSet<String>,
     types: &mut TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
-    fn collect(body: &[Stmt], out: &mut HashMap<String, Vec<u8>>) {
+    fn collect(
+        body: &[Stmt],
+        out: &mut HashMap<String, Vec<u8>>,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) {
         for statement in body {
-            match statement {
+            match statement.semantic() {
                 Stmt::Call {
                     target,
                     args,
@@ -256,7 +337,7 @@ fn refine_authoritative_pointer_values(
                         let Expr::Reg(VReg::Phys(argument_name)) = argument else {
                             continue;
                         };
-                        if !is_trusted_copy_source(argument_name) {
+                        if !is_trusted_copy_source_with_identities(argument_name, identities) {
                             continue;
                         }
                         let c_type = recovered
@@ -278,25 +359,27 @@ fn refine_authoritative_pointer_values(
                     else_body,
                     ..
                 } => {
-                    collect(then_body, out);
+                    collect(then_body, out, identities);
                     if let Some(else_body) = else_body {
-                        collect(else_body, out);
+                        collect(else_body, out, identities);
                     }
                 }
-                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => collect(body, out),
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                    collect(body, out, identities)
+                }
                 Stmt::For {
                     init, step, body, ..
                 } => {
-                    collect(std::slice::from_ref(init.as_ref()), out);
-                    collect(body, out);
-                    collect(std::slice::from_ref(step.as_ref()), out);
+                    collect(std::slice::from_ref(init.as_ref()), out, identities);
+                    collect(body, out, identities);
+                    collect(std::slice::from_ref(step.as_ref()), out, identities);
                 }
                 Stmt::Switch { cases, default, .. } => {
                     for (_, case) in cases {
-                        collect(case, out);
+                        collect(case, out, identities);
                     }
                     if let Some(default) = default {
-                        collect(default, out);
+                        collect(default, out, identities);
                     }
                 }
                 _ => {}
@@ -305,7 +388,7 @@ fn refine_authoritative_pointer_values(
     }
 
     let mut candidates = HashMap::new();
-    collect(body, &mut candidates);
+    collect(body, &mut candidates, identities);
     let mut direct_values = Vec::new();
     let mut widths_by_origin: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     for (name, widths) in candidates {
@@ -328,12 +411,13 @@ fn refine_authoritative_pointer_values(
                     width,
                     types,
                     definitions,
+                    identities,
                 )
             })
         {
             direct_values.push((name.clone(), width));
         }
-        let Some(origin) = single_exact_parameter_origin(&name, definitions) else {
+        let Some(origin) = single_exact_parameter_origin(&name, definitions, identities) else {
             continue;
         };
         if unsafe_uses.contains(&origin) {
@@ -369,6 +453,7 @@ fn definitions_accept_authoritative_pointer_use(
     width: u8,
     types: &TypeMap,
     all_definitions: &HashMap<String, Vec<Definition>>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> bool {
     fn accepts(
         definition: &Definition,
@@ -376,6 +461,7 @@ fn definitions_accept_authoritative_pointer_use(
         width: u8,
         types: &TypeMap,
         all_definitions: &HashMap<String, Vec<Definition>>,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
         visiting: &mut HashSet<String>,
     ) -> bool {
         if definition.is_null_initializer() {
@@ -394,14 +480,17 @@ fn definitions_accept_authoritative_pointer_use(
         {
             return true;
         }
-        match (definition.classify(types), definition) {
+        match (
+            definition.classify_with_identities(types, identities),
+            definition,
+        ) {
             (ValueClass::Pointer(candidate), _) => {
                 candidate == 0 || width == 0 || candidate == width
             }
             (
                 ValueClass::Scalar | ValueClass::Unknown,
                 Definition::Assignment(Expr::Reg(VReg::Phys(source))),
-            ) if is_trusted_copy_source(source) => {
+            ) if is_trusted_copy_source_with_identities(source, identities) => {
                 let Some(source_definitions) = all_definitions.get(source) else {
                     return false;
                 };
@@ -415,6 +504,7 @@ fn definitions_accept_authoritative_pointer_use(
                         width,
                         types,
                         all_definitions,
+                        identities,
                         visiting,
                     )
                 });
@@ -437,6 +527,7 @@ fn definitions_accept_authoritative_pointer_use(
             width,
             types,
             all_definitions,
+            identities,
             &mut HashSet::new(),
         )
     })
@@ -460,9 +551,13 @@ enum Definition {
 }
 
 impl Definition {
-    fn classify(&self, types: &TypeMap) -> ValueClass {
+    fn classify_with_identities(
+        &self,
+        types: &TypeMap,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) -> ValueClass {
         match self {
-            Self::Assignment(value) => classify_expr(value, types),
+            Self::Assignment(value) => classify_expr(value, types, identities),
             Self::Call {
                 target,
                 return_type,
@@ -485,6 +580,18 @@ impl Definition {
             Self::Assignment(Expr::Reg(VReg::Phys(source))) if unsafe_uses.contains(source)
         )
     }
+
+    fn is_unsigned_high_bit_literal(&self, width: u8) -> bool {
+        let Self::Assignment(Expr::Const(value)) = self else {
+            return false;
+        };
+        if *value < 0 || width == 0 || width >= 8 {
+            return false;
+        }
+        let bits = u32::from(width) * 8;
+        let value = i128::from(*value);
+        value >= (1_i128 << (bits - 1)) && value < (1_i128 << bits)
+    }
 }
 
 /// Resolve one prepared value to a unique source parameter through pure copies.
@@ -496,13 +603,19 @@ impl Definition {
 fn single_exact_parameter_origin(
     name: &str,
     definitions: &HashMap<String, Vec<Definition>>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Option<String> {
     fn visit(
         name: &str,
         definitions: &HashMap<String, Vec<Definition>>,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
         visiting: &mut HashSet<String>,
     ) -> Option<String> {
-        if crate::ir::ast::parse_arg_index(name).is_some() {
+        let parameter = match identities {
+            Some(identities) => identities.parameter_slot(&VReg::phys(name)).is_some(),
+            None => crate::ir::ast::parse_arg_index(name).is_some(),
+        };
+        if parameter {
             return Some(name.to_string());
         }
         if !is_source_value_local(name) || !visiting.insert(name.to_string()) {
@@ -515,10 +628,10 @@ fn single_exact_parameter_origin(
                 let Definition::Assignment(Expr::Reg(VReg::Phys(source))) = definition else {
                     return None;
                 };
-                if !is_trusted_copy_source(source) {
+                if !is_trusted_copy_source_with_identities(source, identities) {
                     return None;
                 }
-                let next = visit(source, definitions, visiting)?;
+                let next = visit(source, definitions, identities, visiting)?;
                 if origin.as_ref().is_some_and(|current| current != &next) {
                     return None;
                 }
@@ -530,12 +643,12 @@ fn single_exact_parameter_origin(
         result
     }
 
-    visit(name, definitions, &mut HashSet::new())
+    visit(name, definitions, identities, &mut HashSet::new())
 }
 
 fn collect_definitions(body: &[Stmt], out: &mut HashMap<String, Vec<Definition>>) {
     for statement in body {
-        match statement {
+        match statement.semantic() {
             Stmt::Assign {
                 dst: VReg::Phys(name),
                 src,
@@ -600,7 +713,230 @@ fn collect_definitions(body: &[Stmt], out: &mut HashMap<String, Vec<Definition>>
     }
 }
 
-fn compatible_pointer_definitions(definitions: &[Definition], types: &TypeMap) -> Option<u8> {
+fn body_uses_preserve_positive_value(
+    body: &[Stmt],
+    name: &str,
+    width: u8,
+    types: &TypeMap,
+    uses: &mut usize,
+) -> bool {
+    body.iter().all(|statement| match statement.semantic() {
+        Stmt::Assign { src, .. } | Stmt::Return { value: Some(src) } => {
+            expr_uses_preserve_positive_value(src, name, width, types, false, uses)
+        }
+        Stmt::Store { addr, src, .. } => {
+            expr_uses_preserve_positive_value(addr, name, width, types, false, uses)
+                && expr_uses_preserve_positive_value(src, name, width, types, false, uses)
+        }
+        Stmt::Call { target, args, .. } => {
+            expr_uses_preserve_positive_value(target, name, width, types, false, uses)
+                && args.iter().all(|argument| {
+                    expr_uses_preserve_positive_value(argument, name, width, types, false, uses)
+                })
+        }
+        Stmt::Throw { value } | Stmt::Push { value } => {
+            expr_uses_preserve_positive_value(value, name, width, types, false, uses)
+        }
+        Stmt::TryCatch { try_body, catches } => {
+            body_uses_preserve_positive_value(try_body, name, width, types, uses)
+                && catches.iter().all(|catch| {
+                    body_uses_preserve_positive_value(&catch.body, name, width, types, uses)
+                })
+        }
+        Stmt::If {
+            cond,
+            then_body,
+            else_body,
+        } => {
+            expr_uses_preserve_positive_value(cond, name, width, types, false, uses)
+                && body_uses_preserve_positive_value(then_body, name, width, types, uses)
+                && else_body.as_ref().is_none_or(|else_body| {
+                    body_uses_preserve_positive_value(else_body, name, width, types, uses)
+                })
+        }
+        Stmt::While { cond, body } | Stmt::DoWhile { body, cond } => {
+            expr_uses_preserve_positive_value(cond, name, width, types, false, uses)
+                && body_uses_preserve_positive_value(body, name, width, types, uses)
+        }
+        Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+        } => {
+            body_uses_preserve_positive_value(
+                std::slice::from_ref(init.as_ref()),
+                name,
+                width,
+                types,
+                uses,
+            ) && expr_uses_preserve_positive_value(cond, name, width, types, false, uses)
+                && body_uses_preserve_positive_value(body, name, width, types, uses)
+                && body_uses_preserve_positive_value(
+                    std::slice::from_ref(step.as_ref()),
+                    name,
+                    width,
+                    types,
+                    uses,
+                )
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+            default,
+        } => {
+            expr_uses_preserve_positive_value(discriminant, name, width, types, false, uses)
+                && cases.iter().all(|(_, case)| {
+                    body_uses_preserve_positive_value(case, name, width, types, uses)
+                })
+                && default.as_ref().is_none_or(|default| {
+                    body_uses_preserve_positive_value(default, name, width, types, uses)
+                })
+        }
+        Stmt::IndirectGoto { target } => {
+            expr_uses_preserve_positive_value(target, name, width, types, false, uses)
+        }
+        Stmt::Return { value: None }
+        | Stmt::Label(_)
+        | Stmt::Goto { .. }
+        | Stmt::Continue
+        | Stmt::Break
+        | Stmt::Nop
+        | Stmt::Unknown(_)
+        | Stmt::Comment(_)
+        | Stmt::Pop { .. } => true,
+        Stmt::Origin { .. } => unreachable!("semantic() removes origin wrappers"),
+    })
+}
+
+fn expr_uses_preserve_positive_value(
+    expression: &Expr,
+    name: &str,
+    width: u8,
+    types: &TypeMap,
+    unsigned_context: bool,
+    uses: &mut usize,
+) -> bool {
+    match expression {
+        Expr::Origin { expr, .. } => {
+            expr_uses_preserve_positive_value(expr, name, width, types, unsigned_context, uses)
+        }
+        Expr::Reg(VReg::Phys(found)) if found == name => {
+            *uses += 1;
+            unsigned_context
+        }
+        Expr::Reg(_)
+        | Expr::Const(_)
+        | Expr::FloatConst { .. }
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::Unknown(_)
+        | Expr::StackAddr { .. } => true,
+        Expr::Cast {
+            signed,
+            width: cast_width,
+            expr,
+        } => expr_uses_preserve_positive_value(
+            expr,
+            name,
+            width,
+            types,
+            !*signed && *cast_width >= width,
+            uses,
+        ),
+        Expr::Bin { lhs, rhs, .. } => {
+            let lhs_context = unsigned_widening_cast(rhs, width);
+            let rhs_context = unsigned_widening_cast(lhs, width);
+            expr_uses_preserve_positive_value(lhs, name, width, types, lhs_context, uses)
+                && expr_uses_preserve_positive_value(rhs, name, width, types, rhs_context, uses)
+        }
+        Expr::Cmp { op, lhs, rhs } => {
+            let signed_comparison = matches!(
+                op,
+                crate::ir::types::CmpOp::Slt | crate::ir::types::CmpOp::Sle
+            );
+            let lhs_context = signed_comparison && wide_signed_integer(rhs, types);
+            let rhs_context = signed_comparison && wide_signed_integer(lhs, types);
+            expr_uses_preserve_positive_value(lhs, name, width, types, lhs_context, uses)
+                && expr_uses_preserve_positive_value(rhs, name, width, types, rhs_context, uses)
+        }
+        Expr::Deref { addr, .. }
+        | Expr::Un { src: addr, .. }
+        | Expr::NumericConvert { expr: addr, .. }
+        | Expr::FunctionTableEntry { index: addr, .. } => {
+            expr_uses_preserve_positive_value(addr, name, width, types, false, uses)
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            expr_uses_preserve_positive_value(cond, name, width, types, false, uses)
+                && expr_uses_preserve_positive_value(
+                    if_true,
+                    name,
+                    width,
+                    types,
+                    unsigned_context,
+                    uses,
+                )
+                && expr_uses_preserve_positive_value(
+                    if_false,
+                    name,
+                    width,
+                    types,
+                    unsigned_context,
+                    uses,
+                )
+        }
+        Expr::Call { target, args, .. } => {
+            expr_uses_preserve_positive_value(target, name, width, types, false, uses)
+                && args.iter().all(|argument| {
+                    expr_uses_preserve_positive_value(argument, name, width, types, false, uses)
+                })
+        }
+        Expr::WideArithmetic { args, .. } => args.iter().all(|argument| {
+            expr_uses_preserve_positive_value(argument, name, width, types, false, uses)
+        }),
+        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => !base
+            .iter()
+            .chain(index.iter())
+            .any(|register| matches!(register, VReg::Phys(found) if found == name)),
+    }
+}
+
+fn wide_signed_integer(expression: &Expr, types: &TypeMap) -> bool {
+    match expression {
+        Expr::Cast {
+            signed: true,
+            width: 8,
+            ..
+        } => true,
+        Expr::Reg(VReg::Phys(name)) => {
+            crate::ir::ast::declared_int_type(name, Some(types)) == Some((true, 8))
+        }
+        _ => false,
+    }
+}
+
+fn unsigned_widening_cast(expression: &Expr, width: u8) -> bool {
+    matches!(
+        expression,
+        Expr::Cast {
+            signed: false,
+            width: cast_width,
+            ..
+        } if *cast_width > width
+    )
+}
+
+fn compatible_pointer_definitions(
+    definitions: &[Definition],
+    types: &TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<u8> {
     let mut width = 0;
     let mut has_pointer = false;
     let mut has_opaque_pointer = false;
@@ -612,7 +948,7 @@ fn compatible_pointer_definitions(definitions: &[Definition], types: &TypeMap) -
         if definition.is_null_initializer() {
             continue;
         }
-        match definition.classify(types) {
+        match definition.classify_with_identities(types, identities) {
             ValueClass::Pointer(next) if width == 0 || next == 0 || width == next => {
                 width = width.max(next);
                 has_pointer = true;
@@ -634,8 +970,13 @@ fn compatible_pointer_definitions(definitions: &[Definition], types: &TypeMap) -
     has_pointer.then_some(width)
 }
 
-fn classify_expr(expression: &Expr, types: &TypeMap) -> ValueClass {
+fn classify_expr(
+    expression: &Expr,
+    types: &TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> ValueClass {
     match expression {
+        Expr::Origin { expr, .. } => classify_expr(expr, types, identities),
         Expr::StringLit { .. } => ValueClass::Pointer(1),
         Expr::StackAddr { .. } => ValueClass::Pointer(0),
         Expr::FunctionTableEntry { .. } => ValueClass::Pointer(0),
@@ -651,18 +992,22 @@ fn classify_expr(expression: &Expr, types: &TypeMap) -> ValueClass {
                     ValueClass::Scalar
                 }
             }),
-        Expr::Reg(reg @ VReg::Phys(name)) if is_trusted_copy_source(name) => match types.get(reg) {
-            Some(TypeHint::Pointer { pointee_width }) => ValueClass::Pointer(pointee_width),
-            Some(TypeHint::CodePointer) => ValueClass::Pointer(0),
-            Some(_) => ValueClass::Scalar,
-            None => ValueClass::Unknown,
-        },
+        Expr::Reg(reg @ VReg::Phys(name))
+            if is_trusted_copy_source_with_identities(name, identities) =>
+        {
+            match types.get(reg) {
+                Some(TypeHint::Pointer { pointee_width }) => ValueClass::Pointer(pointee_width),
+                Some(TypeHint::CodePointer) => ValueClass::Pointer(0),
+                Some(_) => ValueClass::Scalar,
+                None => ValueClass::Unknown,
+            }
+        }
         Expr::Reg(_) => ValueClass::Unknown,
         Expr::Select {
             if_true, if_false, ..
         } => merge_selected_values(
-            classify_expr(if_true, types),
-            classify_expr(if_false, types),
+            classify_expr(if_true, types, identities),
+            classify_expr(if_false, types, identities),
             if_true,
             if_false,
         ),
@@ -764,6 +1109,19 @@ fn is_source_value_local(name: &str) -> bool {
     is_high_variable(name) || is_promoted_local(name)
 }
 
+fn is_source_value_local_with_identities(
+    name: &str,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    if is_promoted_local(name) {
+        return true;
+    }
+    match identities {
+        Some(identities) => identities.exact(&VReg::phys(name)).is_some(),
+        None => is_high_variable(name),
+    }
+}
+
 fn is_high_variable(name: &str) -> bool {
     name.strip_prefix("var").is_some_and(|suffix| {
         !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
@@ -774,13 +1132,29 @@ fn is_trusted_copy_source(name: &str) -> bool {
     is_source_value_local(name) || crate::ir::ast::parse_arg_index(name).is_some()
 }
 
+fn is_trusted_copy_source_with_identities(
+    name: &str,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    if is_promoted_local(name) {
+        return true;
+    }
+    match identities {
+        Some(identities) => {
+            let value = VReg::phys(name);
+            identities.exact(&value).is_some() || identities.parameter_slot(&value).is_some()
+        }
+        None => is_trusted_copy_source(name),
+    }
+}
+
 /// Mark names below incompatible integer/address operations. Declaring these
 /// as pointers could scale byte arithmetic or make bitwise operators ill-typed.
 /// Direct copies, returns, call arguments, comparisons, identity addresses, and
 /// byte-scaled character-pointer arithmetic stay eligible.
 fn collect_unsafe_pointer_uses(body: &[Stmt], types: Option<&TypeMap>, out: &mut HashSet<String>) {
     for statement in body {
-        match statement {
+        match statement.semantic() {
             Stmt::Assign { src, .. } | Stmt::Return { value: Some(src) } => {
                 collect_unsafe_expr(src, false, types, out)
             }
@@ -848,6 +1222,7 @@ fn collect_unsafe_expr(
     out: &mut HashSet<String>,
 ) {
     match expression {
+        Expr::Origin { expr, .. } => collect_unsafe_expr(expr, integer_context, types, out),
         Expr::Reg(VReg::Phys(name)) if integer_context => {
             out.insert(name.clone());
         }

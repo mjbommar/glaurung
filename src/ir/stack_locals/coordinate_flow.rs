@@ -84,7 +84,10 @@ pub(super) fn collect_label_stack_deltas(
         address_defs: &HashMap<VReg, (String, i64)>,
     ) -> StackFlow {
         for statement in body {
-            match statement {
+            match statement.semantic() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::Assign { dst, src } if is_stack_pointer_reg(dst, ctx) => {
                     flow = update_stack_assignment(flow, dst, src, ctx, address_defs);
                 }
@@ -293,7 +296,10 @@ fn frame_coordinate_is_dead_after(body: &[Stmt], register: &VReg, ctx: StackCont
         if !crate::ir::dead_stores::stmt_reads(statement, register) {
             return true;
         }
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => {
+                unreachable!("semantic statement cannot be an origin wrapper")
+            }
             // The stack-pointer restore is the teardown's whole purpose.
             Stmt::Assign { dst, .. } if is_stack_pointer_reg(dst, ctx) => true,
             Stmt::Assign { src, .. } => !expression_roots_at(src, register),
@@ -358,7 +364,10 @@ pub(super) fn collect_stack_address_defs(
         label_deltas: &HashMap<u64, Option<i64>>,
     ) {
         for (statement_index, stmt) in body.iter().enumerate() {
-            match stmt {
+            match stmt.semantic() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::Assign { dst, src } => {
                     let address = resolve_stack_address(src, *sp_delta, ctx, out);
                     if is_stack_pointer_reg(dst, ctx) {

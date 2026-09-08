@@ -209,7 +209,7 @@ def test_every_declared_local_is_assigned_before_the_body_uses_it(
         text = decompile(binary, db)
         if "named_slot" not in text:
             continue
-        assert re.search(r"^\s+named_slot\s*=", text, re.M), (
+        assert re.search(r"^\s+(?:unsigned int\s+)?named_slot\s*=", text, re.M), (
             f"offset {offset} declared `named_slot` and never assigned it:\n{text}"
         )
 
@@ -267,6 +267,8 @@ def test_an_unusable_name_is_refused(binary, scan_va, bound, tmp_path):
 
 def test_without_a_project_nothing_changes(binary):
     text = decompile(binary, None)
-    assert re.search(r"\blocal_[0-9a-f]+\b", text), (
-        "the stripped baseline should show anonymous locals:\n" + text
-    )
+    assert decompile(binary, None) == text
+    for analyst_name in ("named_slot", "running_total", "untyped", "acc"):
+        assert analyst_name not in text, (
+            f"the no-project render leaked analyst name {analyst_name!r}:\n{text}"
+        )

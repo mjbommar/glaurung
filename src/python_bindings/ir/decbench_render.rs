@@ -83,6 +83,7 @@ pub(super) fn select_renderable_dwarf_local_facts(
 
 pub(super) fn decbench_text(
     f: &crate::ir::ast::Function,
+    value_identities: &crate::ir::value_number::ValueIdentities,
     profiler: &mut crate::decompile::profile::FunctionProfiler,
     cfg_health: crate::ir::health::CfgHealth,
     exception_sites: &[crate::analysis::exception::ExceptionCallSite],
@@ -97,6 +98,7 @@ pub(super) fn decbench_text(
     dwarf_types: &[crate::debug::dwarf::DwarfType],
     dwarf_local_types: &std::collections::HashMap<String, String>,
     dwarf_local_names: &std::collections::HashMap<String, String>,
+    promoted_stack_slots: &std::collections::HashMap<String, u8>,
     dwarf_static_locals: &[crate::debug::dwarf::DwarfStaticLocal],
     cc: crate::ir::call_args::CallConv,
     addr_map: &std::collections::HashMap<u64, String>,
@@ -116,6 +118,7 @@ pub(super) fn decbench_text(
     crate::ir::ast::install_dec_function_static_locals(dwarf_static_locals.iter().cloned());
     let text = decbench_text_with_installed_environment(
         f,
+        value_identities,
         profiler,
         cfg_health,
         exception_sites,
@@ -130,6 +133,7 @@ pub(super) fn decbench_text(
         dwarf_types,
         dwarf_local_types,
         dwarf_local_names,
+        promoted_stack_slots,
         cc,
         addr_map,
     );
@@ -144,6 +148,7 @@ pub(super) fn decbench_text(
 #[allow(clippy::too_many_arguments)]
 fn decbench_text_with_installed_environment(
     f: &crate::ir::ast::Function,
+    value_identities: &crate::ir::value_number::ValueIdentities,
     profiler: &mut crate::decompile::profile::FunctionProfiler,
     cfg_health: crate::ir::health::CfgHealth,
     exception_sites: &[crate::analysis::exception::ExceptionCallSite],
@@ -158,9 +163,11 @@ fn decbench_text_with_installed_environment(
     dwarf_types: &[crate::debug::dwarf::DwarfType],
     dwarf_local_types: &std::collections::HashMap<String, String>,
     dwarf_local_names: &std::collections::HashMap<String, String>,
+    promoted_stack_slots: &std::collections::HashMap<String, u8>,
     cc: crate::ir::call_args::CallConv,
     addr_map: &std::collections::HashMap<u64, String>,
 ) -> String {
+    let mut value_identities = value_identities.clone();
     let output_kind = recovered_prototype.map_or(
         crate::ir::types_recover::RecoveredOutputKind::Unknown,
         crate::ir::types_recover::RecoveredPrototype::output_kind,
@@ -171,22 +178,30 @@ fn decbench_text_with_installed_environment(
         .keys()
         .cloned()
         .collect::<std::collections::HashSet<_>>();
-    let mut prepared = profiler.measure("prepare_for_decbench", || {
-        let mut prepared = crate::ir::ast::prepare_for_decbench_with_output_and_protected_locals(
-            f,
-            output_kind,
-            &protected_locals,
-            calling_convention_pointer_width(cc),
-        );
+    let (mut prepared, fixpoints) = profiler.measure("prepare_for_decbench", || {
+        let (mut prepared, fixpoints) =
+            crate::ir::ast::prepare_for_decbench_with_output_and_protected_locals_and_report(
+                f,
+                output_kind,
+                &protected_locals,
+                calling_convention_pointer_width(cc),
+                Some(&value_identities),
+            );
         // Preparation deletes proof-dead caller-saved register zeroing from
         // hardened GCC epilogues.  Only at this point can the x86 frame owner
         // see the adjacent balanced x87 scrub and stack teardown as one exact
         // machine-only suffix.  Run the idempotent recogniser at this semantic
         // boundary, then repeat the narrow joined-return fold it may unblock.
         // The renderer below remains formatting-only.
-        recognise_machine_frame(&mut prepared, cc);
-        crate::ir::ast::fold_exhaustive_if_returns(&mut prepared);
-        crate::ir::ast::remove_redundant_return_constant_assignments(&mut prepared.body);
+        recognise_machine_frame(&mut prepared, cc, &value_identities);
+        crate::ir::ast::fold_exhaustive_if_returns_with_identities(
+            &mut prepared,
+            &value_identities,
+        );
+        crate::ir::ast::remove_redundant_return_constant_assignments_with_identities(
+            &mut prepared.body,
+            &value_identities,
+        );
         // Preparation is also where a PC-relative address arithmetic sequence
         // finally becomes an absolute address. On AArch64 the stack guard is reached
         // through its GOT slot (`adrp`/`ldr`/`ldr`), so at the earlier
@@ -202,7 +217,7 @@ fn decbench_text_with_installed_environment(
         // to look up and no address for the renderer to back with a portable object.
         // `read_counter` emitted `*(int *)(0x20000 + 28)` — a dereference of a raw
         // original-image address, which is a wild pointer once recompiled.
-        crate::ir::const_fold::fold_constants(&mut prepared);
+        crate::ir::const_fold::fold_constants_with_identities(&mut prepared, &value_identities);
         crate::ir::name_resolve::resolve_names(&mut prepared, addr_map);
         crate::ir::canary::recognise_canary(&mut prepared);
         // Source-level preparation folds GCC's multi-statement reload/sub/flag
@@ -210,8 +225,20 @@ fn decbench_text_with_installed_environment(
         // the idempotent canary pass here so the earlier collapsed save cannot
         // leave that now-recognisable check reading an uninitialised C local.
         crate::ir::canary::collapse_canary_save(&mut prepared);
-        prepared
+        (prepared, fixpoints)
     });
+    profiler.record_fixpoint(
+        "copies_and_constants",
+        fixpoints.copies_and_constants.rounds,
+        fixpoints.copies_and_constants.firing_rounds,
+        fixpoints.copies_and_constants.termination.label(),
+    );
+    profiler.record_fixpoint(
+        "forward_regions_and_loops",
+        fixpoints.forward_regions_and_loops.rounds,
+        fixpoints.forward_regions_and_loops.firing_rounds,
+        fixpoints.forward_regions_and_loops.termination.label(),
+    );
     // From here to the verification boundary every semantic step is a NAMED pass.
     //
     // Naming is not cosmetic. `run_ast_passes` has always announced each of its
@@ -262,40 +289,48 @@ fn decbench_text_with_installed_environment(
     let mut refined_width = width.cloned();
     if let Some(tm) = refined_decl.as_mut() {
         refine!("refine_decbench_abi_widths", {
-            crate::ir::ast::refine_decbench_abi_widths_with_value_widths(
+            crate::ir::ast::refine_decbench_abi_widths_with_identities(
                 &prepared,
                 tm,
                 exact_value_widths,
+                Some(&value_identities),
             );
-            crate::ir::high_variables::refine_pointer_high_variables(&prepared, tm);
+            crate::ir::high_variables::refine_pointer_high_variables_with_identities(
+                &prepared,
+                tm,
+                Some(&value_identities),
+            );
         });
     }
     if let Some(tm) = refined_decl.as_mut() {
-        pass!(
-            "coalesce_loop_entry_copies",
-            crate::ir::latch_predicate::coalesce_loop_entry_copies(
+        pass!("coalesce_loop_entry_copies", {
+            let renames = crate::ir::latch_predicate::coalesce_loop_entry_copies_with_identities(
                 &mut prepared,
                 &protected_locals,
                 tm,
-            )
-        );
-        pass!(
-            "coalesce_source_loop_updates",
-            crate::ir::latch_predicate::coalesce_source_loop_updates(
+                Some(&value_identities),
+            );
+            value_identities.apply_renames(&renames);
+        });
+        pass!("coalesce_source_loop_updates", {
+            let renames = crate::ir::latch_predicate::coalesce_source_loop_updates(
                 &mut prepared,
                 &protected_locals,
                 tm,
                 exact_value_widths,
-            )
-        );
+                Some(&value_identities),
+            );
+            value_identities.apply_renames(&renames);
+        });
     }
     if let Some(tm) = refined_width.as_mut() {
         refine!(
             "refine_decbench_abi_widths_for_width_map",
-            crate::ir::ast::refine_decbench_abi_widths_with_value_widths(
+            crate::ir::ast::refine_decbench_abi_widths_with_identities(
                 &prepared,
                 tm,
                 exact_value_widths,
+                Some(&value_identities),
             )
         );
     }
@@ -306,15 +341,27 @@ fn decbench_text_with_installed_environment(
         );
         pass!(
             "fold_typed_declared_views",
-            crate::ir::const_fold::fold_typed_declared_views(&mut prepared, tm)
+            crate::ir::const_fold::fold_typed_declared_views_with_identities(
+                &mut prepared,
+                tm,
+                Some(&value_identities),
+            )
         );
         pass!(
             "fold_consumed_extensions",
-            crate::ir::typed_simplify::fold_consumed_extensions(&mut prepared, tm)
+            crate::ir::typed_simplify::fold_consumed_extensions_with_identities(
+                &mut prepared,
+                tm,
+                Some(&value_identities),
+            )
         );
         pass!(
             "fold_typed_comparison_extensions",
-            crate::ir::const_fold::fold_typed_comparison_extensions(&mut prepared, tm)
+            crate::ir::const_fold::fold_typed_comparison_extensions_with_identities(
+                &mut prepared,
+                tm,
+                Some(&value_identities),
+            )
         );
         // After the typed comparison folds, so both halves of a two-comparison
         // guard have already had their extensions normalised -- the fusion
@@ -326,7 +373,14 @@ fn decbench_text_with_installed_environment(
         );
         pass!(
             "fold_constants_after_typed_folds",
-            crate::ir::const_fold::fold_constants(&mut prepared)
+            crate::ir::const_fold::fold_constants_with_identities(&mut prepared, &value_identities,)
+        );
+        // Comparison fusion may expose `predicate == 0`; constant folding
+        // converts that shell to the exact inverse comparison before path
+        // contradiction pruning compares outer and nested guards.
+        pass!(
+            "prune_contradictory_nested_guards",
+            crate::ir::guard_chain::prune_contradictory_nested_guards(&mut prepared)
         );
     }
     pass!("fold_guarded_readonly_lookups", {
@@ -336,7 +390,7 @@ fn decbench_text_with_installed_environment(
         // consumers such as packed byte-table permutations see the literal index
         // rather than rendering a dynamic 16-way lookup for a compiler-emitted mask.
         crate::ir::copy_prop::propagate_copies(&mut prepared);
-        crate::ir::const_fold::fold_constants(&mut prepared);
+        crate::ir::const_fold::fold_constants_with_identities(&mut prepared, &value_identities);
     });
     // PIC address materialisation on 32-bit ARM/x86 can become an absolute
     // constant only during late AST preparation, after the ordinary LLIR
@@ -356,7 +410,10 @@ fn decbench_text_with_installed_environment(
     // path. Fold it before verification and rendering as well.
     pass!(
         "fold_exhaustive_switch_returns",
-        crate::ir::ast::fold_exhaustive_switch_returns(&mut prepared)
+        crate::ir::ast::fold_exhaustive_switch_returns_with_identities(
+            &mut prepared,
+            &value_identities,
+        )
     );
     if let Some(tm) = refined_decl.as_ref() {
         pass!(
@@ -369,10 +426,11 @@ fn decbench_text_with_installed_environment(
         // or value identity.
         pass!(
             "insert_widening_casts_for_machine_width",
-            crate::ir::widen::insert_widening_casts_for_machine_width(
+            crate::ir::widen::insert_widening_casts_for_machine_width_with_identities(
                 &mut prepared,
                 tm,
                 machine_word_bytes(cc),
+                Some(&value_identities),
             )
         );
         // The subtract-and-unsigned-compare range idiom is deliberately
@@ -426,14 +484,15 @@ fn decbench_text_with_installed_environment(
             calling_convention_pointer_width(cc),
         )
     });
-    pass!(
-        "apply_authoritative_local_names",
-        crate::ir::naming::apply_authoritative_local_names(&mut prepared, &dwarf_local_names)
-    );
+    pass!("apply_authoritative_local_names", {
+        crate::ir::naming::apply_authoritative_local_names(&mut prepared, &dwarf_local_names);
+        value_identities.apply_role_renames(&dwarf_local_names);
+    });
     let canonical_loop_names = pass!(
         "apply_canonical_loop_local_names",
         crate::ir::naming::apply_canonical_loop_local_names(&mut prepared)
     );
+    value_identities.apply_role_renames(&canonical_loop_names);
     // The AST identity, declaration facts, and width facts are one contract.
     // A presentation rename that updates only the AST turns an `int local_8`
     // into an untyped `long sum`; keep the recovered facts reachable under the
@@ -492,13 +551,16 @@ fn decbench_text_with_installed_environment(
         "prune_unobserved_promoted_object_stores",
         crate::ir::dead_stores::prune_unobserved_promoted_object_stores(&mut prepared)
     );
+    pass!("prune_promoted_self_stores", {
+        crate::ir::stack_locals::prune_promoted_self_stores(&mut prepared, promoted_stack_slots)
+    });
     // Typed/local preparation can be the first point at which every saved
     // cdecl32 frame identity has disappeared and GCC's entry-realignment
     // prologue/epilogue becomes one exact balanced transaction. Repeat the
     // idempotent architecture recognizer at the final semantic boundary so
     // the verifier and renderer never inherit that now-provable ABI state.
     pass!("recognise_final_machine_frame", {
-        recognise_machine_frame(&mut prepared, cc)
+        recognise_machine_frame(&mut prepared, cc, &value_identities)
     });
     pass!("drop_final_machine_frame_comments", {
         crate::ir::ast::drop_machine_frame_comments(&mut prepared.body)
@@ -535,7 +597,7 @@ fn decbench_text_with_installed_environment(
     // means the emitted C reads a value the machine never produced, and a proof
     // that fails into a dropped `Vec` is a wrong-code bug nobody can count.
     let verification = profiler.measure("verify_before_render", || {
-        crate::ir::verify_defs::verify_before_render(&prepared)
+        crate::ir::verify_defs::verify_before_render_with_identities(&prepared, &value_identities)
     });
     crate::ir::health::record_render_verification(&verification);
     let violations = verification.violations;
@@ -562,10 +624,12 @@ fn decbench_text_with_installed_environment(
                     }
                 }
             }
-            let refined = crate::ir::call_contracts::refine_opaque_parameter_types_from_calls(
-                &prepared,
-                &machine_prototype,
-            );
+            let refined =
+                crate::ir::call_contracts::refine_opaque_parameter_types_from_calls_with_identities(
+                    &prepared,
+                    &machine_prototype,
+                    &value_identities,
+                );
             (refined != machine_prototype).then_some(refined)
         })
     } else {
@@ -668,7 +732,7 @@ fn decbench_text_with_installed_environment(
         .or(single_render_prototype.as_ref())
         .or(render_prototype);
     let body = profiler.measure("render_decbench", || {
-        crate::ir::ast::render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types_and_parameter_names(
+        crate::ir::ast::render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types_and_parameter_names_and_identities(
             &prepared,
             decl,
             width,
@@ -679,6 +743,7 @@ fn decbench_text_with_installed_environment(
             calling_convention_pointer_width(cc),
             &dwarf_pointer_types,
             &rendered_local_types,
+            Some(&value_identities),
         )
     });
     if violations.is_empty() {

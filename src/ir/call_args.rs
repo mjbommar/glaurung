@@ -43,23 +43,30 @@ mod slot_marking;
 mod tail_calls;
 
 use aapcs::{
-    aapcs_core_register_arity, aapcs_integer_stack_suffix, fold_one_arm_hard_float_call,
-    known_arm_core_register_arity, known_arm_hard_float_layout, outgoing_aapcs_stack_area,
+    aapcs_core_register_arity, aapcs_integer_stack_suffix,
+    fold_one_arm_hard_float_call_with_identities, known_arm_core_register_arity,
+    known_arm_hard_float_layout, outgoing_aapcs_stack_area_with_identities,
 };
 use captured_defs::{
-    is_stable_frame_arg_definition, resolve_captured_definition, resolve_captured_definition_in,
-    substitute_exact_reg,
+    is_stable_frame_arg_definition_with_identities, resolve_captured_definition,
+    resolve_captured_definition_in, substitute_exact_reg,
 };
 use cdecl32::fold_one_cdecl32_call;
 use enclosing_slots::EnclosingSlots;
 use fold_one_call::fold_one_call;
-use return_attribution::{attribute_call_results, return_value_is_read};
+use return_attribution::{attribute_call_results, attribute_call_results_with_identities};
 use slot_marking::{
-    mark_arg_reads_in_expr, mark_arg_reads_in_stmt, mark_arg_writes_in_stmt, mark_slot_write,
+    mark_arg_reads_in_expr_with_identities, mark_arg_reads_in_stmt_with_identities,
+    mark_arg_writes_in_stmt_with_identities, mark_slot_write_with_identities,
 };
 pub use tail_calls::{
     recover_proven_vtable_tail_calls, recover_resolved_direct_tail_calls,
     recover_resolved_tail_calls,
+};
+pub(crate) use tail_calls::{
+    recover_proven_vtable_tail_calls_with_identities,
+    recover_resolved_direct_tail_calls_with_identities,
+    recover_resolved_tail_calls_with_identities,
 };
 
 /// Compatibility export while ABI consumers migrate to `crate::target`.
@@ -145,8 +152,28 @@ fn layout_matches_abi_allocation_order(arch: CallConv, layout: &[VReg]) -> bool 
 /// pointer changes meaning after any later allocation. Keeping these
 /// definitions statement-rooted is conservative and preserves the coordinate
 /// oracle's ownership of frame rebasing.
-fn is_frame_coordinate_storage(arch: CallConv, name: &str) -> bool {
-    let name = ssa_base(name);
+fn is_frame_coordinate_storage(
+    arch: CallConv,
+    register: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    let name = match identities {
+        Some(identities) => {
+            let Some(identity) = identities.exact(register) else {
+                return false;
+            };
+            let VReg::Phys(base) = &identity.base else {
+                return false;
+            };
+            base.as_str()
+        }
+        None => {
+            let VReg::Phys(name) = register else {
+                return false;
+            };
+            ssa_base(name)
+        }
+    };
     match arch {
         CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Cdecl32 => {
             matches!(name, "rsp" | "esp" | "rbp" | "ebp")
@@ -171,8 +198,32 @@ fn is_frame_coordinate_storage(arch: CallConv, name: &str) -> bool {
 /// body: later versions are definitions made inside the function. When the slot's
 /// register does not appear at all there is no incoming value to name and no
 /// argument is invented.
-fn incoming_arg_expr(arch: CallConv, slot: usize, body: &[Stmt]) -> Option<Expr> {
+fn incoming_arg_expr_with_identities(
+    arch: CallConv,
+    slot: usize,
+    body: &[Stmt],
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<Expr> {
     let names = arg_slots(arch).get(slot)?;
+    if let Some(identities) = identities {
+        let mut live_in = None;
+        walk_body_reg_names(body, &mut |name| {
+            if live_in.is_some() {
+                return;
+            }
+            let register = VReg::phys(name);
+            let Some(identity) = identities.exact(&register) else {
+                return;
+            };
+            let VReg::Phys(base) = &identity.base else {
+                return;
+            };
+            if identity.version == 0 && names.contains(&base.as_str()) {
+                live_in = Some(Expr::Reg(register));
+            }
+        });
+        return live_in;
+    }
     // Is this body value-numbered at all? On the un-numbered path the incoming
     // register is implicit — it legitimately appears nowhere — and the bare
     // canonical name is the right reference, as it always was.
@@ -254,7 +305,8 @@ fn walk_body_reg_names(body: &[Stmt], f: &mut impl FnMut(&str)) {
         }
     }
     for s in body {
-        match s {
+        match s.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
                 if let VReg::Phys(n) = dst {
                     f(n);
@@ -434,12 +486,62 @@ pub fn reconstruct_args_with_layouts_prototypes_and_strings(
     >,
     string_pool: &std::collections::HashMap<u64, String>,
 ) {
+    reconstruct_args_with_layouts_prototypes_strings_and_optional_identities(
+        f,
+        arch,
+        param_slots,
+        callee_layouts,
+        table_entry_layouts,
+        direct_prototypes,
+        string_pool,
+        None,
+    );
+}
+
+/// Production form of [`reconstruct_args_with_layouts_prototypes_and_strings`]
+/// that resolves incoming values through exact SSA identities.
+pub fn reconstruct_args_with_layouts_prototypes_strings_and_identities(
+    f: &mut Function,
+    arch: CallConv,
+    param_slots: &mut std::collections::HashSet<usize>,
+    callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+    table_entry_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+    direct_prototypes: Option<
+        &std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>,
+    >,
+    string_pool: &std::collections::HashMap<u64, String>,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    reconstruct_args_with_layouts_prototypes_strings_and_optional_identities(
+        f,
+        arch,
+        param_slots,
+        callee_layouts,
+        table_entry_layouts,
+        direct_prototypes,
+        string_pool,
+        Some(identities),
+    );
+}
+
+fn reconstruct_args_with_layouts_prototypes_strings_and_optional_identities(
+    f: &mut Function,
+    arch: CallConv,
+    param_slots: &mut std::collections::HashSet<usize>,
+    callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+    table_entry_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+    direct_prototypes: Option<
+        &std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>,
+    >,
+    string_pool: &std::collections::HashMap<u64, String>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     // The spelling this function uses for each live-in argument register is a
     // WHOLE-FUNCTION fact. Answering it from the statement list that happens to
     // contain the call makes an untouched incoming parameter invisible to every
     // call nested in a branch arm — see `EnclosingSlots`.
     let function_live_ins = (0..arg_slots(arch).len())
-        .map(|slot| incoming_arg_expr(arch, slot, &f.body))
+        .map(|slot| incoming_arg_expr_with_identities(arch, slot, &f.body, identities))
         .collect::<Vec<_>>();
     fold_body(
         &mut f.body,
@@ -452,8 +554,12 @@ pub fn reconstruct_args_with_layouts_prototypes_and_strings(
         },
         &function_live_ins,
         string_pool,
+        identities,
     );
-    attribute_call_results(&mut f.body, arch);
+    match identities {
+        Some(identities) => attribute_call_results_with_identities(&mut f.body, arch, identities),
+        None => attribute_call_results(&mut f.body, arch),
+    }
 }
 
 /// The register a callee leaves its return value in.
@@ -486,14 +592,18 @@ fn return_reg(arch: CallConv) -> &'static str {
 /// This is deliberately NOT the general answer. Reaching definitions across
 /// arbitrary joins belong to the verified MIR query surface; this proof only
 /// removes the cases where there is provably nothing to reason about.
-fn entry_constant_slots(body: &[Stmt], arch: CallConv) -> Vec<bool> {
+fn entry_constant_slots(
+    body: &[Stmt],
+    arch: CallConv,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Vec<bool> {
     let slots = arg_slots(arch).len();
     if !every_call_returns_immediately(body) {
         return vec![false; slots];
     }
     let mut written = vec![false; slots];
     for statement in body {
-        mark_slot_writes_everywhere(statement, arch, &mut written);
+        mark_slot_writes_everywhere(statement, arch, &mut written, identities);
     }
     written.into_iter().map(|write| !write).collect()
 }
@@ -506,7 +616,8 @@ fn entry_constant_slots(body: &[Stmt], arch: CallConv) -> Vec<bool> {
 /// other call site is reachable from it.
 fn every_call_returns_immediately(body: &[Stmt]) -> bool {
     fn nested_bodies(statement: &Stmt) -> Vec<&[Stmt]> {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -529,10 +640,13 @@ fn every_call_returns_immediately(body: &[Stmt]) -> bool {
         }
     }
     for (index, statement) in body.iter().enumerate() {
-        if matches!(statement, Stmt::Call { .. }) {
+        if matches!(statement.semantic(), Stmt::Call { .. }) {
             let mut returns = false;
             for following in &body[index + 1..] {
-                match following {
+                match following.semantic() {
+                    Stmt::Origin { .. } => {
+                        unreachable!("semantic statement cannot be an origin wrapper")
+                    }
                     Stmt::Return { .. } => {
                         returns = true;
                         break;
@@ -567,31 +681,41 @@ fn every_call_returns_immediately(body: &[Stmt]) -> bool {
 /// Unlike `mark_arg_writes_in_stmt` this deliberately ignores control flow: the
 /// question is whether the slot is written ANYWHERE, so branch arms that cannot
 /// fall through still count.
-fn mark_slot_writes_everywhere(statement: &Stmt, arch: CallConv, written: &mut [bool]) {
-    match statement {
-        Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => mark_slot_write(dst, arch, written),
-        Stmt::Call { dst: Some(dst), .. } => mark_slot_write(dst, arch, written),
+fn mark_slot_writes_everywhere(
+    statement: &Stmt,
+    arch: CallConv,
+    written: &mut [bool],
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
+    match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
+        Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => {
+            mark_slot_write_with_identities(dst, arch, written, identities)
+        }
+        Stmt::Call { dst: Some(dst), .. } => {
+            mark_slot_write_with_identities(dst, arch, written, identities)
+        }
         Stmt::If {
             then_body,
             else_body,
             ..
         } => {
             for nested in then_body.iter().chain(else_body.iter().flatten()) {
-                mark_slot_writes_everywhere(nested, arch, written);
+                mark_slot_writes_everywhere(nested, arch, written, identities);
             }
         }
         Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
             for nested in body {
-                mark_slot_writes_everywhere(nested, arch, written);
+                mark_slot_writes_everywhere(nested, arch, written, identities);
             }
         }
         Stmt::For {
             init, step, body, ..
         } => {
-            mark_slot_writes_everywhere(init, arch, written);
-            mark_slot_writes_everywhere(step, arch, written);
+            mark_slot_writes_everywhere(init, arch, written, identities);
+            mark_slot_writes_everywhere(step, arch, written, identities);
             for nested in body {
-                mark_slot_writes_everywhere(nested, arch, written);
+                mark_slot_writes_everywhere(nested, arch, written, identities);
             }
         }
         Stmt::Switch { cases, default, .. } => {
@@ -600,7 +724,7 @@ fn mark_slot_writes_everywhere(statement: &Stmt, arch: CallConv, written: &mut [
                 .flat_map(|(_, case)| case)
                 .chain(default.iter().flatten())
             {
-                mark_slot_writes_everywhere(nested, arch, written);
+                mark_slot_writes_everywhere(nested, arch, written, identities);
             }
         }
         Stmt::TryCatch { try_body, catches } => {
@@ -608,7 +732,7 @@ fn mark_slot_writes_everywhere(statement: &Stmt, arch: CallConv, written: &mut [
                 .iter()
                 .chain(catches.iter().flat_map(|catch| &catch.body))
             {
-                mark_slot_writes_everywhere(nested, arch, written);
+                mark_slot_writes_everywhere(nested, arch, written, identities);
             }
         }
         _ => {}
@@ -637,10 +761,19 @@ fn fold_body(
     callee_layouts: CalleeLayouts<'_>,
     function_live_ins: &[Option<Expr>],
     string_pool: &std::collections::HashMap<u64, String>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
-    let entry_constant = entry_constant_slots(body, arch);
+    let entry_constant = entry_constant_slots(body, arch, identities);
     let entry = EnclosingSlots::entry(arch, function_live_ins, entry_constant);
-    fold_body_with_context(body, arch, param_slots, callee_layouts, &entry, string_pool);
+    fold_body_with_context(
+        body,
+        arch,
+        param_slots,
+        callee_layouts,
+        &entry,
+        string_pool,
+        identities,
+    );
 }
 
 fn fold_body_with_context(
@@ -650,6 +783,7 @@ fn fold_body_with_context(
     callee_layouts: CalleeLayouts<'_>,
     enclosing: &EnclosingSlots,
     string_pool: &std::collections::HashMap<u64, String>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
     // Recurse into nested bodies first so we don't miss calls inside arms.
     // `running` is the enclosing clobber mask at each position, accumulated in
@@ -664,7 +798,8 @@ fn fold_body_with_context(
         let (prefix, suffix) = body.split_at_mut(index);
         let s = &mut suffix[0];
         let nested = enclosing.with_blocked(running.clone(), reaching.clone());
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -677,6 +812,7 @@ fn fold_body_with_context(
                     callee_layouts,
                     &nested,
                     string_pool,
+                    identities,
                 );
                 if let Some(eb) = else_body {
                     fold_body_with_context(
@@ -686,15 +822,20 @@ fn fold_body_with_context(
                         callee_layouts,
                         &nested,
                         string_pool,
+                        identities,
                     );
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                 // A loop's own carried inputs are `loop_carried_arg_inputs`'
                 // business; only the path INTO the loop is inherited here.
-                let loop_inputs = loop_carried_arg_inputs(prefix, body, arch, &enclosing.overrides);
+                let loop_inputs =
+                    loop_carried_arg_inputs(prefix, body, arch, &enclosing.overrides, identities);
                 let nested = enclosing
-                    .with_blocked(running.clone(), loop_body_reaching(&reaching, body, arch))
+                    .with_blocked(
+                        running.clone(),
+                        loop_body_reaching(&reaching, body, arch, identities),
+                    )
                     .with_overrides(loop_inputs);
                 fold_body_with_context(
                     body,
@@ -703,11 +844,14 @@ fn fold_body_with_context(
                     callee_layouts,
                     &nested,
                     string_pool,
+                    identities,
                 )
             }
             Stmt::For { body, .. } => {
-                let nested = enclosing
-                    .with_blocked(running.clone(), loop_body_reaching(&reaching, body, arch));
+                let nested = enclosing.with_blocked(
+                    running.clone(),
+                    loop_body_reaching(&reaching, body, arch, identities),
+                );
                 fold_body_with_context(
                     body,
                     arch,
@@ -715,6 +859,7 @@ fn fold_body_with_context(
                     callee_layouts,
                     &nested,
                     string_pool,
+                    identities,
                 )
             }
             Stmt::Switch { cases, default, .. } => {
@@ -726,6 +871,7 @@ fn fold_body_with_context(
                         callee_layouts,
                         &nested,
                         string_pool,
+                        identities,
                     );
                 }
                 if let Some(default) = default {
@@ -736,13 +882,14 @@ fn fold_body_with_context(
                         callee_layouts,
                         &nested,
                         string_pool,
+                        identities,
                     );
                 }
             }
             _ => {}
         }
-        EnclosingSlots::advance(&mut running, &suffix[0], arch);
-        EnclosingSlots::advance_reaching(&mut reaching, &suffix[0], arch);
+        EnclosingSlots::advance(&mut running, &suffix[0], arch, identities);
+        EnclosingSlots::advance_reaching(&mut reaching, &suffix[0], arch, identities);
     }
 
     // Find calls and walk backward from each to collect args.
@@ -750,7 +897,7 @@ fn fold_body_with_context(
         .iter()
         .enumerate()
         .filter_map(|(i, s)| {
-            if matches!(s, Stmt::Call { .. }) {
+            if matches!(s.semantic(), Stmt::Call { .. }) {
                 Some(i)
             } else {
                 None
@@ -770,6 +917,7 @@ fn fold_body_with_context(
             callee_layouts,
             enclosing,
             string_pool,
+            identities,
         );
     }
 }
@@ -785,10 +933,11 @@ fn loop_body_reaching(
     incoming: &[Option<Expr>],
     loop_body: &[Stmt],
     arch: CallConv,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Vec<Option<Expr>> {
     let mut written = vec![false; incoming.len()];
     for statement in loop_body {
-        mark_slot_writes_everywhere(statement, arch, &mut written);
+        mark_slot_writes_everywhere(statement, arch, &mut written, identities);
     }
     incoming
         .iter()
@@ -811,37 +960,60 @@ fn loop_carried_arg_inputs(
     loop_body: &[Stmt],
     arch: CallConv,
     inherited: &[Option<Expr>],
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Vec<Option<Expr>> {
     let mut inputs = inherited.to_vec();
     inputs.resize(arg_slots(arch).len(), None);
     for (update_index, statement) in loop_body.iter().enumerate() {
-        let Stmt::Assign {
-            dst: VReg::Phys(dst),
-            ..
-        } = statement
-        else {
+        let Stmt::Assign { dst, .. } = statement.semantic() else {
             continue;
         };
-        let Some(slot) = slot_of(arch, dst) else {
+        let Some((slot, versioned, initialized)) = (match identities {
+            Some(identities) => identities.exact(dst).and_then(|identity| {
+                let storage = identity.canonical_physical_base()?;
+                let slot = slot_of(arch, storage)?;
+                let initialized = prefix.iter().rev().any(|candidate| {
+                    matches!(
+                        candidate.semantic(),
+                        Stmt::Assign { dst: prior, .. }
+                            if identities.exact(prior) == Some(identity)
+                    )
+                });
+                Some((slot, identity.version > 0, initialized))
+            }),
+            None => {
+                let VReg::Phys(name) = dst else {
+                    continue;
+                };
+                slot_of(arch, name).map(|slot| {
+                    let initialized = prefix.iter().rev().any(|candidate| {
+                        matches!(
+                            candidate.semantic(),
+                            Stmt::Assign { dst: VReg::Phys(prior), .. } if prior == name
+                        )
+                    });
+                    (slot, name.contains('#'), initialized)
+                })
+            }
+        }) else {
             continue;
         };
-        if !dst.contains('#')
+        if !versioned
             || !loop_body[..update_index]
                 .iter()
-                .any(|candidate| matches!(candidate, Stmt::Call { .. }))
-            || !prefix.iter().rev().any(|candidate| {
-                matches!(candidate, Stmt::Assign { dst: VReg::Phys(prior), .. } if prior == dst)
-            })
+                .any(|candidate| matches!(candidate.semantic(), Stmt::Call { .. }))
+            || !initialized
         {
             continue;
         }
-        inputs[slot] = Some(Expr::Reg(VReg::Phys(dst.clone())));
+        inputs[slot] = Some(Expr::Reg(dst.clone()));
     }
     inputs
 }
 
 fn direct_call_target_va(statement: &Stmt) -> Option<u64> {
-    match statement {
+    match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Call {
             target: Expr::Named { va, .. } | Expr::Addr(va),
             ..
@@ -871,7 +1043,8 @@ fn table_call_target_vas(statement: &Stmt) -> Option<Vec<u64>> {
             _ => None,
         }
     }
-    match statement {
+    match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Call { target, .. } => entry_targets(target),
         _ => None,
     }
@@ -944,13 +1117,14 @@ fn fold_one_table_call(
     layout: &[VReg],
     param_slots: &std::collections::HashSet<usize>,
     enclosing: &EnclosingSlots,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> bool {
-    if fold_one_recovered_layout_call(body, call_idx, layout) {
+    if fold_one_recovered_layout_call(body, call_idx, layout, identities) {
         return true;
     }
     let mut blocked_here = vec![false; arg_slots(arch).len()];
     for statement in &body[..call_idx] {
-        mark_arg_writes_in_stmt(statement, arch, &mut blocked_here);
+        mark_arg_writes_in_stmt_with_identities(statement, arch, &mut blocked_here, identities);
     }
     let Some(arguments) = layout
         .iter()
@@ -978,7 +1152,12 @@ fn fold_one_table_call(
 /// window. Moving a load-valued argument across a store or another call would
 /// change its value, so less obvious shapes remain explicit until the AST owns
 /// a full reaching-definition query.
-fn fold_one_recovered_layout_call(body: &mut Vec<Stmt>, call_idx: usize, layout: &[VReg]) -> bool {
+fn fold_one_recovered_layout_call(
+    body: &mut Vec<Stmt>,
+    call_idx: usize,
+    layout: &[VReg],
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     if layout.is_empty() {
         return false;
     }
@@ -986,19 +1165,23 @@ fn fold_one_recovered_layout_call(body: &mut Vec<Stmt>, call_idx: usize, layout:
     let mut index = call_idx;
     while index > 0 && found.iter().any(Option::is_none) {
         index -= 1;
-        match &body[index] {
-            Stmt::Assign {
-                dst: VReg::Phys(name),
-                src,
-            } => {
-                let base = ssa_base(name);
-                let Some(slot) = layout.iter().position(
-                    |storage| matches!(storage, VReg::Phys(storage) if ssa_base(storage) == base),
-                ) else {
+        match body[index].semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
+            Stmt::Assign { dst, src } => {
+                let Some(slot) = layout.iter().position(|storage| {
+                    let VReg::Phys(storage) = storage else {
+                        return false;
+                    };
+                    register_is_storage(dst, ssa_base(storage), identities)
+                }) else {
                     continue;
                 };
                 if found[slot].is_none() {
-                    found[slot] = Some((index, src.clone(), VReg::Phys(name.clone())));
+                    let mut argument = src.clone();
+                    if let Some(origins) = body[index].origins() {
+                        argument.merge_origins(origins);
+                    }
+                    found[slot] = Some((index, argument, dst.clone()));
                 }
             }
             Stmt::Nop | Stmt::Comment(_) => {}
@@ -1006,6 +1189,16 @@ fn fold_one_recovered_layout_call(body: &mut Vec<Stmt>, call_idx: usize, layout:
         }
     }
     if found.iter().any(Option::is_none) {
+        return false;
+    }
+    if found
+        .iter()
+        .flatten()
+        .any(|(_, expression, _)| !is_pure_arg_normalisation(expression))
+    {
+        return false;
+    }
+    if !resolve_recovered_layout_sources(body, call_idx, &mut found, identities) {
         return false;
     }
 
@@ -1030,7 +1223,7 @@ fn fold_one_recovered_layout_call(body: &mut Vec<Stmt>, call_idx: usize, layout:
     // falls back to the general backward scan, which keeps the setup in place
     // and names the argument register at the call.
     if found.iter().flatten().any(|(index, expression, _)| {
-        versioned_operand_is_reassigned(expression, body, *index, call_idx)
+        versioned_operand_is_reassigned(expression, body, *index, call_idx, identities)
     }) {
         return false;
     }
@@ -1040,15 +1233,76 @@ fn fold_one_recovered_layout_call(body: &mut Vec<Stmt>, call_idx: usize, layout:
         .flatten()
         .map(|(_, expression, _)| expression.clone())
         .collect();
-    if let Stmt::Call { args, .. } = &mut body[call_idx] {
+    if let Stmt::Call { args, .. } = body[call_idx].semantic_mut() {
         *args = arguments;
     } else {
         return false;
     }
     let mut used: Vec<usize> = found.iter().flatten().map(|(index, _, _)| *index).collect();
+    let consumed_origins = used
+        .iter()
+        .filter_map(|index| body[*index].origins())
+        .cloned()
+        .reduce(|left, right| left.union(&right));
+    if let Some(origins) = consumed_origins.as_ref() {
+        body[call_idx].merge_origins(origins);
+    }
     used.sort_unstable_by(|left, right| right.cmp(left));
     for index in used {
         body.remove(index);
+    }
+    true
+}
+
+/// Follow pure straight-line definitions feeding a recovered layout setup.
+///
+/// The layout scan stops once every ABI storage location has a nearest setup,
+/// but those setup expressions can still name compiler-generated spill locals.
+/// The ordinary argument fold already follows these exact definition edges;
+/// doing the same here prevents a stronger callee-layout proof from degrading
+/// `callee(arg0)` into `local = arg0; callee(local)`. A call, control boundary,
+/// memory effect, impure definition, or intervening rewrite declines the
+/// specialized fold and leaves the established general path in charge.
+fn resolve_recovered_layout_sources(
+    body: &[Stmt],
+    call_idx: usize,
+    found: &mut [Option<(usize, Expr, VReg)>],
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    let Some(first_setup) = found.iter().flatten().map(|(index, _, _)| *index).min() else {
+        return true;
+    };
+    for index in (0..first_setup).rev() {
+        match body[index].semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
+            Stmt::Assign { dst, src } => {
+                if !crate::ir::types::is_promoted_local_reg(dst) {
+                    continue;
+                }
+                let feeds = found
+                    .iter()
+                    .flatten()
+                    .any(|(_, argument, _)| reads_reg_in_expr(argument, dst));
+                if !feeds {
+                    continue;
+                }
+                if !is_pure_arg_normalisation(src)
+                    || versioned_operand_is_reassigned(src, body, index, call_idx, identities)
+                {
+                    return false;
+                }
+                let definition_origins = body[index].origins().cloned();
+                for (_, argument, _) in found.iter_mut().flatten() {
+                    if substitute_exact_reg(argument, dst, src) {
+                        if let Some(origins) = definition_origins.as_ref() {
+                            argument.merge_origins(origins);
+                        }
+                    }
+                }
+            }
+            Stmt::Nop | Stmt::Comment(_) => {}
+            _ => break,
+        }
     }
     true
 }
@@ -1062,6 +1316,7 @@ fn fold_one_recovered_layout_call_with_live_ins(
     layout: &[VReg],
     param_slots: &std::collections::HashSet<usize>,
     enclosing: &EnclosingSlots,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> bool {
     if layout.is_empty() {
         return false;
@@ -1070,19 +1325,23 @@ fn fold_one_recovered_layout_call_with_live_ins(
     let mut index = call_idx;
     while index > 0 {
         index -= 1;
-        match &body[index] {
-            Stmt::Assign {
-                dst: VReg::Phys(name),
-                src,
-            } => {
-                let base = ssa_base(name);
-                let Some(slot) = layout.iter().position(
-                    |storage| matches!(storage, VReg::Phys(storage) if ssa_base(storage) == base),
-                ) else {
+        match body[index].semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
+            Stmt::Assign { dst, src } => {
+                let Some(slot) = layout.iter().position(|storage| {
+                    let VReg::Phys(storage) = storage else {
+                        return false;
+                    };
+                    register_is_storage(dst, ssa_base(storage), identities)
+                }) else {
                     continue;
                 };
                 if found[slot].is_none() {
-                    found[slot] = Some((index, src.clone(), VReg::Phys(name.clone())));
+                    let mut argument = src.clone();
+                    if let Some(origins) = body[index].origins() {
+                        argument.merge_origins(origins);
+                    }
+                    found[slot] = Some((index, argument, dst.clone()));
                 }
             }
             Stmt::Nop | Stmt::Comment(_) => {}
@@ -1096,13 +1355,23 @@ fn fold_one_recovered_layout_call_with_live_ins(
     let storage_slots = arg_slots(arch).len() + crate::ir::abi::sse_argument_registers(arch).len();
     let mut blocked_storage = vec![false; storage_slots];
     for statement in &body[..call_idx] {
-        mark_arg_writes_in_stmt(statement, arch, &mut blocked_storage);
-        match statement {
-            Stmt::Assign {
-                dst: VReg::Phys(name),
-                ..
-            } => {
-                if let Some(slot) = crate::ir::abi::sse_argument_slot_of(arch, name) {
+        mark_arg_writes_in_stmt_with_identities(statement, arch, &mut blocked_storage, identities);
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
+            Stmt::Assign { dst, .. } => {
+                let sse_slot = match identities {
+                    Some(identities) => identities.exact(dst).and_then(|identity| {
+                        let name = identity.canonical_physical_base()?;
+                        crate::ir::abi::sse_argument_slot_of(arch, name)
+                    }),
+                    None => {
+                        let VReg::Phys(name) = dst else {
+                            continue;
+                        };
+                        crate::ir::abi::sse_argument_slot_of(arch, name)
+                    }
+                };
+                if let Some(slot) = sse_slot {
                     blocked_storage[arg_slots(arch).len() + slot] = true;
                 }
             }
@@ -1151,17 +1420,25 @@ fn fold_one_recovered_layout_call_with_live_ins(
             .iter()
             .any(|destination| reads_reg_in_expr(expression, destination))
     }) || found.iter().flatten().any(|(index, expression, _)| {
-        versioned_operand_is_reassigned(expression, body, *index, call_idx)
+        versioned_operand_is_reassigned(expression, body, *index, call_idx, identities)
     }) {
         return false;
     }
 
-    if let Stmt::Call { args, .. } = &mut body[call_idx] {
+    if let Stmt::Call { args, .. } = body[call_idx].semantic_mut() {
         *args = arguments;
     } else {
         return false;
     }
     let mut used: Vec<usize> = found.iter().flatten().map(|(index, _, _)| *index).collect();
+    let consumed_origins = used
+        .iter()
+        .filter_map(|index| body[*index].origins())
+        .cloned()
+        .reduce(|left, right| left.union(&right));
+    if let Some(origins) = consumed_origins.as_ref() {
+        body[call_idx].merge_origins(origins);
+    }
     used.sort_unstable_by(|left, right| right.cmp(left));
     for index in used {
         body.remove(index);
@@ -1171,6 +1448,7 @@ fn fold_one_recovered_layout_call_with_live_ins(
 
 fn is_pure_arg_normalisation(expr: &Expr) -> bool {
     match expr {
+        Expr::Origin { expr, .. } => is_pure_arg_normalisation(expr),
         Expr::Deref { .. }
         | Expr::Call { .. }
         | Expr::FunctionTableEntry { .. }
@@ -1212,21 +1490,34 @@ fn is_pure_arg_normalisation(expr: &Expr) -> bool {
 }
 
 /// Width of `esp/rsp = esp/rsp - N`, if this is exactly a stack allocation.
+#[cfg(test)]
 pub(super) fn stack_pointer_sub_width(stmt: &Stmt) -> Option<i64> {
+    stack_pointer_sub_width_with_identities(stmt, None)
+}
+
+pub(super) fn stack_pointer_sub_width_with_identities(
+    stmt: &Stmt,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<i64> {
     let Stmt::Assign {
-        dst: VReg::Phys(dst),
+        dst,
         src: Expr::Bin {
             op: BinOp::Sub,
             lhs,
             rhs,
         },
-    } = stmt
+    } = stmt.semantic()
     else {
         return None;
     };
-    if !matches!(dst.as_str(), "esp" | "rsp")
-        || !matches!(lhs.as_ref(), Expr::Reg(VReg::Phys(src)) if src == dst)
-    {
+    let stack = if register_is_storage(dst, "rsp", identities) {
+        "rsp"
+    } else if register_is_storage(dst, "esp", identities) {
+        "esp"
+    } else {
+        return None;
+    };
+    if !matches!(lhs.as_ref(), Expr::Reg(src) if register_is_storage(src, stack, identities)) {
         return None;
     }
     match rhs.as_ref() {
@@ -1236,25 +1527,36 @@ pub(super) fn stack_pointer_sub_width(stmt: &Stmt) -> Option<i64> {
 }
 
 /// One exact SysV `push value` after lowering to stack arithmetic.
+#[cfg(test)]
 pub(super) fn outgoing_sysv_stack_push(body: &[Stmt], store_index: usize) -> Option<(&Expr, i64)> {
+    outgoing_sysv_stack_push_with_identities(body, store_index, None)
+}
+
+pub(super) fn outgoing_sysv_stack_push_with_identities<'body>(
+    body: &'body [Stmt],
+    store_index: usize,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<(&'body Expr, i64)> {
     if store_index == 0 {
         return None;
     }
     let Stmt::Store {
         addr:
             Expr::Lea {
-                base: Some(VReg::Phys(base)),
+                base: Some(base),
                 index: None,
                 disp: 0,
                 ..
             },
         src,
         size: 8,
-    } = &body[store_index]
+    } = body[store_index].semantic()
     else {
         return None;
     };
-    if ssa_base(base) != "rsp" || stack_pointer_sub_width(&body[store_index - 1]) != Some(8) {
+    if !register_is_storage(base, "rsp", identities)
+        || stack_pointer_sub_width_with_identities(&body[store_index - 1], identities) != Some(8)
+    {
         return None;
     }
     Some((src, 8))
@@ -1267,23 +1569,28 @@ pub(super) fn outgoing_sysv_stack_push(body: &[Stmt], store_index: usize) -> Opt
 /// four bytes into those eight-byte ABI slots. Requiring an uninterrupted,
 /// zero-based slot layout distinguishes that call area from ordinary frame
 /// locals and preserves ABI argument order independent of store order.
-fn outgoing_sysv_stack_area(body: &[Stmt], call_index: usize) -> Option<(Vec<Expr>, Vec<usize>)> {
+fn outgoing_sysv_stack_area(
+    body: &[Stmt],
+    call_index: usize,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<(Vec<Expr>, Vec<usize>)> {
     let mut by_offset = std::collections::BTreeMap::new();
     let mut cursor = call_index;
     while cursor > 0 {
         let index = cursor - 1;
-        match &body[index] {
+        match body[index].semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Store {
                 addr:
                     Expr::Lea {
-                        base: Some(VReg::Phys(base)),
+                        base: Some(base),
                         index: None,
                         disp,
                         ..
                     },
                 src,
                 size,
-            } if ssa_base(base) == "rsp"
+            } if register_is_storage(base, "rsp", identities)
                 && *disp >= 0
                 && *disp % 8 == 0
                 && matches!(*size, 4 | 8) =>
@@ -1291,10 +1598,14 @@ fn outgoing_sysv_stack_area(body: &[Stmt], call_index: usize) -> Option<(Vec<Exp
                 // A `[rsp]` store paired with the immediately preceding
                 // `rsp -= 8` is the push-form handled by the balanced-cleanup
                 // path, not a preallocated outgoing area.
-                if outgoing_sysv_stack_push(body, index).is_some() {
+                if outgoing_sysv_stack_push_with_identities(body, index, identities).is_some() {
                     return None;
                 }
-                if by_offset.insert(*disp, (index, src.clone())).is_some() {
+                let mut value = src.clone();
+                if let Some(origins) = body[index].origins() {
+                    value.merge_origins(origins);
+                }
+                if by_offset.insert(*disp, (index, value)).is_some() {
                     return None;
                 }
             }
@@ -1319,20 +1630,23 @@ fn outgoing_sysv_stack_area(body: &[Stmt], call_index: usize) -> Option<(Vec<Exp
 }
 
 /// Width of `rsp = rsp + N`, if this is exactly caller stack cleanup.
-fn stack_pointer_add_width(stmt: &Stmt) -> Option<i64> {
+fn stack_pointer_add_width(
+    stmt: &Stmt,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<i64> {
     let Stmt::Assign {
-        dst: VReg::Phys(dst),
+        dst,
         src: Expr::Bin {
             op: BinOp::Add,
             lhs,
             rhs,
         },
-    } = stmt
+    } = stmt.semantic()
     else {
         return None;
     };
-    if ssa_base(dst) != "rsp"
-        || !matches!(lhs.as_ref(), Expr::Reg(VReg::Phys(src)) if ssa_base(src) == "rsp")
+    if !register_is_storage(dst, "rsp", identities)
+        || !matches!(lhs.as_ref(), Expr::Reg(src) if register_is_storage(src, "rsp", identities))
     {
         return None;
     }
@@ -1348,10 +1662,20 @@ fn stack_pointer_add_width(stmt: &Stmt) -> Option<i64> {
 /// `rsp += N`. The caller supplies the exact byte count implied by the pushes,
 /// so this stops as soon as that amount is balanced and never consumes the
 /// following callee-save pop.
+#[cfg(test)]
 pub(super) fn outgoing_stack_cleanup(
     body: &[Stmt],
     call_index: usize,
     expected_bytes: i64,
+) -> Option<Vec<usize>> {
+    outgoing_stack_cleanup_with_identities(body, call_index, expected_bytes, None)
+}
+
+pub(super) fn outgoing_stack_cleanup_with_identities(
+    body: &[Stmt],
+    call_index: usize,
+    expected_bytes: i64,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Option<Vec<usize>> {
     if expected_bytes <= 0 {
         return None;
@@ -1363,7 +1687,7 @@ pub(super) fn outgoing_stack_cleanup(
         if cleaned == expected_bytes {
             return Some(used);
         }
-        if let Some(width) = lowered_stack_pop_width(body, cursor) {
+        if let Some(width) = lowered_stack_pop_width(body, cursor, identities) {
             if cleaned.saturating_add(width) > expected_bytes {
                 return None;
             }
@@ -1372,7 +1696,7 @@ pub(super) fn outgoing_stack_cleanup(
             cursor += 2;
             continue;
         }
-        if let Some(width) = stack_pointer_add_width(&body[cursor]) {
+        if let Some(width) = stack_pointer_add_width(&body[cursor], identities) {
             if cleaned.saturating_add(width) != expected_bytes {
                 return None;
             }
@@ -1381,11 +1705,9 @@ pub(super) fn outgoing_stack_cleanup(
             cursor += 1;
             continue;
         }
-        match &body[cursor] {
-            Stmt::Assign {
-                dst: VReg::Phys(name),
-                ..
-            } if ssa_base(name) == "rsp" => return None,
+        match body[cursor].semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
+            Stmt::Assign { dst, .. } if register_is_storage(dst, "rsp", identities) => return None,
             Stmt::Assign { .. } | Stmt::Comment(_) | Stmt::Nop if cleaned == 0 => {
                 cursor += 1;
             }
@@ -1395,16 +1717,20 @@ pub(super) fn outgoing_stack_cleanup(
     (cleaned == expected_bytes).then_some(used)
 }
 
-fn lowered_stack_pop_width(body: &[Stmt], load_index: usize) -> Option<i64> {
+fn lowered_stack_pop_width(
+    body: &[Stmt],
+    load_index: usize,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<i64> {
     let Stmt::Assign {
-        dst: VReg::Phys(dst),
+        dst,
         src: Expr::Deref { addr, size },
-    } = body.get(load_index)?
+    } = body.get(load_index)?.semantic()
     else {
         return None;
     };
     let Expr::Lea {
-        base: Some(VReg::Phys(base)),
+        base: Some(base),
         index: None,
         disp: 0,
         ..
@@ -1413,10 +1739,102 @@ fn lowered_stack_pop_width(body: &[Stmt], load_index: usize) -> Option<i64> {
         return None;
     };
     let width = i64::from(*size);
-    (ssa_base(dst) != "rsp"
-        && ssa_base(base) == "rsp"
-        && stack_pointer_add_width(body.get(load_index + 1)?) == Some(width))
+    (!register_is_storage(dst, "rsp", identities)
+        && register_is_storage(base, "rsp", identities)
+        && stack_pointer_add_width(body.get(load_index + 1)?, identities) == Some(width))
     .then_some(width)
+}
+
+pub(super) fn register_is_storage(
+    register: &VReg,
+    expected: &str,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    match identities {
+        Some(identities) => {
+            let Some(candidates) = identities.candidates(register) else {
+                return false;
+            };
+            !candidates.is_empty()
+                && candidates
+                    .iter()
+                    .all(|identity| matches!(&identity.base, VReg::Phys(base) if base == expected))
+        }
+        None => matches!(register, VReg::Phys(name) if ssa_base(name) == expected),
+    }
+}
+
+/// The ABI argument slot represented by one exact value identity.
+///
+/// A coalesced value is accepted only when every candidate denotes the same
+/// slot. The spelling-based branch exists solely for compatibility callers
+/// that do not carry the production identity sidecar.
+pub(super) fn register_argument_slot(
+    arch: CallConv,
+    register: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<usize> {
+    match identities {
+        Some(identities) => {
+            let candidates = identities.candidates(register)?;
+            let mut slots = candidates.iter().map(|identity| {
+                identity
+                    .canonical_physical_base()
+                    .and_then(|name| crate::ir::abi::argument_slot_of(arch, name))
+            });
+            let slot = slots.next()??;
+            slots
+                .all(|candidate| candidate == Some(slot))
+                .then_some(slot)
+        }
+        None => match register {
+            VReg::Phys(name) => crate::ir::abi::argument_slot_of(arch, name),
+            _ => None,
+        },
+    }
+}
+
+/// Whether every exact candidate for `register` is ABI result storage.
+pub(super) fn register_is_return_storage(
+    arch: CallConv,
+    register: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    match identities {
+        Some(identities) => identities.candidates(register).is_some_and(|candidates| {
+            !candidates.is_empty()
+                && candidates.iter().all(|identity| {
+                    identity
+                        .canonical_physical_base()
+                        .is_some_and(|name| crate::ir::abi::is_return_register(arch, name))
+                })
+        }),
+        None => {
+            matches!(register, VReg::Phys(name) if crate::ir::abi::is_return_register(arch, name))
+        }
+    }
+}
+
+/// Whether every exact candidate is the version-zero ABI result carrier.
+pub(super) fn register_is_entry_return_storage(
+    arch: CallConv,
+    register: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    match identities {
+        Some(identities) => identities.candidates(register).is_some_and(|candidates| {
+            !candidates.is_empty()
+                && candidates.iter().all(|identity| {
+                    identity.version == 0
+                        && identity
+                            .canonical_physical_base()
+                            .is_some_and(|name| crate::ir::abi::is_return_register(arch, name))
+                })
+        }),
+        None => {
+            matches!(register, VReg::Phys(name) if crate::ir::abi::is_return_register(arch, name) && !name.contains('#'))
+        }
+    }
 }
 
 /// A captured argument slot that must keep its defining statement: the value is
@@ -1444,14 +1862,25 @@ const KEEP_ARG_SETUP: usize = usize::MAX;
 ///
 /// Measured on `11_call_shapes:gcc:O2:call_accumulate_bytes`, which accumulated
 /// `wrap_byte(seed + i + 1)` instead of `wrap_byte(seed + i)`.
-fn versioned_operand_is_reassigned(expr: &Expr, body: &[Stmt], from: usize, to: usize) -> bool {
-    fn writes(statement: &Stmt, out: &mut Vec<VReg>) {
+fn versioned_operand_is_reassigned(
+    expr: &Expr,
+    body: &[Stmt],
+    from: usize,
+    to: usize,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    fn writes(
+        statement: &Stmt,
+        out: &mut Vec<VReg>,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) {
         let mut record = |register: &VReg| {
-            if matches!(register, VReg::Phys(name) if name.contains('#')) {
+            if has_numbered_identity(register, identities) {
                 out.push(register.clone());
             }
         };
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => record(dst),
             Stmt::Call { dst: Some(dst), .. } => record(dst),
             Stmt::If {
@@ -1460,21 +1889,21 @@ fn versioned_operand_is_reassigned(expr: &Expr, body: &[Stmt], from: usize, to: 
                 ..
             } => {
                 for s in then_body.iter().chain(else_body.iter().flatten()) {
-                    writes(s, out);
+                    writes(s, out, identities);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                 for s in body {
-                    writes(s, out);
+                    writes(s, out, identities);
                 }
             }
             Stmt::For {
                 init, step, body, ..
             } => {
-                writes(init, out);
-                writes(step, out);
+                writes(init, out, identities);
+                writes(step, out, identities);
                 for s in body {
-                    writes(s, out);
+                    writes(s, out, identities);
                 }
             }
             Stmt::Switch { cases, default, .. } => {
@@ -1483,7 +1912,7 @@ fn versioned_operand_is_reassigned(expr: &Expr, body: &[Stmt], from: usize, to: 
                     .flat_map(|(_, b)| b)
                     .chain(default.iter().flatten())
                 {
-                    writes(s, out);
+                    writes(s, out, identities);
                 }
             }
             _ => {}
@@ -1491,17 +1920,49 @@ fn versioned_operand_is_reassigned(expr: &Expr, body: &[Stmt], from: usize, to: 
     }
     let mut reassigned = Vec::new();
     for statement in &body[(from + 1).min(to)..to] {
-        writes(statement, &mut reassigned);
+        writes(statement, &mut reassigned, identities);
     }
-    reassigned
-        .iter()
-        .any(|register| reads_reg_in_expr(expr, register))
+    reassigned.iter().any(|register| {
+        identities.map_or_else(
+            || reads_reg_in_expr(expr, register),
+            |identities| expr_reads_identity_candidate(expr, register, identities),
+        )
+    })
 }
 
-fn reads_reg_in_expr(e: &Expr, target: &VReg) -> bool {
-    match e {
-        Expr::Reg(r) => r == target,
-        Expr::StackAddr { object, .. } => object == target,
+pub(super) fn has_numbered_identity(
+    register: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    match identities {
+        Some(identities) => identities
+            .candidates(register)
+            .is_some_and(|values| values.iter().any(|value| value.version > 0)),
+        None => matches!(register, VReg::Phys(name) if name.contains('#')),
+    }
+}
+
+fn expr_reads_identity_candidate(
+    expression: &Expr,
+    target: &VReg,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> bool {
+    let Some(targets) = identities.candidates(target) else {
+        return false;
+    };
+    let mut reads_same_value = |register: &VReg| {
+        identities
+            .candidates(register)
+            .is_some_and(|reads| reads.iter().any(|value| targets.contains(value)))
+    };
+    any_reg_in_expr(expression, &mut reads_same_value)
+}
+
+fn any_reg_in_expr(expression: &Expr, visit: &mut impl FnMut(&VReg) -> bool) -> bool {
+    match expression {
+        Expr::Origin { expr, .. } => any_reg_in_expr(expr, visit),
+        Expr::Reg(register) => visit(register),
+        Expr::StackAddr { object, .. } => visit(object),
         Expr::Const(_)
         | Expr::FloatConst { .. }
         | Expr::Addr(_)
@@ -1509,21 +1970,19 @@ fn reads_reg_in_expr(e: &Expr, target: &VReg) -> bool {
         | Expr::StringLit { .. }
         | Expr::Unknown(_) => false,
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
-            base.as_ref() == Some(target) || index.as_ref() == Some(target)
+            base.as_ref().is_some_and(&mut *visit) || index.as_ref().is_some_and(&mut *visit)
         }
-        Expr::Deref { addr, .. } => reads_reg_in_expr(addr, target),
+        Expr::Deref { addr, .. } => any_reg_in_expr(addr, visit),
         Expr::Call {
             target: call_target,
             args,
             ..
         } => {
-            reads_reg_in_expr(call_target, target)
-                || args
-                    .iter()
-                    .any(|argument| reads_reg_in_expr(argument, target))
+            any_reg_in_expr(call_target, visit)
+                || args.iter().any(|argument| any_reg_in_expr(argument, visit))
         }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-            reads_reg_in_expr(lhs, target) || reads_reg_in_expr(rhs, target)
+            any_reg_in_expr(lhs, visit) || any_reg_in_expr(rhs, visit)
         }
         Expr::Select {
             cond,
@@ -1531,28 +1990,121 @@ fn reads_reg_in_expr(e: &Expr, target: &VReg) -> bool {
             if_false,
             ..
         } => {
-            reads_reg_in_expr(cond, target)
-                || reads_reg_in_expr(if_true, target)
-                || reads_reg_in_expr(if_false, target)
+            any_reg_in_expr(cond, visit)
+                || any_reg_in_expr(if_true, visit)
+                || any_reg_in_expr(if_false, visit)
         }
-        Expr::Un { src, .. } => reads_reg_in_expr(src, target),
-        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
-            reads_reg_in_expr(expr, target)
+        Expr::Un { src, .. } => any_reg_in_expr(src, visit),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => any_reg_in_expr(expr, visit),
+        Expr::FunctionTableEntry { index, .. } => any_reg_in_expr(index, visit),
+        Expr::WideArithmetic { args, .. } => {
+            args.iter().any(|argument| any_reg_in_expr(argument, visit))
         }
-        Expr::FunctionTableEntry { index, .. } => reads_reg_in_expr(index, target),
-        Expr::WideArithmetic { args, .. } => args
-            .iter()
-            .any(|argument| reads_reg_in_expr(argument, target)),
     }
+}
+
+fn reads_reg_in_expr(e: &Expr, target: &VReg) -> bool {
+    any_reg_in_expr(e, &mut |register| register == target)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::ast::{Function, Stmt};
+    use crate::ir::ast::{Function, OriginSet, Stmt};
 
     fn reg(n: &str) -> VReg {
         VReg::phys(n)
+    }
+
+    #[test]
+    fn opaque_argument_reassignment_is_detected_by_value_identity() {
+        let read = reg("opaque_read");
+        let written = reg("opaque_write");
+        let value = crate::ir::ssa::SsaValue {
+            base: reg("rbx"),
+            version: 3,
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(read.clone(), value.clone());
+        identities.record(written.clone(), value);
+        let body = vec![
+            Stmt::Comment("setup".into()),
+            Stmt::Assign {
+                dst: written,
+                src: Expr::Const(2),
+            },
+            Stmt::Comment("call".into()),
+        ];
+
+        assert!(versioned_operand_is_reassigned(
+            &Expr::Reg(read),
+            &body,
+            0,
+            2,
+            Some(&identities),
+        ));
+    }
+
+    #[test]
+    fn distinct_argument_identities_do_not_create_a_false_reassignment() {
+        let read = reg("opaque_read");
+        let written = reg("opaque_write");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            read.clone(),
+            crate::ir::ssa::SsaValue {
+                base: reg("rbx"),
+                version: 3,
+            },
+        );
+        identities.record(
+            written.clone(),
+            crate::ir::ssa::SsaValue {
+                base: reg("rbx"),
+                version: 4,
+            },
+        );
+        let body = vec![
+            Stmt::Comment("setup".into()),
+            Stmt::Assign {
+                dst: written,
+                src: Expr::Const(2),
+            },
+            Stmt::Comment("call".into()),
+        ];
+
+        assert!(!versioned_operand_is_reassigned(
+            &Expr::Reg(read),
+            &body,
+            0,
+            2,
+            Some(&identities),
+        ));
+    }
+
+    #[test]
+    fn captured_scratch_numbering_comes_from_identity_not_spelling() {
+        let opaque = reg("opaque_scratch");
+        let misleading = reg("rax#99");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            opaque.clone(),
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 3,
+            },
+        );
+        identities.record(
+            misleading.clone(),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi"),
+                version: 0,
+            },
+        );
+
+        assert!(has_numbered_identity(&opaque, Some(&identities)));
+        assert!(!has_numbered_identity(&misleading, Some(&identities)));
+        assert!(has_numbered_identity(&misleading, None));
     }
 
     #[test]
@@ -1635,6 +2187,79 @@ mod tests {
             dst: reg(dst),
             src: Expr::Const(value),
         }
+    }
+
+    #[test]
+    fn origin_wrapped_argument_setup_folds_into_origin_wrapped_call() {
+        let first_owner = OriginSet::one(0x1000);
+        let second_owner = OriginSet::one(0x1004);
+        let call_owner = OriginSet::one(0x1008);
+        let mut function = Function {
+            name: "wrapped_caller".into(),
+            entry_va: 0x1000,
+            body: vec![
+                assign("rdi", 11).with_origins(first_owner.clone()),
+                assign("rsi", 22).with_origins(second_owner.clone()),
+                call_to("callee").with_origins(call_owner.clone()),
+            ],
+        };
+
+        reconstruct_args(&mut function, CallConv::SysVAmd64);
+
+        assert_eq!(function.body.len(), 1);
+        let Stmt::Call { args, .. } = function.body[0].semantic() else {
+            panic!("expected folded call: {:#?}", function.body)
+        };
+        assert_eq!(args.len(), 2);
+        assert!(matches!(args[0].semantic(), Expr::Const(11)));
+        assert!(matches!(args[1].semantic(), Expr::Const(22)));
+        assert_eq!(args[0].origins(), Some(&first_owner));
+        assert_eq!(args[1].origins(), Some(&second_owner));
+        assert_eq!(
+            function.body[0]
+                .origins()
+                .expect("folded call retains setup and call origins")
+                .addresses(),
+            &[0x1000, 0x1004, 0x1008]
+        );
+    }
+
+    #[test]
+    fn transitive_argument_definition_origins_reach_the_folded_argument() {
+        let source_owner = OriginSet::one(0x1010);
+        let setup_owner = OriginSet::one(0x1014);
+        let mut function = Function {
+            name: "transitive_argument_origin".into(),
+            entry_va: 0x1010,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("var0"),
+                    src: Expr::Const(17),
+                }
+                .with_origins(source_owner.clone()),
+                Stmt::Assign {
+                    dst: reg("rdi"),
+                    src: Expr::Reg(reg("var0")),
+                }
+                .with_origins(setup_owner.clone()),
+                call_to("callee").with_origins(OriginSet::one(0x1018)),
+            ],
+        };
+
+        reconstruct_args(&mut function, CallConv::SysVAmd64);
+
+        let call = function
+            .body
+            .iter()
+            .find(|statement| matches!(statement.semantic(), Stmt::Call { .. }))
+            .expect("folded call survives");
+        let Stmt::Call { args, .. } = call.semantic() else {
+            unreachable!()
+        };
+        assert_eq!(args.len(), 1);
+        let (value, origins) = args[0].clone().into_semantic_with_origins();
+        assert!(matches!(value, Expr::Const(17)));
+        assert_eq!(origins, Some(source_owner.union(&setup_owner)));
     }
 
     /// An argument setup may only be folded into its call when nothing it reads
@@ -1732,6 +2357,43 @@ mod tests {
             "an unobstructed setup must still be spliced into the call: {:#?}",
             f.body
         );
+    }
+
+    #[test]
+    fn an_origin_wrapped_argument_setup_is_not_hoisted_across_a_wrapped_rewrite() {
+        let mut function = Function {
+            name: "recursive".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rdi#10"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("r12#9"))),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(0x1000)),
+                Stmt::Assign {
+                    dst: reg("r12#9"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("r12#9"))),
+                        rhs: Box::new(Expr::Const(2)),
+                    },
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(0x1004)),
+                call_to("recursive").with_origins(crate::ir::ast::OriginSet::one(0x1008)),
+            ],
+        };
+
+        reconstruct_args(&mut function, CallConv::SysVAmd64);
+
+        assert_eq!(function.body.len(), 3);
+        assert!(matches!(
+            function.body[2].semantic(),
+            Stmt::Call { args, .. } if args == &[Expr::Reg(reg("rdi#10"))]
+        ));
     }
 
     #[test]
@@ -2291,6 +2953,122 @@ mod tests {
     }
 
     #[test]
+    fn preceding_call_result_uses_exact_identity_not_display_spelling() {
+        let caller = |result: &str| Function {
+            name: "caller".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "producer".into(),
+                    },
+                    args: Vec::new(),
+                    dst: Some(reg(result)),
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: reg("rdi"),
+                    src: Expr::Reg(reg(result)),
+                },
+                call_to("consumer"),
+            ],
+        };
+        let run = |mut function: Function,
+                   identities: &crate::ir::value_number::ValueIdentities| {
+            reconstruct_args_with_layouts_prototypes_strings_and_identities(
+                &mut function,
+                CallConv::SysVAmd64,
+                &mut Default::default(),
+                &Default::default(),
+                &Default::default(),
+                None,
+                &Default::default(),
+                identities,
+            );
+            function
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            reg("opaque_result"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 1,
+            },
+        );
+        identities.record(
+            reg("rax#looks_like_result"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi"),
+                version: 0,
+            },
+        );
+        identities.record(
+            reg("opaque_entry_result"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 0,
+            },
+        );
+        identities.record(
+            reg("rdi"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi"),
+                version: 2,
+            },
+        );
+
+        let exact = run(caller("opaque_result"), &identities);
+        assert!(
+            exact.body.iter().any(|statement| matches!(
+                statement.semantic(),
+                Stmt::Call { target: Expr::Named { name, .. }, args, .. }
+                    if name == "consumer" && args == &[Expr::Reg(reg("opaque_result"))]
+            )),
+            "exact result was not preserved: {exact:#?}"
+        );
+
+        let misleading = run(caller("rax#looks_like_result"), &identities);
+        assert!(misleading.body.iter().any(|statement| matches!(
+            statement.semantic(),
+            Stmt::Call { target: Expr::Named { name, .. }, args, .. }
+                if name == "consumer" && args == &[Expr::Reg(reg("rax#looks_like_result"))]
+        )));
+        assert!(matches!(
+            misleading.body.first().map(Stmt::semantic),
+            Some(Stmt::Call { dst: Some(result), .. }) if result == &reg("rax#looks_like_result")
+        ));
+
+        let entry = run(caller("opaque_entry_result"), &identities);
+        let producer_result = entry
+            .body
+            .iter()
+            .find_map(|statement| match statement.semantic() {
+                Stmt::Call {
+                    target: Expr::Named { name, .. },
+                    dst: Some(result),
+                    ..
+                } if name == "producer" => Some(result.clone()),
+                _ => None,
+            });
+        let consumer_argument =
+            entry
+                .body
+                .iter()
+                .find_map(|statement| match statement.semantic() {
+                    Stmt::Call {
+                        target: Expr::Named { name, .. },
+                        args,
+                        ..
+                    } if name == "consumer" => args.first().cloned(),
+                    _ => None,
+                });
+        let result = producer_result.expect("producer result must remain explicit");
+        assert_ne!(result, reg("opaque_entry_result"));
+        assert_eq!(consumer_argument, Some(Expr::Reg(result)));
+    }
+
+    #[test]
     fn pushed_arguments_keep_the_prior_call_result_distinct_from_rax_setup() {
         let adjust_rsp = |op, width| Stmt::Assign {
             dst: reg("rsp"),
@@ -2533,6 +3311,66 @@ mod tests {
         assert_eq!(args, Some(&vec![Expr::Reg(reg("rdi#1"))]));
     }
 
+    #[test]
+    fn loop_carried_input_uses_exact_identity_not_display_spelling() {
+        let loop_with = |name: &str| {
+            vec![
+                call_to("signed_step"),
+                Stmt::Assign {
+                    dst: reg(name),
+                    src: Expr::Reg(reg("rax")),
+                },
+            ]
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            reg("opaque_init"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi"),
+                version: 1,
+            },
+        );
+        identities.record(
+            reg("opaque_loop"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi"),
+                version: 1,
+            },
+        );
+        identities.record(
+            reg("rdi#1"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 1,
+            },
+        );
+
+        let exact = loop_carried_arg_inputs(
+            &[Stmt::Assign {
+                dst: reg("opaque_init"),
+                src: Expr::Reg(reg("rdi")),
+            }],
+            &loop_with("opaque_loop"),
+            CallConv::SysVAmd64,
+            &[None],
+            Some(&identities),
+        );
+        assert_eq!(exact[0], Some(Expr::Reg(reg("opaque_loop"))));
+        assert!(exact[1..].iter().all(Option::is_none));
+
+        let misleading = loop_carried_arg_inputs(
+            &[Stmt::Assign {
+                dst: reg("rdi#1"),
+                src: Expr::Reg(reg("rdi")),
+            }],
+            &loop_with("rdi#1"),
+            CallConv::SysVAmd64,
+            &[None],
+            Some(&identities),
+        );
+        assert!(misleading.iter().all(Option::is_none));
+    }
+
     /// AArch64 reuses x0 for both the first argument and the return value. GCC
     /// therefore emits no setup instruction for a loop-carried `callee(x0)`:
     /// the phi value is already in the right storage when `bl` executes.
@@ -2704,6 +3542,49 @@ mod tests {
             Stmt::Call { args, .. }
                 if args == &vec![Expr::Const(10), Expr::Const(20), Expr::Const(30)]
         ));
+    }
+
+    #[test]
+    fn cdecl32_folds_attributed_stack_stores_into_the_call_owner() {
+        let stack_store = |disp, value, va| {
+            Stmt::Store {
+                addr: Expr::Lea {
+                    base: Some(reg("esp")),
+                    index: None,
+                    scale: 1,
+                    disp,
+                    segment: None,
+                },
+                src: Expr::Const(value),
+                size: 4,
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(va))
+        };
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body: vec![
+                stack_store(4, 20, 0x1010),
+                stack_store(0, 10, 0x1014),
+                call_to("callee").with_origins(crate::ir::ast::OriginSet::one(0x1018)),
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::Cdecl32);
+
+        assert_eq!(f.body.len(), 1, "attributed setup was not folded: {f:#?}");
+        let Stmt::Call { args, .. } = f.body[0].semantic() else {
+            panic!("folded statement is not a call: {f:#?}")
+        };
+        assert_eq!(args.len(), 2);
+        assert!(matches!(args[0].semantic(), Expr::Const(10)));
+        assert!(matches!(args[1].semantic(), Expr::Const(20)));
+        assert_eq!(args[0].origins(), Some(&OriginSet::one(0x1014)));
+        assert_eq!(args[1].origins(), Some(&OriginSet::one(0x1010)));
+        assert_eq!(
+            f.body[0].origins().expect("folded call owner").addresses(),
+            &[0x1010, 0x1014, 0x1018]
+        );
     }
 
     #[test]
@@ -2902,6 +3783,67 @@ mod tests {
     }
 
     #[test]
+    fn sysv_origin_wrapped_aliasing_store_blocks_frame_load_substitution() {
+        let frame_addr = || Expr::Lea {
+            base: Some(reg("rbp")),
+            index: None,
+            scale: 1,
+            disp: -8,
+            segment: None,
+        };
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body: vec![
+                assign("rdi", 0),
+                assign("rsi", 1),
+                assign("rdx", 2),
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: Expr::Deref {
+                        addr: Box::new(frame_addr()),
+                        size: 4,
+                    },
+                },
+                Stmt::Store {
+                    addr: frame_addr(),
+                    src: Expr::Const(99),
+                    size: 4,
+                }
+                .with_origins(OriginSet::one(0x1010)),
+                Stmt::Assign {
+                    dst: reg("rcx"),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(reg("rax"))),
+                        rhs: Box::new(Expr::Const(3)),
+                    },
+                },
+                assign("r8", 4),
+                assign("r9", 5),
+                call_to("callee"),
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+
+        assert!(f.body.iter().any(|statement| matches!(
+            statement.semantic(),
+            Stmt::Assign {
+                dst: VReg::Phys(name),
+                src: Expr::Deref { .. },
+            } if name == "rax"
+        )));
+        let Stmt::Call { args, .. } = f.body.last().expect("call must survive").semantic() else {
+            panic!("expected call: {f:#?}");
+        };
+        assert!(matches!(
+            &args[3],
+            Expr::Bin { lhs, .. } if lhs.as_ref() == &Expr::Reg(reg("rax"))
+        ));
+    }
+
+    #[test]
     fn sysv_does_not_cross_an_opaque_scratch_definition() {
         let mut f = Function {
             name: "caller".into(),
@@ -2953,17 +3895,22 @@ mod tests {
 
     #[test]
     fn sysv_folds_contiguous_preallocated_outgoing_stack_arguments() {
-        let stack_store = |disp, value| Stmt::Store {
-            addr: Expr::Lea {
-                base: Some(reg("rsp")),
-                index: None,
-                scale: 1,
-                disp,
-                segment: None,
-            },
-            src: Expr::Const(value),
-            size: 4,
+        let stack_store = |disp, value, owner| {
+            Stmt::Store {
+                addr: Expr::Lea {
+                    base: Some(reg("rsp")),
+                    index: None,
+                    scale: 1,
+                    disp,
+                    segment: None,
+                },
+                src: Expr::Const(value),
+                size: 4,
+            }
+            .with_origins(owner)
         };
+        let seventh_owner = OriginSet::one(0x1020);
+        let eighth_owner = OriginSet::one(0x1024);
         let mut f = Function {
             name: "caller".into(),
             entry_va: 0,
@@ -2974,22 +3921,29 @@ mod tests {
                 assign("rcx", 3),
                 assign("r8", 4),
                 assign("r9", 5),
-                stack_store(0, 6),
-                stack_store(8, 7),
+                stack_store(0, 6, seventh_owner.clone()),
+                stack_store(8, 7, eighth_owner.clone()),
                 call_to("callee"),
             ],
         };
 
         reconstruct_args(&mut f, CallConv::SysVAmd64);
 
+        let [call] = f.body.as_slice() else {
+            panic!("preallocated outgoing area was not absorbed: {f:#?}")
+        };
+        let Stmt::Call { args, .. } = call.semantic() else {
+            panic!("expected folded call: {f:#?}")
+        };
+        assert_eq!(args.len(), 8);
         assert!(
-            matches!(
-                f.body.as_slice(),
-                [Stmt::Call { args, .. }]
-                    if args == &(0..8).map(Expr::Const).collect::<Vec<_>>()
-            ),
-            "preallocated outgoing area was not absorbed: {f:#?}"
+            args.iter()
+                .enumerate()
+                .all(|(index, arg)| matches!(arg.semantic(), Expr::Const(value) if *value == index as i64)),
+            "wrong argument values: {args:#?}"
         );
+        assert_eq!(args[6].origins(), Some(&seventh_owner));
+        assert_eq!(args[7].origins(), Some(&eighth_owner));
     }
 
     #[test]
@@ -3099,6 +4053,77 @@ mod tests {
             [Stmt::Call { args, .. }]
                 if args == &(0..8).map(Expr::Const).collect::<Vec<_>>()
         ));
+    }
+
+    #[test]
+    fn sysv_balanced_stack_argument_keeps_only_its_value_store_owner() {
+        let allocation_owner = OriginSet::one(0x1100);
+        let value_owner = OriginSet::one(0x1104);
+        let call_owner = OriginSet::one(0x1108);
+        let cleanup_owner = OriginSet::one(0x110c);
+        let mut body = vec![
+            assign("rdi", 0),
+            assign("rsi", 1),
+            assign("rdx", 2),
+            assign("rcx", 3),
+            assign("r8", 4),
+            assign("r9", 5),
+            Stmt::Assign {
+                dst: reg("rsp"),
+                src: Expr::Bin {
+                    op: BinOp::Sub,
+                    lhs: Box::new(Expr::Reg(reg("rsp"))),
+                    rhs: Box::new(Expr::Const(8)),
+                },
+            }
+            .with_origins(allocation_owner.clone()),
+            Stmt::Store {
+                addr: Expr::Lea {
+                    base: Some(reg("rsp")),
+                    index: None,
+                    scale: 1,
+                    disp: 0,
+                    segment: None,
+                },
+                src: Expr::Const(6),
+                size: 8,
+            }
+            .with_origins(value_owner.clone()),
+            call_to("callee").with_origins(call_owner.clone()),
+            Stmt::Assign {
+                dst: reg("rsp"),
+                src: Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Reg(reg("rsp"))),
+                    rhs: Box::new(Expr::Const(8)),
+                },
+            }
+            .with_origins(cleanup_owner.clone()),
+        ];
+        let mut function = Function {
+            name: "stack_argument_origin".into(),
+            entry_va: 0x1100,
+            body: std::mem::take(&mut body),
+        };
+
+        reconstruct_args(&mut function, CallConv::SysVAmd64);
+
+        assert_eq!(function.body.len(), 1, "setup did not fold: {function:#?}");
+        let Stmt::Call { args, .. } = function.body[0].semantic() else {
+            panic!("expected folded call: {function:#?}")
+        };
+        assert_eq!(args.len(), 7);
+        assert!(matches!(args[6].semantic(), Expr::Const(6)));
+        assert_eq!(args[6].origins(), Some(&value_owner));
+        assert_eq!(
+            function.body[0].origins(),
+            Some(
+                &allocation_owner
+                    .union(&value_owner)
+                    .union(&call_owner)
+                    .union(&cleanup_owner)
+            )
+        );
     }
 
     #[test]
@@ -3287,6 +4312,65 @@ mod tests {
     }
 
     #[test]
+    fn sysv_stack_area_uses_exact_identity_not_display_spelling() {
+        let stack_sub = |name| Stmt::Assign {
+            dst: reg(name),
+            src: Expr::Bin {
+                op: BinOp::Sub,
+                lhs: Box::new(Expr::Reg(reg(name))),
+                rhs: Box::new(Expr::Const(8)),
+            },
+        };
+        let stack_store = |name| Stmt::Store {
+            addr: Expr::Lea {
+                base: Some(reg(name)),
+                index: None,
+                scale: 1,
+                disp: 0,
+                segment: None,
+            },
+            src: Expr::Const(7),
+            size: 8,
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            reg("opaque_sp"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rsp"),
+                version: 3,
+            },
+        );
+        identities.record(
+            reg("rsp#3"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 3,
+            },
+        );
+
+        assert_eq!(
+            stack_pointer_sub_width_with_identities(&stack_sub("opaque_sp"), Some(&identities),),
+            Some(8)
+        );
+        assert_eq!(
+            stack_pointer_sub_width_with_identities(&stack_sub("rsp#3"), Some(&identities)),
+            None
+        );
+        assert!(outgoing_sysv_stack_push_with_identities(
+            &[stack_sub("opaque_sp"), stack_store("opaque_sp")],
+            1,
+            Some(&identities),
+        )
+        .is_some());
+        assert!(outgoing_sysv_stack_push_with_identities(
+            &[stack_sub("rsp#3"), stack_store("rsp#3")],
+            1,
+            Some(&identities),
+        )
+        .is_none());
+    }
+
+    #[test]
     fn cdecl32_folds_right_to_left_push_lowering() {
         let push_pair = |value| {
             [
@@ -3347,6 +4431,120 @@ mod tests {
             Stmt::Call { args, .. }
                 if args == &vec![Expr::Const(10), Expr::Const(20), Expr::Const(30)]
         ));
+    }
+
+    #[test]
+    fn cdecl32_attributed_pushes_preserve_call_and_adjustment_owners() {
+        let push_pair = |value, adjustment_va, store_va| {
+            [
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(4)),
+                    },
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(adjustment_va)),
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(reg("rsp")),
+                        index: None,
+                        scale: 1,
+                        disp: 0,
+                        segment: None,
+                    },
+                    src: Expr::Const(value),
+                    size: 4,
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(store_va)),
+            ]
+        };
+        let mut body = Vec::new();
+        body.extend(push_pair(20, 0x1020, 0x1022));
+        body.extend(push_pair(10, 0x1024, 0x1026));
+        body.push(call_to("callee").with_origins(crate::ir::ast::OriginSet::one(0x1028)));
+        let mut f = Function {
+            name: "caller".into(),
+            entry_va: 0,
+            body,
+        };
+
+        reconstruct_args(&mut f, CallConv::Cdecl32);
+
+        assert_eq!(f.body.len(), 2, "attributed pushes were not folded: {f:#?}");
+        assert_eq!(stack_pointer_sub_width(&f.body[0]), Some(8));
+        assert_eq!(
+            f.body[0]
+                .origins()
+                .expect("net stack adjustment owner")
+                .addresses(),
+            &[0x1020, 0x1024]
+        );
+        let Stmt::Call { args, .. } = f.body[1].semantic() else {
+            panic!("folded statement is not a call: {f:#?}")
+        };
+        assert_eq!(args.len(), 2);
+        assert!(matches!(args[0].semantic(), Expr::Const(10)));
+        assert!(matches!(args[1].semantic(), Expr::Const(20)));
+        assert_eq!(args[0].origins(), Some(&OriginSet::one(0x1026)));
+        assert_eq!(args[1].origins(), Some(&OriginSet::one(0x1022)));
+        assert_eq!(
+            f.body[1].origins().expect("folded call owner").addresses(),
+            &[0x1020, 0x1022, 0x1024, 0x1026, 0x1028]
+        );
+    }
+
+    #[test]
+    fn origin_wrapped_sysv_push_and_cleanup_are_recognized() {
+        let adjust = |op, va| {
+            Stmt::Assign {
+                dst: reg("rsp"),
+                src: Expr::Bin {
+                    op,
+                    lhs: Box::new(Expr::Reg(reg("rsp"))),
+                    rhs: Box::new(Expr::Const(8)),
+                },
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(va))
+        };
+        let body = vec![
+            adjust(BinOp::Sub, 0x1000),
+            Stmt::Store {
+                addr: Expr::Lea {
+                    base: Some(reg("rsp")),
+                    index: None,
+                    scale: 1,
+                    disp: 0,
+                    segment: None,
+                },
+                src: Expr::Const(7),
+                size: 8,
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(0x1004)),
+            call_to("callee").with_origins(crate::ir::ast::OriginSet::one(0x1008)),
+            Stmt::Assign {
+                dst: reg("scratch"),
+                src: Expr::Deref {
+                    addr: Box::new(Expr::Lea {
+                        base: Some(reg("rsp")),
+                        index: None,
+                        scale: 1,
+                        disp: 0,
+                        segment: None,
+                    }),
+                    size: 8,
+                },
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(0x100c)),
+            adjust(BinOp::Add, 0x1010),
+        ];
+
+        assert_eq!(
+            outgoing_sysv_stack_push(&body, 1),
+            Some((&Expr::Const(7), 8))
+        );
+        assert_eq!(outgoing_stack_cleanup(&body, 2, 8), Some(vec![3, 4]));
     }
 
     /// Six identical `push 0x2c(%esp)` instructions forward six DIFFERENT
@@ -3798,6 +4996,109 @@ mod tests {
     }
 
     #[test]
+    fn argument_slot_liveness_uses_exact_identity_not_display_spelling() {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            reg("opaque_arg"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rsi"),
+                version: 2,
+            },
+        );
+        identities.record(
+            reg("rdi#2"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 2,
+            },
+        );
+        identities.record(
+            reg("ambiguous_arg"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi"),
+                version: 1,
+            },
+        );
+        identities.record(
+            reg("multi_non_arg"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rsp"),
+                version: 1,
+            },
+        );
+        identities.record(
+            reg("multi_non_arg"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rsp"),
+                version: 2,
+            },
+        );
+        identities.record(
+            reg("ambiguous_arg"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rsi"),
+                version: 1,
+            },
+        );
+
+        let mut reads = vec![false; 6];
+        mark_arg_reads_in_expr_with_identities(
+            &Expr::Reg(reg("opaque_arg")),
+            CallConv::SysVAmd64,
+            &mut reads,
+            Some(&identities),
+        );
+        mark_arg_reads_in_expr_with_identities(
+            &Expr::Reg(reg("rdi#2")),
+            CallConv::SysVAmd64,
+            &mut reads,
+            Some(&identities),
+        );
+        assert_eq!(reads, vec![false, true, false, false, false, false]);
+
+        let mut writes = vec![false; 6];
+        mark_slot_write_with_identities(
+            &reg("opaque_arg"),
+            CallConv::SysVAmd64,
+            &mut writes,
+            Some(&identities),
+        );
+        mark_slot_write_with_identities(
+            &reg("rdi#2"),
+            CallConv::SysVAmd64,
+            &mut writes,
+            Some(&identities),
+        );
+        assert_eq!(writes, vec![false, true, false, false, false, false]);
+
+        let mut ambiguous = vec![false; 6];
+        mark_slot_write_with_identities(
+            &reg("ambiguous_arg"),
+            CallConv::SysVAmd64,
+            &mut ambiguous,
+            Some(&identities),
+        );
+        assert!(ambiguous.into_iter().all(|blocked| blocked));
+
+        let mut synthesized_local = vec![false; 6];
+        mark_slot_write_with_identities(
+            &reg("source_local"),
+            CallConv::SysVAmd64,
+            &mut synthesized_local,
+            Some(&identities),
+        );
+        assert!(synthesized_local.into_iter().all(|blocked| !blocked));
+        let mut multi_non_arg = vec![false; 6];
+        mark_slot_write_with_identities(
+            &reg("multi_non_arg"),
+            CallConv::SysVAmd64,
+            &mut multi_non_arg,
+            Some(&identities),
+        );
+        assert!(multi_non_arg.into_iter().all(|blocked| !blocked));
+    }
+
+    #[test]
     fn aarch64_folds_x0_argument() {
         let mut f = Function {
             name: "f".into(),
@@ -4218,6 +5519,53 @@ mod tests {
     }
 
     #[test]
+    fn origin_wrapped_sysv_sse_pair_result_still_forwards() {
+        let mut function = Function {
+            name: "pair_roundtrip".into(),
+            entry_va: 0x1000,
+            body: vec![
+                call_at(0x2000, "make_pair").with_origins(OriginSet::one(0x1000)),
+                call_at(0x3000, "consume_pair"),
+            ],
+        };
+        let layouts = std::collections::HashMap::from([
+            (0x2000, vec![reg("rdi")]),
+            (0x3000, vec![reg("xmm0"), reg("xmm1")]),
+        ]);
+        let prototypes = std::collections::HashMap::from([
+            (
+                0x2000,
+                recovered_prototype("struct __glaurung_sse_pair", &["int"]),
+            ),
+            (0x3000, recovered_prototype("int", &["double", "double"])),
+        ]);
+
+        reconstruct_args_with_layouts_prototypes_and_strings(
+            &mut function,
+            CallConv::SysVAmd64,
+            &mut [0].into_iter().collect(),
+            &layouts,
+            &std::collections::HashMap::new(),
+            Some(&prototypes),
+            &std::collections::HashMap::new(),
+        );
+
+        let args = function
+            .body
+            .iter()
+            .find_map(|statement| match statement.semantic() {
+                Stmt::Call {
+                    target: Expr::Named { va: 0x3000, .. },
+                    args,
+                    ..
+                } => Some(args),
+                _ => None,
+            })
+            .expect("consumer call");
+        assert_eq!(args, &[Expr::Reg(reg("xmm0")), Expr::Reg(reg("xmm1"))]);
+    }
+
+    #[test]
     fn sysv_sse_pair_forwarding_refuses_an_intervening_high_bank_write() {
         let mut function = Function {
             name: "clobbered_pair".into(),
@@ -4267,6 +5615,88 @@ mod tests {
             })
             .expect("consumer call");
         assert!(args.is_empty(), "clobbered pair was forwarded: {args:?}");
+    }
+
+    #[test]
+    fn sysv_sse_pair_clobber_uses_exact_identity_not_display_spelling() {
+        let layouts = std::collections::HashMap::from([
+            (0x2000, vec![reg("rdi")]),
+            (0x3000, vec![reg("xmm0"), reg("xmm1")]),
+        ]);
+        let prototypes = std::collections::HashMap::from([
+            (
+                0x2000,
+                recovered_prototype("struct __glaurung_sse_pair", &["int"]),
+            ),
+            (0x3000, recovered_prototype("int", &["double", "double"])),
+        ]);
+        let run = |destination: &str, identities: &crate::ir::value_number::ValueIdentities| {
+            let mut function = Function {
+                name: "pair".into(),
+                entry_va: 0x1000,
+                body: vec![
+                    call_at(0x2000, "make_pair"),
+                    Stmt::Assign {
+                        dst: reg(destination),
+                        src: Expr::Const(0),
+                    },
+                    call_at(0x3000, "consume_pair"),
+                ],
+            };
+            reconstruct_args_with_layouts_prototypes_strings_and_identities(
+                &mut function,
+                CallConv::SysVAmd64,
+                &mut [0].into_iter().collect(),
+                &layouts,
+                &Default::default(),
+                Some(&prototypes),
+                &Default::default(),
+                identities,
+            );
+            function
+                .body
+                .into_iter()
+                .find_map(|statement| match statement {
+                    Stmt::Call {
+                        target: Expr::Named { va: 0x3000, .. },
+                        args,
+                        ..
+                    } => Some(args),
+                    _ => None,
+                })
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            reg("opaque_high"),
+            crate::ir::ssa::SsaValue {
+                base: reg("xmm1"),
+                version: 2,
+            },
+        );
+        identities.record(
+            reg("xmm1#looks_high"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 2,
+            },
+        );
+        identities.record(
+            reg("malformed_identity_base"),
+            crate::ir::ssa::SsaValue {
+                base: reg("xmm1#not_canonical"),
+                version: 2,
+            },
+        );
+
+        assert_eq!(run("opaque_high", &identities), Some(Vec::new()));
+        assert_eq!(
+            run("xmm1#looks_high", &identities),
+            Some(vec![Expr::Reg(reg("xmm0")), Expr::Reg(reg("xmm1"))])
+        );
+        assert_eq!(
+            run("malformed_identity_base", &identities),
+            Some(vec![Expr::Reg(reg("xmm0")), Expr::Reg(reg("xmm1"))])
+        );
     }
 
     #[test]
@@ -4409,6 +5839,193 @@ mod tests {
     }
 
     #[test]
+    fn attributed_recovered_layout_setup_folds_and_joins_the_call_owner() {
+        let setup0 = crate::ir::ast::OriginSet::one(0x1010);
+        let setup1 = crate::ir::ast::OriginSet::one(0x1014);
+        let call_owner = crate::ir::ast::OriginSet::one(0x1018);
+        let mut body = vec![
+            assign("rdi#1", 7).with_origins(setup0.clone()),
+            assign("rsi#1", 11).with_origins(setup1.clone()),
+            call_to("mixed_float").with_origins(call_owner),
+        ];
+
+        assert!(fold_one_recovered_layout_call(
+            &mut body,
+            2,
+            &[reg("rdi"), reg("rsi")],
+            None,
+        ));
+
+        assert_eq!(body.len(), 1);
+        let Stmt::Call { args, .. } = body[0].semantic() else {
+            panic!("folded statement is not a call: {body:#?}")
+        };
+        assert_eq!(args.len(), 2);
+        assert!(matches!(args[0].semantic(), Expr::Const(7)));
+        assert!(matches!(args[1].semantic(), Expr::Const(11)));
+        assert_eq!(args[0].origins(), Some(&setup0));
+        assert_eq!(args[1].origins(), Some(&setup1));
+        assert_eq!(
+            body[0].origins().expect("folded call owner").addresses(),
+            &[0x1010, 0x1014, 0x1018]
+        );
+    }
+
+    #[test]
+    fn recovered_layout_setup_uses_exact_identity_not_display_spelling() {
+        let setup = |destination: &str| vec![assign(destination, 7), call_to("callee")];
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            reg("opaque_argument"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi"),
+                version: 1,
+            },
+        );
+        identities.record(
+            reg("rdi#looks_versioned"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 1,
+            },
+        );
+
+        let mut exact = setup("opaque_argument");
+        assert!(fold_one_recovered_layout_call(
+            &mut exact,
+            1,
+            &[reg("rdi")],
+            Some(&identities),
+        ));
+        assert!(matches!(
+            exact.as_slice(),
+            [Stmt::Call { args, .. }] if args == &[Expr::Const(7)]
+        ));
+
+        let mut misleading = setup("rdi#looks_versioned");
+        assert!(!fold_one_recovered_layout_call(
+            &mut misleading,
+            1,
+            &[reg("rdi")],
+            Some(&identities),
+        ));
+        assert!(matches!(
+            misleading.as_slice(),
+            [Stmt::Assign { .. }, Stmt::Call { args, .. }] if args.is_empty()
+        ));
+    }
+
+    #[test]
+    fn attributed_recovered_layout_follows_a_pure_spill_definition() {
+        let mut body = vec![
+            Stmt::Assign {
+                dst: reg("local_c"),
+                src: Expr::Reg(reg("arg0")),
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(0x1010)),
+            Stmt::Assign {
+                dst: reg("rdi#1"),
+                src: Expr::Reg(reg("local_c")),
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(0x1014)),
+            call_to("callee").with_origins(crate::ir::ast::OriginSet::one(0x1018)),
+        ];
+
+        assert!(fold_one_recovered_layout_call(
+            &mut body,
+            2,
+            &[reg("rdi")],
+            None,
+        ));
+
+        assert_eq!(body.len(), 2, "only the ABI setup is consumed");
+        let Stmt::Call { args, .. } = body[1].semantic() else {
+            panic!("folded statement is not a call: {body:#?}")
+        };
+        assert_eq!(args.len(), 1);
+        assert!(matches!(args[0].semantic(), Expr::Reg(value) if value == &reg("arg0")));
+        assert_eq!(
+            args[0]
+                .origins()
+                .expect("argument expression owner")
+                .addresses(),
+            &[0x1010, 0x1014]
+        );
+        assert_eq!(
+            body[1].origins().expect("folded call owner").addresses(),
+            &[0x1014, 0x1018]
+        );
+    }
+
+    #[test]
+    fn attributed_recovered_layout_leaves_frame_loads_for_the_general_fold() {
+        let frame_load = Expr::Deref {
+            addr: Box::new(Expr::Lea {
+                segment: None,
+                base: Some(reg("r7#1")),
+                index: None,
+                scale: 1,
+                disp: 4,
+            }),
+            size: 4,
+        };
+        let mut body = vec![
+            Stmt::Assign {
+                dst: reg("s0#1"),
+                src: frame_load,
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(0x1014)),
+            call_to("callee").with_origins(crate::ir::ast::OriginSet::one(0x1018)),
+        ];
+
+        assert!(!fold_one_recovered_layout_call(
+            &mut body,
+            1,
+            &[reg("s0")],
+            None,
+        ));
+        assert_eq!(body.len(), 2, "the general fold must retain the load root");
+        assert!(matches!(body[1].semantic(), Stmt::Call { args, .. } if args.is_empty()));
+    }
+
+    #[test]
+    fn attributed_mixed_layout_setup_folds_with_a_proven_live_in() {
+        let mut body = vec![
+            assign("rdi#1", 7).with_origins(crate::ir::ast::OriginSet::one(0x1020)),
+            call_to("mixed_float").with_origins(crate::ir::ast::OriginSet::one(0x1024)),
+        ];
+        let live_ins = vec![Some(Expr::Reg(reg("rdi"))), Some(Expr::Reg(reg("rsi")))];
+        let enclosing = EnclosingSlots::entry(
+            CallConv::SysVAmd64,
+            &live_ins,
+            vec![true; arg_slots(CallConv::SysVAmd64).len()],
+        );
+
+        assert!(fold_one_recovered_layout_call_with_live_ins(
+            &mut body,
+            1,
+            CallConv::SysVAmd64,
+            &[reg("rdi"), reg("rsi")],
+            &[0, 1].into_iter().collect(),
+            &enclosing,
+            None,
+        ));
+
+        assert_eq!(body.len(), 1);
+        let Stmt::Call { args, .. } = body[0].semantic() else {
+            panic!("folded statement is not a call: {body:#?}")
+        };
+        assert_eq!(args.len(), 2);
+        assert!(matches!(args[0].semantic(), Expr::Const(7)));
+        assert_eq!(args[0].origins(), Some(&OriginSet::one(0x1020)));
+        assert_eq!(args[1], Expr::Reg(reg("rsi")));
+        assert_eq!(
+            body[0].origins().expect("folded call owner").addresses(),
+            &[0x1020, 0x1024]
+        );
+    }
+
+    #[test]
     fn recovered_callee_layout_keeps_current_register_without_adjacent_setup() {
         let mut f = Function {
             name: "tail_caller".into(),
@@ -4530,20 +6147,23 @@ mod tests {
     /// feed the ordinary core-register prefix.
     #[test]
     fn recovered_aapcs_layout_folds_reused_core_registers_and_stack_suffix() {
-        let stack_store = |disp, source| Stmt::Store {
-            addr: if disp == 0 {
-                Expr::Reg(reg("sp"))
-            } else {
-                Expr::Lea {
-                    base: Some(reg("sp")),
-                    index: None,
-                    scale: 1,
-                    disp,
-                    segment: None,
-                }
-            },
-            src: Expr::Reg(reg(source)),
-            size: 4,
+        let stack_store = |disp, source, va| {
+            Stmt::Store {
+                addr: if disp == 0 {
+                    Expr::Reg(reg("sp"))
+                } else {
+                    Expr::Lea {
+                        base: Some(reg("sp")),
+                        index: None,
+                        scale: 1,
+                        disp,
+                        segment: None,
+                    }
+                },
+                src: Expr::Reg(reg(source)),
+                size: 4,
+            }
+            .with_origins(OriginSet::one(va))
         };
         let mut f = Function {
             name: "call_into_spill_shape".into(),
@@ -4552,12 +6172,12 @@ mod tests {
                 assign("r3#1", 7),
                 assign("r2#1", 8),
                 assign("ip#1", 6),
-                stack_store(8, "r3#1"),
-                stack_store(12, "r2#1"),
+                stack_store(8, "r3#1", 0x120c),
+                stack_store(12, "r2#1", 0x1210),
                 assign("r3#2", 5),
                 assign("r2#2", 3),
-                stack_store(0, "r3#2"),
-                stack_store(4, "ip#1"),
+                stack_store(0, "r3#2", 0x121c),
+                stack_store(4, "ip#1", 0x1220),
                 assign("r3#3", 4),
                 Stmt::Assign {
                     dst: reg("flag_input#1"),
@@ -4595,14 +6215,14 @@ mod tests {
         let call = f
             .body
             .iter()
-            .find(|statement| matches!(statement, Stmt::Call { .. }))
+            .find(|statement| matches!(statement.semantic(), Stmt::Call { .. }))
             .expect("call must survive");
-        let Stmt::Call { args, .. } = call else {
+        let Stmt::Call { args, .. } = call.semantic() else {
             unreachable!()
         };
         assert_eq!(
-            args,
-            &vec![
+            args.iter().map(Expr::semantic).cloned().collect::<Vec<_>>(),
+            vec![
                 Expr::Const(1),
                 Expr::Const(2),
                 Expr::Const(3),
@@ -4615,6 +6235,10 @@ mod tests {
             "AAPCS stack setup was not composed with the core-register prefix: {:#?}",
             f.body
         );
+        assert_eq!(args[4].origins(), Some(&OriginSet::one(0x121c)));
+        assert_eq!(args[5].origins(), Some(&OriginSet::one(0x1220)));
+        assert_eq!(args[6].origins(), Some(&OriginSet::one(0x120c)));
+        assert_eq!(args[7].origins(), Some(&OriginSet::one(0x1210)));
         assert!(
             f.body.iter().any(|statement| matches!(
                 statement,
@@ -4902,6 +6526,101 @@ mod tests {
     }
 
     #[test]
+    fn an_origin_wrapped_consumed_call_result_is_attributed_in_place() {
+        let call_owner = OriginSet::one(0x1000);
+        let return_owner = OriginSet::one(0x1004);
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                call_to("g").with_origins(call_owner.clone()),
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("rax"))),
+                }
+                .with_origins(return_owner),
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+
+        assert_eq!(f.body[0].origins(), Some(&call_owner));
+        match f.body[0].semantic() {
+            Stmt::Call { dst, .. } => assert_eq!(*dst, Some(VReg::phys("rax"))),
+            other => panic!("expected a call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn origin_wrappers_do_not_hide_register_names_from_call_recovery() {
+        let body = vec![Stmt::Return {
+            value: Some(Expr::Reg(reg("rdi"))),
+        }
+        .with_origins(OriginSet::one(0x1000))];
+        let mut names = Vec::new();
+
+        walk_body_reg_names(&body, &mut |name| names.push(name.to_string()));
+
+        assert_eq!(names, vec!["rdi"]);
+    }
+
+    #[test]
+    fn origin_wrappers_do_not_hide_enclosing_reaching_definitions() {
+        let mut reaching = vec![None; arg_slots(CallConv::SysVAmd64).len()];
+        let definition = Stmt::Assign {
+            dst: reg("rdi#1"),
+            src: Expr::Const(7),
+        }
+        .with_origins(OriginSet::one(0x1000));
+
+        EnclosingSlots::advance_reaching(&mut reaching, &definition, CallConv::SysVAmd64, None);
+
+        let value = reaching[0].as_ref().expect("reaching definition");
+        assert!(matches!(value.semantic(), Expr::Reg(reg) if reg == &VReg::phys("rdi#1")));
+        assert_eq!(value.origins(), Some(&OriginSet::one(0x1000)));
+    }
+
+    #[test]
+    fn enclosing_reaching_state_does_not_reparse_an_identity_base() {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            reg("opaque_argument"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi"),
+                version: 1,
+            },
+        );
+        identities.record(
+            reg("malformed_identity_base"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi#not_canonical"),
+                version: 1,
+            },
+        );
+        let definition = |dst| Stmt::Assign {
+            dst: reg(dst),
+            src: Expr::Const(7),
+        };
+
+        let mut exact = vec![None; arg_slots(CallConv::SysVAmd64).len()];
+        EnclosingSlots::advance_reaching(
+            &mut exact,
+            &definition("opaque_argument"),
+            CallConv::SysVAmd64,
+            Some(&identities),
+        );
+        assert_eq!(exact[0], Some(Expr::Reg(reg("opaque_argument"))));
+
+        let mut malformed = vec![None; arg_slots(CallConv::SysVAmd64).len()];
+        EnclosingSlots::advance_reaching(
+            &mut malformed,
+            &definition("malformed_identity_base"),
+            CallConv::SysVAmd64,
+            Some(&identities),
+        );
+        assert!(malformed.iter().all(Option::is_none));
+    }
+
+    #[test]
     fn a_result_nobody_reads_is_not_an_assignment() {
         // The ABI clobbers the return register on EVERY call — that belongs in the
         // value model. Printing `ret = puts(..)` claims something else: that the
@@ -5049,6 +6768,217 @@ mod tests {
         assert_eq!(slot_of(CallConv::Aarch64, "x2#1"), Some(2));
         // A non-argument register is still not an argument register.
         assert_eq!(slot_of(CallConv::SysVAmd64, "rbx#2"), None);
+    }
+
+    #[test]
+    fn incoming_argument_uses_exact_identity_not_display_spelling() {
+        let body = vec![Stmt::Return {
+            value: Some(Expr::Reg(VReg::phys("opaque_incoming"))),
+        }];
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            VReg::phys("opaque_incoming"),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rdi"),
+                version: 0,
+            },
+        );
+        identities.record(
+            VReg::phys("rdi#0"),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rax"),
+                version: 0,
+            },
+        );
+
+        assert_eq!(
+            incoming_arg_expr_with_identities(CallConv::SysVAmd64, 0, &body, Some(&identities),),
+            Some(Expr::Reg(VReg::phys("opaque_incoming")))
+        );
+        assert_eq!(
+            incoming_arg_expr_with_identities(
+                CallConv::SysVAmd64,
+                0,
+                &[Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("rdi#0"))),
+                }],
+                Some(&identities),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn frame_coordinate_uses_exact_identity_not_display_spelling() {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            VReg::phys("opaque_stack"),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rsp"),
+                version: 4,
+            },
+        );
+        identities.record(
+            VReg::phys("rsp#4"),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rax"),
+                version: 4,
+            },
+        );
+
+        assert!(is_frame_coordinate_storage(
+            CallConv::SysVAmd64,
+            &VReg::phys("opaque_stack"),
+            Some(&identities),
+        ));
+        assert!(!is_frame_coordinate_storage(
+            CallConv::SysVAmd64,
+            &VReg::phys("rsp#4"),
+            Some(&identities),
+        ));
+    }
+
+    #[test]
+    fn argument_slot_uses_exact_identity_not_display_spelling() {
+        let caller = |destination: &str| Function {
+            name: "caller".into(),
+            entry_va: 0x1000,
+            body: vec![assign(destination, 17), call_to("callee")],
+        };
+        let run = |mut function: Function,
+                   identities: &crate::ir::value_number::ValueIdentities| {
+            reconstruct_args_with_layouts_prototypes_strings_and_identities(
+                &mut function,
+                CallConv::SysVAmd64,
+                &mut Default::default(),
+                &Default::default(),
+                &Default::default(),
+                None,
+                &Default::default(),
+                identities,
+            );
+            function
+        };
+
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            reg("opaque_argument"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi"),
+                version: 2,
+            },
+        );
+        identities.record(
+            reg("rdi#looks_versioned"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 2,
+            },
+        );
+
+        let exact = run(caller("opaque_argument"), &identities);
+        assert!(matches!(
+            exact.body.as_slice(),
+            [Stmt::Call { args, .. }] if args == &[Expr::Const(17)]
+        ));
+
+        let misleading = run(caller("rdi#looks_versioned"), &identities);
+        assert!(matches!(
+            misleading.body.as_slice(),
+            [Stmt::Assign { .. }, Stmt::Call { args, .. }] if args.is_empty()
+        ));
+    }
+
+    #[test]
+    fn storage_match_does_not_reparse_an_authoritative_identity_base() {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            reg("opaque_argument"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi#not_canonical"),
+                version: 2,
+            },
+        );
+
+        assert!(!register_is_storage(
+            &reg("opaque_argument"),
+            "rdi",
+            Some(&identities),
+        ));
+    }
+
+    #[test]
+    fn stable_frame_load_uses_exact_identity_not_display_spelling() {
+        let frame_load = |base| Expr::Deref {
+            addr: Box::new(Expr::Lea {
+                base: Some(VReg::phys(base)),
+                index: None,
+                scale: 1,
+                disp: -8,
+                segment: None,
+            }),
+            size: 4,
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            VReg::phys("opaque_frame"),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rbp"),
+                version: 3,
+            },
+        );
+        identities.record(
+            VReg::phys("rbp#3"),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rax"),
+                version: 3,
+            },
+        );
+        identities.record(
+            VReg::phys("opaque_reframe"),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rbp"),
+                version: 4,
+            },
+        );
+
+        let body = vec![assign("rax", 1), call_to("callee")];
+
+        assert!(is_stable_frame_arg_definition_with_identities(
+            &frame_load("opaque_frame"),
+            &body,
+            0,
+            0,
+            Some(&identities),
+        ));
+        assert!(!is_stable_frame_arg_definition_with_identities(
+            &frame_load("rbp#3"),
+            &body,
+            0,
+            0,
+            Some(&identities),
+        ));
+
+        let fake_frame_write = vec![assign("rax", 1), assign("rbp#3", 2), call_to("callee")];
+        assert!(is_stable_frame_arg_definition_with_identities(
+            &frame_load("opaque_frame"),
+            &fake_frame_write,
+            0,
+            2,
+            Some(&identities),
+        ));
+        let real_frame_write = vec![
+            assign("rax", 1),
+            assign("opaque_reframe", 2),
+            call_to("callee"),
+        ];
+        assert!(!is_stable_frame_arg_definition_with_identities(
+            &frame_load("opaque_frame"),
+            &real_frame_write,
+            0,
+            2,
+            Some(&identities),
+        ));
     }
 
     /// End to end over the pass: a value-numbered argument write folds into the
@@ -5240,6 +7170,59 @@ mod tests {
             statement,
             Stmt::Assign { dst, .. } if dst == &reg("rdx#1")
         )));
+    }
+
+    #[test]
+    fn origin_wrapped_printf_call_keeps_format_proven_argument() {
+        let mut f = Function {
+            name: "printf_caller".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rdi#1"),
+                    src: Expr::Addr(0x3000),
+                },
+                Stmt::Assign {
+                    dst: reg("rsi#1"),
+                    src: Expr::Const(42),
+                },
+                Stmt::Store {
+                    addr: Expr::Addr(0x4000),
+                    src: Expr::Reg(reg("rsi#1")),
+                    size: 4,
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "printf".to_string(),
+                    },
+                    args: Vec::new(),
+                    dst: None,
+                    call_spec: None,
+                }
+                .with_origins(OriginSet::one(0x1010)),
+            ],
+        };
+        let strings = std::collections::HashMap::from([(0x3000, "%d\n".to_string())]);
+
+        reconstruct_args_with_layouts_and_strings(
+            &mut f,
+            CallConv::SysVAmd64,
+            &mut Default::default(),
+            &Default::default(),
+            &Default::default(),
+            &strings,
+        );
+
+        let args = f
+            .body
+            .iter()
+            .find_map(|statement| match statement.semantic() {
+                Stmt::Call { args, .. } => Some(args),
+                _ => None,
+            })
+            .expect("the call must survive");
+        assert_eq!(args, &[Expr::Addr(0x3000), Expr::Reg(reg("rsi#1"))]);
     }
 
     /// Unsupported format constructs must not relax the read barrier. This is
@@ -5710,6 +7693,70 @@ mod tests {
     }
 
     #[test]
+    fn rsp_relative_argument_load_stays_before_tail_epilogue() {
+        // GCC saves an incoming value in its local frame, reloads it into the
+        // fourth SysV argument register, restores rsp, and only then performs
+        // a tail call. Moving the load expression into the call changes its
+        // coordinate phase: [rsp+8] before the restore is entry_rsp-16, while
+        // [rsp+8] afterwards is the incoming seventh-argument slot.
+        let adjust_rsp = |op| Stmt::Assign {
+            dst: reg("rsp"),
+            src: Expr::Bin {
+                op,
+                lhs: Box::new(Expr::Reg(reg("rsp"))),
+                rhs: Box::new(Expr::Const(24)),
+            },
+        };
+        let local_address = || Expr::Lea {
+            base: Some(reg("rsp")),
+            index: None,
+            scale: 1,
+            disp: 8,
+            segment: None,
+        };
+        let saved_load = Stmt::Assign {
+            dst: reg("rcx#1"),
+            src: Expr::Deref {
+                addr: Box::new(local_address()),
+                size: 8,
+            },
+        };
+        let mut f = Function {
+            name: "format_wrapper".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                adjust_rsp(BinOp::Sub),
+                Stmt::Store {
+                    addr: local_address(),
+                    src: Expr::Reg(reg("rsi")),
+                    size: 8,
+                },
+                saved_load.clone(),
+                assign("rdx#1", 3),
+                assign("rsi#1", 0),
+                assign("rdi#1", 0),
+                adjust_rsp(BinOp::Add),
+                call_to("error"),
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+
+        assert!(
+            f.body.contains(&saved_load),
+            "the phase-sensitive load must remain before the rsp restore: {f:#?}"
+        );
+        let Stmt::Call { args, .. } = f.body.last().expect("call must survive") else {
+            panic!("expected call: {f:#?}")
+        };
+        assert_eq!(args.get(3), Some(&Expr::Reg(reg("rcx#1"))), "{f:#?}");
+
+        crate::ir::stack_locals::promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+        let rendered = crate::ir::ast::render(&f);
+        assert!(!rendered.contains("arg6"), "{rendered}");
+    }
+
+    #[test]
     fn fixed_arm_library_contract_crosses_shadowed_argument_setup() {
         // GCC 15 emits two consecutive `mov r1, #0` instructions before the
         // A32 rb_validate memset. The nearest definition is the call input;
@@ -6077,15 +8124,22 @@ mod tests {
     #[test]
     fn a_proven_table_call_reads_the_enclosing_reaching_definitions() {
         let mut f = guarded_table_dispatch(&[0x1100, 0x1110]);
+        let first_owner = OriginSet::one(0x1154);
+        let second_owner = OriginSet::one(0x1158);
+        for (index, owner) in [(1, first_owner.clone()), (2, second_owner.clone())] {
+            let statement = std::mem::replace(&mut f.body[index], Stmt::Nop);
+            f.body[index] = statement.with_origins(owner);
+        }
         reconstruct_with_table(
             &mut f,
             &layouts(&[(0x1100, &["rdi", "rsi"]), (0x1110, &["rdi", "rsi"])]),
         );
-        assert_eq!(
-            recovered_table_args(&f),
-            vec![Expr::Reg(reg("rdi#1")), Expr::Reg(reg("rsi#1"))],
-            "the shuffled values, not the function's own entry registers"
-        );
+        let args = recovered_table_args(&f);
+        assert_eq!(args.len(), 2);
+        assert!(matches!(args[0].semantic(), Expr::Reg(value) if value == &reg("rdi#1")));
+        assert!(matches!(args[1].semantic(), Expr::Reg(value) if value == &reg("rsi#1")));
+        assert_eq!(args[0].origins(), Some(&first_owner));
+        assert_eq!(args[1].origins(), Some(&second_owner));
     }
 
     /// The may-use direction. One entry reads two registers and the other reads

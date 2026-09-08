@@ -11,10 +11,10 @@ pub(crate) fn straight_line_return_body(body: &[Stmt]) -> bool {
     let Some((last, prefix)) = body.split_last() else {
         return false;
     };
-    matches!(last, Stmt::Return { .. })
+    matches!(last.semantic(), Stmt::Return { .. })
         && prefix.iter().all(|statement| {
             matches!(
-                statement,
+                statement.semantic(),
                 Stmt::Assign { .. }
                     | Stmt::Store { .. }
                     | Stmt::Call { .. }
@@ -30,7 +30,7 @@ pub(crate) fn straight_line_return_body(body: &[Stmt]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::ast::Expr;
+    use crate::ir::ast::{Expr, OriginSet};
 
     #[test]
     fn only_straight_line_prefixes_ending_in_return_are_terminal() {
@@ -44,6 +44,21 @@ mod tests {
         assert!(!straight_line_return_body(&[
             Stmt::Break,
             Stmt::Return { value: None },
+        ]));
+    }
+
+    #[test]
+    fn origin_wrappers_do_not_hide_straight_line_returns() {
+        assert!(straight_line_return_body(&[
+            Stmt::Assign {
+                dst: crate::ir::types::VReg::phys("ret"),
+                src: Expr::Const(-1),
+            }
+            .with_origins(OriginSet::one(0x1000)),
+            Stmt::Return {
+                value: Some(Expr::Const(-1)),
+            }
+            .with_origins(OriginSet::one(0x1004)),
         ]));
     }
 }

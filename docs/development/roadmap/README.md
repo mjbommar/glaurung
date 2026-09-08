@@ -136,14 +136,85 @@ structure tests pass. The complete 838-lane baseline-aware comparison reports
 34 older unrecorded improvements and one `rust_slice_get` regression which an
 isolated `55ab688b` A/B proves predates this increment; no regression is
 attributable to this change. This closes the production gap
-for that cell, not WP5's shared evidence-object or architecture-wide exit
-criteria. Its former unaccounted-edge diagnostic is gone, but structure
+for that cell, not WP5's architecture-wide exit criteria. The next bounded
+increment at `9ad9414d` gives production and shadow-v2 one immutable, ordered
+case/default/provenance object built from typed CFG edges and labels. Missing
+or empty labels, ambiguous defaults, and incomplete candidates fail closed;
+the independent verifier rejects relational disagreement, including removal
+of a proven default. The complete Rust gate reports 4,351 passed, zero failed,
+and 17 ignored across 35 targets. Fitness records `+104` product LOC with only
+the mean worsening, while shadow-v2 shrinks by 33 product lines to 3,284 of its
+approved 4,400-line, nine-file cap. Remaining compiler/architecture execution,
+decline classification, and full Python/matrix validation keep WP5 open. Its
+former unaccounted-edge diagnostic is gone, but structure
 accounting is now clean as well. Shared return tails carry explicit borrowed
 provenance: predecessor-specific SSA renderings may be cloned for readable C,
 while the underlying machine block has exactly one structural owner. A full
 838-lane rerun preserves the same 34 older improvements and sole pre-existing
 `rust_slice_get` baseline mismatch, with no regression attributable to the
 ownership repair.
+
+The next bounded WP5 architecture slice is behavioral commit `310b949e`.
+GCC AArch64 O2's guarded `LDRB` plus `ADD ..., SXTB #2` compact table now
+produces cases `0..15` and the out-of-range default for the real
+`206::dense_dispatch` fixture, rather than an unrecovered indirect branch. All
+22 deterministic executions pass, the reviewed architecture baseline moves
+only that cell from `fail` to `pass`, ten adjacent AArch64 switch lanes have no
+regression, and the full Rust gate is green. A complete 412-lane AArch64 O0/O2
+parent/tip comparison reports the same four older regressions and fourteen
+stale improvements at both revisions, proving no broad regression is
+attributable to this slice. The decoder requires an exact edge-local bound and
+instruction encoding and rejects malformed targets. Hardening commit
+`5dbc3fc4` also clears all candidate facts across AArch64 calls so callee-
+clobbered registers cannot manufacture a switch. The remaining AArch64
+encodings and corpus decline census keep WP5 open. The post-source whole Python
+gate completed red at 4,595 passed and 126 failed. Seven of its eight apparent
+new failures pass together on immediate clean-tip retry; the deterministic
+delta is the expected six-test census increase, recorded at `88bb8650` with a
+green focused census suite and a zero never-executed pool. This is triaged
+evidence, not a release-green claim. Detailed evidence is in
+[`wp5-aarch64-compact-byte-switch.md`](../../history/decompiler-review-2026-09-02/results/wp5-aarch64-compact-byte-switch.md).
+
+The following bounded WP5 slice at `b84233ec` recovers GCC i386 PIC tables
+whose entries are stored at a displacement from the GOT but are relative to the
+GOT base. One target-owned PC-thunk byte contract now serves lifting and CFG
+analysis, and table address remains distinct from target base through bounded
+decode. Eight i386 O2 cells move from `fail` to execution-verified `pass`,
+including a switch inside a loop. A complete 410-lane parent/tip comparison
+shows the exact same four older regressions at both revisions, so none is
+attributable to this slice; the full Rust gate is green. The whole Python gate
+completed broadly red at 4,597 passed and 125 failed, but exact node-ID
+comparison finds no tip-only failure relative to the AArch64 parent; the sole
+removed failure is the refreshed census. The residual decline census remains
+open. Detailed evidence is in
+[`wp5-i386-got-relative-switch.md`](../../history/decompiler-review-2026-09-02/results/wp5-i386-got-relative-switch.md).
+
+The next stacked WP5 slice at `76cce5d1`, hardened at `5ef0bcb9`, recovers
+GCC ARMv7 A32's PC-relative unsigned-byte tables ending in exact
+`add pc, pc, rOffset, lsl #2` semantics. Production `dense_dispatch` and
+shadow-v2 `dispatch_in_loop` pass native execution. Commit `6f0ba701` also
+closes the production-v1 multi-latch loop ownership defect: the same function
+now passes with a real switch inside its locally owned loop. Across the
+complete 410-lane ARMv7 A32
+O0/O2 comparison, nine of 1,604 function verdicts move from `fail` to `pass`
+and none becomes worse or disappears. The first clean tip also exposed four
+valid 48-entry switches overflowing v1's native recursion stack. A graph-sized
+shared shape-recovery work budget now declines that function to its complete
+labelled CFG in 0.17 seconds instead of crashing. Detailed evidence is in
+[`wp5-armv7-a32-byte-switch.md`](../../history/decompiler-review-2026-09-02/results/wp5-armv7-a32-byte-switch.md).
+The exact post-repair comparison adds one attributable fail-to-pass movement
+and no attributable decline; same-revision instability in two unrelated rows
+is recorded separately in
+[`wp4-a32-multi-latch-dispatch-loop.md`](../../history/decompiler-review-2026-09-02/results/wp4-a32-multi-latch-dispatch-loop.md).
+The follow-on commits `28b3bc5b` and `0e29ffc4` remove the unreachable
+undefined select arm and final outer-guard accounting goto. Exact host and A32
+comparisons show no attributable status decline; detailed evidence is in
+[`wp4-a32-guard-quality.md`](../../history/decompiler-review-2026-09-02/results/wp4-a32-guard-quality.md).
+Commit `c9483542` further replaces all six exact raw-loop header gotos with
+source-level `continue`; native execution and clean accounting are preserved,
+the complete A32 matrix has no attributable status movement, and exact host
+parent/tip maps remain identical across 3,346 function verdicts. See
+[`wp4-raw-loop-continue.md`](../../history/decompiler-review-2026-09-02/results/wp4-raw-loop-continue.md).
 
 The ABI/call-value work formerly recorded here as uncommitted is landed: CFG-
 aware parameter evidence, exceptional and aggregate call results, non-C source
@@ -163,7 +234,11 @@ O2 float and double complex-multiply cells all move to pass, four improvements
 with no scoped adjacent regression. General exact call-boundary facts and
 exceptional-input coverage remain WP6 work; this two-helper catalogued contract
 does not establish other ABIs, arbitrary aggregate calls, or vector support.
-WP8 has
+WP2 is complete: all four public entry points now share one typed request,
+result, discovery, preparation, finalization, and rendering transaction with
+explicit enforced budgets, checked pass ordering, bounded fixpoints, stable
+fingerprints, and equal-budget output identity. The final exact-range budget
+contract landed at `e7b7de67`. WP8 has
 authoritative DWARF/PDB/analyst
 declaration slices and now owns their total priority order in the program
 environment; authoritative tagged PDB pointers also retain their nominal type
@@ -177,8 +252,37 @@ be reconstructed from a cached artifact. DWARF variadic markers now survive
 into GCC and Clang rendered signatures across O0/O2; generic stripped-binary
 variadic inference and complete SysV `va_start` lowering remain open. WP9 has
 target-owned ARM32 register views plus standing
-decoded/effect capability censuses and several silent-writer repairs. WP2,
-WP3, WP6, and WP7B remain open architectural work. No current-tip release gate
+decoded/effect capability censuses and several silent-writer repairs. WP3's
+first bounded lifecycle slices are landed at `925dc002` and `09522773`:
+explicit conservative invalidation retains one SSA owner across definedness,
+prototype recovery, and return materialization, with byte-identical output
+across the 419-pair identity gate. Commit `f05c9a5d` then carries exact or
+explicitly ambiguous opaque SSA identities beside the lowered AST and migrates
+float-role type projection as the first product consumer. Commit `af65c260`
+migrates optimized DWARF register-local recovery as the second; both 419-pair
+maps are byte-identical. Statement origins and structured line mappings are
+now live. Commits `3c5c74b9`, `f30167f7`, `b269a3f2`, `86ac95a6`, and
+`fb878925`, `5f8dec01`, `76753c05`, `bb98a3a9`, `e68ff86f`, `a756a6d5`, `f2e69784`, `4c19cb2e`, `97aef0c3`, `65162531`, `6c737361`, `5e04d66a`, `02791f18`, `3b1f34ca`, `22cb5827`, `66e533d7`, `1647953d`, `14eef6d2`, `e2df3e60`, `ff0ced1c`, `3627ca65`, `c79f57db`, `64781964`, `997ec48c`, `072412ce`, `2fccded5`, `dfa2fa22`, and `5289e459` make the first bounded production expression-origin attachments
+during temporary reconstruction, simple/exhaustive return folding, all four
+safe adjacent value movements, generic register-call argument recovery, and
+both generic SysV stack-argument forms, the generic AAPCS stack area, and
+convention-generic recovered callee layouts, both cdecl32 stack forms, and
+pure-VFP hard-float setup, enclosing reaching values used by table calls, and
+rematerialized push values, inclusive-comparison folding, and width-proved
+terminal mixed-view relation folding, subtraction zero-test recovery, and
+constant-select hoisting, full-width parameter-address load recovery, and
+repeated-condition select collapse, proved nested-cast subsumption, and safe
+eager SETcc boolean-tree recovery, observed partial-register masks, and safe
+constant arithmetic and comparisons, same-operand algebraic folds, and the
+neutral/absorbing constant-identity family, redundant literal/boolean casts,
+ARM/AArch64 address reconstruction, associative x86 flag-XOR cancellation, and
+terminal comparison-to-zero recovery, storage-width expression cleanup, and
+typed declared-view removal
+without changing their scoped real-binary verdicts. Multi-output
+identity, remaining display-name consumers,
+universal expression attribution, and remaining mutating-pass migrations keep
+WP3 open. WP6 and WP7B
+remain open architectural work. No current-tip release gate
 is claimed green; isolated overlay results in the review record retain their
 named scope and must not be read as cross-architecture or full-plan
 completion.

@@ -153,7 +153,8 @@ pub fn fold_string_literals(f: &mut Function, pool: &HashMap<u64, String>) {
 
 fn fold_body(body: &mut [Stmt], pool: &HashMap<u64, String>) {
     for s in body.iter_mut() {
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::IndirectGoto { target } => fold_expr(target, pool),
             Stmt::Assign { src, .. } => fold_expr(src, pool),
             Stmt::Store { addr, src, .. } => {
@@ -264,6 +265,7 @@ fn fold_constant_string(expr: &mut Expr, pool: &HashMap<u64, String>) {
 
 fn fold_expr(e: &mut Expr, pool: &HashMap<u64, String>) {
     match e {
+        Expr::Origin { expr, .. } => fold_expr(expr, pool),
         Expr::Addr(v) => {
             if let Some(s) = pool.get(v) {
                 *e = Expr::StringLit { value: shorten(s) };

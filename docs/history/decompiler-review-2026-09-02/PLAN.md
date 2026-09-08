@@ -10,10 +10,10 @@ Review basis: `README.md` and `01` through `06` in this directory
 
 Scope: local Glaurung implementation, tests, measurements, and documentation
 
-Current-state snapshot: reconciled 2026-09-05 through homogeneous-float
+Current-state snapshot: reconciled 2026-09-06 through homogeneous-float
 behavioral commits `db750dbc`, `197e6383`, and `64181d02`, baseline commit
 `1bee3fb1`, and census commit `a0915220`. WP0 and
-WP7A are complete; the bounded WP1 production trial is complete and rejected,
+WP2 and WP7A are complete; the bounded WP1 production trial is complete and rejected,
 with selective substrate cleanup still open under WP10. WP4 now has a pinned
 715-function structural comparison and a 334-candidate execution comparison
 with zero unexplained structural regressions, zero execution regressions, and
@@ -21,10 +21,207 @@ nested post-tested branches preserved; it still lacks the remaining promotion
 measurements. WP5, WP8, WP9, and WP10 have production or shadow vertical slices
 but have not met their full exit criteria. WP6 has its first per-use signedness
 slice and the O0 `classify` signed-result vertical slice, but not the general
-solver. WP2, WP3,
-and the general WP7B idiom framework remain the principal unstarted or
-dependency-blocked packages. A bounded, pre-WP3 WP7B relational slice is
-landed and proved at `9c9c607c`; it does not establish the general framework.
+solver. Its latest bounded edge at `8ab39b50` preserves an authoritative
+unsigned parameter declaration while rendering a contradictory signed machine
+comparison at the exact use; fixture-215 Clang O2 is now five-for-five. WP3 and
+the general WP7B idiom framework remain the principal architectural packages.
+WP3 is active rather than unstarted: the tracked SSA lifecycle and opaque
+identity sidecar are in production, and bounded semantic consumers are being
+migrated off display spellings one at a time.
+WP3 has its first bounded consumer migration at `925dc002`: pipeline-owned SSA
+now has explicit conservative invalidation and reconstructs after the
+definedness pass changes uses. Commit `09522773` retains that owner across
+return materialization, and `f05c9a5d` carries an opaque value-identity sidecar
+through AST lowering and migrates exact float-role projection away from
+display-name parsing. Commit `af65c260` migrates optimized DWARF register-local
+recovery as the second product consumer. Commit `7bea3314` defines canonical
+instruction-origin sets and `59840017` gives statements a transparent carrier
+without changing the 419-pair output map. Commit `8cb7d171` then makes the
+enabled AST transformation and structured return-width consumers transparent
+to that carrier. Its release-built stripped differential moves from 112 to 103
+regressions while retaining 17 improvements, with zero changed classifications
+and zero infrastructure problems; see
+`results/wp3-statement-origin-propagation.md`. Commit `cda7ab73` migrates the
+post-pipeline C++ exception consumer and unions the contributing instruction
+origins into recovered `try`/`catch`, `throw`, and catch-return nodes. The real
+Clang O2 stripped exception cell returns to green and the same complete
+differential improves again to 102 regressions, still with 17 improvements and
+zero infrastructure problems; see
+`results/wp3-exception-origin-propagation.md`. Commit `cb9e5b10` then migrates
+six control-oriented wildcard consumers with an exactly neutral complete
+differential; see `results/wp3-control-consumer-origins.md`. Commit `52914784`
+migrates guarded-switch recovery without weakening its ownership and range
+proofs, remains exactly neutral on the same differential, and reduces the
+shared whole-Python failing-node set from 228 to 227; see
+`results/wp3-guarded-switch-origins.md`. Commit `f7b47953` migrates every
+guard-chain rewrite, keeps the complete
+stripped differential exactly neutral, and leaves no guard-chain node in the
+224-entry shared Python failure cache; see
+`results/wp3-guard-chain-origins.md`. Commit `3b7d8a95` then migrates
+comparison-tree and linear-labelled
+switch ladders plus final join-to-`break` cleanup with an exactly neutral
+stripped differential; see `results/wp3-switch-ladder-origins.md`. Commit
+`a807b2d0` completes the next bounded wildcard migration in
+`latch_predicate`: attributed predicate, snapshot, entry-copy, and loop-update
+statements remain visible, and every removed contributor is unioned into the
+surviving loop. Its complete stripped differential is again exactly neutral;
+see `results/wp3-latch-predicate-origins.md`. The post-migration audit confirms
+that `aapcs64_indirect_result.rs` is the next enabled raw-statement consumer to
+migrate before expression ownership. Commit `c51a116d` closes that omission
+for AAPCS64 `x8` and SysV hidden-result setup, nested traversal, stack
+adjustments, and post-promotion call binding. Its complete stripped
+differential and 221-node whole-Python failure set are exactly neutral; see
+`results/wp3-indirect-result-origins.md`. Commit `02b0da5c` then migrates
+`vector_copy`: attributed and nested lane transports rejoin without losing
+their owners, synthesized wide operations receive exact consumed-origin
+unions, and multiple nested consumers still fail closed. Its complete stripped
+differential and normalized 221-node whole-Python failure set are exactly
+neutral; the current undeclared-local invariant is eight-for-eight green. See
+`results/wp3-vector-copy-origins.md`. The next confirmed wildcard omission is
+the raw guarded-return and diamond surface in `select_fold`. Commit `e92d7248`
+closes that surface, including nested `try`/`catch` traversal, and improves the
+whole-Python boundary from 221 to 218 failures with zero new nodes. A controlled
+parent/tip release A/B proves all three removals, including corrected ARM
+hard-float execution. See `results/wp3-select-fold-origins.md`. Commit
+`18ef9fdc` restores GOT-pointer folding through origin carriers and closes its
+exception, transfer, push, and call-expression omissions with exactly neutral
+stripped and whole-Python comparisons; see
+`results/wp3-got-fold-origins.md`. Commit `217796be` then makes attributed
+definitions and exception paths participate in relocation-proven
+function-table recovery and conservative clobber tracking. Its stripped map is
+exactly neutral, while the whole-Python boundary improves from 218 to 217
+failures with no addition; a controlled release A/B proves the recovered
+portable `ops[5]` table is attributable. See
+`results/wp3-function-table-origins.md`. Commit `849c5a5b` then migrates direct,
+resolved GOT-indirect, and relocation-proven vtable tail-call recovery. Its
+stripped map is exactly neutral and its whole-Python boundary improves from 217
+to 216 failures with no addition; a controlled release A/B attributes the
+recovered Rust trait-object tail to this commit. See
+`results/wp3-tail-call-origins.md`. Continue through the convention-generic
+argument-layout folds in `call_args.rs`, then the architecture-specific
+`cdecl32.rs` and `aapcs.rs` setup/removal paths, before beginning expression
+ownership. Commits `b6172031` and `a0917da5` complete that generic-layout
+slice: attributed setup is consumed with exact call-owner unions, while an
+explicit purity boundary leaves ARM frame loads rooted for the general scan.
+The release-built whole-Python boundary improves from 216 to 215 failures with
+zero additions, and the real mixed hard-float call retains
+`arm_hf_mixed_callee(7, measured, negate)`; see
+`results/wp3-recovered-call-layout-origins.md`. Continue with `cdecl32.rs` and
+`aapcs.rs`. Commit `c291328a` completes the cdecl32 slice: attributed outgoing
+stores, lowered pushes, cleanup evidence, and rebasing remain visible; removed
+setup owners join the call and decrement owners survive on the net stack
+adjustment. A release A/B proves real `helper3(a, b, c)` recovery and two
+whole-Python failures removed with zero additions; see
+`results/wp3-cdecl-call-origins.md`. Commit `e403de27` completes the AAPCS
+slice: attributed locked contracts,
+pure-VFP setup, outgoing stack areas, and phase-sensitive stack adjustments
+remain visible, and removed VFP setup owners join the call. Release A/B proves
+two ARM32 execution failures removed and one stripped fixture improvement with
+no added regression; see `results/wp3-aapcs-call-origins.md`. The generic,
+cdecl32, and AAPCS call-argument surfaces are now migrated. The enabled
+consumer re-audit selected `src/ir/canary.rs`; commit `9942f948` makes its save,
+reload, branch, failure-call, and nested structured paths origin-transparent
+and unions every removed owner into the synthesized canary comment. The
+  complete stripped differential and exact 211-node whole-Python failure set are
+  neutral, and the release declaration invariant is eight-for-eight green; see
+  `results/wp3-canary-origins.md`. Commit `8989cecc` then makes integer-pair
+  return composition origin-transparent and rejects contradictory explicit SSE
+  low-result evidence; its stripped map and normalized 211-node semantic
+  whole-Python boundary are neutral. Commit `82a95253` batches the next five
+  related call-analysis surfaces: register discovery, result attribution,
+  frame-load alias barriers, enclosing reaching definitions, SysV SSE-pair
+  forwarding, and format-proven variadic arity all see through statement
+  carriers. All six focused tests failed before their fixes, and the complete
+  109-test call-argument module is green. The whole-Python boundary improves
+  from 211 to 209 exact failure nodes with no addition; focused release A/B
+  attributes both restored indirect-tail/table-dispatch tests to this batch.
+  Commit `b84c03e5` completes the following enabled-consumer slice in
+  `src/ir/lazy_call_select.rs`: result inventory, recursive traversal,
+  adjacent folding, goto census, every supported diamond matcher, and
+  replacement construction now see attributed statements in both production
+  entry points and union every consumed owner. Five focused tests were
+  observed red; the module, origin, release real-binary, fixture-189, and
+  complete Rust gates pass. The whole-Python gate has zero attributable
+  failure-set change; its one newly exercised i386 invariant reproduces at the
+  parent.
+  Most
+semantic consumers, multi-output definition identity, expression origins, and
+structured line mappings remain open. A bounded, pre-WP3 WP7B relational slice
+is landed and proved at `9c9c607c`; it does not establish the general
+framework.
+The first WP2 request-model slice is landed at `d6a65779`. Module-level and
+reusable-session `decompile_at` now construct one pipeline-owned
+  `DecompileRequest`, `AnalysisBudget`, and `RenderOptions`; every discovery
+limit survives one checked conversion. Exact-range discovery converged with
+the other entry points at `5a2d6c86`, and `e19bd73b` moves the ordered helper,
+ABI-call, recovered-callee, and caller-effect sequence behind one
+`callee_contracts.rs` boundary used by all four entry points. The other three
+public entry points still need to construct the request directly; the common
+per-function orchestrator is now shared from prepared LLIR through AST passes
+at `41bd90a6`, but discovery/context assembly and rendering remain adapter-owned.
+`5ea45dca` adds the result half for the single-function path with real health,
+completeness, provenance, and a versioned budget/pass fingerprint. `15d044eb`
+makes range, all, and many construct the same typed request and result internally
+before preserving their legacy Python return shapes. `e0588083` moves the
+image-wide string/data reconciliation, relocated read-only data, function-table,
+and GOT facts into one pipeline-owned `ProgramRenderContext` used by all four
+adapters and prepared once per batch. `21f8b29a` similarly makes one
+`ProgramDebugContext` own DWARF/PDB declaration and type preparation for every
+adapter. `2ef9c4eb` makes `ProgramNameContext` the sole owner of the combined
+object parse plus discovered, FLIRT, and referenced-function name enrichment.
+`d900cf1b` makes one `ProgramDiscovery` carry the exact converted budgets and
+their discovered functions for all four adapters; exact-range discovery now
+also releases the GIL. `1e1ac0a8` moves post-lowering semantic finalization --
+analyst and DWARF local facts, exception recovery, machine-frame cleanup, and
+PDB field annotations -- behind one `finalize_prepared_ast` boundary used by
+all four adapters. `2f7a6149` then makes one `render_prepared_ast` select
+declaration authority, project types, record conflicts, render every style,
+and attach per-function incompleteness for all four adapters. `2ee8fa15` moves
+the remaining lift, direct-callee-fact, analyst-name, typed/shadow LLIR,
+stack-hint, lowering, finalization, and rendering sequence into one
+pipeline-owned `decompile_function`; all four public adapters now call that
+single per-function transaction. `74853fcc` adds checked coarse semantic-stage
+transitions and a focused invalid-order failure; `4ea067df` registers and checks
+the canonical order of all 20 production AST passes, including safe optional
+omissions and typed rejection of unknown, repeated, or backward passes.
+`5f7df194` replaces both hand-written AST settle loops with one bounded
+fixpoint driver and emits their rounds, firing counts, and quiescent/bound-
+reached termination through the pipeline profile. Commit `e7b7de67` closes the
+remaining exact-range budget contract and its focused closure tests, completing
+WP2. See
+`results/wp2-pipeline-request-model.md`.
+The bounded WP6/WP9 AAPCS32 follow-on is landed at `62a4ab72`. An
+authoritatively declared eight-byte integer parameter now carries both aligned
+entry words into the AST instead of presenting its high word as an invented
+local. Four ARMv7/ARMv7-A32 O2 fixture-215 cells move to execution-correct
+output with no attributable regression across the 60-cell architecture slice.
+Big-endian ordering, inferred prototypes, and residual A32 O0 storage defects
+remain deliberately open. See
+`results/wp6-wp9-aapcs32-wide-parameters.md`.
+The matching i386 cdecl32 carrier is landed at `fcd9bd2d`, with baseline and
+census commits `9b307e0b` and `d1bf72a7`. Authoritatively declared eight-byte
+integer parameters now join their two adjacent incoming stack words without
+truncating the promoted whole-argument role. Fixture 202 and 215 gain nine
+execution-correct O0/O2 cells with no attributable regression in the complete
+410-lane i386 comparison. Signed selectors remain WP6/WP7 work and the i386 O2
+mixed selector remains WP5 work. See
+`results/wp6-wp9-cdecl32-wide-parameters.md`.
+The required exact-clean-checkout Rust gate at `d1bf72a7` is green: the library
+target reports 4,126 passed, zero failed, and five ignored, and every
+integration and documentation target passes. The long identity-retrieval
+target independently reports 44 passed, zero failed, and ten ignored.
+The next bounded WP7 range slice is landed at `f39bdf0e`, with census commit
+`98ea766c`. The i386 O2 `wide_selector_mixed` guard now recovers `op <= 5` from
+the exact cdecl32 high/low borrow identity and removes the repeated impossible
+`op > 5` nested arm. The complete 410-lane i386 sweep has no attributable
+execution-verdict movement; this is an output/readability improvement, and the
+still-unrecovered indirect jump remains WP5 work. See
+`results/wp7-cdecl32-wide-range-predicate.md`.
+The required exact-clean-checkout Rust gate at `98ea766c` is green: its library
+target reports 4,132 passed, zero failed, and five ignored, and every
+integration and documentation target passes. The complete host sweep executes
+824 of 838 lanes with zero regressions and reproduces 35 pre-existing
+unratcheted improvements.
 The first fixture-217 follow-on is a bounded WP9 instruction-semantics
 increment: legacy `ADDPS`, `SUBPS`, `MULPS`, and `DIVPS` now preserve four
 typed binary32 lanes. The following WP6/WP9 call-boundary increment is also
@@ -82,13 +279,257 @@ and unrecovered functions from 27 to 25. Deduplicated emitted gotos move from
 focused inventory suite passes. An isolated parent/tip fitness A/B records
 the final borrowed-provenance slice's exact cost as 61 product lines with no file
 threshold crossing, maximum-size growth, or IR-count growth. The next WP5
-slice is the shared immutable case/default/provenance object named in immediate
-action 5, not another fixture-specific switch recognizer.
+slice is now landed at `9ad9414d`: `Cfg` builds one immutable, ordered
+case/default/provenance object from typed edges and labels, and both production
+and shadow-v2 consume it. Completeness fails closed when any typed case lacks a
+non-empty label, when default evidence is ambiguous, or when evidence is
+otherwise truncated. The independent v2 verifier checks relational invariants
+rather than trusting or duplicating the producer. Forged missing-label,
+missing-default, and incomplete-evidence tests prove those refusal boundaries.
+The full Rust gate reports 4,351 passed, zero failed, and 17 ignored across 35
+targets. See `results/wp5-shared-switch-evidence.md`. This completes the shared
+transport increment, not WP5: remaining compiler/architecture execution cells,
+decline classification, and the full Python/matrix gates remain open.
+Commit `460259fa` carries that canonical object through a WP4 `RawLoop`, closing
+another place where lowering reconstructed switch facts from successor order.
+The real fixture-206 A32 loop now retains its proven guard-only default even
+though that target is not a dispatch successor, and its native v1 round trip
+remains green. Incomplete evidence declines to the prior lossless labelled
+form. This is prerequisite transport for handler partitioning, not the
+partition itself; labelled handler bodies and their shared join remain open.
+See `results/wp5-raw-loop-switch-evidence.md`.
+Commit `88e6584c` then uses that transport to absorb the real raw-loop range
+guard under the same complete-evidence, single-predecessor, and SSA unsigned
+comparison proof as ordinary guarded switches. Fixture 206 now renders
+`switch ((var11 & 7))` directly: the `var12` temporary, redundant range-check
+`if`, and one goto disappear while the typed default and native execution are
+preserved. See `results/wp4-raw-switch-guard.md`. Handler bodies remain labelled
+until the separate exclusive-entry/shared-join partition is proved.
+The first such partition is now production at `13588284`. A case/default entry
+whose only predecessors are its typed dispatch/folded guard is emitted directly
+inside that arm, while every shared successor remains in canonical raw
+ownership and is emitted once. The real A32 loop moves from seven remaining
+gotos to zero with unchanged native execution and silent accounting. This is a
+one-block exclusive-prefix proof; see
+`results/wp4-raw-switch-exclusive-entries.md`.
+Commit `ca30c62f` extends that ownership through bounded, disjoint private
+linear prefixes and independently rejects a forged prefix that crosses a
+shared join. The exact-tip structural gate completes 25 of 27 tests: its eight
+regression findings and six improvement findings all reproduce byte-identically
+at the preceding exact commit. They are baseline debt and earlier improvements,
+respectively, rather than changes attributable to this increment. The complete
+six-test def-use census likewise produces an identical parent/tip report (four
+tests green, the same regression and improvement ratchets red). Branching
+private regions are now covered by the follow-on `1ce1a80b`: bounded,
+predecessor-closed private DAGs retain their conditional inside the typed arm,
+while an independent verifier rejects a forged shared-join crossing. A real
+GCC ARMv7 A32 case loses two out-of-line gotos, preserves native execution, and
+keeps accounting silent. Cyclic, cross-arm, and shared-join ownership and the
+remaining promotion gates stay open; see
+`results/wp4-raw-switch-private-prefixes.md` and
+`results/wp4-raw-switch-private-branches.md`.
 The refresh also caught and rejected a local `weak_fold` readability regression
 before baseline acceptance. Guard-only return-value prefixes retain ownership
 while only their shared terminal is borrowed; `weak_fold` is back to two gotos,
 fixture 204 remains account-clean, and the `deep152_while_tower` correctness
 canary remains green.
+The next architecture slice is now landed separately at behavioral commit
+`310b949e`: GCC AArch64 O2's guarded `LDRB`/`SXTB #2` compact byte table
+becomes an execution-correct 16-case production switch for
+`206::dense_dispatch`. The exact fixture moves from `fail` to `pass`; a
+ten-lane adjacent AArch64 switch slice has no regressions, and the full Rust
+gate is green. An isolated full 412-lane AArch64 parent/tip comparison produces
+the same four older regressions and fourteen stale improvements at both
+revisions, proving no architecture-wide regression is attributable to the
+slice. This is one fail-closed compiler encoding, not completion of WP5's
+architecture matrix. See
+`results/wp5-aarch64-compact-byte-switch.md`.
+Hardening commit `5dbc3fc4` additionally invalidates all AArch64 dispatch facts
+across direct and indirect calls, preventing a callee-clobbered address from
+being reused as false switch evidence; the focused and architecture-wide
+results are unchanged. Its post-source whole Python gate completed red at
+4,595 passed and 126 failed. Exact comparison with the 118-failure parent
+snapshot found eight tip-only node IDs: seven pass together on immediate
+clean-tip retry, while the sole deterministic delta is the six-test census
+increase committed at `88bb8650`. The focused census suite is green and the
+never-executed pool remains zero; this is triaged full-gate evidence, not a
+release-green claim.
+The following i386 slice is landed at behavioral commit `b84233ec`. GCC PIC's
+PC thunk and checked GOT arithmetic now preserve distinct table and target-base
+addresses through bounded relative decode. Eight i386 O2 cells move from
+`fail` to execution-verified `pass`, including a switch nested in a loop. The
+complete 410-lane parent/tip comparison has zero attributable regression and
+the full Rust gate is green. The census increase is recorded at `86d224f5`;
+its exact-checkout whole Python gate completed at 4,597 passed, 125 failed, 891
+expected failures, 78 skipped, and 125 deselected. There are no tip-only
+failing node IDs relative to the AArch64 parent; the sole removed failure is
+the census check updated by `86d224f5`. This is triaged broadly-red evidence,
+not a release-green claim. See
+`results/wp5-i386-got-relative-switch.md`.
+The following ARMv7 A32 slice is landed at `76cce5d1` and hardened at
+`5ef0bcb9`. Exact PC-relative literal materialisation, unsigned byte-table
+decode, and `add pc, pc, rOffset, lsl #2` semantics recover nine O2 switch
+functions with zero parent/tip decline across 410 lanes and 1,604 function
+verdicts. Production `dense_dispatch` and shadow-v2 `dispatch_in_loop` pass
+native execution. Commit `6f0ba701` closes the latter's production-v1 WP4
+ownership defect: all six latch backedges are locally owned and production now
+passes with a real switch inside the loop. Four valid wide byte switches in
+`43_base64` exposed a v1 recursive
+stack overflow; the shared graph-sized structure work budget now selects the
+complete labelled CFG in 0.17 seconds instead of crashing. See
+`results/wp5-armv7-a32-byte-switch.md`.
+The exact 410-lane post-repair comparison has one attributable movement,
+`dispatch_in_loop` from `fail` to `pass`; two unrelated alternating rows are
+recorded as same-revision harness instability rather than code regressions.
+See `results/wp4-a32-multi-latch-dispatch-loop.md`.
+The follow-on quality increments at `28b3bc5b` and `0e29ffc4` eliminate the
+unreachable undefined `var1` select arm and the final outer-guard
+`EdgeViaGoto`. Exact host and A32 comparisons show no attributable status
+decline; see `results/wp4-a32-guard-quality.md`.
+Commit `c9483542` then lowers every exact raw-loop header backedge to
+source-level `continue`, removing six more gotos and the unused header label
+from the real output without changing its execution status or clean accounting.
+The exact 3,346-function host comparison has zero status/category movement;
+see `results/wp4-raw-loop-continue.md`.
+The next host-wide-selector slice is landed at `9333881e` and hardened at
+`98a0d2d3`. Clang and GCC O2 fixture-215 `wide_selector_mixed` now retain all
+six typed cases even though case zero borrows a return also reached by the
+formal default. The first complete def-use run caught that unrestricted SSA
+ancestry and cyclic borrowed-return reachability regressed the already-green
+fixture-206 Clang O2 loop switch. That movement was rejected, reduced to a
+unit and real-binary regression, and repaired by distinguishing boolean
+predicate provenance from arbitrary data dependence and by keeping cyclic
+guard ownership on a direct-comparison contract. The hardened result preserves
+both switches and restores all 169 normalized def-use findings byte-for-byte.
+The exact whole-Python comparison has no ordinary tip-only regression, and the
+1,676-object inventory moves from 38 to 30 unrecovered observations and from
+6,823 to 6,502 emitted gotos. Commit `0466a2e0` ratchets those repairs and
+promotes the Duff latch to a positive test; see
+`results/wp5-wide-selector-shared-return.md`.
+
+Commit `a8ba1b87`, hardened at `dcdc99cc`, closes one concrete WP3/WP9 identity seam exposed by the
+whole-Python fail-fast gate. Target-aware SSA already gave ARM32 `fp` and
+`r11` one canonical value, but value numbering applied that canonical base
+only to uses. Definitions now adopt that target-qualified base only for ARM32
+calling conventions and only when the architecture-blind compatibility parent
+cannot express it; the earlier all-target definition rewrite was rejected.
+The real GCC A32 O0 `03_loop_shapes::while_prefix` output moves from
+an undefined raw `var0` frame base back to source-level `p[i]`, initialized
+`i`/`s`, and execution-correct output. All 44 value-numbering, 12 SSA, 85
+stack-local, and 12 ARM32 semantic tests pass. The complete Rust gate is green
+with 4,200 library tests passed, zero failed, and five ignored. The complete
+def-use module is 4/6 green; both red ratchets reproduce at the pre-repair
+parent and therefore remain separately tracked baseline debt. This is a bounded identity
+handoff, not completion of WP3 invalidation/origins or the wider WP9
+architecture migration. See
+`results/wp3-wp9-arm32-definition-identity.md`.
+
+The adjacent `4fa0b12f` stack-coordinate repair is hardened by the same
+`dcdc99cc` commit. A call argument loaded through `rsp` can no longer be moved
+across an `rsp` adjustment and reinterpreted as a different stack slot. The
+real stripped SysV format wrapper returns to its true two-parameter signature
+and forwards `arg1`, while the hardened rule declines to change generic impure
+folding. See `results/wp3-stack-coordinate-phase.md`.
+
+Commit `ef444751` makes the late loop-entry copy coalescer the next
+identity-native AST consumer. The pipeline projects opaque SSA identities
+through the exact raw-to-role naming map while preserving the original
+storage-keyed sidecar for type recovery. Exact opaque identities authorize the
+rewrite, ambiguous role identities fail closed, and values with no identity
+temporarily retain the legacy `varN` fallback for incremental migration. The
+focused contract and all 15 directly related latch-predicate tests pass; no
+broad suite was run for this bounded increment. This advances WP3 but does not
+complete consumer migration or conservative invalidation. See
+`results/wp3-ast-role-identities.md`.
+
+Commit `697d6358` migrates the next production consumer: pointer eligibility
+inside `high_variables`. The renderer supplies the projected identity sidecar,
+so an exact opaque role can carry proven pointer evidence without being named
+`varN`; a role with multiple candidate identities remains untyped. Existing
+promoted-local and legacy `varN` behavior is preserved while consumers migrate
+incrementally. Both exact contracts and all 29 directly related module tests
+pass, with 4,368 unrelated tests filtered out. See
+`results/wp3-pointer-refinement-identities.md`.
+
+Commit `ee65638e` makes prepared-AST ABI definition-width refinement the third
+role-projected consumer in this sequence. Exact opaque identity plus exact
+per-value width evidence can now widen a scalar declaration independently of
+its displayed name; ambiguous roles decline and retain their prior type. Both
+identity contracts, seven adjacent ABI tests, and the two legacy wide/narrow
+boundaries pass. The validation executed 11 relevant tests and filtered out
+the rest. See `results/wp3-abi-width-identities.md`.
+
+Commit `33371b23` migrates function-table reaching-definition retention to the
+same identity authority. Nested calls retain only definitions whose entire SSA
+candidate set consists of explicit non-entry values; missing, entry, and mixed
+sets fail closed instead of trusting a `#version` display suffix. All 12 owning
+module tests pass with 4,495 unrelated tests filtered out. The exact
+`95_function_pointer_table:gcc:O0:dispatch_operation` probe remains red, but an
+A/B rebuild through the old compatibility entry point reproduces identical
+output, so that branch-tip regression is tracked rather than attributed to
+this migration. See `results/wp3-function-table-definition-identities.md`.
+
+Commits `48cf15a0` and `6a7ec0b5` carry those identities through the pipeline-owned render
+entry point into the immutable declaration plan. An exact opaque role now
+receives its recovered local declaration without depending on `varN` spelling;
+an ambiguous role remains the conservative machine-word `long`. Compatibility
+render APIs still pass no sidecar, and existing source-local/legacy behavior is
+unchanged. Five focused declaration contracts and two adjacent legacy render
+contracts pass. See `results/wp3-declaration-identities.md`.
+The follow-up keys integer signedness and machine-width render metadata by the
+same identity decision, so a recovered narrow integer declaration and its
+representation-boundary conversions cannot disagree.
+
+Commit `05a524e8` migrates the next render-time consumer: redundant unsigned
+machine-view cleanup now accepts an opaque AST value only when its sidecar has
+one exact SSA identity. Ambiguous identities fail closed and retain the explicit
+cast, while the compatibility path without a sidecar keeps its prior behavior.
+Five exact tests cover the new positive and negative contracts plus contextual
+widening and origin-union regressions; all pass with 4,405 unrelated tests
+filtered out. The adjacent typed-comparison and contextual-widening consumers
+remain open. See `results/wp3-typed-view-identities.md`.
+
+Commit `49a78f31` applies the same exact-or-ambiguous identity contract to
+signed relational-comparison extension cleanup. Both opaque operands must have
+one exact identity and matching recovered declarations before their machine
+extensions disappear; ambiguity on either side preserves both extensions.
+Five exact tests cover the positive and negative contracts, legacy arguments,
+origin unions, and equality behavior, with 4,407 unrelated tests filtered out.
+Contextual widening and typed consumed-extension cleanup remain open. See
+`results/wp3-typed-comparison-identities.md`.
+
+Commit `17dff536` migrates contextual widening across both sides of an
+assignment. Exact opaque source identities now receive required machine-width
+extensions, while exact opaque destinations keep genuinely narrow arithmetic
+narrow. Ambiguous identities retain the conservative machine-word behavior.
+Seven exact tests cover source, destination, ambiguity, signedness, legacy raw
+registers, and statement origins, with more than 4,400 unrelated tests filtered
+out. Typed consumed-extension cleanup remains the next name-based consumer. See
+`results/wp3-widen-identities.md`.
+
+Commit `403296e0` closes the adjacent typed consumed-extension consumer. Exact
+opaque destination identity now proves when narrow modular arithmetic can
+discard an unobservable machine-parent extension; ambiguous identities preserve
+it. Three exact tests cover the positive, ambiguity, and promoted-stack-local
+contracts, with 4,412 unrelated tests filtered out. This completes the immediate
+render-time identity cluster, while the wider WP3 semantic-consumer audit and
+origin-determinism exit criteria remain open. See
+`results/wp3-consumed-extension-identities.md`.
+
+Commit `2ccd8ce1` then removes a separate `varN` dependency from high-bit
+integer-literal refinement. An exact opaque identity can now receive a proven
+unsigned type when all definitions and uses support the positive
+interpretation; ambiguity retains the signed type. Five exact tests cover the
+new positive/negative contracts and the existing origin, signed-use, and
+wide-comparison boundaries, with 4,414 unrelated tests filtered out. See
+`results/wp3-unsigned-literal-identities.md`.
+
+Follow-up `f889e200` removes the neighboring `varN` fallback from the
+wide-signed comparison-domain proof. It now consults the authoritative rendered
+integer declaration, allowing an opaque machine-word bound without duplicating
+name syntax. The observed-red opaque-bound case and three adjacent refusal and
+legacy contracts pass exactly, with 4,415 unrelated tests filtered out. See the
+follow-up in `results/wp3-unsigned-literal-identities.md`.
 
 ## Authority and relationship to the roadmaps
 
@@ -341,52 +782,154 @@ If accepted:
 Purpose: remove semantic differences caused solely by the Python entry point
 and make pass repetition/invalidation explicit.
 
+Status: complete. Commit `e7b7de67` closes the final exact-range budget
+contract; the 27-test focused WP2 suite covers shared session facts, all-entry-
+point equivalence, fresh-process determinism, pipeline reporting, and explicit
+incompleteness.
+
 ### Production changes
 
-- [ ] Introduce a pipeline-owned request and result model in
+- [x] Introduce a pipeline-owned request and result model in
   `src/python_bindings/ir/pipeline.rs`:
   - `DecompileRequest { va, style, analysis_budget, render_options }`
   - `AnalysisBudget` with explicit callee, discovery, type, CFG, and size
     limits;
   - `DecompileResult` carrying pseudocode, health, completeness, provenance,
     and pipeline fingerprint.
-- [ ] Move common orchestration out of `src/python_bindings/ir.rs` into one
+  `d6a65779` lands the request half for module-level and reusable-session
+  `decompile_at`: the VA, five explicit discovery limits, render selection,
+  debug cache, and analyst overlays now cross one typed boundary. The result
+  model and the range/all/many request adapters were initially open. Follow-on
+  `5a2d6c86` moves all four entry points onto the same `AnalysisBudget`
+  conversion and makes an exact discovered range reuse the ordinary CFG and
+  direct-callee facts. `5ea45dca` adds `DecompileResult` for module/session
+  single-function requests, carrying rendered text, final AST health, exact
+  completeness limits, provenance, and the pipeline fingerprint. `15d044eb`
+  makes range/all/many construct the same request and result internally before
+  projecting their legacy adapter-specific shapes. `e9518094` begins the
+  required budget split with a fingerprinted `CalleeBudget`: its depth now
+  bounds both direct-callee and relocation-proven function-table contract
+  recovery through the shared pipeline instead of a hidden constant.
+  `b3a6543a` separates program-level function-count/total-time discovery limits
+  from per-function block/instruction/time CFG limits while preserving their
+  exact projection into the discovery engine. `dc303793` replaces the hidden
+  render-time type fixed-point cap with a request-owned `TypeBudget`; exhaustion
+  keeps the best accumulated facts, and a zero-budget test proves it does not
+  erase pre-existing evidence. `87edaeb6` adds `SizeBudget`, which now bounds
+  explicit-range fallback bytes and all/many result counts. All five budget
+  classes are enforced, fingerprinted, and constructed by every adapter.
+- [x] Move common orchestration out of `src/python_bindings/ir.rs` into one
   `decompile_function(session, request)` implementation.
-- [ ] Convert `decompile_at`, `decompile_range_at`, `decompile_all`, and
+  `41bd90a6` moves prototype refinement, lowering, landing-pad marking,
+  lower-stage health tracing, and the AST pass invocation behind one
+  pipeline-owned `lower_and_run_ast_passes` boundary. All four adapters consume
+  its `PreparedAst`, including exact-range, which previously skipped
+  pass-through parameter refinement. `e0588083` then centralizes the immutable
+  image-wide render facts in `ProgramRenderContext`; `21f8b29a` centralizes
+  debug declarations and layouts in `ProgramDebugContext`; `2ef9c4eb`
+  centralizes binary-truth address names and data symbols in
+  `ProgramNameContext`; `d900cf1b` centralizes budget conversion and function
+  discovery in `ProgramDiscovery`; `1e1ac0a8` centralizes post-lowering
+  semantic finalization in `finalize_prepared_ast`; `2f7a6149` centralizes
+  declaration selection, type projection, all style rendering, provenance, and
+  incompleteness in `render_prepared_ast`. `2ee8fa15` moves the final
+  adapter-owned lift/preparation shell behind `decompile_function`, which now
+  owns the complete per-function lift-to-render transaction.
+- [x] Convert `decompile_at`, `decompile_range_at`, `decompile_all`, and
   `decompile_many` into adapters that create requests and call the same path.
-- [ ] Move shared callee-contract preparation through
+  Module-level and reusable-session `decompile_at` create the typed request;
+  all/range/many now share its budget conversion. The first full-text
+  differential caught range's synthetic one-block CFG and empty callee facts;
+  `5a2d6c86` makes an exact discovered range reuse both authoritative inputs
+  while preserving the explicit-window fallback. `41bd90a6` then makes every
+  adapter call the same LLIR-to-AST stage. `15d044eb` closes typed request/result
+  construction for range/all/many too. `e0588083` removes four copies of the
+  image-wide render-context builder, and `21f8b29a` removes the four debug-
+  context builders. `2ef9c4eb` removes the four name/data context builders.
+  `d900cf1b` removes the four discovery calls and keeps each result paired with
+  its exact budgets. `1e1ac0a8` removes four adapter-owned finalization
+  sequences while preserving their analyst, debug, exception, frame, and PDB
+  semantics. `2f7a6149` removes the four remaining render-policy copies; a
+  three-style differential proves DecBench, C, and untyped output agree across
+  address, exact-range, all, and many. `2ee8fa15` removes the remaining four
+  lift/preparation copies: each adapter now constructs shared contexts and a
+  typed request, calls `decompile_function`, and projects only its legacy
+  Python return shape.
+- [x] Move shared callee-contract preparation through
   `src/python_bindings/ir/callee_contracts.rs`.
-- [ ] Add checked `PipelineStage` and pass preconditions to
+- [x] Add checked `PipelineStage` and pass preconditions to
   `src/python_bindings/ir/pipeline.rs`; split into a new
   `src/python_bindings/ir/pass_manager.rs` only when the module-size ratchet
   requires it.
-- [ ] Replace hand-repeated settle passes with a bounded fixpoint driver that
-  records firing and termination reasons.
-- [ ] Include analysis-budget identity and pass-version identity in the
+  `74853fcc` adds a fail-closed `PipelineStageTracker` to the production
+  per-function transaction for lift, callee facts, LLIR preparation, AST
+  preparation, finalization, and rendering. A deliberate Finalized-to-Rendered
+  request from the Lifted stage returns the exact expected/actual-stage error.
+  `4ea067df` adds one canonical 20-pass AST order and makes every production
+  `pass!` invocation check it. Optional passes may be omitted, while unknown,
+  repeated, or backward passes return typed `AstPassOrderError` values.
+- [x] Replace hand-repeated settle passes with a bounded fixpoint driver that
+  records firing and termination reasons. `5f7df194` makes copy/constant
+  settling and forward-region/loop settling use one `run_bounded_fixpoint`
+  implementation. Each invocation records total rounds, firing rounds, and
+  `quiescent` versus `bound_reached`; the real DecBench profile carries both
+  reports without changing pseudocode.
+- [x] Include analysis-budget identity and pass-version identity in the
   pipeline fingerprint.
+  `5ea45dca` defines schema `glaurung.decompile-pipeline/v1`, explicit
+  `PIPELINE_PASS_VERSION`, the complete `AnalysisBudget`, style/type/debug
+  selectors, and analyst-overlay presence. A unit test proves a budget change
+  changes fingerprint identity.
 
 ### Tests
 
-- [ ] Extend `python/tests/test_decompiler_session.py` for shared-session facts
-  and explicit budgets.
-- [ ] Add `python/tests/test_decompiler_entrypoint_equivalence.py` covering all
+- [x] Extend `python/tests/test_decompiler_session.py` for shared-session facts
+  and explicit budgets. `357579c4` exposes exact program-fact ownership and
+  proves two distinct discovery budgets retain distinct discovery/call-graph
+  artifacts while reusing one compatible program environment and one immutable
+  symbol/type fact set. Cache clearing removes budget-dependent facts and
+  intentionally retains image-derived facts.
+- [x] Add `python/tests/test_decompiler_entrypoint_equivalence.py` covering all
   four entry points at equal budgets.
-- [ ] Extend `python/tests/test_decompiler_determinism.py` for fingerprints and
-  function-order independence.
-- [ ] Extend `python/tests/test_pipeline_profile_report.py` for pass order,
-  firing counts, and bounded fixpoint termination.
-- [ ] Test that a deliberately lower range budget differs only with an
-  explicit completeness reason.
+  All four paths now emit byte-identical `tail_dispatch`, including its
+  indirect-call arguments, in DecBench, C, and untyped styles with equal block,
+  instruction, and per-function time budgets. `c077ccca` separates
+  `decompile_all`'s output `limit` from its public discovery `max_functions`,
+  exposes the same discovery limit on exact-range, and makes single-function
+  size identity use that explicit limit. The test now constructs equal
+  discovery, CFG, callee, type, and size budgets across all four entry points.
+- [x] Extend `python/tests/test_decompiler_determinism.py` for fingerprints and
+  function-order independence. `c907121a` serializes the complete fingerprint
+  canonically into opt-in pipeline evidence and proves, across fresh processes,
+  that reversing a three-function request changes neither each function's
+  pseudocode nor its fingerprint. Serialization remains lazy when profiling is
+  disabled.
+- [x] Extend `python/tests/test_pipeline_profile_report.py` for pass order,
+  firing counts, and bounded fixpoint termination. `5f7df194` validates and
+  aggregates both production fixpoint reports, including impossible counts and
+  the closed termination vocabulary. `a7797e28` emits the checked semantic
+  transaction as one ordered `pipeline_stages` sequence, rejects malformed or
+  duplicate traces, and proves the real production order is lift, callee facts,
+  LLIR preparation, AST preparation, finalization, then rendering without
+  changing pseudocode.
+- [x] Test that a deliberately lower range budget differs only with an
+  explicit completeness reason. The exact-range `tail_dispatch` regression
+  changes only `max_blocks` from 4096 to 1, requires both calls to retain a
+  rendered function body, and proves the constrained result names exactly the
+  fired `max_blocks=1` limit while the complete result remains unmarked.
 
 ### Exit criteria
 
-- [ ] Equal budget produces byte-identical pseudocode for the same function
+- [x] Equal budget produces byte-identical pseudocode for the same function
   across all entry points.
-- [ ] No entry point independently performs discovery, naming, or callee
+- [x] No entry point independently performs discovery, naming, or callee
   analysis.
-- [ ] Invalid pass order fails in a focused test.
-- [ ] Every repeated pass is justified by recorded invalidation or a declared
-  fixpoint, not duplicated orchestration.
+- [x] Invalid pass order fails in focused tests. `74853fcc` proves this for
+  coarse semantic stages; `4ea067df` proves it for individual AST passes and
+  separately rejects unregistered passes.
+- [x] Every repeated pass is justified by recorded invalidation or a declared
+  fixpoint, not duplicated orchestration. The two intentional AST settling
+  repetitions are named bounded fixpoints with reported termination.
 
 ## 9. WP3 — Authoritative SSA, stable value identity, and origins
 
@@ -395,19 +938,686 @@ provenance through lowering.
 
 ### Core model
 
-- [ ] Add a pipeline-owned, versioned `SsaInfo` near the existing SSA
-  implementation under `src/ir/`.
-- [ ] Define explicit invalidation classes: CFG changed, definitions changed,
+- [~] Add a pipeline-owned, versioned `SsaInfo` near the existing SSA
+  implementation under `src/ir/`. `925dc002` lands the owner and `09522773`
+  retains it across definedness normalization, prototype recovery, and return
+  materialization; ownership does not yet persist through AST lowering.
+- [x] Define explicit invalidation classes: CFG changed, definitions changed,
   uses changed, types changed, and presentation-only change.
-- [ ] Make an unclassified mutating pass conservatively return
+- [x] Make an unclassified mutating pass conservatively return
   `Invalidate::All`. Migrate passes one at a time to narrower change sets; do
   not require roughly 100 passes to convert before the first consumer lands.
-- [ ] Require every newly added mutating pass to declare a change set, and
-  ratchet the count of legacy `Invalidate::All` passes downward.
-- [ ] Recompute or repair SSA before the next consumer when invalidated.
-- [ ] Preserve opaque SSA value identity through AST lowering.
-- [ ] Add a compositional instruction-origin set to expressions/statements;
-  unions must be deterministic and deduplicated.
+  The enum default is `All`; the remaining pass migrations are tracked by the
+  following ratchet item.
+- [x] Require every newly added mutating pass to declare a change set, and
+  ratchet the count of legacy `Invalidate::All` passes downward. Commit
+  `bac6cef8` adds an explicit `VersionedSsa::apply_mutation` boundary and moves
+  both current post-SSA LLIR mutations onto it with `Invalidate::Uses`. A no-op
+  preserves the current artifact and an actual mutation forces reconstruction.
+  Commit `e8bec18c` makes direct invalidation private and pins the production
+  pipeline to two classified mutation sites, zero direct invalidations, and
+  zero legacy `Invalidate::All` sites. Commit `2fe827df` then places the only
+  mutable post-SSA LLIR borrow inside `SsaTrackedLlir`, which exposes mutation
+  solely through that classified gateway. New mutations in the authoritative
+  transaction must therefore declare their change set; see
+  `results/wp3-versioned-ssa-invalidation.md`.
+- [x] Recompute or repair SSA before the next consumer when invalidated. The
+  definedness-normalization and return-materialization mutations declare
+  `Uses` through the shared `apply_mutation` boundary and reconstruct before
+  indirect-target, structuring, and value-numbering consumers. The tracked
+  transaction prevents another mutable access path from bypassing registration.
+- [~] Preserve opaque SSA value identity through AST lowering. Commit
+  `f05c9a5d` carries exact or explicitly ambiguous `SsaValue` candidates beside
+  value-numbered LLIR and the lowered production AST, and migrates float-role
+  projection as the first product consumer; `af65c260` migrates optimized
+  DWARF register-local recovery. Commit `8bc75c71` carries every positional
+  output of a multi-output intrinsic through value numbering and records each
+  exact identity; a later read of the second output is joined to that producer.
+  Follow-up `ad81c123` keys definition width by instruction plus output index,
+  preserving mixed-width output facts through numbering and coalescing.
+  Commit `3afd711a` establishes the first AST pass-native mutation contract:
+  loop-entry coalescing returns its exact rename map and the renderer applies it
+  to its local identity snapshot in the same pass transaction. Successful
+  coalescing unions seed and carrier candidates under the survivor; refusal
+  changes neither AST nor identity state. Commit `d8da5f13` extends the same
+  transaction to source-loop update coalescing: a successful `scratch ->
+  carrier` rewrite updates the identity snapshot, while old-value-live and
+  width-mismatch refusals preserve both states. Other renaming/coalescing passes
+  and remaining consumers are still open. Commit `97f65ae6` moves identity
+  candidates through both final presentation-name maps before typed rendering;
+  name collisions union candidates and remain explicitly ambiguous rather than
+  selecting one. See
+  `results/wp3-multi-output-identities.md` and
+  `results/wp3-ast-identity-renames.md`.
+- [~] Add a compositional instruction-origin set to expressions/statements;
+  unions must be deterministic and deduplicated. `7bea3314` defines the
+  canonical set and `59840017` adds transparent statement ownership with
+  union-without-nesting semantics. Commit `8cb7d171` preserves that ownership
+  through the enabled AST pass surface and fixes origin-transparent structured
+  return-width reasoning. Commit `cda7ab73` additionally makes post-pipeline
+  exception recovery origin-transparent and unions contributing origins into
+  its synthesized structured nodes. Commit `cb9e5b10` migrates six more
+  control-oriented wildcard consumers and preserves composed origins on their
+  synthesized statements. Commit `52914784` makes guarded-switch recovery
+  transparent through recognition, recursion, and mutation and preserves the
+  union of each removed guard, discriminator copy, and inner switch on the
+  replacement. Commit `f7b47953` makes every guard-chain rewrite transparent
+  and unions origins across removed guards, labels, gotos, duplicate
+  assignments, and terminal tails. Commit `3b7d8a95` makes
+  both switch-ladder synthesis forms and final join-break cleanup transparent,
+  preserving unions across every consumed comparison, dispatch, label, goto,
+  case, and join statement. Commit `a807b2d0` makes latch-predicate folding and
+  both loop-carrier coalescers transparent and transfers each removed
+  contributor to its surviving loop. Commit `c51a116d` makes AAPCS64 and SysV
+  indirect-result hinting plus post-promotion binding transparent while
+  preserving call ownership. Commit `02b0da5c` makes packed-vector batch,
+  scalar-view bridge, and nested-control recovery transparent, unions every
+  consumed lane and bridge origin into the two synthesized wide operations,
+  and retains the one-consumer safety proof under nesting. Commit `e92d7248`
+  additionally makes assignment-diamond, guarded-return,
+  created-select-return, and `try`/`catch` traversal transparent, distributing
+  exact origin unions to the semantic replacements. Its three whole-Python
+  improvements are parent/tip A/B-confirmed with zero new failing nodes.
+  Commits `b6172031` and `a0917da5` make the convention-generic recovered-
+  layout folds transparent, union removed setup owners into the call, and
+  enforce the existing pure-expression boundary so attributed ARM frame loads
+  remain available to the stronger general argument scan. The complete
+  stripped map is neutral and the whole-Python boundary improves by one node
+  with no addition.
+  Commit `c291328a` then migrates cdecl32 outgoing stores, lowered push pairs,
+  cleanup proof, and stack rebasing. Consumed setup owners join the call and
+  removed decrement owners remain on the synthesized net adjustment. Its
+  stripped map is neutral, while controlled release A/B proves two
+  whole-Python failures removed with zero additions.
+  Commit `e403de27` completes the AAPCS call-argument surface: locked contract
+  lookup, pure-VFP setup, outgoing stack areas, and stack-phase refusal all see
+  attributed statements, with exact call-owner preservation. Controlled
+  release A/B proves two ARM32 execution failures removed and one stripped
+  improvement without a regression.
+  Commit `9942f948` then migrates stack-canary recognition and collapse:
+  attributed save, reload, comparison, branch, failure-call, and nested
+  structured statements remain visible, and synthesized comments receive the
+  complete deterministic union of removed owners. Both the stripped map and
+  exact 211-node whole-Python boundary are neutral.
+  Commit `8989cecc` next migrates integer-pair return recognition and mutation,
+  preserving the return owner and refusing an explicitly floating low result.
+  Commit `82a95253` batches six origin-transparent call-analysis consumers
+  across `call_args.rs`, `captured_defs.rs`, `enclosing_slots.rs`,
+  `fold_one_call.rs`, and `return_attribution.rs`; it preserves carriers while
+  recognizing reads, writes, calls, alias barriers, enclosing definitions,
+  SSE-pair producers, and literal-format proofs.
+  Commit `7d531781` closes final-preparation omissions in machine-frame
+  cleanup, widening, comparison fusion, and DWARF-field invalidation. Commit
+  `4b35aeab` then makes dead-store recognition, nested-exit safety, promoted-
+  store cleanup, and unused call-result clearing origin-transparent. The latter
+  restores effect-only calls without losing their statement owner and prevents
+  an attributed exit from making a reaching value look dead. See
+  `results/wp3-final-cleanup-origins.md`.
+  Commit `025937a7` next migrates direct-output cleanup, balanced-stack caller
+  arity, named and frame-object parameter homes, and wide dual-role definition
+  evidence. Seven focused cases were observed red before repair; attributed
+  readers and in-place rewrites now match their unwrapped behavior without
+  losing surviving owners. The audit also identifies bank-return composition
+  as a non-mechanical boundary: it synthesizes stores and returns, so its
+  migration follows the explicit fold/hoist/duplication policy rather than an
+  ad hoc wrapper bypass. See `results/wp3-output-value-origins.md`.
+  Commit `6068a59c` completes that first complex boundary: stack-resident bank
+  composition sees through carriers, while register-resident materialization
+  copies each exact assignment/call/return owner onto every synthesized store
+  or rewritten return. Both transformation tests were observed red first; all
+  20 module tests and the eight exact aggregate-return lanes pass. See
+  `results/wp3-banked-return-origins.md`.
+  Commit `876bddf6` follows through the adjacent call-result loop boundary:
+  attributed breaks remain exit barriers and attributed boxed-clause calls do
+  not request an impossible compatibility insertion. Both observed-red tests,
+  all 15 module tests, and eight exact call-result lanes pass. See
+  `results/wp3-call-result-loop-origins.md`.
+  Commit `c6a42332` then migrates the goto-aware final-source verifier and
+  authoritative pointer-boundary refinement. Both observed-red tests, all 66
+  touched-module tests, and the eight architecture/optimization declaration
+  invariant cells pass. See `results/wp3-verification-pointer-origins.md`.
+  Commit `bd31420d` next makes fallback canonical loop naming transparent to
+  attributed loop, initializer, step, and accumulator statements without
+  reassigning their independent owners. Its observed-red test, all 18 naming
+  tests, and the four exact `skip_odd_sum` host lanes pass. See
+  `results/wp3-canonical-loop-naming-origins.md`.
+  Commit `51d3c9df` then migrates the ARM32 frame recognizer end to end:
+  attributed prologue, epilogue, nested-return, and helper reads preserve the
+  transactional balance proof, while each synthesized machine-frame comment
+  receives the exact union of the instructions it replaces. Its observed-red
+  test, all nine module tests, and the exact ARMv7 A32 `while_prefix` cell pass.
+  See `results/wp3-arm32-frame-origins.md`.
+  Commit `6e4cd9ec` follows with the canonical x86 frame prologue: attributed
+  pushes, frame-pointer setup, optional dead allocation predicates, and stack
+  allocation remain recognizable, and the replacement comment receives their
+  exact origin union. Its observed-red test, all 31 module tests, and the two
+  exact host O0 `classify` cells pass. See `results/wp3-x86-frame-origins.md`.
+  Commit `4dcaa1f5` then migrates balanced cdecl32 call padding through top-level
+  and nested structured control. Each surviving call receives the exact union
+  of its own owner and the removed padding/cleanup owners without weakening
+  the arity and balance proof. Its observed-red test, all 32 x86 frame tests,
+  and two exact i386 O0 call functions pass. See
+  `results/wp3-cdecl-alignment-origins.md`.
+  Commit `ce8d092a` completes the adjacent aligned-entry-frame transaction:
+  attributed entry setup and teardown remain recognizable, while the two
+  synthesized comments receive separate exact unions for the disjoint machine
+  ranges they replace. Its observed-red test, all 33 x86 frame tests, and the
+  exact checked-in MinGW PE32 `main` integration test pass. See
+  `results/wp3-cdecl-entry-frame-origins.md`.
+  Commit `5db4b91b` closes the adjacent MinGW runtime-call omission: attributed
+  zero-argument `___main` cleanup now sees through the origin carrier, deletes
+  only that runtime bookkeeping, and does not reassign its owner to an
+  unrelated surviving call or return. Its observed-red test, all 34 x86 frame
+  tests, and the exact checked-in MinGW PE32 `main` integration test pass. See
+  `results/wp3-mingw-runtime-origins.md`.
+  Commit `8bfadfa9` then migrates the exact hardened-return x87 scrub: wrapped
+  `8 x fldz; 8 x fstp` sequences remain recognizable, incomplete sequences
+  still fail closed, and the replacement comment receives the exact union of
+  every consumed x87/stack-teardown owner while the return stays independent.
+  Its observed-red test and all 35 x86 frame tests pass; no checked-in fixture
+  currently exercises `-fzero-call-used-regs=all`. See
+  `results/wp3-x87-scrub-origins.md`.
+  Commit `96e86313` completes the ordinary x86 epilogue transaction: canonical
+  `leave`, standalone pop, promoted-stack restore, pre-rematerialized pop, and
+  second-round teardown forms all see attributed statements. Each replacement
+  comment receives the exact consumed-owner union and each return remains
+  independent. Its observed-red test, four focused ownership assertions, all
+  39 x86 frame tests, and both exact host O0 `classify` cells pass. See
+  `results/wp3-x86-epilogue-origins.md`.
+  Commit `2efa3106` then migrates the AArch64 frame transaction: canonical and
+  promoted prologues, paired `fp`/`lr` restores, and adjacent stack teardown
+  see attributed statements, while replacement comments receive exact
+  consumed-owner unions and returns remain independent. Its observed-red
+  prologue test, focused epilogue ownership test, all 12 module tests, and one
+  exact AArch64 O0 `classify` cell pass. See
+  `results/wp3-aarch64-frame-origins.md`.
+  Commit `7c2fc34b` begins the next enabled cleanup boundary: attributed
+  `ret = C; return C` pairs now collapse in supported structured bodies and
+  union the removed assignment owner onto the surviving return, while
+  mismatched constants remain unchanged. Its observed-red test, all four
+  return-fold module tests, and both exact host O0 `classify` cells pass. See
+  `results/wp3-constant-return-origins.md`.
+  Commit `1c909df4` completes the adjacent exhaustive-return transaction:
+  attributed if/switch control, arm definitions, optional breaks, epilogue
+  comments, and shared returns retain exact ownership through joined-return
+  recovery. Shared-tail owners are copied into every newly materialized return
+  while control and arm-specific owners remain disjoint. Both focused tests
+  were observed red; all six module tests and four exact O0 if/switch cells
+  pass. See `results/wp3-exhaustive-return-origins.md`.
+  Commit `91432a22` closes the remaining raw lexical boundary in label cleanup:
+  attributed labels and return/goto/indirect-goto/break transfers now delimit
+  unreachable runs, while removed unreachable mappings disappear and surviving
+  owners remain exact. Its observed-red test, all 20 label-prune tests, and both
+  exact host O0 `classify` cells pass. See
+  `results/wp3-unreachable-tail-origins.md`.
+  Commit `0c7b4e0f` migrates the first declaration/render consumer: attributed
+  promoted or debug-proven integer definitions now participate in the same
+  safe inline-declaration proof as unwrapped statements, producing
+  `int local = value` without weakening prior-read/write or loop-scope refusal.
+  Its observed-red rendering test, three adjacent declaration controls, and
+  both exact host O0 `while_zero_trips` cells pass. See
+  `results/wp3-inline-scalar-origins.md`.
+  Commit `db2e7735` adds render-time structured line mappings to the opt-in
+  Python batch result and CLI JSON. It records canonical statement origins at
+  the line actually emitted, without parsing pseudocode; default native tuple
+  shapes and scored text remain unchanged. The exact real `classify` result
+  proves both non-contiguous address sets and one instruction contributing to
+  several output lines. See `results/wp3-structured-line-mappings.md`.
+  Commit `9b10f06e` adds the expression-level carrier and canonical
+  attach/unwrap/union helpers, makes all 87 compiler-enumerated exhaustive
+  consumers explicitly transparent, and keeps both renderers byte-neutral.
+  Commit `3c5c74b9` makes the first bounded production attachment: removing a
+  single-use temporary transfers its definition origins to the exact
+  reconstructed expression subtree, while the surviving statement retains the
+  complete union. Its observed-red test, 102 touched-module tests, and the
+  four-lane/48-function `01_conditional_polarity` family pass. A release A/B
+  caught and repaired every exposed copy/fold/render regression, leaving the
+  exact `classify` text byte-identical to the clean parent. Universal
+  expression attribution and the remaining non-exhaustive matcher audit remain
+  open; see `results/wp3-reconstructed-expression-origins.md` and
+  `results/wp3-expression-origin-carrier.md`.
+  Commits `f30167f7` and `b269a3f2` extend that production boundary through
+  every return fold that replaces an ABI result assignment, including
+  exhaustive `if`/`switch` joins. Returned values retain their definition
+  owners while surviving return statements retain the definition/control-
+  transfer unions. All four ownership assertions were observed red, all seven
+  touched-module tests pass, and the exact four-cell host O0 conditional/switch
+  slice remains green on a fresh release build; see
+  `results/wp3-return-expression-origins.md`.
+  Commit `86ac95a6` then completes expression-owner transfer for all four
+  adjacent def/use movements: exactly-once effectful scratch, promoted value,
+  eager guard, and consumed-and-overwritten value. All four ownership tests
+  were observed red, all 19 touched-module tests pass, and a release-built
+  8-lane/24-function effectful-select, guarded-dispatch, and conditional slice
+  remains entirely green; see `results/wp3-adjacent-expression-origins.md`.
+  Commit `fb878925` next gives every generic register-call argument its own
+  setup origin and composes earlier scratch-definition owners through the
+  backward scan. Its disjoint two-argument test was observed red, all 110
+  parent call-argument tests pass, and the release-built 52-function call-shapes
+  fixture remains entirely green; see
+  `results/wp3-register-argument-expression-origins.md`. Generic stack
+  arguments and specialized recovered-layout/cdecl/AAPCS producers remain
+  open. Commit `5f8dec01` then attributes both generic SysV stack forms:
+  preallocated outgoing-area and balanced-push argument expressions receive
+  only their exact value-store owners, while allocation, call, and cleanup
+  owners remain on the call statement. Both observed-red tests, all 111
+  call-argument tests, and the exact four-cell release-built `call_into_spill`
+  canary pass; see `results/wp3-sysv-stack-argument-expression-origins.md`.
+  Commit `76753c05` applies the same exact value-store ownership rule to the
+  generic AAPCS outgoing stack area and proves the owner survives
+  scratch-register substitution into the final source-ordered arguments. Its
+  observed-red helper, four AAPCS tests, 111 call-argument tests, and exact
+  four-cell ARM release A/B are neutral; the legacy `armv7:O0` cell is the same
+  pre-existing failure on parent and tip. See
+  `results/wp3-aapcs-stack-argument-expression-origins.md`. Specialized
+  recovered-layout, cdecl32, hard-float, and table-call expression producers
+  remain open. Commit `bb98a3a9` next attributes convention-generic recovered-
+  layout arguments from their adjacent setup definitions and composes promoted-
+  spill definitions through exact substitution; proven untouched live-ins stay
+  independent. Both ownership cases were observed red, all 111 call-argument
+  tests pass, and the 12-cell cross-ABI `call_into_spill` release A/B is exactly
+  neutral, including the same pre-existing legacy `armv7:O0` failure. See
+  `results/wp3-recovered-layout-expression-origins.md`. Specialized cdecl32,
+  hard-float, and table-call fallback expression producers remain open. Commit
+  `e68ff86f` next attributes cdecl32 preallocated-store and lowered-push
+  arguments to their exact value stores. Stack decrements remain on the
+  synthesized net adjustment, while the call keeps every consumed setup owner.
+  Both forms were observed red, all 111 call-argument tests pass, and the exact
+  i386 O0/O2 `call_into_spill` release A/B remains 2/2 green; see
+  `results/wp3-cdecl32-argument-expression-origins.md`. Hard-float and
+  table-call fallback expression producers remain open. Commit `a756a6d5`
+  then attributes each pure-VFP hard-float argument to its distinct setup
+  assignment without changing the contiguous-prefix or mixed-bank refusal.
+  Its observed-red ownership test, four AAPCS tests, all 111 call-argument
+  tests, and two exact real ARM hard-float tests pass on a fresh release build;
+  the two A32 complex-float canaries remain identically known-failing. See
+  `results/wp3-hard-float-argument-expression-origins.md`. The table-call
+  reaching-value fallback remains the final identified call-argument producer.
+  Commit `f2e69784` closes it by preserving each attributed versioned enclosing
+  definition inside `EnclosingSlots`; nested table calls now receive the exact
+  owners on their argument expressions while unversioned or clobbered values
+  still decline. Its observed-red test and all 111 call-argument tests pass,
+  and the exact eight-function fixture-95 release A/B is neutral at three
+  passes and the same five pre-existing failures. See
+  `results/wp3-enclosing-call-argument-expression-origins.md`. The currently
+  identified call-argument expression producer family is complete; universal
+  expression attribution and the remaining SSA/invalidation migrations remain
+  open. Commit `4c19cb2e` then migrates the adjacent stack-idiom expression
+  constructor: a rematerialized push value keeps its prior owner and receives
+  the exact value-store owner, while the push statement retains the decrement/
+  store union. Its observed-red test, all 11 stack-idiom tests, and four exact
+  release-built flag-roundtrip cells pass; see
+  `results/wp3-stack-idiom-expression-origins.md`.
+  Commit `97aef0c3` then begins the bounded constant-fold migration. Inclusive
+  comparison recovery now sees attributed equality and strict-less children
+  and places their deterministic origin union on the surviving `<=`
+  comparison, without weakening operand, signedness, or relation checks. Its
+  observed-red test and all 59 constant-fold tests pass, including the
+  module's checked-in real-binary end-to-end canary; see
+  `results/wp3-inclusive-comparison-expression-origins.md`.
+  Commit `65162531` follows through the adjacent width-proved terminal
+  mixed-view relation. Attributed terminal test, relation, equality, and
+  signed-less nodes now recover the same readable `K < signed(x)` expression,
+  and nested carriers created by an inner fold flatten into their canonical
+  four-owner union. Follow-on `2fccded5` closes the shared comparison-to-zero
+  boundary for this fold, eager boolean recovery, and exact-boolean inversion:
+  attributed zero operands no longer block recognition and retain their owner.
+  Its strengthened observed-red test and all 74 constant-fold tests pass; see
+  `results/wp3-terminal-relation-expression-origins.md`.
+  Commit `6c737361` next makes subtraction zero-test recovery transparent:
+  attributed `(x - y) == 0` and `!= 0` forms recover their direct readable
+  relation and preserve the deterministic union of the outer comparison and
+  consumed subtraction/zero owners. Its observed-red test and all 61
+  constant-fold tests pass; see
+  `results/wp3-subtraction-relation-expression-origins.md`.
+  Commit `5e04d66a` then applies the normative hoisting contract to literal
+  selects: an attributed constant predicate is recognized, the chosen arm
+  keeps its owner and receives the consumed condition/select owners, and the
+  unreachable arm's owner is excluded. Its observed-red four-owner test and
+  all 62 constant-fold tests pass; see
+  `results/wp3-constant-select-expression-origins.md`.
+  Commit `02791f18` next makes full-width cdecl32 parameter-address loads
+  transparent. Attributed `Deref(StackAddr(argN))` recovers the parameter and
+  retains the exact address/load owner union, while partial-load and non-
+  parameter refusal remains unchanged. Its observed-red test and all 63
+  constant-fold tests pass; see
+  `results/wp3-parameter-load-expression-origins.md`.
+  Commit `3b1f34ca` then makes repeated-condition select collapse compare
+  semantic predicates through their carriers and preserves the removed inner
+  select/condition owner union while excluding the unreachable prior value.
+  Its observed-red test and all 64 constant-fold tests pass; see
+  `results/wp3-repeated-select-expression-origins.md`.
+  Commit `22cb5827` next makes equal-or-wider inner-cast subsumption
+  transparent. The surviving outer cast receives the consumed inner-cast
+  owner while the source value keeps its independent subtree owner; narrowing
+  refusal is unchanged. Its observed-red test and all 65 constant-fold tests
+  pass; see `results/wp3-subsumed-cast-expression-origins.md`.
+  Commit `66e533d7` then makes safe eager SETcc boolean-tree recovery
+  recursively transparent. Terminal, byte-view, tree, and predicate-leaf
+  owners survive on the recovered logical expression while memory/effect and
+  missing-byte-view refusals remain unchanged. Its observed-red test and all
+  66 constant-fold tests pass; see
+  `results/wp3-eager-boolean-expression-origins.md`.
+  Commit `1647953d` next makes observed-mask simplification transparent to an
+  attributed partial-register merge. The low-bit predicate retains its merge
+  and observation owners, while the provably masked-out high-parent owner is
+  excluded. Follow-on `997ec48c` makes the entry matcher transparent to an
+  attributed mask constant and retains that additional owner without reviving
+  the dead parent. Its strengthened observed-red test and all 73 constant-fold
+  tests pass; see
+  `results/wp3-observed-mask-expression-origins.md`.
+  Commit `14eef6d2` then makes safe constant arithmetic transparent to operand
+  carriers. Attributed constants fold normally and the result retains the
+  enclosing operation plus both operand owners; division-by-zero and invalid-
+  shift refusals are unchanged. Its observed-red test and all 68 constant-fold
+  tests pass; see `results/wp3-constant-arithmetic-expression-origins.md`.
+  Commit `e2df3e60` next makes signed and unsigned constant comparisons
+  transparent to operand carriers. The folded boolean retains the enclosing
+  comparison plus both operand owners. Its observed-red test and all 69
+  constant-fold tests pass; see
+  `results/wp3-constant-comparison-expression-origins.md`.
+  Commit `ff0ced1c` then makes same-semantic-operand identities transparent to
+  distinct carriers. The `x ^ x`, `x - x`, `x & x`, and `x | x` family now
+  preserves the enclosing operation and both operand owners. Its observed-red
+  test and all 70 constant-fold tests pass; see
+  `results/wp3-same-operand-expression-origins.md`.
+  Commit `3627ca65` next makes the full neutral/absorbing constant-identity
+  family transparent to carriers. Neutral folds retain the survivor and
+  constant owners; absorbing folds retain the determining constant but exclude
+  the genuinely irrelevant value owner. Its observed-red policy test and all
+  71 constant-fold tests pass; see
+  `results/wp3-constant-identity-expression-origins.md`.
+  Commit `c79f57db` then makes redundant literal and exact-boolean cast removal
+  transparent to the inner carrier. The replacement retains both inner-value
+  and enclosing-cast owners, while the width-bearing shift-left refusal remains
+  unchanged. Its observed-red test and all 72 constant-fold tests pass; see
+  `results/wp3-redundant-cast-expression-origins.md`.
+  Commit `64781964` next makes ARM/AArch64-style address reconstruction
+  transparent to page/base and offset carriers. The final address retains both
+  operand owners plus the enclosing arithmetic owner without weakening the
+  non-additive, reversed-subtraction, or stale-name refusals. Its observed-red
+  test and all 73 constant-fold tests pass; see
+  `results/wp3-address-reconstruction-expression-origins.md`.
+  Commit `072412ce` next makes the common x86 associative XOR-cancellation
+  shape transparent to carriers. Repeated semantic flags cancel despite
+  distinct owners, and the surviving relation retains every consumed flag,
+  nested-XOR, relation, and enclosing-operation owner. Its observed-red test
+  and all 74 constant-fold tests pass; see
+  `results/wp3-xor-cancellation-expression-origins.md`.
+  Commit `dfa2fa22` then makes the storage-width fold boundary transparent to
+  an enclosing carrier. Store-proved redundant casts and masks still collapse,
+  with the cast/value owners flattened into one canonical set. Its observed-red
+  test and all 75 constant-fold tests pass; see
+  `results/wp3-stored-value-expression-origins.md`.
+  Commit `5289e459` then makes the typed-declaration view pass transparent to
+  outer-cast, inner-cast, and source carriers. Its exact width/signedness proof
+  and return-promotion refusal remain unchanged while the surviving source
+  receives the canonical three-owner union. Its observed-red test and all 76
+  constant-fold tests pass; see `results/wp3-typed-view-expression-origins.md`.
+  Commit `251ae25e` applies the same rule to typed comparison-extension
+  removal. Both compared operands retain their exact outer-cast, inner-cast,
+  and source owners, and the shared terminal mixed-view relation composes the
+  cast owners into its readable replacement. Its strengthened observed-red
+  test and all 76 constant-fold tests pass; see
+  `results/wp3-typed-comparison-expression-origins.md`.
+  Commit `8c84c4ed` then makes the safe eager-Boolean recognizer transparent to
+  an attributed byte-mask constant. The recovered short-circuit tree retains
+  the mask owner alongside its mask-tree, cast, predicate-tree, and terminal-
+  test owners without weakening the side-effect, leaf-count, or byte-view
+  gates. Its strengthened observed-red test and all 76 constant-fold tests
+  pass; see `results/wp3-boolean-mask-expression-origins.md`.
+  Commit `c0e296e7` then makes nested observed-mask proofs transparent to an
+  attributed inner mask tree and constant. The surviving predicate retains the
+  owners that prove the stale high bits irrelevant while excluding the stale
+  value owner itself; mask-disjointness remains mandatory. Its strengthened
+  observed-red test and all 76 constant-fold tests pass; see
+  `results/wp3-disjoint-mask-expression-origins.md`.
+  Commit `321d205b` then makes inclusive-comparison recovery compare
+  attributed operands by semantic value. Equivalent equality and strict-less
+  inputs now fuse despite distinct carriers, and each surviving operand keeps
+  the exact union of its two contributing owners; ordering and signedness
+  refusals remain unchanged. Its strengthened observed-red test and all 76
+  constant-fold tests pass; see
+  `results/wp3-inclusive-operand-expression-origins.md`.
+  Commit `8f499b04` then makes terminal mixed-view recovery transparent to
+  attributed repeated bounds. Equality and strict-less constants compare by
+  semantic value, and the bound in the recovered readable relation keeps both
+  contributing owners without weakening equality, representability, or width
+  proofs. Its strengthened observed-red test and all 76 constant-fold tests
+  pass; see `results/wp3-relation-bound-expression-origins.md`.
+  Commit `af0c014b` then makes the same terminal mixed-view fold compare
+  attributed unsigned and signed source views by semantic value. Both source
+  instruction owners survive on the recovered relation while width,
+  signedness, bound, and representability proofs remain mandatory. Its
+  strengthened observed-red test and all 76 constant-fold tests pass; see
+  `results/wp3-relation-source-expression-origins.md`.
+  Commit `93de6232` then moves the audit into switch recovery. Attributed
+  ladder conditions, operands, machine views, and lifted greater-than trees
+  remain recognizable, and every consumed condition owner joins the
+  synthesized switch's deterministic origin union. Single-discriminant,
+  signed-range, reachability, and control-flow refusals remain unchanged. Its
+  strengthened observed-red test and all 28 switch-ladder tests pass; see
+  `results/wp3-switch-condition-expression-origins.md`.
+  Commit `320cb2e5` completes the adjacent operand boundary: attributed direct
+  discriminants and bounds remain recognizable, and the synthesized switch
+  receives the deterministic union from every consumed condition expression
+  tree. The origin walk is exhaustive over the expression enum; existing
+  single-discriminant, signed-range, reachability, and control-flow refusals
+  remain unchanged. Its strengthened observed-red test and all 28 switch-
+  ladder tests pass; see `results/wp3-switch-operand-expression-origins.md`.
+  Commit `57f6c625` next makes x86 scalar-view bridge recognition transparent
+  to attributed bridge, shift, cast, and lane-register nodes. Removing the
+  proven-dead bridge transfers the complete statement/expression origin tree
+  onto the recovered wide load without weakening the dead-view, exact-lane,
+  adjacency, or single-consumer proofs. Its observed-red test and all eight
+  vector-copy tests pass; see `results/wp3-vector-bridge-expression-origins.md`.
+  Commit `0a8ba2bb` then makes guarded-switch recovery transparent to
+  attributed guard comparisons, bounds, discriminants, and unsigned cast
+  chains. The replacement switch receives the complete origin union from each
+  consumed guard/copy statement and expression tree without weakening case-
+  domain, exhaustiveness, width, one-use, or control-flow proofs. Its observed-
+  red test and all 18 guarded-switch tests pass; see
+  `results/wp3-guarded-switch-expression-origins.md`.
+  Commit `7ff9bdc2` closes the adjacent speculation proof: attributed total
+  register/constant/cast copies remain safe to hoist between a terminating
+  guard and exhaustive switch, while loads, calls, arithmetic, memory effects,
+  and guard dependencies remain refused. Its observed-red test and all 18
+  guarded-switch tests pass; see
+  `results/wp3-guarded-copy-expression-origins.md`.
+  Commit `af10e4e7` then makes guarded-switch copy elimination compare an
+  attributed temporary discriminator by semantic identity and retain its owner
+  on the replacement discriminant. Exact temporary identity, unsigned-
+  extension proof, and one-use requirements remain mandatory. Its strengthened
+  observed-red test and all 18 guarded-switch tests pass; see
+  `results/wp3-switch-discriminator-expression-origins.md`.
+  Commit `5a7e76d6` then makes the typed promoted-stack discriminator copy
+  transparent to attributed address and value expressions. The replacement
+  switch receives the consumed store/address/value owners and its discriminant
+  retains the value owner, while promoted-object identity, recovered-width,
+  and one-use proofs remain mandatory. Its strengthened observed-red test and
+  all 18 guarded-switch tests pass; see
+  `results/wp3-promoted-discriminator-expression-origins.md`.
+  Commit `bfeb4974` next makes sentinel-search loop recovery transparent to an
+  attributed sentinel and equality operands. The six-statement rotated machine
+  form recovers its three-statement source-like initialization/`while`/return,
+  and the sentinel owner survives in both reconstructed uses without weakening
+  stable-value, seed, carried-register, exit-shape, or effect refusals. Its
+  observed-red test and all 30 loop-form tests pass; see
+  `results/wp3-sentinel-loop-expression-origins.md`.
+  Commit `fca387da` applies the same carrier-transparent sentinel contract to
+  guarded `do/while` rotation. The entry `if` plus rotated loop recovers its
+  pre-tested `while`, retaining the sentinel owner without weakening entry-
+  result, stable-prelude, carried-latch, zero-iteration, or trailing-control
+  proofs. Its observed-red test and all 30 loop-form tests pass; see
+  `results/wp3-guarded-loop-expression-origins.md`.
+  Commit `9523e980` then handles distinct entry/latch sentinel owners: the
+  values compare semantically and the recovered pre-tested `while` bound keeps
+  their deterministic union without weakening sentinel equality or any entry,
+  prelude, latch, zero-iteration, or trailing-control proof. Its strengthened
+  observed-red test and all 30 loop-form tests pass; see
+  `results/wp3-guarded-sentinel-composition.md`.
+  Commit `fa8b0656` then composes all four sentinel owners consumed by
+  coalesced sentinel-search recovery: entry comparison, entry return,
+  loop-exit comparison, and loop-exit return. Both reconstructed sentinel uses
+  retain the same deterministic union without weakening stable-value, seed,
+  carried-register, exit-shape, or effect refusals. Its strengthened
+  observed-red test and all 30 loop-form tests pass; see
+  `results/wp3-sentinel-search-composition.md`.
+  Commit `c4e3f4b3` next makes the entry-owned loop proof transparent to
+  attributed entry/latch predicates, their operands, and the intervening
+  stable alias. The proof compares origin-free semantic projections while the
+  retained outer guard and original attributed latch predicate remain intact;
+  no-else, stable-prelude, alias-depth, and overwrite refusals are unchanged.
+  Its strengthened observed-red test and all 30 loop-form tests pass; see
+  `results/wp3-owned-loop-proof-origins.md`.
+  Commit `ca3ff99a` then makes guarded-loop result matching transparent to
+  distinct ownership carriers and transfers the removed early-return value's
+  owner to the surviving final return. Different semantic result values still
+  refuse rotation, and all entry, stable-prelude, carried-latch, overwrite,
+  and trailing-control proofs remain mandatory. Its strengthened observed-red
+  test and all 30 loop-form tests pass; see
+  `results/wp3-guarded-loop-result-origins.md`.
+  Commit `a4326607` then makes the entry-value/current-seed proof transparent
+  to distinct ownership carriers and transfers the removed entry-value owner
+  to the surviving seed expression. Exact current seeding and all stable-
+  value, carried-latch, result-overwrite, and trailing-control refusals remain
+  mandatory. Its strengthened observed-red test and all 30 loop-form tests
+  pass; see `results/wp3-guarded-loop-seed-origins.md`.
+  Commit `82deec7a` then makes guarded counted-loop promotion recognize an
+  attributed semantic `while (1)`, retaining the consumed constant-condition
+  owner on the reconstructed `for` and the exit-predicate owner on its inverted
+  condition. Adjacent-initializer, exact-break, induction-variable, unit-step,
+  and iterator-bypass proofs remain mandatory. Its strengthened observed-red
+  test and all 30 loop-form tests pass; see
+  `results/wp3-counted-loop-condition-origins.md`.
+  Commit `2fac94e2` next makes unit-step recognition transparent to attributed
+  addition, induction-variable, and constant nodes. The exact attributed step
+  survives unchanged in the reconstructed `for`; same-variable, unit-addition,
+  width-cast, and iterator-bypass proofs remain mandatory. Its strengthened
+  observed-red test and all 30 loop-form tests pass; see
+  `results/wp3-counted-loop-step-origins.md`.
+  Commit `f7a3afe9` then makes loop-exit seeding recognize an attributed header
+  register copy and compare differently attributed tail values semantically.
+  All three assignments survive or move intact; exact-copy, stable-value,
+  dependency-write, and control-bypass proofs remain mandatory. Its
+  strengthened observed-red test and all 30 loop-form tests pass; see
+  `results/wp3-loop-exit-copy-origins.md`.
+  Commit `eb414739` then makes exact head-test recovery recognize an attributed
+  semantic `while (1)` and composes that consumed condition owner with the
+  attributed exit-predicate owner on the reconstructed condition. First-guard,
+  exact-break, and no-motion proofs remain mandatory. Its strengthened
+  observed-red test and all 30 loop-form tests pass; see
+  `results/wp3-head-tested-loop-origins.md`.
+  Commit `1bc1f57f` then makes counted-loop target recognition transparent to
+  attributed stack-local address expressions. Both initializer and step stores
+  survive unchanged; exact local/stack identity, same-induction-variable,
+  unit-step, and iterator-bypass proofs remain mandatory. Its strengthened
+  observed-red test and all 30 loop-form tests pass; see
+  `results/wp3-loop-store-target-origins.md`.
+  Commit `ab046385` moves the audit to final latch-predicate folding. An
+  attributed predicate register and saved-value copy remain recognizable; the
+  replacement predicate keeps its expression owner and receives the consumed
+  latch-condition owner. Single-snapshot, exact-update, straight-line, and
+  no-intervening-write proofs remain mandatory. Its strengthened observed-red
+  test and all 12 latch-predicate tests pass; see
+  `results/wp3-latch-predicate-expression-origins.md`.
+  Commit `e8dab427` then makes typed source-loop update coalescing recognize an
+  attributed scratch-to-carrier source and transfers both the deleted tail
+  statement owner and its source-expression owner to the surviving loop.
+  Protected identity, type/width compatibility, single-definition, suffix-use,
+  and old-carrier-read proofs remain mandatory. Its strengthened observed-red
+  test and all 12 latch-predicate tests pass; see
+  `results/wp3-loop-update-source-expression-origins.md`.
+  Commit `2644823c` then makes loop-entry carrier coalescing recognize an
+  attributed register source and transfers both ownership layers from the
+  deleted entry copy to the surviving loop. Typed-source, dead-source,
+  coalescible-role, protected-identity, and whole-function-goto refusals remain
+  mandatory. Its strengthened observed-red test and all 12 latch-predicate
+  tests pass; see `results/wp3-loop-entry-source-expression-origins.md`.
+  Commit `c6795d65` then closes the adjacent fail-open boundary: an attributed
+  installed next value that aliases the saved snapshot still triggers the
+  existing refusal. The negative regression was observed red when provenance
+  hid that identity and the pass incorrectly folded; it now remains byte-for-
+  byte unchanged, and all 13 latch-predicate tests pass. See
+  `results/wp3-latch-next-value-refusal.md`.
+  Commit `5b8909b3` then makes the late redundant-return cleanup recognize
+  attributed constant expressions and transfers both ownership layers from
+  the deleted ABI-result assignment to the surviving constant return. The
+  mismatched-constant refusal remains unchanged. Its observed-red test and all
+  eight return-fold tests pass; see
+  `results/wp3-late-return-expression-origins.md`.
+  Commit `de7c13d1` then makes exhaustive branch-return recovery see through
+  an origin carrier on the shared return register/cast template. Each
+  synthesized arm return retains that template's exact expression owner. Its
+  observed-red test and all nine return-fold tests pass; see
+  `results/wp3-shared-return-expression-origins.md`.
+  Commit `767664db` then makes the basic result-assignment fold recognize an
+  attributed returned register and unions that consumed expression owner with
+  the deleted definition owner on the surviving value. Its strengthened
+  observed-red test and all nine return-fold tests pass; see
+  `results/wp3-folded-return-carrier-origins.md`.
+  Commit `08f0f858` then makes exhaustive branch-return recovery recognize an
+  attributed promoted result-slot target and transfers the consumed target
+  owner to the synthesized return value. Its observed-red test and all ten
+  return-fold tests pass; see `results/wp3-return-store-target-origins.md`.
+  Commit `ce55594e` then begins the declared copy-propagation migration at its
+  loop invalidation boundary. Attributed register store targets now enter the
+  write set, so a source changed in the loop invalidates its pre-loop alias
+  instead of freezing the entry value. Its negative test was observed red and
+  all 53 copy-propagation tests pass; see
+  `results/wp3-copy-loop-store-invalidation.md`.
+  Commit `be69b02b` next makes the shared self-copy refusal compare semantic
+  expressions through origin carriers. Attributed `x = x` assignments are no
+  longer admitted to ordinary, switch-entry, or dead-copy environments. Its
+  observed-red invariant and all 54 copy-propagation tests pass; see
+  `results/wp3-copy-self-reference-origins.md`.
+  Commit `82d7f3db` then makes both linear propagation walkers invalidate
+  aliases at attributed register stores. A pre-write snapshot can no longer be
+  silently replaced by its source's post-write value. Its end-to-end AST test
+  was observed red and all 55 copy-propagation tests pass; see
+  `results/wp3-copy-linear-store-invalidation.md`.
+  Commit `de1cd148` next makes counted propagation's 128-bit-load and unknown-
+  value refusals origin-transparent. An attributed wide load keeps its
+  materialized identity instead of being scalarized at its single use. Its
+  public-pass test was observed red and all 56 copy-propagation tests pass; see
+  `results/wp3-copy-wide-load-refusal.md`.
+  Commit `13b1143a` then makes the shared read walker treat an attributed
+  promoted-local store target as a write rather than a pointer read. Exact use
+  counts no longer retain artificial temporaries solely because provenance is
+  present. Its count test was observed red and all 57 copy-propagation tests
+  pass; see `results/wp3-copy-store-read-counts.md`.
+  Commit `b5cde5e3` then makes the existing fail-closed alias proofs transparent
+  to attributed address expressions and constant operands. Proven-disjoint
+  frame slots can still fold a pending load without discarding provenance;
+  indexed, overlapping, and otherwise unproved addresses remain refusals. Its
+  observed-red test and all 58 copy-propagation tests pass; see
+  `results/wp3-copy-alias-proof-origins.md`.
+  Commit `7c60441e` next closes a store-lvalue correctness seam: an attributed
+  promoted-local pointer copied through a scratch can no longer collapse an
+  explicit indirect store into a bare local assignment. The explicit address
+  container survives and receives the copied expression owner. Its end-to-end
+  test was observed red and all 59 copy-propagation tests pass; see
+  `results/wp3-copy-indirect-store-origins.md`.
+  Commit `0e7aa4bb` then makes the existing typed promoted-value width proof
+  transparent to expression ownership. A width-proven attributed comparison
+  now folds through its one-use local into the return, removing an artificial
+  output temporary while retaining its exact owner; wider and unproved values
+  still decline. Its observed-red test and all 20 adjacent-copy tests pass; see
+  `results/wp3-copy-typed-value-origins.md`.
+  Commit `e3b29fe3` then repairs the shared substitution boundary: replacing an
+  attributed register use with an attributed definition now produces one
+  canonical deterministic union rather than nested origin carriers. The
+  normalization occurs only after a real substitution, preserving exact change
+  reporting. Its observed-red test and all 61 copy-propagation tests pass; see
+  `results/wp3-copy-substitution-origin-union.md`.
+  Commit `129a5277` then makes the adjacent effectful-value mover recognize an
+  attributed direct register use. A one-use call temporary still disappears,
+  the call remains evaluated exactly once, and its expression receives the
+  canonical definition/use owner union while all prior adjacency and sequencing
+  refusals remain. Its observed-red test and all 21 adjacent-copy tests pass;
+  see `results/wp3-copy-effectful-use-origins.md`.
+  The remaining wildcard consumers and universal production attribution remain
+  open.
 
 ### Migration targets
 
@@ -415,34 +1625,471 @@ provenance through lowering.
   consumption before AST lowering.
 - [ ] Move constant folding, dead-store elimination, and DCE in bounded
   increments, one pass at a time.
-- [ ] Remove semantic parsing of `ret`, `argN`, `local_`, and `#version` only
+  Commit `079e26d5` implements the next constant-fold prerequisite: value
+  numbering attaches a live ABI parameter slot directly to each exact
+  version-zero identity and refuses later register versions or non-live ABI
+  registers. This makes parameter ownership available before presentation
+  naming. Commit `86a3b39a` then projects pipeline-owned stack parameter slots
+  into the same typed sidecar and switches the production early fold to exact
+  identity authority. The former slot-authority path, which parsed `argN`, is
+  deleted. A focused A/B rebuild proves that the two currently red cdecl tests
+  are unchanged pre-existing regressions; the optimized cdecl execution round
+  trip remains green. See
+  `results/wp3-early-parameter-identities.md`.
+- [~] Remove semantic parsing of `ret`, `argN`, `local_`, and `#version` only
   after each consumer has a typed identity replacement.
+  `f05c9a5d` removes `#version` parsing from production float-role projection;
+  `af65c260` removes it from optimized DWARF register-local recovery.
+  Commit `633df9f7` removes the `varN` fallback from loop-entry coalescing when
+  identity authority is installed: a missing or ambiguous identity now refuses,
+  while spelling fallback remains only for compatibility callers with no
+  sidecar. Commit `db6c4756` applies the same authority rule to exact high-bit
+  and pointer-value type refinement, while promoted stack objects retain their
+  separate storage-model eligibility. See
+  `results/wp3-semantic-name-fallbacks.md`. Compatibility and other product
+  consumers remain. Commit `3e302824` removes an `argN` spelling decision from
+  DWARF aggregate-field recovery: only roles seeded from the authoritative
+  prototype are exempt from definition validation, so stale or fabricated
+  argument spellings cannot impersonate parameters. Commit `7eeb84ca` then
+  carries pipeline-owned parameter slots beside opaque identities during AST
+  role projection, without parsing aliases. Commit `53eb97ec` migrates callee-
+  contract pointer back-propagation to that typed role: owned parameters still
+  refine and an unowned `arg99` refuses. Commit `14f6d24a` threads the same
+  authority through recursive pointer classification and copy-origin proofs;
+  an unowned `varN` intermediary now refuses while an exact intermediary still
+  transports the owned parameter fact. Commit `11ae7601` migrates exact integer
+  and float type-role projection to its already-authoritative `param_slots` set;
+  only owned slots are withheld from legacy storage projection, so an unrelated
+  role spelled `arg99` is no longer misclassified. Commit `5c88a5bd` migrates
+  exact-definition-width merging to the same slot
+  fact. This removes the final `parse_arg_index` call from `type_maps.rs` while
+  retaining protection for real parameter prototypes and ordinary local
+  narrowing. Commit `f6c9d0ce` migrates high-half ABI-width refinement to typed
+  parameter slots when identities are installed; high-bit use widens an owned
+  `arg0` but not an unrelated role spelled `arg99`. Commit `f3781342` migrates
+  source-loop scratch eligibility to the same typed
+  roles: an exact unowned `arg99` may coalesce, while a value carrying parameter
+  slot 99 refuses. Commit `4219eee0` migrates optimized DWARF register-local
+  merging to pipeline-owned parameter slots: an exact local role merely spelled
+  `arg99` can receive its authoritative DWARF name and type, while a role owned
+  by parameter slot 99 remains protected. Commit `0c1d0819` migrates opaque
+  library-call parameter refinement to the AST identity sidecar: only a value
+  carrying an authoritative parameter slot can lend a nominal type such as
+  `FILE *` to the caller prototype, while an unowned `arg0` spelling cannot.
+  Commit `40cb2904` migrates the full-width parameter-address load fold across
+  both production phases: the early shared pipeline uses its owned slot set,
+  and post-promotion preparation/rendering use projected identities. An
+  unowned `StackAddr(arg0)` therefore remains a dereference rather than being
+  rewritten into an unrelated scalar value. Commit `d5b69f98` migrates
+  parameter-spill coalescing across named slots, frame-array homes, casts,
+  scratch aliases, and repeated stores. The pass can delete a spill and rename
+  its storage only when the source value carries an authoritative parameter
+  slot; an unrelated `arg0` spelling leaves both storage and reload intact.
+  Commit `964b66d6` migrates declared-integer classification at the shared
+  return/declaration typing boundary. With identities installed, only an owned
+  parameter slot receives parameter narrowing; an unowned `arg0` remains a
+  conservative machine-word integer, while exact non-parameter SSA values
+  retain their value-specific type path. Commit `b0197ec9` then retains the
+  ABI-proved source-parameter slot directly on promoted stack storage. Home-
+  slot assignment and adjacent-slot composition consume that typed fact rather
+  than reparsing the generated `argN` name; an unowned local merely spelled
+  `arg0` can no longer impersonate parameter storage. Commit `bc8c7755`
+  migrates the declaration plan's pointer, integer-type, and machine-width
+  fact admission to the same authority rule. With identities installed, an
+  unowned `argN` type-map row cannot influence casts or pointer indexing;
+  exact SSA values and promoted storage retain their independent eligibility.
+  Commit `973d1931` migrates the recursive production identifier census and
+  type-map arity fallback. Signature arity, local declarations, stack/wide
+  objects, and typed call-result declarations now share one identity-aware
+  parameter decision; health and compatibility callers explicitly retain the
+  no-sidecar spelling path. Commit `5cbb36bd` carries the census's exact role-
+  to-slot map into the immutable declaration plan. Lvalue naming and both
+  `StackAddr` rendering decisions now query that plan, leaving
+  `dec_render.rs` with no `argN` parser and preventing a local array called
+  `arg0` from rendering as a parameter-valued `void *`. Commit `e79bb7b5`
+  removes the first pre-naming `ret` spelling decision from direct-output
+  recovery. Prototype-backed identity returns now recognize body writes only
+  through the selected calling convention's ABI result registers; an unrelated
+  value literally named `ret` cannot suppress or replace the proven live-in
+  result. Commit `e30c727f` closes the corresponding production post-naming
+  path. `ValueIdentities` now carries a pipeline-owned result-role fact through
+  role projection and AST renames; source preparation accepts canonical `ret`
+  only when that fact is present. The no-sidecar compatibility API retains its
+  legacy spelling behavior explicitly. Commit `e27ab2cc` threads the same
+  authority through late redundant-return cleanup in both production render
+  paths. An assignment to an unowned local named `ret` is retained rather than
+  deleted, while a typed result-role assignment still folds and transfers its
+  origins to the surviving return. Commit `aab2921d` carries the authority into
+  the final definition-before-use verifier, including its structured and goto-
+  aware paths. A destination-less call no longer silently defines an unowned
+  `ret` spelling in production, while the pipeline-owned role and explicit call
+  destinations remain valid definitions. Commit `c599ac49` migrates direct and
+  exhaustive return folding in both production preparation stages. An unowned
+  `ret = value; return ret;` remains intact, while a pipeline-owned result role
+  still folds to `return value;`; exact versioned ABI storage continues to fold
+  independently of presentation spelling. Commit `fbb7f596` migrates the
+  post-naming dead-store pass to the same typed result-role authority. A call
+  no longer kills an unrelated local merely spelled `ret`, while a
+  pipeline-owned result role retains the ABI-clobber behavior. Commit
+  `b3210392` removes the remaining production `argN` parser from canonical
+  register naming. Stack promotion now publishes its proven parameter-slot
+  bindings as typed facts; naming preserves those bindings but treats an
+  unowned `argN` spelling as ordinary storage. Compatibility-only naming keeps
+  the legacy spelling fallback. Commit `32698e2e` removes the guessed
+  `remap_type_map` production path from plain typed rendering. That renderer
+  now recovers types over numbered LLIR and projects them through the exact
+  role map and opaque identities, so typed `varN` values no longer fall through
+  merely because a reconstructed calling-convention table cannot name them.
+  See
+  `results/wp3-parameter-role-metadata.md`. The latter migration also
+  exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
+  merge hid the unresolved SysV `al` variadic live-in. That cell is now an
+  honest strict xfail rather than a semantic identity exception.
+  Commit `a7762f05` migrates the x86-64 omit-frame-pointer recognizer to exact
+  value identities for entry-save classification and save/restore matching. An
+  opaque exact `r15` value is accepted, a misleading `r15#0` spelling mapped to
+  `rax` is rejected, and missing identity fails closed in production. See
+  `results/wp3-x86-frame-identities.md`.
+  Commit `5fdb7906` applies the same authority boundary to ARM32 frame
+  recognition. Prologue/epilogue matching, restore classification, frame
+  deallocation, and residual-SP refusal now resolve `sp`, `fp`/`r11`,
+  `lr`/`r14`, core, and VFP saves through exact identities. Misleading `sp#0`
+  and `lr#0` spellings mapped to `r0` refuse. See
+  `results/wp3-arm32-frame-identities.md`.
+  Commit `9e43b52b` migrates packed-vector copy recovery to exact identities
+  for lane grouping, scalar-view bridges, exclusivity checks, and synthesized
+  wide copies. An opaque exact lane is accepted, while a misleading
+  `xmm0_d0#9` spelling mapped to `rax` refuses. The owning nine-test module and
+  one real fixture-188 GCC O2 lane pass; see
+  `results/wp3-vector-copy-identities.md`.
+  Commit `b40b4226` migrates production incoming-call backfill to the same
+  authority. Whole-function live-in discovery and nested call fallbacks now
+  accept only exact version-zero ABI argument identities; misleading
+  `rdi#version` spellings cannot invent arguments. All 112 call-argument tests
+  and two exact host/ARM end-to-end checks pass; see
+  `results/wp3-call-live-in-identities.md`.
+  Commit `11a96792` migrates call-result attribution: exact identities now
+  decide whether later expressions read or overwrite the ABI result storage,
+  including nested bodies and the call-fold liveness probe. A misleading
+  `rax#version` spelling mapped to an argument register refuses, while opaque
+  exact result storage remains visible. All 130 `call_args` tests and the exact
+  effect-only/consumed-result C checks pass; see
+  `results/wp3-call-result-identities.md`.
+  Commit `5fcd345c` migrates frame-relative type propagation. Production frame
+  bases and spill/reload slots use exact `(base, SSA version)` identities, so
+  pointer evidence cannot cross frame-register lifetimes or a misleading
+  `rbp#version` spelling. All 83 owning type-recovery tests and one production
+  typed-render CLI check pass; see
+  `results/wp3-frame-spill-type-identities.md`.
+  Commit `a86966f1` migrates typed-output return refinement using exact result
+  identity plus the pipeline-owned definition width. Opaque four-byte `rax`
+  storage narrows correctly, while a misleading `rax#version` spelling mapped
+  to `rdi` cannot alter the return. All 84 owning type-recovery tests and one
+  production typed-output check pass; see
+  `results/wp3-return-width-identities.md`.
+  Commit `42f9c5e0` migrates the call-fold frame-coordinate guard. Opaque exact
+  stack/frame values remain rooted, while a misleading `rsp#version` spelling
+  mapped to scratch storage cannot block substitution. All 131 `call_args`
+  tests and the exact ARM hard-float stack-coordinate check pass; the selected
+  fixture-11 lane's unrelated `const_fold` invariant reproduces with the patch
+  removed and is not evidence. See
+  `results/wp3-call-frame-coordinate-identities.md`.
+  Commit `d2518e37` then migrates stable captured frame loads, alias checks,
+  and intervening frame-base writes to the same exact identity boundary. A
+  misleading `rbp#version` scratch is rejected while an opaque value with a
+  proved `rbp` identity is accepted. All 132 owning tests and the exact
+  `11_call_shapes:clang:O0:call_into_spill` lane pass; no broad suite or corpus
+  ran. See `results/wp3-captured-frame-definition-identities.md`.
+  Commit `541a6e5b` then migrates call-slot read/write liveness, enclosing
+  clobbers/reaching definitions, loop-entry constancy, and table/mixed-layout
+  backfill to identity candidate sets. Agreement across several SSA versions
+  is accepted; cross-slot ambiguity fails closed. All 133 owning tests and the
+  exact effectful branch-call fixture pass after that fixture caught and
+  rejected an over-conservative `rsp` prototype. See
+  `results/wp3-call-slot-liveness-identities.md`.
+  Commit `79da282c` then migrates stack allocation/cleanup, lowered push/pop
+  pairs, preallocated SysV outgoing areas, phase-sensitive reads, prologue
+  boundaries, and captured outgoing pushes to exact identity classification.
+  Opaque proved stack pointers remain usable; misleading `rsp#version` display
+  names mapped to other storage are rejected. All 134 owning tests and the
+  exact `11_call_shapes:clang:O0:call_into_spill` lane pass; no broad suite or
+  corpus ran. See `results/wp3-call-stack-area-identities.md`.
+  Commit `10325870` then migrates loop-carried call-slot discovery. Pre-loop
+  initializers and back-edge values are joined by exact SSA identity, and the
+  ABI slot comes from authoritative physical storage rather than the displayed
+  name. All 135 owning tests and the exact AArch64 O2 `call_chain_in_loop`
+  fixture pass; no broad suite or corpus ran. See
+  `results/wp3-loop-carried-call-identities.md`.
+  Commit `d7dfcf9f` then migrates pure hard-float AAPCS setup. Core, VFP, and
+  unrelated destinations are classified from complete SSA identity candidate
+  sets; cross-bank ambiguity declines instead of trusting `s0#version` text.
+  All five owning AAPCS tests and the exact ARMv7 O0
+  `single_precision_horner` fixture pass; no broad suite or corpus ran. See
+  `results/wp3-aapcs-vfp-setup-identities.md`.
+  Commit `06b6f429` then migrates preallocated AAPCS outgoing stack areas.
+  Address bases and intervening stack writes must carry complete `sp` identity;
+  misleading `sp#version` text is rejected. All six owning AAPCS tests and the
+  exact ARMv7 O2 `call_into_spill` fixture pass. The adjacent O0 failure
+  reproduces unchanged with the patch removed and is baseline debt. No broad
+  suite or corpus ran. See `results/wp3-aapcs-stack-area-identities.md`.
+  Commit `75c95f4b` then migrates the complete cdecl stack reader: stores,
+  pushes, frame refusal, caller cleanup, stack-mention safety, displacement
+  rebasing, and PIC traversal all use exact stack/frame identities. The 27-test
+  cdecl filter and exact i386 O0 `call_into_spill` fixture pass; no broad suite
+  or corpus ran. See `results/wp3-cdecl-stack-identities.md`.
+  Commit `6ab43e01` then threads the identity sidecar into resolved direct and
+  symbol-backed indirect tail calls. Recursive local argument-setup detection
+  uses complete identity candidates instead of register text. All 14 owning
+  tail-call tests and the exact GCC O2 `forward_sum6` fixture pass; no broad
+  suite or corpus ran. See `results/wp3-tail-call-setup-identities.md`.
+  Commit `c576b207` then threads the sidecar through proven Rust vtable tails.
+  Computed-target equality, wide-result high-half recognition, and intervening
+  writes now use exact identities. All 15 owning tail-call tests and the exact
+  Rust O2 `rust_dyn_apply` fixture pass; no broad suite or corpus ran. See
+  `results/wp3-vtable-tail-identities.md`.
+  Commit `f79d7909` then migrates the ordinary backward call scan's ABI-slot
+  lookup. Opaque values carrying exact argument-register identities now fold,
+  misleading `rdi#version` spellings mapped to non-argument storage refuse,
+  and coalesced candidates must agree on one slot. The exact regression, all
+  141 owning call-argument tests, and the single GCC O2
+  `call_accumulate_bytes` canary pass; no broad suite or corpus ran. A wider
+  attempt to infer AST-name immutability from the original SSA version was
+  rejected by that canary because post-SSA AST coalescing can reuse a
+  presentation variable. See `results/wp3-call-argument-slot-identities.md`.
+  Commit `5042ef6d` then migrates both generic recovered-callee-layout setup
+  folds. Adjacent assignment destinations match the layout's authoritative ABI
+  storage through complete identity candidates rather than stripped display
+  text; an opaque exact `rdi` value folds and a misleading `rdi#version` mapped
+  to `rax` refuses. The exact regression, all 142 owning call-argument tests,
+  and only the directly related Clang O0 `call_into_spill` fixture pass. See
+  `results/wp3-recovered-layout-storage-identities.md`.
+  Commit `fba2ee95` then migrates recognition of an explicit preceding-call
+  destination as ABI result storage. Complete identity candidates must all be
+  valid result registers; an opaque exact `rax` result is preserved and a
+  misleading `rax#version` mapped to `rdi` is rejected. The exact regression,
+  all 143 owning call-argument tests, and the Clang O0 `call_into_spill` canary
+  pass. The selected GCC O2 canary's `const_fold` change-report crash reproduces
+  unchanged with the patch removed and remains baseline infrastructure debt.
+  See `results/wp3-preceding-call-result-identities.md`.
+  Commit `4ce03e4f` closes the adjacent bare-result decision. An explicit call
+  destination is replaced with a fresh result value only when every exact
+  candidate is version-zero ABI result storage; opaque versioned results stay
+  explicit and misleading result-like names backed by other storage remain
+  untouched. The strengthened exact regression, all 143 owning tests, and the
+  single Clang O0 `call_into_spill` canary pass. See
+  `results/wp3-bare-call-result-identities.md`.
+  Commit `094c1055` then migrates the SysV SSE-pair forwarding proof's
+  intervening-clobber classification. Opaque exact `xmm0:xmm1` or lane storage
+  blocks forwarding, while misleading `xmm1#version` text mapped to integer
+  storage does not. The exact regression, all 144 owning tests, and only the
+  Clang O2 `complex_multiply` fixture pass. See
+  `results/wp3-sse-pair-clobber-identities.md`.
+  Commit `b71cdc92` then migrates the complete AArch64/SysV indirect-result
+  buffer consumer. Pre-promotion frame-coordinate discovery and post-promotion
+  call binding now classify `x8`, `sp`, `x29`, `rsp`, and `rbp` through
+  complete exact identity candidates; the spelling-only entry points remain
+  explicit compatibility wrappers. The exact opaque-versus-misleading
+  regression, all six owning module tests, and only the AArch64 O2
+  `agr198_five_roundtrip` fixture pass. No broad suite or corpus ran. See
+  `results/wp3-indirect-result-storage-identities.md`.
+  Commit `489622b4` then migrates callee-side integer-pair return recovery.
+  Reaching high-half definitions and nested-control invalidation now use exact
+  identities, as does the guard that refuses to reinterpret a floating result
+  bank as the low half of an integer pair. Opaque exact `rdx`/`xmm0` values are
+  classified correctly and misleading `rdx#version` text backed by `rax` is
+  rejected. The exact regression, all ten owning module tests, and only the
+  GCC O0 `bv195_make_quad` fixture pass. No broad suite or corpus ran. See
+  `results/wp3-callee-pair-return-identities.md`.
+  Commit `4345efff` closes the sibling register-resident multi-bank return
+  consumer. Split INTEGER/SSE and `xmm0:xmm1` parts, call destinations, return
+  projections, nested flow, and pop invalidation now use exact identities.
+  Opaque exact bank values materialize, while misleading `xmm1#version` text
+  backed by `rax` refuses. The exact regression, all 21 owning module tests,
+  and only the GCC O2 `bv195_make_mixed` fixture pass. No broad suite or corpus
+  ran. See `results/wp3-register-return-bank-identities.md`.
+  Commit `0e824a04` then removes production live-in parameter inference's
+  dependency on `tag_phys` spelling. Reads must carry version-zero identities,
+  definitions kill paths by exact ABI storage, and ARM balanced-padding
+  recognition uses the same identity authority. The spelling path remains only
+  for callers operating before or without the sidecar. The exact regression,
+  four live-in neighbors, three ARM padding checks, and only the GCC O2
+  `call_accumulate_bytes` fixture pass. No broad suite or corpus ran. See
+  `results/wp3-live-in-parameter-identities.md`.
+  Commit `ebcd6440` then migrates the separate caller-derived fixed-arity
+  pipeline. It retains identities through caller AST lowering and uses them for
+  outgoing stack pushes, cleanup, padding, and intervening-assignment
+  classification. Opaque exact `rsp` values remain provable and misleading
+  `rsp#version` text backed by `rax` no longer aborts the proof. The exact
+  regression, all four owning caller-arity tests, one adjacent stack-identity
+  test, and only the GCC O0 `sum_arg7` fixture pass. Superseded spelling-only
+  helpers are test-only in release builds. No broad suite or corpus ran. See
+  `results/wp3-caller-stack-arity-identities.md`.
+  Commit `64eb116d` then migrates scalar-float register classification across
+  the production LLIR-to-AST boundary. The pipeline-owned identity sidecar now
+  reaches every recursive lowering shape; float-bank membership, call-result
+  classification, caller-saved ABI detection, packed dword lanes, and `vmov`
+  operand roles use exact canonical storage rather than stripped display text.
+  Missing or ambiguous identities decline. The adversarial exact regression,
+  both owning float-gate tests, and only the GCC O2
+  `hfa197_tagged_control` fixture pass with a fresh extension. No broad suite or
+  corpus ran. See `results/wp3-float-register-identities.md`.
+  Commit `e4aaabf8` then migrates stack promotion's frame-anchor proof. Exact
+  identities now distinguish x86 frame establishment versus repurposing and
+  ARM32 `fp`/`r7`/`r11` establishment from `sp`; opaque storage is accepted and
+  misleading frame-looking names are ignored. The exact cross-architecture
+  regression, three adjacent frame controls, and only the GCC O0 `sum_arg7`
+  fixture pass. A controlled one-file A/B proves the initially selected
+  fixture-196 failure predates this patch. No broad suite or corpus ran. See
+  `results/wp3-frame-anchor-identities.md`.
+  Commit `e82617fd` then removes canonical naming's suffix-stripped test for
+  the producer-owned `sse_pair_return_object`. A misleading
+  `sse_pair_return_object#fake` can no longer suppress the ordinary `xmm0`
+  result role, while the genuine materialized pair and scalar-return controls
+  remain green. Three exact naming tests and only the GCC O2
+  `hfa197_tagged_control` fixture pass with a fresh extension. No broad suite
+  or corpus ran. See `results/wp3-sse-pair-object-identity.md`.
+  Commit `2a33f6a5` then hardens the call-recovery side of the same boundary:
+  recovered-layout storage and SSE-pair clobber classification compare
+  authoritative identity bases exactly instead of reparsing them as
+  `#version` display text. Both adversarial tests were observed red before the
+  fix; those tests, one neighboring recovered-layout control, and only the GCC
+  O2 `hfa197_tagged_control` fixture pass with a fresh extension. No broad
+  suite or corpus ran. See `results/wp3-canonical-call-identity-bases.md`.
+  Commit `df62ee4c` then makes indirect-result buffer tracking key the exact
+  canonical bases supplied by `ValueIdentities`; a malformed
+  `x8#not_canonical` identity can no longer fabricate either a pre-promotion
+  object hint or post-promotion call destination. The adversarial test was
+  observed red before the fix; it, two nearest buffer controls, and only the
+  AArch64 O2 `agr198_five_roundtrip` fixture pass with a fresh extension. No
+  broad suite or corpus ran. See
+  `results/wp3-indirect-result-canonical-bases.md`.
+  Commit `20f0575c` then closes the enclosing reaching-state variant: a
+  non-canonical `rdi#not_canonical` identity can no longer cross a structured
+  boundary as a proven call argument, while an opaque value with exact `rdi`
+  identity still does. The adversarial test was observed red before the fix;
+  it, two nearest enclosing-state controls, and only the GCC O2
+  `se189_select_call` fixture pass with a fresh extension. No broad suite or
+  corpus ran. See `results/wp3-enclosing-canonical-identities.md`.
+  Commit `d9e77a0a` then centralizes these local defenses as
+  `SsaValue::canonical_physical_base` and migrates the remaining related
+  call/parameter identity consumers behind it. ABI compatibility parsers no
+  longer silently repair malformed identity bases, while explicit no-sidecar
+  paths retain their old behavior. Seven exact tests and only the GCC O2
+  `se189_select_call` fixture pass with a fresh extension. No broad suite or
+  corpus ran. See `results/wp3-canonical-ssa-base-boundary.md`.
+  Commit `0d8a77cc` then moves `ValueIdentities`' own source-parameter role
+  attachment behind that boundary. A malformed `rdi#not_canonical` identity
+  no longer receives slot-zero authority, while a valid version-zero `rdi`
+  identity still does. The ownership-level regression was observed red before
+  the fix; it, two nearest authority controls, and only the GCC O0 `sum_arg7`
+  fixture pass with a fresh extension. No broad suite or corpus ran. See
+  `results/wp3-canonical-parameter-authority.md`.
+  Commit `13fd396c` then begins the final typed `tag_phys` migration by applying
+  the authoritative definition-width map to every identity-owned numbered
+  definition, not only the return value. An opaque four-byte local no longer
+  widens to eight bytes merely because its display name has no register-width
+  clue; role classification remains identity-owned and stronger pointer/float
+  facts remain intact. The exact regression was observed red before the fix;
+  it, two nearest width/identity controls, and only the GCC O2
+  `sign_bit_of_binary32` fixture pass with a fresh extension. No broad suite or
+  corpus ran. Uses without definition-width evidence still depend on raw
+  operand views, so this does not yet make `tag_phys` removable. See
+  `results/wp3-exact-typed-local-widths.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
-- [ ] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
+- [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
   `src/python_bindings/ir/type_maps.rs` after value-keyed type maps are live.
+  Commit `32698e2e` replaces the final plain-typed-render caller with numbered
+  type recovery plus exact role/identity projection; the guessed remapper no
+  longer exists.
 - [ ] Keep naming as a render mapping, not a program rewrite.
 
 ### Origin and mapping surface
 
-- [ ] Extend AST definitions in `src/ir/ast.rs` or the owning AST module with
-  `OriginSet`.
-- [ ] Thread origins through lowering, expression rewrites, structuring, tail
-  duplication, and rendering.
-- [ ] Expose line-to-address mappings from the Python binding as structured
-  data; do not infer them by parsing rendered text.
-- [ ] Define non-contiguous origin behavior for folded, hoisted, and duplicated
-  nodes.
+- [~] Extend AST definitions in `src/ir/ast.rs` or the owning AST module with
+  `OriginSet`. Commit `7bea3314` lands the canonical sorted, deduplicated set,
+  deterministic union, and exact clone behavior. Commit `59840017` gives
+  statements a transparent carrier, converts the 64 exhaustive consumers, and
+  proves attributed loop clauses render byte-identically. Commit `8cb7d171`
+  converts the remaining enabled pass matches identified by the corpus sweep
+  to inspect semantic statements without discarding their carriers and attaches
+  each lowered LLIR instruction VA at the block-lowering boundary. Expressions and
+  structured control nodes still need direct ownership where statement-level
+  attribution is insufficient. Commit `9b10f06e` adds the corresponding
+  expression carrier, deterministic union-without-nesting, semantic access,
+  and explicit transparency at every exhaustive expression consumer. It does
+  not yet attach origins to production expression nodes.
+- [~] Thread origins through lowering, expression rewrites, structuring, tail
+  duplication, and rendering. Commit `8cb7d171` makes enabled statement
+  consumers and all three renderers preserve or ignore the carrier without
+  changing statement meaning. Block lowering attaches each LLIR instruction VA,
+  and `cda7ab73` plus `cb9e5b10` migrate exception recovery and six
+  control-oriented wildcard consumers. Commit `52914784` adds the guarded-
+  switch consumer, including direct, copied-discriminator, speculative, and
+  early-return shapes. Commit `f7b47953` adds contradictory, terminal-return,
+  redundant-copy, shared-assignment, and shared-exit guard-chain rewrites.
+  Commit `9b10f06e` establishes expression ownership's carrier and exhaustive
+  consumer boundary. Production attachment, composition through expression
+  reconstruction, and the remaining non-exhaustive matcher audit must finish
+  before universal attribution.
+- [x] Expose line-to-address mappings from the Python binding as structured
+  data; do not infer them by parsing rendered text. Commit `db2e7735` adds an
+  opt-in sixth batch-result field with ordered `line_number`/`addresses`
+  records and exposes the same records in CLI JSON.
+- [x] Define non-contiguous origin behavior for folded, hoisted, and duplicated
+  nodes. The normative contract is:
+  - an in-place rewrite retains the exact existing owner;
+  - a fold unions the sorted, deduplicated origins of every consumed semantic
+    contributor with any owner already on the surviving replacement;
+  - a hoisted unchanged node retains its own origins, and additionally unions
+    the owners of control nodes consumed to make it unconditional;
+  - every proved duplicate receives the complete original origin set; origins
+    are never partitioned among clones, including when the original already
+    represents a fold;
+  - purely synthetic scaffolding has an empty origin unless it represents
+    consumed machine semantics; a pass must never invent a nearest address;
+  - deletion of genuinely dead semantics may remove its mapping, but must not
+    transfer it to an unrelated survivor.
+  `OriginSet` remains the canonical sorted/deduplicated representation and the
+  structured Python mapping must permit one instruction to own multiple output
+  nodes. Commit `6068a59c` supplies the first transformation-level proof:
+  banked-return materialization clones exact owners onto every synthesized
+  store and rewritten return. Commit `db2e7735` supplies the structured Python
+  exposure above.
+
+Commit `23a8ef7e` retains the existing raw-LLIR `TypeMapV` in the common
+prepared pipeline and projects a fact into ordinary typed rendering only when
+the numbered value has one unambiguous SSA identity. A use whose opaque
+numbered name no longer retains the original `edi` view therefore remains a
+four-byte value; a coalesced name with two candidate identities declines the
+projection instead of guessing. Exact definition widths remain a separate,
+stronger sidecar. This removes one production dependency on `tag_phys`
+spelling, but does not complete WP3 or permit compatibility-tag deletion. See
+`results/wp3-value-keyed-use-types.md`.
 
 ### Tests
 
-- [ ] Unit tests for SSA invalidation and reconstruction.
-- [ ] Unit tests for deterministic origin union and duplication.
+- [~] Unit tests for SSA invalidation and reconstruction. The first three tests
+  prove conservative default invalidation, revisioned reconstruction, and that
+  type/presentation-only changes preserve value identity. The next three prove
+  identity survival through lowering, exact opaque consumer lookup, and
+  fail-closed ambiguity after phi-copy coalescing.
+- [x] Unit tests for deterministic origin union and duplication. Five focused
+  tests at `7bea3314` cover non-contiguous canonical construction,
+  commutative/idempotent union, and independent duplicated sets; `59840017`
+  adds union-without-nesting and byte-identical C/scored rendering. Commit
+  `9b10f06e` adds the matching expression-level union, semantic-unwrapping, and
+  byte-identical C/scored-rendering contract.
 - [ ] Extend `python/tests/test_dectest_equivalence.py` for byte neutrality
   during identity-only migrations.
-- [ ] Add `python/tests/test_decompiler_line_mappings.py` for one-to-many and
-  non-contiguous mappings.
-- [ ] Run the 419-pair output identity sweep after each migrated pass.
+- [x] Add `python/tests/test_decompiler_line_mappings.py` for one-to-many and
+  non-contiguous mappings. Its exact release-built `classify` cell also proves
+  legacy tuple-shape compatibility and repeated-call determinism.
+- [~] Run the 419-pair output identity sweep after each migrated pass. The
+  invalidation, persistent-lifecycle, and first opaque-identity consumer slices
+  are byte-identical across all 419 lanes; repeat this gate for every
+  subsequent identity-only migration. The statement carrier at `59840017`
+  retains the exact same JSON SHA-256 and zero infrastructure problems.
 
 ### Exit criteria
 
@@ -866,9 +2513,15 @@ one authoritative set of case edges.
   `ldr pc, [pc, r0, lsl #2]` through the relevant lifter/machine-model layer.
   Both forms already decode through `dispatch_resolution.rs`; the remaining
   work is to complete the architecture lanes and consolidate the evidence
-  contract.
-- [~] Represent resolved case values, targets, default edge, provenance,
-  bounds, and completeness as typed evidence attached to `Op::IndirectJump`.
+  contract. AArch64's GCC O2 compact signed-byte form is now also decoded:
+  W/X register identity and the taken-edge `b.ls` bound prove the selector and
+  extent, while exact `LDRB` plus encoded `ADD ..., SXTB #2` evidence proves
+  the table and target base. Checked decoding rejects malformed,
+  non-executable, overlapping, or wrongly scaled candidates. This is the
+  bounded `310b949e` slice, not general AArch64 dispatch completion.
+- [x] Represent resolved case values, targets, default edge, provenance,
+  bounds, and completeness as typed evidence derived from `Op::IndirectJump`
+  and its typed CFG edges.
   `Op::IndirectJump.index`, typed CFG `SwitchCase`/`SwitchDefault` edges, and
   ordered `Cfg::case_labels` already carry the first production facts. WP4's
   independently verified `RegionCandidate` now receives explicit
@@ -876,10 +2529,20 @@ one authoritative set of case edges.
   the real `102_duffs_device-gcc-O2.so::duff_copy` fixture records one dispatch,
   eight ordered values `0..7`, and its linked bypass edge. The verified WP4
   tree now consumes that same evidence and renders an eight-arm switch with
-  honest labelled transfers into the suffix-entry region. A forged-label test
-  proves that block/edge coverage alone cannot validate this metadata.
-- [ ] Make discovery, `src/ir/structure_accounting.rs`, both structurers, and
-  rendering consume the same evidence object.
+  honest labelled transfers into the suffix-entry region. At `9ad9414d`, the
+  shared immutable `SwitchEvidence` is built once by `Cfg` from typed
+  `SwitchCase`/`SwitchDefault` edges plus ordered labels, and production and v2
+  consume it. Completeness fails closed on missing or empty labels, ambiguous
+  defaults, and incomplete evidence; v2 declines before recovery or rendering.
+  The verifier remains independent and checks edge/label/default relationships,
+  including rejection of forged missing labels and deletion of a proven
+  default.
+- [~] Make discovery, `src/ir/structure_accounting.rs`, both structurers, and
+  rendering consume the same evidence object. Both structurers now share the
+  immutable typed object and rendering receives their structured result.
+  Structure accounting and the independent verifier intentionally retain
+  separate relational checks rather than accepting producer assertions. The
+  remaining corpus-wide accounting and decline evidence is still open.
 - [ ] Add `Op::Switch` only if it becomes the sole semantic owner of those
   targets and receives execution semantics.
 
@@ -920,7 +2583,33 @@ one authoritative set of case edges.
   so neither `EdgeUnaccounted` nor `BlockDuplicated` remains. The full-matrix
   `152_deep_nesting` canary proves predecessor-specific return values were not
   traded away for cleaner accounting.
-  Other compiler/optimization and named fixture lanes remain.
+  The AArch64 GCC O2 `206::dense_dispatch` lane now recovers its compact
+  signed-byte branch table as cases `0..15` plus default and passes all 22
+  deterministic execution cases. Ten adjacent AArch64 switch lanes report no
+  regression after the single reviewed baseline movement. The complete
+  412-lane AArch64 O0/O2 comparison has no attributable regression: all four
+  reported regressions reproduce identically at parent `7c0ba967`.
+  Its whole Python gate is complete but red: seven of eight apparent new
+  failures pass on immediate focused retry, and the one deterministic delta is
+  the expected six-test census increase now recorded at `88bb8650`. Other
+  compiler/optimization and named fixture lanes remain.
+  GCC i386 O2's GOT-relative table form is also recovered. Eight cells now
+  pass execution, table address and target base remain distinct typed facts,
+  and all four regressions in the complete 410-lane comparison reproduce at
+  the parent. Its exact-checkout whole Python gate has no tip-only failing node
+  IDs and remains broadly red at 4,597 passed and 125 failed.
+  GCC ARMv7 A32 O2's compact unsigned-byte form is now recovered from exact
+  PC-relative literal materialisation through the scaled PC terminal. Nine
+  function verdicts improve and none decline across the complete 410-lane,
+  1,604-function parent/tip comparison. `dense_dispatch` passes production
+  execution; `dispatch_in_loop` passes both shadow-v2 and, after `6f0ba701`,
+  production-v1 execution. Its multi-latch raw loop owns every backedge and
+  initially left one explicit outer-guard transfer as a quality-only accounting
+  finding. The bounded private-prefix/shared-terminal repair at `0e29ffc4`
+  closes that finding, while `28b3bc5b` removes the adjacent unreachable
+  undefined select arm. A graph-sized recursive work budget also makes four
+  valid 48-entry tables degrade to complete labelled CFG output rather than
+  overflowing the native stack.
 - [x] Unit tests for malformed, out-of-range, overlapping, and truncated
   tables; analysis must decline safely.
 - [~] Execution differential for every newly recovered switch. The explicit
@@ -939,6 +2628,16 @@ one authoritative set of case edges.
   path. Its production baseline is updated from `fail` to `pass` after the full
   838-lane comparison and an isolated old-tip A/B proved its sole reported
   regression predates this increment.
+  The pinned GCC O0 `statemachine::fsm` decision tree is now recovered as the
+  exact dense `switch (st)` with cases `0..3`. The matcher accepts GCC's nested
+  `st != 0` terminal partition and the exact sign-preserving typed relational
+  views produced by late comparison folding; it rejects side effects, a second
+  discriminant, duplicate cases, and ambiguous case-label ownership. Production
+  output drops from 13 gotos to 4 (the remaining four encode the still-unowned
+  counted loop and two case-local assignment joins), recompiles, and matches the
+  original across the deterministic differential test. The former strict xfail
+  is now an ordinary required regression test; loop ownership remains separate
+  WP4 cleanup rather than a prerequisite for recovering the source switch.
 - [~] Structural census assertion that typed cases reach the structurer.
   One real per-function assertion now proves the exact ordered cases and
   default reach the shadow tree, its independent verifier, and deterministic
@@ -1108,6 +2807,19 @@ representable literal, and retains wider-literal and unsigned cases. This
 closes the concrete example's cast-heavy predicate spelling without claiming
 the general WP6 constraint solver is complete.
 
+The bounded fixture-215 follow-on at `a88edd9a`/`8ab39b50` handles the inverse
+boundary conflict: an authoritative `uint64_t` parameter consumed by a signed
+machine comparison in Clang O2's partition tree. `DeclarationPlan` preserves
+the source signature and records that its integer fact is authoritative; the
+renderer applies a same-width signed cast only at that exact relational use.
+The initially broader rule over all inferred unsigned declarations was rejected
+after the structural census exposed unnecessary churn. The narrowed tip makes
+`wide_selector_high_labels` pass `UINT64_MAX`, moves the final Clang-O2
+fixture-215 cell from fail to pass, and produces byte-identical matched
+parent/tip structural and def-use diagnostics. This is a concrete per-use WP6
+increment, not the general solver. See
+`results/wp6-authoritative-unsigned-signed-edge.md`.
+
 Required regression coverage is equally part of completion:
 
 - `python/tests/test_classify_signed_loop.py` must assert the signed declaration,
@@ -1193,10 +2905,12 @@ name-parsing convention was introduced.
 - [~] Land one rule per increment:
   1. [x] flag-derived relational normalization, beginning with the exact typed
      equivalence `!((x == k) || (x <s k)) == (x >s k)` seen in `classify`;
-  2. [ ] strength-reduced constant multiplication;
-  3. [ ] signed division/modulo by a power of two;
-  4. [ ] compiler magic-number division;
-  5. [ ] compound boolean-mask normalization;
+  2. [x] bounded cdecl32 high/low borrow normalization for an authoritative
+     unsigned 64-bit source and an immutable, single-definition alias chain;
+  3. [ ] strength-reduced constant multiplication;
+  4. [ ] signed division/modulo by a power of two;
+  5. [ ] compiler magic-number division;
+  6. [ ] compound boolean-mask normalization;
 - [ ] Each rule must declare operand width, signed interpretation,
   preconditions, output type, and origin composition.
 - [ ] Never peel or narrow casts unless equivalence is proved at the original
@@ -1233,6 +2947,19 @@ view, compile as C, and pass 34 differential cases each. The 24-lane loops,
 polarity, switch, and width corpus reports zero scoped regressions. This closes
 the predicate subproblem only; stripped return inference and redundant return
 casts remain WP6 work. See `results/wp7b-classify-signed-predicate.md`.
+
+The bounded two-word range rule landed at `f39bdf0e`. It recognizes only the
+exact cdecl32 identity `(0 <u hi) | ((0 - hi) <u (k <u lo))`, requires `hi` and
+`lo` to be the unsigned 32-bit projections of the same recovered unsigned
+eight-byte source, and resolves only single-definition aliases whose complete
+dependency set is never assigned. A following path rule removes the repeated
+inverse nested guard only after ordinary boolean folding makes both typed
+comparisons structurally complementary. This is an explicit pre-WP3 range-
+fusion exception, not the general SSA-expression framework; mutable or
+ambiguous identities decline. The real i386 O2 output replaces the flag tree
+with `op <= 5` and removes the impossible nested arm, while retaining the
+honest unrecovered indirect jump and red execution status. See
+`results/wp7-cdecl32-wide-range-predicate.md`.
 
 At `81ffe9ab`, `cargo test --features python-ext` passes, including 15 focused
 comparison-fusion tests and 191 AST/render tests; the six def-use census tests
@@ -1607,7 +3334,10 @@ complex-helper call boundary. See `results/wp9-packed-float-arithmetic.md`.
 ### Tests
 
 - [ ] Byte-identical fixture sweep for each architecture-only migration.
-- [ ] Extend architecture roundtrip and ARM32 semantic tests.
+- [~] Extend architecture roundtrip and ARM32 semantic tests. The existing
+  twelve-test ARM32 semantic module now pins the target-qualified definition
+  identity through readable C and source-to-QEMU execution; broader
+  architecture closure remains open.
 - [x] New census test: every decoded mnemonic is lifted or has a reviewed,
   reasoned exemption. Both the post-lift opaque-effect census and the raw
   decoded-mnemonic-to-LLIR correlation are now enforced across all four lifted
@@ -1833,10 +3563,30 @@ The conversion is deliberately outside the generic C catalog normalizer, so it
 does not reinterpret Rust pointers or aggregates. Exact RED/GREEN and isolated
 snapshot evidence is in `results/wp9-rust-scalar-source-types.md`.
 
+### Implementation evidence - 2026-09-06 cdecl32 wide source parameters
+
+Commit `fcd9bd2d` extends the bounded 32-bit wide-parameter carrier from
+AAPCS32 register pairs to authoritatively declared i386 cdecl stack pairs. The
+high incoming word is projected from the same source argument while the
+promoted low `argN` role remains the whole value. Layout stops at unknown or
+unsupported preceding parameter types. This moves nine fixture-202/215 O0/O2
+cells to execution-correct output with no attributable regression across the
+complete 410-lane i386 comparison.
+
+An initially broader rewrite truncated the already-whole low role and caused
+three scalar regressions. It was rejected before commit; those controls are
+unchanged by the final implementation. Signed wide selectors and the i386 O2
+mixed switch remain in WP6/WP7 and WP5 respectively. Exact contracts,
+attribution, and gate evidence are in
+`results/wp6-wp9-cdecl32-wide-parameters.md`.
+
 ### Exit criteria
 
 - [ ] Shared passes no longer branch on architecture for migrated fact classes.
-- [ ] ARM32 has an explicit register-view model.
+- [x] ARM32 has an explicit register-view model. `TargetSpec` owns its core
+  aliases and complete VFP/NEON view hierarchy; SSA definitions and uses now
+  consume the same target-qualified base. Migration of remaining consumers is
+  tracked by the preceding exit criterion.
 - [ ] The capability census is part of `default` or a clearly named required
   architecture profile.
 
@@ -2027,9 +3777,12 @@ relevant ratchet's accepted-regression record.
 
 ### M3 — One semantic pipeline
 
-- [ ] WP2 and WP3 complete.
-- [ ] Entry points agree at equal budget.
-- [ ] Semantic consumers use stable values, not display names.
+- [~] WP2 is complete; WP3 remains open.
+- [x] Entry points agree at equal budget.
+- [~] Semantic consumers use stable values, not display names. Exact float-role
+  projection and optimized DWARF register-local recovery are the first two
+  migrated AST-side product consumers; the remaining name parsers keep this
+  criterion open.
 - [ ] Origin mappings are deterministic.
 
 ### M4 — Largest measured defect classes closed
@@ -2088,19 +3841,287 @@ relevant ratchet's accepted-regression record.
    regression statuses. The corpus-wide execution route is now live; still
    complete unexplained block/edge accounting, pinned GED, structure-axis
    movement, and accepted runtime/output-size budgets.
-5. Complete WP5's shared typed-case transport so discovery, accounting, both
-   structurers, and rendering consume one case/default/provenance object; add
-   the remaining fixture/compiler/architecture execution cells and classify
-   every residual decline. Malformed, truncated, overlapping, and wrapping
-   table safety tests and the new chained inclusive/exclusive guard tests are
+5. Extend the landed WP5 shared typed-case transport across the remaining
+   fixture/compiler/architecture execution cells and classify every residual
+   decline. At `9ad9414d`, `Cfg` is the single producer of immutable ordered
+   case/default/provenance evidence consumed by production and v2; incomplete
+   or inconsistent evidence declines before recovery, and the verifier checks
+   the relationships independently. Malformed, truncated, overlapping, and
+   wrapping table safety tests and the new chained inclusive/exclusive guard tests are
    already present and must remain green. Fixture 204's Clang O2 seven-case
    evidence now reaches the production structurer, passes all 34 execution
    cases, and has moved its baseline from `fail` to `pass`; the remaining work
-   now has clean accounting through explicit borrowed return-tail provenance;
-   remaining work is the shared case/default evidence object and the unverified
-   compiler/architecture cells.
-6. Begin WP2/WP3 as an independent architecture lane, using conservative
-   invalidate-everything fallback while passes migrate incrementally.
+   now has clean accounting through explicit borrowed return-tail provenance.
+   The unverified compiler/architecture cells, remaining matrix gates, and
+   residual decline census remain. The AArch64 slice's full Python gate has run
+   and is triaged but remains broadly red; do not call WP5 complete from the
+   green Rust gate or focused retry evidence alone.
+   The next i386 slice at `b84233ec` removes eight more O2 failures with zero
+   attributable regression across all 410 i386 lanes. Its full Rust and focused
+   execution gates are green; its whole Python suite is complete and has zero
+   tip-only failure IDs, while remaining broadly red at 125 failures.
+   The stacked ARMv7 A32 slice at `76cce5d1`/`5ef0bcb9` removes nine more O2
+   failures with zero attributable decline across 1,604 function verdicts.
+   Commit `6f0ba701` then closes the isolated production-v1 loop-backedge
+   ownership failure; its exact full A32 comparison adds the intended
+   `dispatch_in_loop` fail-to-pass movement with no attributable decline.
+   Commits `28b3bc5b` and `0e29ffc4` remove the surviving outer-guard goto and
+   undefined-looking temporary as separately proved quality work, with no
+   attributable decline in the exact host/A32 comparisons. Commit `c9483542`
+   then replaces the raw loop's six exact header-backedge gotos with
+   source-level `continue`, with no attributable A32 status change. Next
+   `460259fa` carries the shared typed case/default evidence into that raw loop;
+   the real guard-only default is no longer lost merely because it is not a
+   dispatch successor. `88e6584c` folds the now-redundant proven range guard
+   into that switch, removing its temporary, conditional, and goto without
+   changing execution. Continue with Thumb loop tables, AArch64 adjacent-table
+   variants, and wide-selector forms. For handler inlining, add a verified
+   presentation partition over the canonical raw ownership: exclusive arm
+   prefixes, optional guard-only default prefix, one unique shared join, and
+   residual blocks. Refuse external handler predecessors, cross-arm edges,
+   cycles, non-unique joins, or any partition that would emit a block twice.
+   `13588284` completes the first one-block exclusive-entry slice and removes
+   every goto from the real A32 function. Extend it through multi-block private
+   prefixes only after proving interior predecessor closure and an exact stop
+   at the unique shared join; retain the current refusal rules otherwise.
+   `ca30c62f` completes that bounded straight-line extension with an independent
+   verifier: interiors are exact one-predecessor/one-successor chains, prefixes
+   are disjoint and capped at eight blocks, and a forged shared-join crossing
+   is rejected. Its exact-tip structural run has no attributable regression or
+   improvement: exact parent/tip rendering is byte-identical for every row in
+   both red aggregate ratchets, which are retained for explicit baseline
+   review. The full def-use census is also parent/tip identical: four of six
+   tests pass and the two aggregate baseline-drift ratchets remain red.
+   Commit `1ce1a80b` completes the next bounded branching slice: a typed arm
+   may own a deterministic, predecessor-closed private DAG of at most 16
+   blocks. Its independent verifier accepts a private diamond and rejects a
+   forged region crossing a case/default shared join. On a real GCC ARMv7 A32
+   byte-table loop, case 0 moves from two out-of-line gotos to an inline
+   `if (acc <= 6)` with native execution preserved. Cyclic regions, cross-arm
+   ownership, shared-join ownership, and general unique-join partitioning
+   remain refused; do not widen them without equivalent independent proof.
+   Its exact structural and def-use reports reproduce every preceding
+   regression/improvement finding without adding a row: 25 of 27 structural
+   tests and four of six def-use tests pass, with both two-sided baseline-debt
+   ratchets intentionally still red. Its required release-built whole-Python
+   parent/tip replay also finds zero tip-only failure IDs: parent `33aed1ae`
+   has 116 failures and tip `146bd4c8` has 115, with the sole removed failure
+   being the intentionally refreshed test census. Both runs have 4,621 passes
+   and 889 expected failures. Parent has 69 skips versus tip's 71 because two
+   stripped fixture-08 objects were absent from the tip run's externally
+   selected fixture directory; this is recorded as an environment mismatch,
+   not an implementation result. The suite therefore remains broadly red and
+   the timing is not a matched performance comparison.
+   See `results/wp4-raw-switch-private-branches.md`.
+   The following host wide-selector slice at `9333881e` recovers Clang and GCC
+   O2 fixture-215 `wide_selector_mixed`, including the case-zero return shared
+   with the formal default. Its first full def-use census exposed one real
+   fixture-206 loop-switch regression from over-broad predicate/cyclic
+   ownership. Hardening commit `98a0d2d3` rejects arithmetic ancestry, limits
+   transitive provenance to boolean operations, and refuses transitive dense-
+   guard folding inside cyclic ownership. Fixture 215 and both the host-Clang
+   and ARMv7 fixture-206 controls now pass together; the normalized def-use
+   report is again exactly the preceding 169 findings. Continue the wide-
+   selector matrix only from this hardened boundary. Its exact whole-Python
+   comparison attributes all nine new failure IDs to strict-XPASS
+   improvements, with no ordinary regression, and `0466a2e0` refreshes the
+   full 1,676-object defect inventory (38 to 30 unrecovered observations;
+   6,823 to 6,502 gotos). See
+   `results/wp5-wide-selector-shared-return.md`.
+6. [~] Continue WP3 as the active architecture lane now that WP2 is complete.
+   Commits `925dc002` and `09522773` establish conservative versioned SSA
+   invalidation across definedness and return materialization. Commit
+   `f05c9a5d` carries exact-or-ambiguous opaque identities through AST lowering
+   and migrates float-role projection as the first consumer. Commit `af65c260`
+   migrates the DWARF register-local resolver as the second consumer. Both are
+   byte-identical across the 419-pair gate. Commit `7bea3314` introduces the
+   deterministic compositional origin-set primitive and remains byte-identical
+   across the same map. Commit `59840017` attaches it transparently to
+   statements, converts the 64 exhaustive consumers, and proves rendering and
+   the complete 419-pair map remain byte-identical. Next finish the wildcard
+   consumer audit, union origins in folds, preserve them through remaining
+   structuring/duplication paths, and expose structured Python line mappings
+   before continuing consumer migrations. Commit `8cb7d171` already attaches
+   each `LlirInstr.va` during lowering; `cda7ab73` closes the exception-recovery
+   consumer and moves the stripped differential from 103 to 102 regressions.
+   Commit `cb9e5b10` closes six more control-oriented wildcard consumers with
+   an exactly neutral 102-regression/17-improvement stripped differential; next
+   `52914784` migrates `guarded_switch`, and `f7b47953` migrates the complete
+   `guard_chain` consumer with an exactly neutral differential. Next migrate
+   `switch_ladder`, then `latch_predicate`. Commit `3b7d8a95` completes the
+   `switch_ladder` migration with another exactly neutral differential; next
+   migrate `latch_predicate` and re-audit the wildcard surface. Commit
+   `a807b2d0` completes that migration with another exactly neutral
+   differential. The re-audit identifies the enabled
+   `aapcs64_indirect_result` pre/post-stack-promotion consumer as the next
+   bounded omission; commit `c51a116d` completes that migration with neutral
+   stripped and whole-Python comparisons. Next migrate the enabled
+   `vector_copy` consumer, including exact unions for removed lane batches and
+   scalar-view bridges, before expression ownership. Commit `02b0da5c`
+   completes that migration with eight focused tests, a neutral stripped
+   differential, an identical normalized 221-node whole-Python failure set,
+   and an eight-for-eight green undeclared-local invariant. Next migrate the
+   remaining raw guarded-return and diamond paths in `select_fold`. Commit
+   `e92d7248` completes that migration and removes three whole-Python failures
+   with zero additions; re-audit the remaining enabled wildcard surface, then
+   start expression ownership and the non-contiguous transformation policy.
+   Commit `18ef9fdc` migrates GOT folding, `217796be` migrates relocation-proven
+   function tables, and `849c5a5b` migrates direct, resolved-indirect, and
+   vtable tail calls. The last increment is stripped-neutral and removes the
+   Rust O2 trait-object unrecovered-tail failure with zero additions. Next
+   migrate the convention-generic recovered-layout folds in `call_args.rs`,
+   followed by the bounded cdecl32 and AAPCS setup/removal paths.
+   Those three call-argument surfaces are complete at `a0917da5`, `c291328a`,
+   and `e403de27`. The subsequent audit selected the stack-canary consumer;
+   `9942f948` completes it with 22 focused tests, an unchanged
+   102-regression/18-improvement stripped differential, and an exact-neutral
+   211-node whole-Python comparison. Integer-pair return composition follows at
+   `8989cecc`; the normalized semantic failure set and stripped differential
+   remain neutral. Commit `82a95253` then closes six related raw call-analysis
+   readers as one batch, with six observed-red tests, 109/109 call-argument
+   tests, 54/54 origin-focused tests, and a green complete Rust gate. Its exact
+   whole-Python failure set improves from 211 to 209 with no additions, and
+   focused release A/B proves both indirect-tail/table-dispatch removals are
+   attributable. Commit `b84c03e5` then migrates
+   `src/ir/lazy_call_select.rs` in both AST preparation and the DecBench
+   renderer path: recognition, recursion, goto census, consumed-origin unions,
+   and replacement ownership move together. Five focused tests were observed
+   red; 18 module and 58 origin tests pass, along with the release
+   compiled/stripped check, all 20 fixture-189 functions, and the complete Rust
+   gate. Its whole-Python gate has zero attributable failure-set change after a
+   release parent/tip classification. Re-audit the remaining enabled semantic
+   consumers before starting expression ownership.
+   Commits `7d531781` and `4b35aeab` next close four final-cleanup readers plus
+   the dead-store surface. Seven focused cases were observed red; all touched
+   modules are green, and fixture 11 remains 52/52 while losing fake result
+   temporaries on effect-only calls. Finish the remaining wildcard audit, then
+   define non-contiguous transformation behavior and start expression
+   ownership. See `results/wp3-final-cleanup-origins.md`.
+   Commit `025937a7` closes seven more output-value readers and in-place
+   rewrites across four modules. The origin filter is 62/62, fixture 11 is
+   52/52, and the focused AArch64 result-lifetime plus ARM frame-spill checks
+   pass on a release build. Complete the wildcard classification, define the
+   non-contiguous transformation policy, and only then migrate the
+   store/return-synthesizing bank composition paths. See
+   `results/wp3-output-value-origins.md`.
+   Commit `6068a59c` now migrates that first complex path under the explicit
+   policy, and `876bddf6` closes the adjacent raw loop-exit and boxed-call
+   omissions in `call_result_split.rs`. Commit `c6a42332` next closes the
+   final-source verifier and authoritative pointer reader surfaces. Continue
+   with canonical local naming and architecture-specific prologue readers.
+   Commit `fbb7f596` removes the next presentation-spelling dependency from
+   production dead-store elimination: calls clobber canonical `ret` only when
+   the identity sidecar owns the result role. Both exact regressions and all 42
+   dead-store module tests pass; no broad suite or corpus ran for this bounded
+   increment. Commit `b3210392` then makes stack promotion publish typed
+   parameter-slot bindings and makes production canonical naming consume them.
+   A fabricated `arg99` no longer survives merely because its spelling looks
+   like a parameter, while a proven stacked `arg6` remains intact. The two
+   exact naming regressions, the exact stack-fact test, all 20 naming tests,
+   and 13 stack-argument neighbors pass. Continue the remaining semantic-reader audit;
+   Commit `32698e2e` then closes the explicit `remap_type_map` migration target
+   for plain typed output. Its exact integer-role regression and all 20 local
+   type-map tests pass; no corpus or broad suite ran.
+   Commit `521d9524` next migrates callee-save cleanup from parsed SSA display
+   names to exact version-zero identities carried through stack promotion. The
+   same focused real-binary check closes the pre-existing promoted stack-probe
+   self-store defect using promotion-owned storage facts, while retaining an
+   unowned pointer self-store. Fifteen callee-save tests, the exact self-store
+   unit, and the x86/ARM real-binary checks pass; see
+   `results/wp3-typed-callee-save-ownership.md`.
+   Commit `a7762f05` then removes the adjacent x86 frame recognizer's production
+   `#version` parsing. All 40 x86-prologue tests and the exact compiled/stripped
+   stack-clash execution check pass; see `results/wp3-x86-frame-identities.md`.
+   Commit `5fdb7906` then migrates the ARM32 frame recognizer across its full
+   parse, nested-exit, restore, and residual-SP surface. All 10 module tests and
+   the exact ARM frame-spill fixture pass; see
+   `results/wp3-arm32-frame-identities.md`. Commit `9e43b52b` then migrates the
+   packed-vector consumer's lane grouping, scalar-view bridges, exclusivity
+   checks, and synthesized wide views to exact identities. Its nine module
+   tests and one directly owning fixture-188 GCC O2 lane pass; see
+   `results/wp3-vector-copy-identities.md`. Commit `b40b4226` then replaces the
+   value-numbered incoming-argument spelling scan with exact version-zero ABI
+   identities across whole-function and nested-call recovery. Its 112 owning
+   tests and two exact C end-to-end checks pass; see
+   `results/wp3-call-live-in-identities.md`. Commit `11a96792` then migrates
+   result-register read/write attribution across expressions, nested control,
+   and the call-fold liveness probe. Its 130 owning tests and two exact C output
+   checks pass; see `results/wp3-call-result-identities.md`. Continue the
+   remaining production parser classification. Commit `5fcd345c` closes the
+   `types_recover/tagging.rs` frame-base and spill/reload surface using complete
+   exact SSA identities; its 83 owning tests and production typed-render smoke
+   check pass. See `results/wp3-frame-spill-type-identities.md`. Continue in
+   `src/ir/call_args.rs` and the remaining type/return readers. Commit
+   `a86966f1` closes the typed renderer's final integer return-width reader by
+   joining exact result identity to authoritative definition width; its 84
+   owning tests and production typed-output smoke check pass. See
+   `results/wp3-return-width-identities.md`. Commit `42f9c5e0` then closes the
+   call-fold frame-coordinate guard using exact stack/frame identities; its 131
+   owning tests and exact ARM end-to-end check pass. See
+   `results/wp3-call-frame-coordinate-identities.md`. Commit `d2518e37` closes
+   captured-definition frame aliasing with exact identities; its 132 owning
+   tests and exact Clang O0 `call_into_spill` fixture pass. See
+   `results/wp3-captured-frame-definition-identities.md`. Commit `541a6e5b`
+   closes call-slot liveness and enclosing reaching-state with identity
+   candidate sets; its 133 owning tests and exact fixture-189 GCC O2 effectful
+   branch-call lane pass. See `results/wp3-call-slot-liveness-identities.md`.
+   Commit `79da282c` closes stack-area allocation, cleanup, lowered push/pop,
+   preallocation, phase, and prologue classification using exact identities;
+   its 134 owning tests and exact Clang O0 `call_into_spill` fixture pass. See
+   `results/wp3-call-stack-area-identities.md`. Commit `10325870` closes
+   loop-carried call-slot discovery by joining initializer and back-edge values
+   through exact SSA identity; its 135 owning tests and exact AArch64 O2
+   `call_chain_in_loop` fixture pass. See
+   `results/wp3-loop-carried-call-identities.md`. Commit `d7dfcf9f` migrates
+   the pure-VFP AAPCS setup reader to complete identity candidate
+   classification; its five owning tests and exact ARMv7 O0 float-call fixture
+   pass. See `results/wp3-aapcs-vfp-setup-identities.md`. Commit `06b6f429`
+   closes the AAPCS stack-area reader with
+   complete `sp` identity classification; its six owning tests and exact ARMv7
+   O2 eight-argument fixture pass, while the O0 canary's unchanged parent/tip
+   failure is recorded as baseline debt. See
+   `results/wp3-aapcs-stack-area-identities.md`. Commit `75c95f4b` closes the
+   cdecl stack reader's store, push, prologue, cleanup, stack-mention, rebasing,
+   and PIC classifications with exact identities; its 27-test cdecl filter and
+   exact i386 O0 eight-argument fixture pass. See
+   `results/wp3-cdecl-stack-identities.md`. Audit the remaining call-recovery
+   name readers and migrate only production value-identity consumers. Commit
+   `6ab43e01` closes resolved direct/indirect tail-call argument-setup
+   classification with complete identity candidates; its 14 owning tests and
+   exact GCC O2 `forward_sum6` fixture pass. See
+   `results/wp3-tail-call-setup-identities.md`. Continue with proven Rust
+   vtable-tail high-result identity. Commit `c576b207` closes computed-target,
+   high-result-base, and intervening-write identity in that path; its 15 owning
+   tests and exact Rust O2 `rust_dyn_apply` fixture pass. See
+   `results/wp3-vtable-tail-identities.md`. Continue the ordinary
+   recovered-layout/call-fold parser audit, then remove the final typed
+   `tag_phys` dependency. Keep
+   pre-sidecar tagging internals and explicit no-sidecar compatibility parsers
+   classified separately.
+   Commit `e0c5fc11` removes another production call-fold dependency on those
+   tags. The argument-motion hazard check now compares SSA identity candidate
+   sets, so opaque aliases still detect an intervening reassignment while two
+   adjacent versions of the same physical register remain distinct. Only the
+   explicit no-sidecar compatibility path parses `#version`. Its two exact
+   contracts and the motivating GCC O2 loop-call fixture pass; see
+   `results/wp3-call-reassignment-identities.md`.
+   Commit `45c12f56` closes the adjacent captured-scratch decision. Production
+   now distinguishes a numbered scratch definition from an entry value using
+   its identity version, not a `#` in its rendered name; this preserves the
+   separate substitution rules for register and removable stack arguments.
+   The explicit no-sidecar path retains its compatibility parser. The exact
+   identity contract and Clang O0 eight-argument spill fixture pass; see
+   `results/wp3-captured-scratch-identities.md`.
+   Commit `6ac46be4` then migrates ARM stack-address alias expansion. The
+   production pass admits bounded affine components from non-entry SSA
+   identities rather than requiring `#version` in their presentation names;
+   explicit no-sidecar tests retain the compatibility rule. Opaque chained
+   components and a misleading-spelling refusal pass, along with the exact A32
+   O0 KMP fixture; see `results/wp3-stack-address-alias-identities.md`.
+   Keep expression ownership behind completion of that audit.
+   Batch related migrations and use focused fixtures during
+   development, paying whole-repository gates once per coherent source batch.
+   Keep `Invalidate::All` as the legacy default while passes migrate.
 7. Continue WP6 from the landed stripped-C per-use signedness, SysV hidden
    result-buffer, split INTEGER+SSE, and homogeneous SSE-pair return slices.
    Fixture `197` is now closed across its four host lanes: all non-structural
@@ -2110,6 +4131,10 @@ relevant ratchet's accepted-regression record.
    value constraints rather than extending fixture-specific ABI adapters.
    Keep Rust totals separate and do not generalize the SysV/x86 evidence to
    unsupported architectures, vector forms, or language ABIs.
+   The fixture-215 signed-edge slice at `8ab39b50` is the model for boundary
+   conflicts: retain the authoritative declaration, attach the machine
+   interpretation to one use, and refuse inferred declarations. Extend that
+   model through stable WP3 identities rather than adding renderer name rules.
    The first fixture-217 prerequisite models legacy packed binary32 arithmetic,
    and the following bounded compiler-runtime boundary is landed. Direct SysV
    calls to `__mulsc3`/`__muldc3` now carry exact source-ordered
@@ -2130,6 +4155,17 @@ relevant ratchet's accepted-regression record.
    reduce the 13 reviewed silent-writer mnemonic classes, and wire the census
    into a named required architecture profile. Do not canonicalize partial
    VFP/NEON writes until LLIR can represent the untouched lanes.
+   The AAPCS32 wide-parameter slice at `62a4ab72` additionally carries both
+   little-endian core-register words of an authoritative eight-byte integer
+   parameter into one source argument. Continue with the residual A32 O0
+   frame/storage identity failures and an independently specified i386 pair;
+   do not generalize this declared-parameter fact to inferred values before
+   WP3 provides stable identity. See
+   `results/wp6-wp9-aapcs32-wide-parameters.md`.
+   A first spelling-level `fp`/`r11` frame-alias prototype fixed the two A32 O0
+   fixture-215 cells but caused 188 regressions in the complete 410-lane A32
+   O0/O2 comparison and was rejected. Resume only with exact SSA-definition
+   lifetime evidence; never make the architectural alias globally active.
 10. Under WP10, triage the current red full-gate failures by exact base/overlay
    comparison, promote only independently justified health findings to release
    failures, and remove rejected MIR or compensation code one owned

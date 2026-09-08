@@ -59,7 +59,8 @@ pub fn prune_structured_fallthrough_gotos(function: &mut Function) {
 fn prune_fallthrough_body(body: &mut Vec<Stmt>, inherited: Option<u64>) {
     let mut following = inherited;
     for index in (0..body.len()).rev() {
-        match &mut body[index] {
+        match body[index].semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -90,8 +91,9 @@ fn prune_fallthrough_body(body: &mut Vec<Stmt>, inherited: Option<u64>) {
             _ => {}
         }
 
-        match body[index] {
-            Stmt::Label(target) => following = Some(target),
+        match body[index].semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
+            Stmt::Label(target) => following = Some(*target),
             Stmt::Nop | Stmt::Comment(_) => {}
             _ => following = None,
         }
@@ -102,11 +104,11 @@ fn prune_fallthrough_body(body: &mut Vec<Stmt>, inherited: Option<u64>) {
     };
     let Some(index) = body
         .iter()
-        .rposition(|statement| !matches!(statement, Stmt::Nop | Stmt::Comment(_)))
+        .rposition(|statement| !matches!(statement.semantic(), Stmt::Nop | Stmt::Comment(_)))
     else {
         return;
     };
-    if matches!(body[index], Stmt::Goto { target: seen } if seen == target) {
+    if matches!(body[index].semantic(), Stmt::Goto { target: seen } if *seen == target) {
         body.remove(index);
     }
 }
@@ -150,7 +152,8 @@ pub fn inline_terminal_goto_tails(function: &mut Function) {
 /// one globally unique label, accounts for every goto to it, rejects any other
 /// label in the moved region, and refuses to turn a non-tail loop exit into a
 /// break (because that would execute statements the goto skipped).
-pub fn recover_forward_exit_regions(function: &mut Function) {
+pub fn recover_forward_exit_regions(function: &mut Function) -> bool {
+    let mut changed = false;
     loop {
         let mut labels = HashMap::new();
         let mut gotos = HashMap::new();
@@ -158,7 +161,9 @@ pub fn recover_forward_exit_regions(function: &mut Function) {
         if !recover_one_forward_exit(&mut function.body, &labels, &gotos) {
             break;
         }
+        changed = true;
     }
+    changed
 }
 
 fn recover_one_forward_exit(
@@ -167,24 +172,24 @@ fn recover_one_forward_exit(
     gotos: &HashMap<u64, usize>,
 ) -> bool {
     for label_index in 0..body.len() {
-        let Stmt::Label(target) = body[label_index] else {
+        let Stmt::Label(target) = body[label_index].semantic() else {
             continue;
         };
-        let expected_gotos = gotos.get(&target).copied().unwrap_or_default();
-        if labels.get(&target).copied() != Some(1) || expected_gotos == 0 {
+        let expected_gotos = gotos.get(target).copied().unwrap_or_default();
+        if labels.get(target).copied() != Some(1) || expected_gotos == 0 {
             continue;
         }
         let Some(start) = body[..label_index]
             .iter()
-            .position(|statement| direct_exit_guard(statement, target).is_some())
+            .position(|statement| direct_exit_guard(statement, *target).is_some())
         else {
             continue;
         };
         let segment = &body[start..label_index];
-        if body_contains_label(segment) || count_target_gotos(segment, target) != expected_gotos {
+        if body_contains_label(segment) || count_target_gotos(segment, *target) != expected_gotos {
             continue;
         }
-        let Some(replacement) = structure_forward_segment(segment.to_vec(), target) else {
+        let Some(replacement) = structure_forward_segment(segment.to_vec(), *target) else {
             continue;
         };
         body.splice(start..=label_index, replacement);
@@ -192,7 +197,8 @@ fn recover_one_forward_exit(
     }
 
     for statement in body {
-        let changed = match statement {
+        let changed = match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -232,9 +238,9 @@ fn recover_one_forward_exit(
 fn structure_forward_segment(mut segment: Vec<Stmt>, target: u64) -> Option<Vec<Stmt>> {
     let tail_index = segment
         .iter()
-        .rposition(|statement| !matches!(statement, Stmt::Nop | Stmt::Comment(_)))?;
+        .rposition(|statement| !matches!(statement.semantic(), Stmt::Nop | Stmt::Comment(_)))?;
     if statement_contains_target_goto(&segment[tail_index], target) {
-        match &mut segment[tail_index] {
+        match segment[tail_index].semantic_mut() {
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
                 replace_one_loop_exit_gotos(body, target)?;
             }
@@ -269,9 +275,11 @@ fn structure_forward_segment(mut segment: Vec<Stmt>, target: u64) -> Option<Vec<
 fn replace_one_loop_exit_gotos(body: &mut Vec<Stmt>, target: u64) -> Option<usize> {
     let mut replaced = 0;
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Goto { target: seen } if *seen == target => {
-                *statement = Stmt::Break;
+                let origins = statement.origins().cloned();
+                *statement = Stmt::Break.with_optional_origins(origins);
                 replaced += 1;
             }
             Stmt::If {
@@ -284,7 +292,7 @@ fn replace_one_loop_exit_gotos(body: &mut Vec<Stmt>, target: u64) -> Option<usiz
                     replaced += replace_one_loop_exit_gotos(else_body, target)?;
                 }
             }
-            _ if statement_contains_target_goto(statement, target) => return None,
+            semantic if statement_contains_target_goto(semantic, target) => return None,
             _ => {}
         }
     }
@@ -296,11 +304,11 @@ fn direct_exit_guard(statement: &Stmt, target: u64) -> Option<Expr> {
         cond,
         then_body,
         else_body: None,
-    } = statement
+    } = statement.semantic()
     else {
         return None;
     };
-    matches!(then_body.as_slice(), [Stmt::Goto { target: seen }] if *seen == target)
+    matches!(then_body.as_slice(), [statement] if matches!(statement.semantic(), Stmt::Goto { target: seen } if *seen == target))
         .then(|| cond.clone())
 }
 
@@ -309,7 +317,8 @@ fn body_contains_label(body: &[Stmt]) -> bool {
 }
 
 fn statement_contains_any_label(statement: &Stmt) -> bool {
-    match statement {
+    match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Label(_) => true,
         Stmt::If {
             then_body,
@@ -340,7 +349,8 @@ fn count_target_gotos(body: &[Stmt], target: u64) -> usize {
 }
 
 fn count_target_gotos_in_statement(statement: &Stmt, target: u64) -> usize {
-    match statement {
+    match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Goto { target: seen } => usize::from(*seen == target),
         Stmt::If {
             then_body,
@@ -387,7 +397,7 @@ fn find_terminal_tail(
     gotos: &HashMap<u64, usize>,
 ) -> Option<(u64, Vec<Stmt>)> {
     for (index, statement) in body.iter().enumerate() {
-        let Stmt::Label(target) = statement else {
+        let Stmt::Label(target) = statement.semantic() else {
             continue;
         };
         let tail = &body[index + 1..];
@@ -400,7 +410,8 @@ fn find_terminal_tail(
     }
 
     for statement in body {
-        let candidate = match statement {
+        let candidate = match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -438,10 +449,12 @@ fn find_terminal_tail(
 
 fn straight_line_return_tail(tail: &[Stmt]) -> bool {
     !tail.is_empty()
-        && matches!(tail.last(), Some(Stmt::Return { .. }))
+        && tail
+            .last()
+            .is_some_and(|statement| matches!(statement.semantic(), Stmt::Return { .. }))
         && tail[..tail.len() - 1].iter().all(|statement| {
             matches!(
-                statement,
+                statement.semantic(),
                 Stmt::Assign { .. } | Stmt::Nop | Stmt::Comment(_)
             )
         })
@@ -451,13 +464,14 @@ fn replace_target_gotos(body: &mut Vec<Stmt>, target: u64, tail: &[Stmt]) -> usi
     let mut replaced = 0;
     let mut index = 0;
     while index < body.len() {
-        if matches!(&body[index], Stmt::Goto { target: seen } if *seen == target) {
+        if matches!(body[index].semantic(), Stmt::Goto { target: seen } if *seen == target) {
             body.splice(index..=index, tail.to_vec());
             replaced += 1;
             index += tail.len();
             continue;
         }
-        replaced += match &mut body[index] {
+        replaced += match body[index].semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -499,13 +513,14 @@ fn replace_target_gotos(body: &mut Vec<Stmt>, target: u64, tail: &[Stmt]) -> usi
 fn remove_target_label(body: &mut Vec<Stmt>, target: u64) -> bool {
     if let Some(index) = body
         .iter()
-        .position(|statement| matches!(statement, Stmt::Label(seen) if *seen == target))
+        .position(|statement| matches!(statement.semantic(), Stmt::Label(seen) if *seen == target))
     {
         body.remove(index);
         return true;
     }
     for statement in body {
-        let removed = match statement {
+        let removed = match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -548,7 +563,8 @@ fn count_labels_and_gotos(
     gotos: &mut HashMap<u64, usize>,
 ) {
     for statement in body {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Label(target) => *labels.entry(*target).or_default() += 1,
             Stmt::Goto { target } => *gotos.entry(*target).or_default() += 1,
             Stmt::If {
@@ -585,7 +601,8 @@ fn count_labels_and_gotos(
 
 fn prune_unreachable_body(body: &mut Vec<Stmt>) {
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -613,7 +630,10 @@ fn prune_unreachable_body(body: &mut Vec<Stmt>) {
 
     let mut reachable = true;
     body.retain(|statement| {
-        if matches!(statement, Stmt::Label(_)) {
+        // Origin-wrapped transfers are machine edges already represented by
+        // the enclosing recovered region. Only residual lexical labels and
+        // terminators delimit this list for the early reachability cleanup.
+        if matches!(statement.semantic(), Stmt::Label(_)) {
             // A label may be entered by a goto from any nested region. Target
             // pruning below will remove it on the next iteration if no such
             // edge survives.
@@ -623,7 +643,7 @@ fn prune_unreachable_body(body: &mut Vec<Stmt>) {
             return false;
         }
         if matches!(
-            statement,
+            statement.semantic(),
             Stmt::Return { .. } | Stmt::Goto { .. } | Stmt::IndirectGoto { .. } | Stmt::Break
         ) {
             reachable = false;
@@ -640,7 +660,8 @@ fn prune_unreachable_body(body: &mut Vec<Stmt>) {
 /// statements actually reach.
 pub(crate) fn collect_goto_targets(body: &[Stmt], out: &mut HashSet<u64>) {
     for s in body {
-        match s {
+        match s.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Goto { target } => {
                 out.insert(*target);
             }
@@ -701,7 +722,8 @@ fn drop_unreferenced(body: &mut Vec<Stmt>, referenced: &HashSet<u64>) {
     // Recurse into nested bodies first so inner arms are pruned
     // independently.
     for s in body.iter_mut() {
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -735,25 +757,30 @@ fn drop_unreferenced(body: &mut Vec<Stmt>, referenced: &HashSet<u64>) {
     // structuring consumed its explicit conditional edge. Keep every label
     // immediately after an unconditional terminator: without CFG provenance at
     // this layer, deleting such a boundary is not a sound reachability proof.
-    let after_terminator: HashSet<u64> =
-        body.windows(2)
-            .filter_map(|pair| match pair {
-                [Stmt::Return { .. }
-                | Stmt::Goto { .. }
-                | Stmt::IndirectGoto { .. }
-                | Stmt::Break, Stmt::Label(va)] => Some(*va),
+    let after_terminator: HashSet<u64> = body
+        .windows(2)
+        .filter_map(|pair| {
+            let [first, second] = pair else { return None };
+            (matches!(
+                first.semantic(),
+                Stmt::Return { .. } | Stmt::Goto { .. } | Stmt::IndirectGoto { .. } | Stmt::Break
+            ))
+            .then(|| match second.semantic() {
+                Stmt::Label(va) => Some(*va),
                 _ => None,
             })
-            .collect();
+            .flatten()
+        })
+        .collect();
     body.retain(|s| {
-        !matches!(s, Stmt::Label(va) if !referenced.contains(va) && !after_terminator.contains(va))
+        !matches!(s.semantic(), Stmt::Label(va) if !referenced.contains(va) && !after_terminator.contains(va))
     });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::ast::{Expr, Function, Stmt};
+    use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
     use crate::ir::types::{CmpOp, VReg};
 
     #[test]
@@ -948,6 +975,117 @@ mod tests {
                 tail[1].clone(),
             ]
         );
+    }
+
+    #[test]
+    fn origin_wrapped_shared_return_tail_is_inlined_at_each_goto() {
+        let origin = |va| OriginSet::one(va);
+        let tail = vec![
+            Stmt::Assign {
+                dst: VReg::phys("ret"),
+                src: Expr::Const(-1),
+            }
+            .with_origins(origin(0x1200)),
+            Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("ret"))),
+            }
+            .with_origins(origin(0x1204)),
+        ];
+        let mut function = Function {
+            name: "origin_wrapped_shared_return".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Reg(VReg::phys("failed")),
+                    then_body: vec![Stmt::Goto { target: 0x1200 }.with_origins(origin(0x1100))],
+                    else_body: None,
+                }
+                .with_origins(origin(0x10f8)),
+                Stmt::Nop.with_origins(origin(0x1104)),
+                Stmt::Label(0x1200).with_origins(origin(0x1200)),
+                tail[0].clone(),
+                tail[1].clone(),
+            ],
+        };
+
+        inline_terminal_goto_tails(&mut function);
+
+        assert_eq!(
+            function.body,
+            vec![
+                Stmt::If {
+                    cond: Expr::Reg(VReg::phys("failed")),
+                    then_body: tail.clone(),
+                    else_body: None,
+                }
+                .with_origins(origin(0x10f8)),
+                Stmt::Nop.with_origins(origin(0x1104)),
+                tail[0].clone(),
+                tail[1].clone(),
+            ]
+        );
+    }
+
+    #[test]
+    fn origin_wrapped_chained_return_tails_are_inlined_inside_out() {
+        let origin = |va| OriginSet::one(va);
+        let mut function = Function {
+            name: "origin_wrapped_chained_return_tails".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Reg(VReg::phys("negative")),
+                    then_body: vec![Stmt::Goto { target: 0x11b0 }.with_origins(origin(0x1195))],
+                    else_body: None,
+                }
+                .with_origins(origin(0x1190)),
+                Stmt::Assign {
+                    dst: VReg::phys("ret"),
+                    src: Expr::Const(0),
+                }
+                .with_origins(origin(0x1198)),
+                Stmt::If {
+                    cond: Expr::Reg(VReg::phys("zero")),
+                    then_body: vec![Stmt::Goto { target: 0x11b5 }.with_origins(origin(0x119d))],
+                    else_body: None,
+                }
+                .with_origins(origin(0x119a)),
+                Stmt::Return {
+                    value: Some(Expr::Const(100)),
+                }
+                .with_origins(origin(0x11a8)),
+                Stmt::Label(0x11b0).with_origins(origin(0x11b0)),
+                Stmt::Assign {
+                    dst: VReg::phys("ret"),
+                    src: Expr::Const(-1),
+                }
+                .with_origins(origin(0x11b0)),
+                Stmt::Label(0x11b5).with_origins(origin(0x11b5)),
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("ret"))),
+                }
+                .with_origins(origin(0x11b5)),
+            ],
+        };
+
+        inline_terminal_goto_tails(&mut function);
+
+        assert_eq!(count_target_gotos(&function.body, 0x11b0), 0);
+        assert_eq!(count_target_gotos(&function.body, 0x11b5), 0);
+        assert!(!function
+            .body
+            .iter()
+            .any(|statement| matches!(statement.semantic(), Stmt::Label(_))));
+        assert!(matches!(
+            function.body[0].semantic(),
+            Stmt::If { then_body, .. }
+                if matches!(then_body.last().map(Stmt::semantic), Some(Stmt::Return { .. }))
+        ));
+        assert!(matches!(
+            function.body[2].semantic(),
+            Stmt::If { then_body, .. }
+                if matches!(then_body.last().map(Stmt::semantic), Some(Stmt::Return { .. }))
+        ));
     }
 
     #[test]
@@ -1190,6 +1328,46 @@ mod tests {
         );
         assert!(matches!(f.body[0], Stmt::Store { .. }));
         assert!(matches!(f.body[1], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn attributed_return_prunes_unreachable_tail_and_keeps_surviving_owners() {
+        let result = crate::ir::types::VReg::phys("local_4");
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(result.clone()),
+                    src: Expr::Const(0),
+                    size: 4,
+                }
+                .with_origins(OriginSet::one(0x1010)),
+                Stmt::Label(0x1100).with_origins(OriginSet::one(0x1014)),
+                Stmt::Return {
+                    value: Some(Expr::Reg(result.clone())),
+                }
+                .with_origins(OriginSet::one(0x1018)),
+                Stmt::Store {
+                    addr: Expr::Reg(result),
+                    src: Expr::Const(1),
+                    size: 4,
+                }
+                .with_origins(OriginSet::one(0x101c)),
+                Stmt::Goto { target: 0x1100 }.with_origins(OriginSet::one(0x1020)),
+            ],
+        };
+
+        prune_unreachable_tails(&mut f);
+
+        assert_eq!(
+            f.body.len(),
+            2,
+            "attributed unreachable tail leaked: {:#?}",
+            f.body
+        );
+        assert_eq!(f.body[0].origins(), Some(&OriginSet::one(0x1010)));
+        assert_eq!(f.body[1].origins(), Some(&OriginSet::one(0x1018)));
     }
 
     #[test]

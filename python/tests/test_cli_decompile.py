@@ -239,7 +239,7 @@ def test_real_arm32_frame_local_reaches_the_direct_return(tmp_path: Path) -> Non
     )
 
     assert " frame_return(int wait)" in text.splitlines()[1], text
-    assert "signed char c;" in text, text
+    assert re.search(r"\bsigned char c(?:\s*=\s*0)?;", text), text
     assert "return c;" in text, text
     assert "arg0 = " not in text, text
     assert "return 0;" not in text, text
@@ -927,7 +927,7 @@ def test_real_thumb_leaf_frame_save_does_not_become_a_source_local(
     )
 
     assert "thumb_leaf_frame(int wait)" in generated, generated
-    assert "signed char value;" in generated, generated
+    assert re.search(r"\bsigned char value(?:\s*=\s*0)?;", generated), generated
     assert "local_4" not in generated, generated
     assert "= var0;" not in generated, generated
 
@@ -1205,10 +1205,10 @@ def test_real_stripped_format_wrapper_recovers_forwarded_string_parameter(
     )
     rendered = {int(record[1]): record[2] for record in results}
     string_text = rendered[targets["string_wrapper"]]
-    assert "char * arg1" in string_text.split("{", 1)[0], string_text
+    assert "char *arg1" in string_text.split("{", 1)[0], string_text
     for name in ("null_only_wrapper", "conflicting_wrapper", "unknown_wrapper"):
         control = rendered[targets[name]]
-        assert "char * arg1" not in control.split("{", 1)[0], control
+        assert "char *arg1" not in control.split("{", 1)[0], control
 
 
 def test_real_stripped_plt_got_tail_free_recovers_void_contract(tmp_path: Path) -> None:
@@ -1531,13 +1531,13 @@ def test_real_stripped_arm64_loop_does_not_invent_trailing_parameters(
     )
     assert len(results) == 1
     _, _, text = results[0][:3]
-    signature = next(line for line in text.splitlines() if f"sub_{entry_va:x}(" in line)
+    signature = next(line for line in text.splitlines() if line.endswith(" {") and "(" in line)
     parameters = signature.split("(", 1)[1].rsplit(")", 1)[0].split(",")
     assert len(parameters) == 2, signature
     # `argc` and `argv` — x2 and x3 are scratch, and the loop's three-argument
     # callee is what made them look live-in.
-    assert "arg0" in parameters[0], signature
-    assert "arg1" in parameters[1], signature
+    assert parameters[0].strip().endswith(("arg0", "argc")), signature
+    assert parameters[1].strip().endswith(("arg1", "argv")), signature
     assert "arg2" not in signature, signature
     assert "arg3" not in signature, signature
 
@@ -1578,9 +1578,9 @@ def test_decompile_requested_va_seeds_stripped_arm32(
     )
     assert len(results) == 1
     name, va, text = results[0][:3]
-    assert name == "sub_46c"
     assert va == requested_va
-    assert text.startswith("// glaurung: sub_46c @ 0x46c\n")
+    assert name
+    assert text.startswith(f"// glaurung: {name} @ 0x46c\n")
 
 
 @pytest.mark.skipif(not ARM32_SAMPLE.exists(), reason="armhf sample missing")

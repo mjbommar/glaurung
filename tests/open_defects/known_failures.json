@@ -1,25 +1,25 @@
 {
  "note": "Measured decompiler failures. Regenerate with tools/gen_known_failures.py.",
- "elapsed_seconds": 44.6,
+ "elapsed_seconds": 43.6,
  "objects_scanned": 1676,
  "counts": {
   "types": 82,
-  "structure": 713,
+  "structure": 711,
   "returns": 41,
   "pointers": 0,
-  "unrecovered": 38,
+  "unrecovered": 30,
   "no_body": 0,
-  "goto_statements": 6823
+  "goto_statements": 6502
  },
  "counts_by_language": {
   "c": {
    "types": 0,
-   "structure": 619,
+   "structure": 617,
    "returns": 15,
    "pointers": 0,
-   "unrecovered": 34,
+   "unrecovered": 26,
    "no_body": 0,
-   "goto_statements": 6257
+   "goto_statements": 5936
   },
   "rust": {
    "types": 82,
@@ -33,22 +33,22 @@
  },
  "deduplicated_counts": {
   "types": 65,
-  "structure": 472,
+  "structure": 471,
   "returns": 33,
   "pointers": 0,
-  "unrecovered": 25,
+  "unrecovered": 21,
   "no_body": 0,
-  "goto_statements": 4655
+  "goto_statements": 4490
  },
  "deduplicated_counts_by_language": {
   "c": {
    "types": 0,
-   "structure": 404,
+   "structure": 403,
    "returns": 9,
    "pointers": 0,
-   "unrecovered": 22,
+   "unrecovered": 18,
    "no_body": 0,
-   "goto_statements": 4228
+   "goto_statements": 4063
   },
   "rust": {
    "types": 65,
@@ -973,13 +973,13 @@
    "obj": "102_duffs_device-gcc-O2.so",
    "fn": "duff_copy",
    "va": 4352,
-   "gotos": 4
+   "gotos": 7
   },
   {
    "obj": "102_duffs_device-gcc-O2strip.dwarf.so",
    "fn": "duff_copy",
    "va": 4352,
-   "gotos": 4
+   "gotos": 7
   },
   {
    "obj": "106_switch_shapes_dense_sparse-gcc-O0.so",
@@ -1081,13 +1081,13 @@
    "obj": "113_varargs-gcc-O2.so",
    "fn": "sum_variadic",
    "va": 4384,
-   "gotos": 4
+   "gotos": 2
   },
   {
    "obj": "113_varargs-gcc-O2strip.dwarf.so",
    "fn": "sum_variadic",
    "va": 4384,
-   "gotos": 4
+   "gotos": 2
   },
   {
    "obj": "116_string_literals-clang-O2.so",
@@ -1477,7 +1477,7 @@
    "obj": "145_control_flow_flattening-clang-O2.so",
    "fn": "flattened_accumulate",
    "va": 4352,
-   "gotos": 10
+   "gotos": 5
   },
   {
    "obj": "145_control_flow_flattening-clang-O2.so",
@@ -1495,7 +1495,7 @@
    "obj": "145_control_flow_flattening-clang-O2strip.dwarf.so",
    "fn": "flattened_accumulate",
    "va": 4352,
-   "gotos": 10
+   "gotos": 5
   },
   {
    "obj": "145_control_flow_flattening-clang-O2strip.dwarf.so",
@@ -1543,7 +1543,7 @@
    "obj": "150_obfuscation_composite-clang-O2.so",
    "fn": "obfuscated_transform",
    "va": 4352,
-   "gotos": 14
+   "gotos": 7
   },
   {
    "obj": "150_obfuscation_composite-clang-O2.so",
@@ -1555,7 +1555,7 @@
    "obj": "150_obfuscation_composite-clang-O2strip.dwarf.so",
    "fn": "obfuscated_transform",
    "va": 4352,
-   "gotos": 14
+   "gotos": 7
   },
   {
    "obj": "150_obfuscation_composite-clang-O2strip.dwarf.so",
@@ -1639,7 +1639,7 @@
    "obj": "154_wide_switch-gcc-O2.so",
    "fn": "wide154_dense_effects",
    "va": 4448,
-   "gotos": 203
+   "gotos": 75
   },
   {
    "obj": "154_wide_switch-gcc-O2.so",
@@ -1651,7 +1651,7 @@
    "obj": "154_wide_switch-gcc-O2strip.dwarf.so",
    "fn": "wide154_dense_effects",
    "va": 4448,
-   "gotos": 203
+   "gotos": 75
   },
   {
    "obj": "154_wide_switch-gcc-O2strip.dwarf.so",
@@ -1694,18 +1694,6 @@
    "fn": "plt_fold_calls",
    "va": 4560,
    "gotos": 3
-  },
-  {
-   "obj": "158_weak_symbols-gcc-O2.so",
-   "fn": "weak_fold",
-   "va": 4544,
-   "gotos": 2
-  },
-  {
-   "obj": "158_weak_symbols-gcc-O2strip.dwarf.so",
-   "fn": "weak_fold",
-   "va": 4544,
-   "gotos": 2
   },
   {
    "obj": "15_binary_search_tree-clang-O0.so",
@@ -2689,13 +2677,13 @@
    "obj": "186_defaultless_guarded_switch-gcc-O2.so",
    "fn": "loop_switch_no_default",
    "va": 4592,
-   "gotos": 4
+   "gotos": 2
   },
   {
    "obj": "186_defaultless_guarded_switch-gcc-O2strip.dwarf.so",
    "fn": "loop_switch_no_default",
    "va": 4592,
-   "gotos": 4
+   "gotos": 2
   },
   {
    "obj": "187_constant_bias_index-clang-O2.so",
@@ -3223,7 +3211,7 @@
    "obj": "212_loop_with_returning_arm-gcc-O2.so",
    "fn": "all_arms_break",
    "va": 4720,
-   "gotos": 8
+   "gotos": 6
   },
   {
    "obj": "212_loop_with_returning_arm-gcc-O2strip.dwarf.so",
@@ -3247,7 +3235,7 @@
    "obj": "212_loop_with_returning_arm-gcc-O2strip.dwarf.so",
    "fn": "all_arms_break",
    "va": 4720,
-   "gotos": 8
+   "gotos": 6
   },
   {
    "obj": "213_arm_predicated_execution-gcc-O2.so",
@@ -3523,7 +3511,7 @@
    "obj": "32_longest_common_subsequence-gcc-O2.so",
    "fn": "lcs_length",
    "va": 4384,
-   "gotos": 12
+   "gotos": 10
   },
   {
    "obj": "32_longest_common_subsequence-gcc-O2.so",
@@ -3535,7 +3523,7 @@
    "obj": "32_longest_common_subsequence-gcc-O2strip.dwarf.so",
    "fn": "lcs_length",
    "va": 4384,
-   "gotos": 12
+   "gotos": 10
   },
   {
    "obj": "32_longest_common_subsequence-gcc-O2strip.dwarf.so",
@@ -3913,19 +3901,19 @@
    "obj": "42_rpn_evaluator-clang-O0.so",
    "fn": "rpn_evaluate",
    "va": 4352,
-   "gotos": 16
+   "gotos": 9
   },
   {
    "obj": "42_rpn_evaluator-clang-O2.so",
    "fn": "rpn_evaluate",
    "va": 4352,
-   "gotos": 11
+   "gotos": 8
   },
   {
    "obj": "42_rpn_evaluator-clang-O2strip.dwarf.so",
    "fn": "rpn_evaluate",
    "va": 4352,
-   "gotos": 11
+   "gotos": 8
   },
   {
    "obj": "42_rpn_evaluator-gcc-O0.so",
@@ -4297,7 +4285,7 @@
    "obj": "53_pseudorandom-clang-O0.so",
    "fn": "bounded_sample",
    "va": 4512,
-   "gotos": 3
+   "gotos": 1
   },
   {
    "obj": "53_pseudorandom-gcc-O2.so",
@@ -4387,7 +4375,7 @@
    "obj": "56_sieve-gcc-O2.so",
    "fn": "sieve_primes",
    "va": 4384,
-   "gotos": 7
+   "gotos": 5
   },
   {
    "obj": "56_sieve-gcc-O2.so",
@@ -4399,7 +4387,7 @@
    "obj": "56_sieve-gcc-O2strip.dwarf.so",
    "fn": "sieve_primes",
    "va": 4384,
-   "gotos": 7
+   "gotos": 5
   },
   {
    "obj": "56_sieve-gcc-O2strip.dwarf.so",
@@ -4489,25 +4477,25 @@
    "obj": "63_numerical_integration-gcc-O2.so",
    "fn": "trapezoid_integrate",
    "va": 4352,
-   "gotos": 7
+   "gotos": 5
   },
   {
    "obj": "63_numerical_integration-gcc-O2.so",
    "fn": "simpson_integrate",
    "va": 4512,
-   "gotos": 9
+   "gotos": 7
   },
   {
    "obj": "63_numerical_integration-gcc-O2strip.dwarf.so",
    "fn": "trapezoid_integrate",
    "va": 4352,
-   "gotos": 7
+   "gotos": 5
   },
   {
    "obj": "63_numerical_integration-gcc-O2strip.dwarf.so",
    "fn": "simpson_integrate",
    "va": 4512,
-   "gotos": 9
+   "gotos": 7
   },
   {
    "obj": "64_root_finding-clang-O0.so",
@@ -5437,18 +5425,6 @@
    "n": 1
   },
   {
-   "obj": "102_duffs_device-gcc-O2.so",
-   "fn": "duff_copy",
-   "va": 4352,
-   "n": 1
-  },
-  {
-   "obj": "102_duffs_device-gcc-O2strip.dwarf.so",
-   "fn": "duff_copy",
-   "va": 4352,
-   "n": 1
-  },
-  {
    "obj": "103_computed_goto-clang-O0.so",
    "fn": "threaded_interpreter",
    "va": 4352,
@@ -5482,18 +5458,6 @@
    "obj": "103_computed_goto-gcc-O2strip.dwarf.so",
    "fn": "threaded_interpreter",
    "va": 4352,
-   "n": 1
-  },
-  {
-   "obj": "126_x_macros-clang-O2.so",
-   "fn": "apply_opcode",
-   "va": 4384,
-   "n": 1
-  },
-  {
-   "obj": "126_x_macros-clang-O2strip.dwarf.so",
-   "fn": "apply_opcode",
-   "va": 4384,
    "n": 1
   },
   {
@@ -5614,30 +5578,6 @@
    "obj": "212_loop_with_returning_arm-clang-O2strip.dwarf.so",
    "fn": "fsm_returns_from_arm",
    "va": 4352,
-   "n": 1
-  },
-  {
-   "obj": "215_switch_on_wide_selector-clang-O2.so",
-   "fn": "wide_selector_mixed",
-   "va": 4464,
-   "n": 1
-  },
-  {
-   "obj": "215_switch_on_wide_selector-clang-O2strip.dwarf.so",
-   "fn": "wide_selector_mixed",
-   "va": 4464,
-   "n": 1
-  },
-  {
-   "obj": "215_switch_on_wide_selector-gcc-O2.so",
-   "fn": "wide_selector_mixed",
-   "va": 4496,
-   "n": 1
-  },
-  {
-   "obj": "215_switch_on_wide_selector-gcc-O2strip.dwarf.so",
-   "fn": "wide_selector_mixed",
-   "va": 4496,
    "n": 1
   }
  ],

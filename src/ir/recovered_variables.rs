@@ -255,6 +255,8 @@ mod tests {
             sizes: HashMap::from([("local_18".to_string(), 4u8)]),
             source_types: HashMap::from([("local_18".to_string(), "int".to_string())]),
             source_names: HashMap::new(),
+            parameter_slots: HashMap::new(),
+            machine_saved_slots: Default::default(),
             frame_coordinates: HashMap::from([(
                 "local_18".to_string(),
                 ("rbp".to_string(), -24i64),

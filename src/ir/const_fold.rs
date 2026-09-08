@@ -29,6 +29,23 @@ use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::types::{BinOp, CmpOp};
 use crate::ir::types_recover::TypeMap;
 
+#[derive(Clone, Copy)]
+enum ParameterAuthority<'a> {
+    LegacySpelling,
+    Identities(&'a crate::ir::value_number::ValueIdentities),
+}
+
+impl ParameterAuthority<'_> {
+    fn owns(self, name: &str) -> bool {
+        match self {
+            Self::LegacySpelling => crate::ir::ast::parse_arg_index(name).is_some(),
+            Self::Identities(identities) => identities
+                .parameter_slot(&crate::ir::types::VReg::phys(name))
+                .is_some(),
+        }
+    }
+}
+
 /// Overwrite `slot` and record that this pass changed the AST.
 ///
 /// **Every** write the `fold_constants` traversal makes to the AST goes through
@@ -53,10 +70,25 @@ fn rewrite(slot: &mut Expr, value: Expr, changed: &mut bool) {
 ///
 /// Returns whether anything was rewritten — see [`rewrite`].
 pub fn fold_constants(f: &mut Function) -> bool {
+    fold_constants_with_parameter_authority(f, ParameterAuthority::LegacySpelling)
+}
+
+/// Fold constants while recognizing parameters only from exact AST identities.
+pub(crate) fn fold_constants_with_identities(
+    f: &mut Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> bool {
+    fold_constants_with_parameter_authority(f, ParameterAuthority::Identities(identities))
+}
+
+fn fold_constants_with_parameter_authority(
+    f: &mut Function,
+    parameter_authority: ParameterAuthority<'_>,
+) -> bool {
     #[cfg(debug_assertions)]
     let before = f.clone();
     let mut changed = false;
-    fold_body(&mut f.body, &mut changed);
+    fold_body(&mut f.body, &mut changed, parameter_authority);
     #[cfg(debug_assertions)]
     assert!(
         changed || before == *f,
@@ -72,43 +104,69 @@ pub fn fold_constants(f: &mut Function) -> bool {
 /// a zero-extended 32-bit load may live in a default-`long` scratch, and dropping
 /// its signed cast changes a negative machine value into a positive C value.
 pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
-    fn declared_source_type(expr: &Expr, signed: bool, width: u8, tm: &TypeMap) -> bool {
+    fold_typed_comparison_extensions_with_identities(f, tm, None);
+}
+
+/// Remove matching comparison extensions using exact opaque SSA identities.
+pub fn fold_typed_comparison_extensions_with_identities(
+    f: &mut Function,
+    tm: &TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
+    fn declared_source_type(
+        expr: &Expr,
+        signed: bool,
+        width: u8,
+        tm: &TypeMap,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) -> bool {
         matches!(
-            expr,
+            expr.semantic(),
             Expr::Reg(crate::ir::types::VReg::Phys(name))
-                if crate::ir::ast::declared_int_type(name, Some(tm)) == Some((signed, width))
+                if crate::ir::ast::declared_int_type_with_identities(
+                    name,
+                    Some(tm),
+                    identities,
+                ) == Some((signed, width))
         )
     }
 
-    fn expression(expr: &mut Expr, tm: &TypeMap) {
+    fn expression(
+        expr: &mut Expr,
+        tm: &TypeMap,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) {
         match expr {
-            Expr::Deref { addr, .. } => expression(addr, tm),
+            Expr::Origin { expr, .. } => expression(expr, tm, identities),
+            Expr::Deref { addr, .. } => expression(addr, tm, identities),
             Expr::Call { target, args, .. } => {
-                expression(target, tm);
+                expression(target, tm, identities);
                 for argument in args {
-                    expression(argument, tm);
+                    expression(argument, tm, identities);
                 }
             }
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-                expression(lhs, tm);
-                expression(rhs, tm);
+                expression(lhs, tm, identities);
+                expression(rhs, tm, identities);
             }
-            Expr::Un { src, .. } => expression(src, tm),
+            Expr::Un { src, .. } => expression(src, tm, identities),
             Expr::Select {
                 cond,
                 if_true,
                 if_false,
                 ..
             } => {
-                expression(cond, tm);
-                expression(if_true, tm);
-                expression(if_false, tm);
+                expression(cond, tm, identities);
+                expression(if_true, tm, identities);
+                expression(if_false, tm, identities);
             }
-            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => expression(expr, tm),
-            Expr::FunctionTableEntry { index, .. } => expression(index, tm),
+            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+                expression(expr, tm, identities)
+            }
+            Expr::FunctionTableEntry { index, .. } => expression(index, tm, identities),
             Expr::WideArithmetic { args, .. } => {
                 for argument in args {
-                    expression(argument, tm);
+                    expression(argument, tm, identities);
                 }
             }
             Expr::Reg(_)
@@ -144,49 +202,64 @@ pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
                     signed: left.0,
                     width: left.2,
                     expr: Box::new(left.3.clone()),
-                };
+                }
+                .with_optional_origins((!left.4.is_empty()).then_some(left.4));
                 **rhs = Expr::Cast {
                     signed: right.0,
                     width: right.2,
                     expr: Box::new(right.3.clone()),
-                };
-            } else if declared_source_type(left.3, left.0, left.2, tm)
-                && declared_source_type(right.3, right.0, right.2, tm)
+                }
+                .with_optional_origins((!right.4.is_empty()).then_some(right.4));
+            } else if declared_source_type(left.3, left.0, left.2, tm, identities)
+                && declared_source_type(right.3, right.0, right.2, tm, identities)
             {
-                **lhs = left.3.clone();
-                **rhs = right.3.clone();
+                **lhs = left
+                    .3
+                    .clone()
+                    .with_optional_origins((!left.4.is_empty()).then_some(left.4));
+                **rhs = right
+                    .3
+                    .clone()
+                    .with_optional_origins((!right.4.is_empty()).then_some(right.4));
             }
         }
     }
 
-    fn body(statements: &mut [Stmt], tm: &TypeMap) {
+    fn body(
+        statements: &mut [Stmt],
+        tm: &TypeMap,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) {
         for statement in statements {
             match statement {
+                Stmt::Origin { stmt, .. } => {
+                    body(std::slice::from_mut(stmt.as_mut()), tm, identities)
+                }
                 Stmt::Assign { src, .. } | Stmt::Return { value: Some(src) } => {
-                    expression(src, tm);
+                    expression(src, tm, identities);
                 }
                 Stmt::Store { addr, src, .. } => {
-                    expression(addr, tm);
-                    expression(src, tm);
+                    expression(addr, tm, identities);
+                    expression(src, tm, identities);
                 }
                 Stmt::Call { target, args, .. } => {
-                    expression(target, tm);
+                    expression(target, tm, identities);
                     for arg in args {
-                        expression(arg, tm);
+                        expression(arg, tm, identities);
                     }
                 }
                 Stmt::IndirectGoto { target } | Stmt::Push { value: target } => {
-                    expression(target, tm);
+                    expression(target, tm, identities);
                 }
                 Stmt::If {
                     cond,
                     then_body,
                     else_body,
                 } => {
-                    expression(cond, tm);
-                    body(then_body, tm);
+                    expression(cond, tm, identities);
+                    body(then_body, tm, identities);
                     if let Some(else_body) = else_body {
-                        body(else_body, tm);
+                        body(else_body, tm, identities);
                     }
                 }
                 Stmt::While {
@@ -197,8 +270,8 @@ pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
                     cond,
                     body: loop_body,
                 } => {
-                    expression(cond, tm);
-                    body(loop_body, tm);
+                    expression(cond, tm, identities);
+                    body(loop_body, tm, identities);
                 }
                 Stmt::For {
                     init,
@@ -206,22 +279,22 @@ pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
                     step,
                     body: loop_body,
                 } => {
-                    body(std::slice::from_mut(init.as_mut()), tm);
-                    expression(cond, tm);
-                    body(std::slice::from_mut(step.as_mut()), tm);
-                    body(loop_body, tm);
+                    body(std::slice::from_mut(init.as_mut()), tm, identities);
+                    expression(cond, tm, identities);
+                    body(std::slice::from_mut(step.as_mut()), tm, identities);
+                    body(loop_body, tm, identities);
                 }
                 Stmt::Switch {
                     discriminant,
                     cases,
                     default,
                 } => {
-                    expression(discriminant, tm);
+                    expression(discriminant, tm, identities);
                     for (_, case_body) in cases {
-                        body(case_body, tm);
+                        body(case_body, tm, identities);
                     }
                     if let Some(default) = default {
-                        body(default, tm);
+                        body(default, tm, identities);
                     }
                 }
                 Stmt::Return { value: None }
@@ -239,7 +312,7 @@ pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
         }
     }
 
-    body(&mut f.body, tm);
+    body(&mut f.body, tm, identities);
 }
 
 /// Remove a matching *zero-extension* view around a register whose recovered C
@@ -253,35 +326,63 @@ pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
 /// declaration as a machine-register zero-extension. Mismatched signedness or
 /// width is left untouched as well.
 pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
-    fn expression(expr: &mut Expr, tm: &TypeMap) {
+    fold_typed_declared_views_with_identities(f, tm, None);
+}
+
+/// Remove redundant declared views using exact opaque SSA identities.
+pub fn fold_typed_declared_views_with_identities(
+    f: &mut Function,
+    tm: &TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
+    fn expression(
+        expr: &mut Expr,
+        tm: &TypeMap,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) {
+        if let Expr::Origin { origins, expr } = expr {
+            expression(expr, tm, identities);
+            if matches!(expr.as_ref(), Expr::Origin { .. }) {
+                let nested = std::mem::replace(expr.as_mut(), Expr::Unknown(String::new()));
+                let (semantic, nested_origins) = nested.into_semantic_with_origins();
+                if let Some(nested_origins) = nested_origins {
+                    origins.merge(&nested_origins);
+                }
+                **expr = semantic;
+            }
+            return;
+        }
         match expr {
-            Expr::Deref { addr, .. } => expression(addr, tm),
+            Expr::Origin { .. } => unreachable!("origin carrier returned above"),
+            Expr::Deref { addr, .. } => expression(addr, tm, identities),
             Expr::Call { target, args, .. } => {
-                expression(target, tm);
+                expression(target, tm, identities);
                 for argument in args {
-                    expression(argument, tm);
+                    expression(argument, tm, identities);
                 }
             }
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-                expression(lhs, tm);
-                expression(rhs, tm);
+                expression(lhs, tm, identities);
+                expression(rhs, tm, identities);
             }
-            Expr::Un { src, .. } => expression(src, tm),
+            Expr::Un { src, .. } => expression(src, tm, identities),
             Expr::Select {
                 cond,
                 if_true,
                 if_false,
                 ..
             } => {
-                expression(cond, tm);
-                expression(if_true, tm);
-                expression(if_false, tm);
+                expression(cond, tm, identities);
+                expression(if_true, tm, identities);
+                expression(if_false, tm, identities);
             }
-            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => expression(expr, tm),
-            Expr::FunctionTableEntry { index, .. } => expression(index, tm),
+            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+                expression(expr, tm, identities)
+            }
+            Expr::FunctionTableEntry { index, .. } => expression(index, tm, identities),
             Expr::WideArithmetic { args, .. } => {
                 for argument in args {
-                    expression(argument, tm);
+                    expression(argument, tm, identities);
                 }
             }
             Expr::Reg(_)
@@ -296,62 +397,80 @@ pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
             | Expr::Unknown(_) => {}
         }
 
-        let replacement = match expr {
-            Expr::Cast {
-                signed: outer_signed,
-                width: outer_width,
-                expr: inner,
-            } => match inner.as_ref() {
+        let replacement =
+            match expr {
                 Expr::Cast {
-                    signed: inner_signed,
-                    width: inner_width,
-                    expr: source,
-                } if inner_width < outer_width && !*outer_signed && !*inner_signed => {
-                    match source.as_ref() {
-                        Expr::Reg(crate::ir::types::VReg::Phys(name))
-                            if crate::ir::ast::declared_int_type(name, Some(tm))
-                                == Some((*inner_signed, *inner_width)) =>
-                        {
-                            Some(source.as_ref().clone())
+                    signed: outer_signed,
+                    width: outer_width,
+                    expr: inner,
+                } => match inner.semantic() {
+                    Expr::Cast {
+                        signed: inner_signed,
+                        width: inner_width,
+                        expr: source,
+                    } if inner_width < outer_width && !*outer_signed && !*inner_signed => {
+                        match source.semantic() {
+                            Expr::Reg(crate::ir::types::VReg::Phys(name))
+                                if crate::ir::ast::declared_int_type_with_identities(
+                                    name,
+                                    Some(tm),
+                                    identities,
+                                ) == Some((*inner_signed, *inner_width)) =>
+                            {
+                                let origins =
+                                    inner.origins().into_iter().chain(source.origins()).fold(
+                                        crate::ir::ast::OriginSet::empty(),
+                                        |owners, next| owners.union(next),
+                                    );
+                                Some(source.semantic().clone().with_optional_origins(
+                                    (!origins.is_empty()).then_some(origins),
+                                ))
+                            }
+                            _ => None,
                         }
-                        _ => None,
                     }
-                }
+                    _ => None,
+                },
                 _ => None,
-            },
-            _ => None,
-        };
+            };
         if let Some(replacement) = replacement {
             *expr = replacement;
         }
     }
 
-    fn body(statements: &mut [Stmt], tm: &TypeMap) {
+    fn body(
+        statements: &mut [Stmt],
+        tm: &TypeMap,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) {
         for statement in statements {
             match statement {
-                Stmt::Assign { src, .. } => expression(src, tm),
+                Stmt::Origin { stmt, .. } => {
+                    body(std::slice::from_mut(stmt.as_mut()), tm, identities)
+                }
+                Stmt::Assign { src, .. } => expression(src, tm, identities),
                 Stmt::Store { addr, src, .. } => {
-                    expression(addr, tm);
-                    expression(src, tm);
+                    expression(addr, tm, identities);
+                    expression(src, tm, identities);
                 }
                 Stmt::Call { target, args, .. } => {
-                    expression(target, tm);
+                    expression(target, tm, identities);
                     for arg in args {
-                        expression(arg, tm);
+                        expression(arg, tm, identities);
                     }
                 }
                 Stmt::IndirectGoto { target } | Stmt::Push { value: target } => {
-                    expression(target, tm);
+                    expression(target, tm, identities);
                 }
                 Stmt::If {
                     cond,
                     then_body,
                     else_body,
                 } => {
-                    expression(cond, tm);
-                    body(then_body, tm);
+                    expression(cond, tm, identities);
+                    body(then_body, tm, identities);
                     if let Some(else_body) = else_body {
-                        body(else_body, tm);
+                        body(else_body, tm, identities);
                     }
                 }
                 Stmt::While {
@@ -362,8 +481,8 @@ pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
                     cond,
                     body: loop_body,
                 } => {
-                    expression(cond, tm);
-                    body(loop_body, tm);
+                    expression(cond, tm, identities);
+                    body(loop_body, tm, identities);
                 }
                 Stmt::For {
                     init,
@@ -371,22 +490,22 @@ pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
                     step,
                     body: loop_body,
                 } => {
-                    body(std::slice::from_mut(init.as_mut()), tm);
-                    expression(cond, tm);
-                    body(std::slice::from_mut(step.as_mut()), tm);
-                    body(loop_body, tm);
+                    body(std::slice::from_mut(init.as_mut()), tm, identities);
+                    expression(cond, tm, identities);
+                    body(std::slice::from_mut(step.as_mut()), tm, identities);
+                    body(loop_body, tm, identities);
                 }
                 Stmt::Switch {
                     discriminant,
                     cases,
                     default,
                 } => {
-                    expression(discriminant, tm);
+                    expression(discriminant, tm, identities);
                     for (_, case_body) in cases {
-                        body(case_body, tm);
+                        body(case_body, tm, identities);
                     }
                     if let Some(default) = default {
-                        body(default, tm);
+                        body(default, tm, identities);
                     }
                 }
                 // A root return extension also carries the source-level return
@@ -408,28 +527,33 @@ pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
         }
     }
 
-    body(&mut f.body, tm);
+    body(&mut f.body, tm, identities);
 }
 
-fn fold_body(body: &mut [Stmt], changed: &mut bool) {
+fn fold_body(body: &mut [Stmt], changed: &mut bool, parameter_authority: ParameterAuthority<'_>) {
     for s in body.iter_mut() {
         match s {
-            Stmt::IndirectGoto { target } => fold_expr(target, changed),
-            Stmt::Assign { src, .. } => fold_expr(src, changed),
+            Stmt::Origin { stmt, .. } => fold_body(
+                std::slice::from_mut(stmt.as_mut()),
+                changed,
+                parameter_authority,
+            ),
+            Stmt::IndirectGoto { target } => fold_expr(target, changed, parameter_authority),
+            Stmt::Assign { src, .. } => fold_expr(src, changed, parameter_authority),
             Stmt::Store { addr, src, size } => {
-                fold_expr(addr, changed);
-                fold_expr(src, changed);
-                fold_stored_value(src, *size, changed);
+                fold_expr(addr, changed, parameter_authority);
+                fold_expr(src, changed, parameter_authority);
+                fold_stored_value(src, *size, changed, parameter_authority);
             }
             Stmt::Call { target, args, .. } => {
-                fold_expr(target, changed);
+                fold_expr(target, changed, parameter_authority);
                 for a in args {
-                    fold_expr(a, changed);
+                    fold_expr(a, changed, parameter_authority);
                 }
             }
             Stmt::Return { value } => {
                 if let Some(e) = value {
-                    fold_expr(e, changed);
+                    fold_expr(e, changed, parameter_authority);
                 }
             }
             Stmt::If {
@@ -437,15 +561,15 @@ fn fold_body(body: &mut [Stmt], changed: &mut bool) {
                 then_body,
                 else_body,
             } => {
-                fold_expr(cond, changed);
-                fold_body(then_body, changed);
+                fold_expr(cond, changed, parameter_authority);
+                fold_body(then_body, changed, parameter_authority);
                 if let Some(eb) = else_body {
-                    fold_body(eb, changed);
+                    fold_body(eb, changed, parameter_authority);
                 }
             }
             Stmt::While { cond, body } => {
-                fold_expr(cond, changed);
-                fold_body(body, changed);
+                fold_expr(cond, changed, parameter_authority);
+                fold_body(body, changed, parameter_authority);
             }
             Stmt::For {
                 init,
@@ -453,27 +577,35 @@ fn fold_body(body: &mut [Stmt], changed: &mut bool) {
                 step,
                 body,
             } => {
-                fold_body(std::slice::from_mut(init.as_mut()), changed);
-                fold_expr(cond, changed);
-                fold_body(body, changed);
-                fold_body(std::slice::from_mut(step.as_mut()), changed);
+                fold_body(
+                    std::slice::from_mut(init.as_mut()),
+                    changed,
+                    parameter_authority,
+                );
+                fold_expr(cond, changed, parameter_authority);
+                fold_body(body, changed, parameter_authority);
+                fold_body(
+                    std::slice::from_mut(step.as_mut()),
+                    changed,
+                    parameter_authority,
+                );
             }
             Stmt::DoWhile { body, cond } => {
-                fold_body(body, changed);
-                fold_expr(cond, changed);
+                fold_body(body, changed, parameter_authority);
+                fold_expr(cond, changed, parameter_authority);
             }
-            Stmt::Push { value } => fold_expr(value, changed),
+            Stmt::Push { value } => fold_expr(value, changed, parameter_authority),
             Stmt::Switch {
                 discriminant,
                 cases,
                 default,
             } => {
-                fold_expr(discriminant, changed);
+                fold_expr(discriminant, changed, parameter_authority);
                 for (_, body) in cases.iter_mut() {
-                    fold_body(body, changed);
+                    fold_body(body, changed, parameter_authority);
                 }
                 if let Some(b) = default {
-                    fold_body(b, changed);
+                    fold_body(b, changed, parameter_authority);
                 }
             }
             Stmt::Pop { .. }
@@ -490,8 +622,28 @@ fn fold_body(body: &mut [Stmt], changed: &mut bool) {
     }
 }
 
-fn fold_stored_value(src: &mut Expr, size: u8, changed: &mut bool) {
+fn fold_stored_value(
+    src: &mut Expr,
+    size: u8,
+    changed: &mut bool,
+    parameter_authority: ParameterAuthority<'_>,
+) {
     if size == 0 {
+        return;
+    }
+    // Storage context is semantic, so an origin carrier must not hide the
+    // cast/mask that the write width proves redundant. Recurse inside it, then
+    // flatten any carrier produced by the replacement into one canonical set.
+    if let Expr::Origin { origins, expr } = src {
+        fold_stored_value(expr, size, changed, parameter_authority);
+        if matches!(expr.as_ref(), Expr::Origin { .. }) {
+            let nested = std::mem::replace(expr.as_mut(), Expr::Unknown(String::new()));
+            let (semantic, nested_origins) = nested.into_semantic_with_origins();
+            if let Some(nested_origins) = nested_origins {
+                origins.merge(&nested_origins);
+            }
+            **expr = semantic;
+        }
         return;
     }
     // A machine store observes only its low `size` bytes. Integer casts whose
@@ -517,7 +669,7 @@ fn fold_stored_value(src: &mut Expr, size: u8, changed: &mut bool) {
     };
     if let Some(replacement) = fold_observed_mask(src, required as i64) {
         rewrite(src, replacement, changed);
-        fold_expr(src, changed);
+        fold_expr(src, changed, parameter_authority);
     }
     let replacement = match src {
         Expr::Bin {
@@ -539,8 +691,8 @@ fn fold_stored_value(src: &mut Expr, size: u8, changed: &mut bool) {
     }
 }
 
-fn fold_expr(e: &mut Expr, changed: &mut bool) {
-    fold_expr_at(e, false, changed);
+fn fold_expr(e: &mut Expr, changed: &mut bool, parameter_authority: ParameterAuthority<'_>) {
+    fold_expr_at(e, false, changed, parameter_authority);
 }
 
 /// `shift_left_operand` marks the one position where a widening cast over a
@@ -558,17 +710,33 @@ fn fold_expr(e: &mut Expr, changed: &mut bool) {
 /// `value | (1 << (index & 63))` disagreed with the original for EVERY index at
 /// or above 32, and at 63 returned 0xffffffff80000000 where the machine returns
 /// 0x8000000000000000.
-fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
+fn fold_expr_at(
+    e: &mut Expr,
+    shift_left_operand: bool,
+    changed: &mut bool,
+    parameter_authority: ParameterAuthority<'_>,
+) {
     // Recurse first — bottom-up folding composes naturally.
     match e {
+        Expr::Origin { origins, expr } => {
+            fold_expr_at(expr, shift_left_operand, changed, parameter_authority);
+            if matches!(expr.as_ref(), Expr::Origin { .. }) {
+                let nested = std::mem::replace(expr.as_mut(), Expr::Unknown(String::new()));
+                let (semantic, nested_origins) = nested.into_semantic_with_origins();
+                if let Some(nested_origins) = nested_origins {
+                    origins.merge(&nested_origins);
+                }
+                **expr = semantic;
+            }
+        }
         Expr::Bin { op, lhs, rhs } => {
             let shift = matches!(op, BinOp::Shl | BinOp::Shr | BinOp::Sar);
-            fold_expr_at(lhs, shift, changed);
-            fold_expr(rhs, changed);
+            fold_expr_at(lhs, shift, changed, parameter_authority);
+            fold_expr(rhs, changed, parameter_authority);
         }
         Expr::Cmp { lhs, rhs, .. } => {
-            fold_expr(lhs, changed);
-            fold_expr(rhs, changed);
+            fold_expr(lhs, changed, parameter_authority);
+            fold_expr(rhs, changed, parameter_authority);
         }
         Expr::Select {
             cond,
@@ -576,13 +744,13 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
             if_false,
             ..
         } => {
-            fold_expr(cond, changed);
-            fold_expr(if_true, changed);
-            fold_expr(if_false, changed);
+            fold_expr(cond, changed, parameter_authority);
+            fold_expr(if_true, changed, parameter_authority);
+            fold_expr(if_false, changed, parameter_authority);
         }
-        Expr::Un { src, .. } => fold_expr(src, changed),
-        Expr::Cast { expr, .. } => fold_expr(expr, changed),
-        Expr::Deref { addr, .. } => fold_expr(addr, changed),
+        Expr::Un { src, .. } => fold_expr(src, changed, parameter_authority),
+        Expr::Cast { expr, .. } => fold_expr(expr, changed, parameter_authority),
+        Expr::Deref { addr, .. } => fold_expr(addr, changed, parameter_authority),
         _ => {}
     }
 
@@ -593,14 +761,17 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
     // one byte of an `int` is not an `int` read, and aggregate/local objects
     // are deliberately outside this parameter-only identity.
     let parameter_address_load = match e {
-        Expr::Deref { addr, size } => match addr.as_ref() {
+        Expr::Deref { addr, size } => match addr.semantic() {
             Expr::StackAddr {
                 object: crate::ir::types::VReg::Phys(name),
                 size: object_size,
             } if usize::from(*size) == usize::from(*object_size)
-                && crate::ir::ast::parse_arg_index(name).is_some() =>
+                && parameter_authority.owns(name) =>
             {
-                Some(Expr::Reg(crate::ir::types::VReg::phys(name.clone())))
+                Some(
+                    Expr::Reg(crate::ir::types::VReg::phys(name.clone()))
+                        .with_optional_origins(addr.origins().cloned()),
+                )
             }
             _ => None,
         },
@@ -620,14 +791,106 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
             if_true,
             if_false,
             ..
-        } => match cond.as_ref() {
-            Expr::Const(0) => Some(if_false.as_ref().clone()),
-            Expr::Const(_) => Some(if_true.as_ref().clone()),
-            _ => None,
-        },
+        } => {
+            let selected = match cond.semantic() {
+                Expr::Const(0) => Some(if_false.as_ref()),
+                Expr::Const(_) => Some(if_true.as_ref()),
+                _ => None,
+            };
+            selected.map(|arm| arm.clone().with_optional_origins(cond.origins().cloned()))
+        }
         _ => None,
     };
     if let Some(replacement) = selected_arm {
+        rewrite(e, replacement, changed);
+        return;
+    }
+
+    // ARM predication can spell one hardware condition twice while carrying
+    // the destination's prior value through the unreachable inner arm:
+    // `c ? (c ? yes : prior) : no`.  Once the outer select chose its true arm,
+    // the identical inner condition is necessarily true, so `prior` cannot be
+    // read.  The dual false-arm form follows the same argument.  Require a
+    // repeatable register/arithmetic condition: collapsing a call or load here
+    // could remove an observable second evaluation.
+    fn repeatable_condition(expr: &Expr) -> bool {
+        match expr {
+            Expr::Origin { expr, .. } => repeatable_condition(expr),
+            Expr::Reg(_) | Expr::Const(_) => true,
+            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+                repeatable_condition(lhs) && repeatable_condition(rhs)
+            }
+            Expr::Un { src, .. }
+            | Expr::Cast { expr: src, .. }
+            | Expr::NumericConvert { expr: src, .. } => repeatable_condition(src),
+            Expr::Deref { .. }
+            | Expr::Call { .. }
+            | Expr::Select { .. }
+            | Expr::FloatConst { .. }
+            | Expr::Addr(_)
+            | Expr::StackAddr { .. }
+            | Expr::FunctionTableEntry { .. }
+            | Expr::WideArithmetic { .. }
+            | Expr::Named { .. }
+            | Expr::StringLit { .. }
+            | Expr::Lea { .. }
+            | Expr::PdbFieldAddr { .. }
+            | Expr::Unknown(_) => false,
+        }
+    }
+
+    let dominated_select = match e {
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            width,
+        } if repeatable_condition(cond) => {
+            let make_replacement = |inner_select: &Expr,
+                                    inner_cond: &Expr,
+                                    inner_true: Box<Expr>,
+                                    inner_false: Box<Expr>| {
+                let origins = inner_select
+                    .origins()
+                    .into_iter()
+                    .chain(inner_cond.origins())
+                    .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+                        owners.union(next)
+                    });
+                Expr::Select {
+                    cond: cond.clone(),
+                    if_true: inner_true,
+                    if_false: inner_false,
+                    width: *width,
+                }
+                .with_optional_origins((!origins.is_empty()).then_some(origins))
+            };
+
+            if let Expr::Select {
+                cond: inner_cond,
+                if_true: inner_true,
+                ..
+            } = if_true.semantic()
+            {
+                (inner_cond.semantic() == cond.semantic()).then(|| {
+                    make_replacement(if_true, inner_cond, inner_true.clone(), if_false.clone())
+                })
+            } else if let Expr::Select {
+                cond: inner_cond,
+                if_false: inner_false,
+                ..
+            } = if_false.semantic()
+            {
+                (inner_cond.semantic() == cond.semantic()).then(|| {
+                    make_replacement(if_false, inner_cond, if_true.clone(), inner_false.clone())
+                })
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    if let Some(replacement) = dominated_select {
         rewrite(e, replacement, changed);
         return;
     }
@@ -647,16 +910,19 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
             signed,
             width,
             expr: inner,
-        } => match inner.as_ref() {
+        } => match inner.semantic() {
             Expr::Cast {
                 width: inner_width,
                 expr: source,
                 ..
-            } if inner_width >= width => Some(Expr::Cast {
-                signed: *signed,
-                width: *width,
-                expr: Box::new(source.as_ref().clone()),
-            }),
+            } if inner_width >= width => Some(
+                Expr::Cast {
+                    signed: *signed,
+                    width: *width,
+                    expr: Box::new(source.as_ref().clone()),
+                }
+                .with_optional_origins(inner.origins().cloned()),
+            ),
             _ => None,
         },
         _ => None,
@@ -664,7 +930,7 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
     if let Some(replacement) = subsumed_inner_cast {
         rewrite(e, replacement, changed);
         // Re-run: a chain of three or more collapses one layer per visit.
-        fold_expr_at(e, shift_left_operand, changed);
+        fold_expr_at(e, shift_left_operand, changed, parameter_authority);
         return;
     }
 
@@ -754,7 +1020,7 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
         expr,
     } = e
     {
-        let replacement = match expr.as_ref() {
+        let replacement = match expr.semantic() {
             // Ordered before the two collapses below so a literal on a shift's
             // left operand cannot reach either of them — `is_exact_boolean`
             // accepts the constants 0 and 1, so guarding only the arm that
@@ -770,7 +1036,8 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
             // only a single comparison leaf.
             boolean if *width > 0 && is_exact_boolean(boolean) => Some(boolean.clone()),
             _ => None,
-        };
+        }
+        .map(|replacement| replacement.with_optional_origins(expr.origins().cloned()));
         if let Some(replacement) = replacement {
             rewrite(e, replacement, changed);
             return;
@@ -784,41 +1051,36 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
         // canonical shape of x86 signed predicates: SF ^ OF, where OF is
         // itself the XOR of a signed comparison and SF.
         if op == BinOp::Xor {
-            let replacement = match (lhs.as_ref(), rhs.as_ref()) {
-                (
-                    a,
-                    Expr::Bin {
-                        op: BinOp::Xor,
-                        lhs: b,
-                        rhs: c,
-                    },
-                ) if a == c.as_ref() => Some(b.as_ref().clone()),
-                (
-                    a,
-                    Expr::Bin {
-                        op: BinOp::Xor,
-                        lhs: b,
-                        rhs: c,
-                    },
-                ) if a == b.as_ref() => Some(c.as_ref().clone()),
-                (
-                    Expr::Bin {
-                        op: BinOp::Xor,
-                        lhs: b,
-                        rhs: c,
-                    },
-                    a,
-                ) if a == c.as_ref() => Some(b.as_ref().clone()),
-                (
-                    Expr::Bin {
-                        op: BinOp::Xor,
-                        lhs: b,
-                        rhs: c,
-                    },
-                    a,
-                ) if a == b.as_ref() => Some(c.as_ref().clone()),
-                _ => None,
+            let cancel = |a: &Expr, nested: &Expr| {
+                let Expr::Bin {
+                    op: BinOp::Xor,
+                    lhs: b,
+                    rhs: c,
+                } = nested.semantic()
+                else {
+                    return None;
+                };
+                let survivor = if a.semantic() == c.semantic() {
+                    b.as_ref()
+                } else if a.semantic() == b.semantic() {
+                    c.as_ref()
+                } else {
+                    return None;
+                };
+                let origins = [a, nested, b.as_ref(), c.as_ref()]
+                    .into_iter()
+                    .filter_map(Expr::origins)
+                    .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+                        owners.union(next)
+                    });
+                Some(
+                    survivor
+                        .semantic()
+                        .clone()
+                        .with_optional_origins((!origins.is_empty()).then_some(origins)),
+                )
             };
+            let replacement = cancel(lhs, rhs).or_else(|| cancel(rhs, lhs));
             if let Some(replacement) = replacement {
                 rewrite(e, replacement, changed);
                 return;
@@ -842,40 +1104,61 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
         // preserved in the architectural parent cannot affect a later low-byte
         // (or low-bit) read.
         if op == BinOp::And {
-            let masked = match (lhs.as_ref(), rhs.as_ref()) {
-                (value, Expr::Const(mask)) | (Expr::Const(mask), value) => {
-                    fold_observed_mask(value, *mask)
-                }
+            let masked = match (lhs.semantic(), rhs.semantic()) {
+                (_, Expr::Const(mask)) => fold_observed_mask(lhs, *mask)
+                    .map(|replacement| (replacement, rhs.origins().cloned())),
+                (Expr::Const(mask), _) => fold_observed_mask(rhs, *mask)
+                    .map(|replacement| (replacement, lhs.origins().cloned())),
                 _ => None,
             };
-            if let Some(replacement) = masked {
-                rewrite(e, replacement, changed);
+            if let Some((replacement, mask_origins)) = masked {
+                rewrite(e, replacement.with_optional_origins(mask_origins), changed);
                 // The replacement is strictly shallower (one merge or mask
                 // layer disappeared), so finish any newly adjacent identity.
-                fold_expr(e, changed);
+                fold_expr(e, changed, parameter_authority);
                 return;
             }
         }
 
         // Same-operand identities (X op X).
-        if lhs == rhs {
-            match op {
-                BinOp::Xor | BinOp::Sub => {
-                    rewrite(e, Expr::Const(0), changed);
-                    return;
-                }
-                BinOp::And | BinOp::Or => {
-                    // (X & X) == X; replace with X.
-                    let x = std::mem::replace(lhs.as_mut(), Expr::Const(0));
-                    rewrite(e, x, changed);
-                    return;
-                }
-                _ => {}
+        if lhs.semantic() == rhs.semantic() {
+            let origins = lhs
+                .origins()
+                .into_iter()
+                .chain(rhs.origins())
+                .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+                    owners.union(next)
+                });
+            let replacement = match op {
+                BinOp::Xor | BinOp::Sub => Some(Expr::Const(0)),
+                // (X & X) == X; retain both copies' owners on the survivor.
+                BinOp::And | BinOp::Or => Some(lhs.semantic().clone()),
+                _ => None,
+            };
+            if let Some(replacement) = replacement {
+                rewrite(
+                    e,
+                    replacement.with_optional_origins((!origins.is_empty()).then_some(origins)),
+                    changed,
+                );
+                return;
             }
         }
 
-        // Constant-with-anything identities.
-        if let Expr::Const(0) = **rhs {
+        // Constant-with-anything identities. Carrier metadata does not change
+        // the value being matched. A neutral constant contributes its owner to
+        // the surviving value; an annihilated operand does not donate an
+        // unrelated owner to the constant result.
+        let attributed = |replacement: Expr, contributors: &[&Expr]| {
+            let origins = contributors
+                .iter()
+                .filter_map(|contributor| contributor.origins())
+                .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+                    owners.union(next)
+                });
+            replacement.with_optional_origins((!origins.is_empty()).then_some(origins))
+        };
+        let identity_replacement = if matches!(rhs.semantic(), Expr::Const(0)) {
             match op {
                 BinOp::Add
                 | BinOp::Sub
@@ -883,73 +1166,52 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
                 | BinOp::Xor
                 | BinOp::Shl
                 | BinOp::Shr
-                | BinOp::Sar => {
-                    let x = std::mem::replace(lhs.as_mut(), Expr::Const(0));
-                    rewrite(e, x, changed);
-                    return;
-                }
-                BinOp::Mul | BinOp::And => {
-                    rewrite(e, Expr::Const(0), changed);
-                    return;
-                }
+                | BinOp::Sar => Some(attributed(lhs.semantic().clone(), &[lhs, rhs])),
+                BinOp::Mul | BinOp::And => Some(attributed(Expr::Const(0), &[rhs])),
                 BinOp::LogicalOr if is_exact_boolean(lhs) => {
-                    let x = std::mem::replace(lhs.as_mut(), Expr::Const(0));
-                    rewrite(e, x, changed);
-                    return;
+                    Some(attributed(lhs.semantic().clone(), &[lhs, rhs]))
                 }
-                _ => {}
+                _ => None,
             }
-        }
-        if let Expr::Const(0) = **lhs {
-            if matches!(op, BinOp::Add | BinOp::Or | BinOp::Xor) {
-                let x = std::mem::replace(rhs.as_mut(), Expr::Const(0));
-                rewrite(e, x, changed);
-                return;
+        } else if matches!(lhs.semantic(), Expr::Const(0)) {
+            match op {
+                BinOp::Add | BinOp::Or | BinOp::Xor => {
+                    Some(attributed(rhs.semantic().clone(), &[lhs, rhs]))
+                }
+                BinOp::Mul | BinOp::And => Some(attributed(Expr::Const(0), &[lhs])),
+                BinOp::LogicalOr if is_exact_boolean(rhs) => {
+                    Some(attributed(rhs.semantic().clone(), &[lhs, rhs]))
+                }
+                _ => None,
             }
-            if matches!(op, BinOp::Mul | BinOp::And) {
-                rewrite(e, Expr::Const(0), changed);
-                return;
+        } else if matches!(rhs.semantic(), Expr::Const(1)) {
+            match op {
+                BinOp::Mul => Some(attributed(lhs.semantic().clone(), &[lhs, rhs])),
+                BinOp::LogicalAnd if is_exact_boolean(lhs) => {
+                    Some(attributed(lhs.semantic().clone(), &[lhs, rhs]))
+                }
+                _ => None,
             }
-            if op == BinOp::LogicalOr && is_exact_boolean(rhs) {
-                let x = std::mem::replace(rhs.as_mut(), Expr::Const(0));
-                rewrite(e, x, changed);
-                return;
+        } else if matches!(lhs.semantic(), Expr::Const(1)) {
+            match op {
+                BinOp::Mul => Some(attributed(rhs.semantic().clone(), &[lhs, rhs])),
+                BinOp::LogicalAnd if is_exact_boolean(rhs) => {
+                    Some(attributed(rhs.semantic().clone(), &[lhs, rhs]))
+                }
+                _ => None,
             }
-        }
-        if let Expr::Const(1) = **rhs {
-            if matches!(op, BinOp::Mul) {
-                let x = std::mem::replace(lhs.as_mut(), Expr::Const(0));
-                rewrite(e, x, changed);
-                return;
+        } else if matches!(rhs.semantic(), Expr::Const(-1)) {
+            match op {
+                BinOp::And => Some(attributed(lhs.semantic().clone(), &[lhs, rhs])),
+                BinOp::Or => Some(attributed(Expr::Const(-1), &[rhs])),
+                _ => None,
             }
-            if op == BinOp::LogicalAnd && is_exact_boolean(lhs) {
-                let x = std::mem::replace(lhs.as_mut(), Expr::Const(0));
-                rewrite(e, x, changed);
-                return;
-            }
-        }
-        if let Expr::Const(1) = **lhs {
-            if matches!(op, BinOp::Mul) {
-                let x = std::mem::replace(rhs.as_mut(), Expr::Const(0));
-                rewrite(e, x, changed);
-                return;
-            }
-            if op == BinOp::LogicalAnd && is_exact_boolean(rhs) {
-                let x = std::mem::replace(rhs.as_mut(), Expr::Const(0));
-                rewrite(e, x, changed);
-                return;
-            }
-        }
-        if let Expr::Const(-1) = **rhs {
-            if matches!(op, BinOp::And) {
-                let x = std::mem::replace(lhs.as_mut(), Expr::Const(0));
-                rewrite(e, x, changed);
-                return;
-            }
-            if matches!(op, BinOp::Or) {
-                rewrite(e, Expr::Const(-1), changed);
-                return;
-            }
+        } else {
+            None
+        };
+        if let Some(replacement) = identity_replacement {
+            rewrite(e, replacement, changed);
+            return;
         }
 
         // Addr ± Const fold — how AArch64 and ARM32 name a global at all.
@@ -978,11 +1240,11 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
             // object from `base`, so carrying the base's name forward would be
             // the same lie the masked-address case below refuses to tell; the
             // folded VA is re-resolved against the symbol table instead.
-            let as_base = |e: &Expr| match e {
+            let as_base = |e: &Expr| match e.semantic() {
                 Expr::Addr(base) | Expr::Named { va: base, .. } => Some(*base),
                 _ => None,
             };
-            let addr_and_offset = match (lhs.as_ref(), rhs.as_ref()) {
+            let addr_and_offset = match (lhs.semantic(), rhs.semantic()) {
                 (base, Expr::Const(off)) if as_base(base).is_some() => {
                     as_base(base).map(|base| (base, *off))
                 }
@@ -999,13 +1261,25 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
                 } else {
                     base.wrapping_sub(off as u64)
                 };
-                rewrite(e, Expr::Addr(folded), changed);
+                let origins = lhs
+                    .origins()
+                    .into_iter()
+                    .chain(rhs.origins())
+                    .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+                        owners.union(next)
+                    });
+                rewrite(
+                    e,
+                    Expr::Addr(folded)
+                        .with_optional_origins((!origins.is_empty()).then_some(origins)),
+                    changed,
+                );
                 return;
             }
         }
 
         // Const × Const fold.
-        if let (Expr::Const(a), Expr::Const(b)) = (lhs.as_ref(), rhs.as_ref()) {
+        if let (Expr::Const(a), Expr::Const(b)) = (lhs.semantic(), rhs.semantic()) {
             let (a, b) = (*a, *b);
             let folded = match op {
                 BinOp::Add => a.wrapping_add(b),
@@ -1044,7 +1318,18 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
                     }
                 }
             };
-            rewrite(e, Expr::Const(folded), changed);
+            let origins = lhs
+                .origins()
+                .into_iter()
+                .chain(rhs.origins())
+                .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+                    owners.union(next)
+                });
+            rewrite(
+                e,
+                Expr::Const(folded).with_optional_origins((!origins.is_empty()).then_some(origins)),
+                changed,
+            );
         }
     }
 
@@ -1052,50 +1337,69 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
     // negation, not a bitwise operation; invert it into the corresponding
     // relation so it remains readable and type-correct.
     if let Expr::Cmp { op, lhs, rhs } = e {
-        if let (Expr::Const(lhs), Expr::Const(rhs)) = (lhs.as_ref(), rhs.as_ref()) {
+        if let (Expr::Const(lhs_value), Expr::Const(rhs_value)) = (lhs.semantic(), rhs.semantic()) {
             let value = match op {
-                CmpOp::Eq => lhs == rhs,
-                CmpOp::Ne => lhs != rhs,
-                CmpOp::Ult => (*lhs as u64) < (*rhs as u64),
-                CmpOp::Ule => (*lhs as u64) <= (*rhs as u64),
-                CmpOp::Slt => lhs < rhs,
-                CmpOp::Sle => lhs <= rhs,
+                CmpOp::Eq => lhs_value == rhs_value,
+                CmpOp::Ne => lhs_value != rhs_value,
+                CmpOp::Ult => (*lhs_value as u64) < (*rhs_value as u64),
+                CmpOp::Ule => (*lhs_value as u64) <= (*rhs_value as u64),
+                CmpOp::Slt => lhs_value < rhs_value,
+                CmpOp::Sle => lhs_value <= rhs_value,
             };
-            rewrite(e, Expr::Const(i64::from(value)), changed);
+            let origins = lhs
+                .origins()
+                .into_iter()
+                .chain(rhs.origins())
+                .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+                    owners.union(next)
+                });
+            rewrite(
+                e,
+                Expr::Const(i64::from(value))
+                    .with_optional_origins((!origins.is_empty()).then_some(origins)),
+                changed,
+            );
             return;
         }
         // Subtraction sets x86's zero flag: `(X - Y) == 0` is exactly
         // `X == Y` (and likewise for `!=`) in modular machine arithmetic.
         // Recover that relation before merging ZF with CF/SF into inclusive
         // comparisons below.
-        let subtraction_relation = match (&*op, lhs.as_ref(), rhs.as_ref()) {
-            (
-                op @ (CmpOp::Eq | CmpOp::Ne),
-                Expr::Bin {
+        let subtraction_relation = if matches!(op, CmpOp::Eq | CmpOp::Ne) {
+            let operands = if matches!(rhs.semantic(), Expr::Const(0)) {
+                Some((lhs.as_ref(), rhs.as_ref()))
+            } else if matches!(lhs.semantic(), Expr::Const(0)) {
+                Some((rhs.as_ref(), lhs.as_ref()))
+            } else {
+                None
+            };
+            operands.and_then(|(subtraction, zero)| {
+                let Expr::Bin {
                     op: BinOp::Sub,
                     lhs: sub_lhs,
                     rhs: sub_rhs,
-                },
-                Expr::Const(0),
-            ) => Some(Expr::Cmp {
-                op: *op,
-                lhs: sub_lhs.clone(),
-                rhs: sub_rhs.clone(),
-            }),
-            (
-                op @ (CmpOp::Eq | CmpOp::Ne),
-                Expr::Const(0),
-                Expr::Bin {
-                    op: BinOp::Sub,
-                    lhs: sub_lhs,
-                    rhs: sub_rhs,
-                },
-            ) => Some(Expr::Cmp {
-                op: *op,
-                lhs: sub_lhs.clone(),
-                rhs: sub_rhs.clone(),
-            }),
-            _ => None,
+                } = subtraction.semantic()
+                else {
+                    return None;
+                };
+                let origins = subtraction
+                    .origins()
+                    .into_iter()
+                    .chain(zero.origins())
+                    .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+                        owners.union(next)
+                    });
+                Some(
+                    Expr::Cmp {
+                        op: *op,
+                        lhs: sub_lhs.clone(),
+                        rhs: sub_rhs.clone(),
+                    }
+                    .with_optional_origins((!origins.is_empty()).then_some(origins)),
+                )
+            })
+        } else {
+            None
         };
         if let Some(replacement) = subtraction_relation {
             rewrite(e, replacement, changed);
@@ -1111,12 +1415,17 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
         // is representable at the shared signed source width.  Fuse the whole
         // predicate at once; never expose an intermediate mixed-view `<=`.
         if *op == CmpOp::Eq {
-            let candidate = match (lhs.as_ref(), rhs.as_ref()) {
-                (candidate, Expr::Const(0)) | (Expr::Const(0), candidate) => {
-                    invert_mixed_view_equal_or_signed_less(candidate)
-                }
-                _ => None,
+            let operands = if matches!(rhs.semantic(), Expr::Const(0)) {
+                Some((lhs.as_ref(), rhs.as_ref()))
+            } else if matches!(lhs.semantic(), Expr::Const(0)) {
+                Some((rhs.as_ref(), lhs.as_ref()))
+            } else {
+                None
             };
+            let candidate = operands.and_then(|(candidate, zero)| {
+                invert_mixed_view_equal_or_signed_less(candidate)
+                    .map(|replacement| replacement.with_optional_origins(zero.origins().cloned()))
+            });
             if let Some(replacement) = candidate {
                 rewrite(e, replacement, changed);
                 return;
@@ -1130,12 +1439,22 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
         // globally damages CFG fidelity. Recover only the complete terminal
         // test, and only when every leaf is side-effect-free.
         if *op == CmpOp::Ne {
-            let candidate = match (lhs.as_ref(), rhs.as_ref()) {
-                (candidate, Expr::Const(0)) | (Expr::Const(0), candidate) => {
-                    recover_eager_boolean_guard(candidate)
-                }
-                _ => None,
+            let operands = if matches!(rhs.semantic(), Expr::Const(0)) {
+                Some((lhs.as_ref(), rhs.as_ref()))
+            } else if matches!(lhs.semantic(), Expr::Const(0)) {
+                Some((rhs.as_ref(), lhs.as_ref()))
+            } else {
+                None
             };
+            let candidate = operands.and_then(|(candidate, zero)| {
+                recover_eager_boolean_guard(candidate).map(|(logical, leaves, saw_byte_view)| {
+                    (
+                        logical.with_optional_origins(zero.origins().cloned()),
+                        leaves,
+                        saw_byte_view,
+                    )
+                })
+            });
             if let Some((logical, leaves, saw_byte_view)) = candidate {
                 if leaves >= 2 && saw_byte_view {
                     rewrite(e, logical, changed);
@@ -1144,15 +1463,20 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
             }
         }
 
-        let inner = match (lhs.as_ref(), rhs.as_ref()) {
-            (inner, Expr::Const(0)) | (Expr::Const(0), inner) if is_exact_boolean(inner) => {
-                Some(inner)
-            }
-            _ => None,
+        let inner = if matches!(rhs.semantic(), Expr::Const(0)) && is_exact_boolean(lhs) {
+            Some((lhs.as_ref(), rhs.as_ref()))
+        } else if matches!(lhs.semantic(), Expr::Const(0)) && is_exact_boolean(rhs) {
+            Some((rhs.as_ref(), lhs.as_ref()))
+        } else {
+            None
         };
-        if let Some(inner) = inner {
-            let replacement = match (op, inner) {
-                (CmpOp::Ne, boolean) => Some(boolean.clone()),
+        if let Some((inner, zero)) = inner {
+            let replacement = match (op, inner.semantic()) {
+                (CmpOp::Ne, boolean) => Some(
+                    boolean
+                        .clone()
+                        .with_optional_origins(inner.origins().cloned()),
+                ),
                 (
                     CmpOp::Eq,
                     Expr::Cmp {
@@ -1160,9 +1484,13 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
                         lhs: inner_lhs,
                         rhs: inner_rhs,
                     },
-                ) => Some(invert_comparison(*inner_op, inner_lhs, inner_rhs)),
+                ) => Some(
+                    invert_comparison(*inner_op, inner_lhs, inner_rhs)
+                        .with_optional_origins(inner.origins().cloned()),
+                ),
                 _ => None,
-            };
+            }
+            .map(|replacement| replacement.with_optional_origins(zero.origins().cloned()));
             if let Some(replacement) = replacement {
                 rewrite(e, replacement, changed);
             }
@@ -1194,6 +1522,7 @@ fn cast_preserves_constant(value: i64, signed: bool, width: u8) -> bool {
 /// additionally use [`is_short_circuit_safe_boolean`].
 pub(crate) fn is_exact_boolean(expr: &Expr) -> bool {
     match expr {
+        Expr::Origin { expr, .. } => is_exact_boolean(expr),
         Expr::Cmp { .. } => true,
         Expr::Const(value) => matches!(value, 0 | 1),
         Expr::Cast { width, expr, .. } => *width > 0 && is_exact_boolean(expr),
@@ -1212,6 +1541,7 @@ pub(crate) fn is_exact_boolean(expr: &Expr) -> bool {
 /// behavior.
 pub(crate) fn is_short_circuit_safe_boolean(expr: &Expr) -> bool {
     match expr {
+        Expr::Origin { expr, .. } => is_short_circuit_safe_boolean(expr),
         Expr::Cmp { lhs, rhs, .. } => {
             is_short_circuit_safe_value(lhs) && is_short_circuit_safe_value(rhs)
         }
@@ -1228,6 +1558,7 @@ pub(crate) fn is_short_circuit_safe_boolean(expr: &Expr) -> bool {
 
 fn is_short_circuit_safe_value(expr: &Expr) -> bool {
     match expr {
+        Expr::Origin { expr, .. } => is_short_circuit_safe_value(expr),
         Expr::Reg(_)
         | Expr::Const(_)
         | Expr::FloatConst { .. }
@@ -1262,6 +1593,10 @@ fn is_short_circuit_safe_value(expr: &Expr) -> bool {
 /// the machine tree included a byte cast/mask characteristic of SETcc output.
 fn recover_eager_boolean_guard(expr: &Expr) -> Option<(Expr, usize, bool)> {
     match expr {
+        Expr::Origin { origins, expr } => {
+            let (logical, leaves, saw_byte_view) = recover_eager_boolean_guard(expr)?;
+            Some((logical.with_origins(origins.clone()), leaves, saw_byte_view))
+        }
         comparison @ Expr::Cmp { .. } if is_short_circuit_safe_boolean(comparison) => {
             Some((comparison.clone(), 1, false))
         }
@@ -1276,15 +1611,22 @@ fn recover_eager_boolean_guard(expr: &Expr) -> Option<(Expr, usize, bool)> {
             lhs,
             rhs,
         } => {
-            let masked = match (lhs.as_ref(), rhs.as_ref()) {
-                (inner, Expr::Const(mask)) | (Expr::Const(mask), inner) if mask & 1 == 1 => {
-                    Some((inner, *mask))
+            let masked = match (lhs.semantic(), rhs.semantic()) {
+                (_, Expr::Const(mask)) if mask & 1 == 1 => {
+                    Some((lhs.as_ref(), *mask, rhs.origins().cloned()))
+                }
+                (Expr::Const(mask), _) if mask & 1 == 1 => {
+                    Some((rhs.as_ref(), *mask, lhs.origins().cloned()))
                 }
                 _ => None,
             };
-            if let Some((inner, mask)) = masked {
+            if let Some((inner, mask, mask_origins)) = masked {
                 let (logical, leaves, saw_byte_view) = recover_eager_boolean_guard(inner)?;
-                return Some((logical, leaves, saw_byte_view || mask == 255));
+                return Some((
+                    logical.with_optional_origins(mask_origins),
+                    leaves,
+                    saw_byte_view || mask == 255,
+                ));
             }
             recover_eager_boolean_pair(BinOp::LogicalAnd, lhs, rhs)
         }
@@ -1318,12 +1660,15 @@ fn recover_eager_boolean_pair(
 /// `(outer)(inner)x` when both casts have the signedness required by `op` and
 /// strictly widen from the common inner machine width. Returns the cast shape
 /// plus `x`, allowing the caller to prove both operands use the same extension.
-fn common_extended_operand(expr: &Expr, op: CmpOp) -> Option<(bool, u8, u8, &Expr)> {
+fn common_extended_operand(
+    expr: &Expr,
+    op: CmpOp,
+) -> Option<(bool, u8, u8, &Expr, crate::ir::ast::OriginSet)> {
     let Expr::Cast {
         signed: outer_signed,
         width: outer_width,
         expr: outer_expr,
-    } = expr
+    } = expr.semantic()
     else {
         return None;
     };
@@ -1331,7 +1676,7 @@ fn common_extended_operand(expr: &Expr, op: CmpOp) -> Option<(bool, u8, u8, &Exp
         signed: inner_signed,
         width: inner_width,
         expr: inner_expr,
-    } = outer_expr.as_ref()
+    } = outer_expr.semantic()
     else {
         return None;
     };
@@ -1343,11 +1688,19 @@ fn common_extended_operand(expr: &Expr, op: CmpOp) -> Option<(bool, u8, u8, &Exp
         CmpOp::Ult | CmpOp::Ule => !*outer_signed,
         CmpOp::Eq | CmpOp::Ne => true,
     };
+    let cast_origins = expr
+        .origins()
+        .into_iter()
+        .chain(outer_expr.origins())
+        .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+            owners.union(next)
+        });
     signedness_matches.then_some((
         *outer_signed,
         *outer_width,
         *inner_width,
         inner_expr.as_ref(),
+        cast_origins,
     ))
 }
 
@@ -1362,14 +1715,26 @@ fn fold_observed_mask(value: &Expr, observed_mask: i64) -> Option<Expr> {
         });
     }
 
+    if let Expr::Origin { origins, expr } = value {
+        let replacement = fold_observed_mask(expr, observed_mask)?;
+        return Some(if matches!(replacement.semantic(), Expr::Const(0)) {
+            replacement
+        } else {
+            replacement.with_origins(origins.clone())
+        });
+    }
+
     // `(X & A) & B == X & (A & B)`; combining the constants exposes both
     // zero masks and boolean low-bit reads.
-    if let Some((inner, inner_mask)) = and_with_constant(value) {
-        return Some(Expr::Bin {
-            op: BinOp::And,
-            lhs: Box::new(inner.clone()),
-            rhs: Box::new(Expr::Const(inner_mask & observed_mask)),
-        });
+    if let Some((inner, inner_mask, mask_origins)) = and_with_constant(value) {
+        return Some(
+            Expr::Bin {
+                op: BinOp::And,
+                lhs: Box::new(inner.clone()),
+                rhs: Box::new(Expr::Const(inner_mask & observed_mask)),
+            }
+            .with_optional_origins((!mask_origins.is_empty()).then_some(mask_origins)),
+        );
     }
 
     // `((X & KEEP) | Y) & OBSERVED == Y & OBSERVED` when KEEP and OBSERVED
@@ -1380,41 +1745,61 @@ fn fold_observed_mask(value: &Expr, observed_mask: i64) -> Option<Expr> {
         rhs,
     } = value
     {
-        if masked_term_is_disjoint(lhs, observed_mask) {
-            return Some(Expr::Bin {
-                op: BinOp::And,
-                lhs: rhs.clone(),
-                rhs: Box::new(Expr::Const(observed_mask)),
-            });
+        if let Some(mask_origins) = masked_term_disjoint_origins(lhs, observed_mask) {
+            return Some(
+                Expr::Bin {
+                    op: BinOp::And,
+                    lhs: rhs.clone(),
+                    rhs: Box::new(Expr::Const(observed_mask)),
+                }
+                .with_optional_origins((!mask_origins.is_empty()).then_some(mask_origins)),
+            );
         }
-        if masked_term_is_disjoint(rhs, observed_mask) {
-            return Some(Expr::Bin {
-                op: BinOp::And,
-                lhs: lhs.clone(),
-                rhs: Box::new(Expr::Const(observed_mask)),
-            });
+        if let Some(mask_origins) = masked_term_disjoint_origins(rhs, observed_mask) {
+            return Some(
+                Expr::Bin {
+                    op: BinOp::And,
+                    lhs: lhs.clone(),
+                    rhs: Box::new(Expr::Const(observed_mask)),
+                }
+                .with_optional_origins((!mask_origins.is_empty()).then_some(mask_origins)),
+            );
         }
     }
     None
 }
 
-fn and_with_constant(expr: &Expr) -> Option<(&Expr, i64)> {
+fn and_with_constant(expr: &Expr) -> Option<(&Expr, i64, crate::ir::ast::OriginSet)> {
     let Expr::Bin {
         op: BinOp::And,
         lhs,
         rhs,
-    } = expr
+    } = expr.semantic()
     else {
         return None;
     };
-    match (lhs.as_ref(), rhs.as_ref()) {
-        (value, Expr::Const(mask)) | (Expr::Const(mask), value) => Some((value, *mask)),
+    let (value, mask, mask_origins) = match (lhs.semantic(), rhs.semantic()) {
+        (_, Expr::Const(mask)) => Some((lhs.as_ref(), *mask, rhs.origins())),
+        (Expr::Const(mask), _) => Some((rhs.as_ref(), *mask, lhs.origins())),
         _ => None,
-    }
+    }?;
+    let origins = expr
+        .origins()
+        .into_iter()
+        .chain(mask_origins)
+        .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+            owners.union(next)
+        });
+    Some((value, mask, origins))
 }
 
-fn masked_term_is_disjoint(expr: &Expr, observed_mask: i64) -> bool {
-    and_with_constant(expr).is_some_and(|(_, mask)| mask & observed_mask == 0)
+fn masked_term_disjoint_origins(
+    expr: &Expr,
+    observed_mask: i64,
+) -> Option<crate::ir::ast::OriginSet> {
+    and_with_constant(expr)
+        .filter(|(_, mask, _)| mask & observed_mask == 0)
+        .map(|(_, _, origins)| origins)
 }
 
 fn merge_equality_and_less(equality: &Expr, less: &Expr) -> Option<Expr> {
@@ -1422,7 +1807,7 @@ fn merge_equality_and_less(equality: &Expr, less: &Expr) -> Option<Expr> {
         op: CmpOp::Eq,
         lhs: equality_lhs,
         rhs: equality_rhs,
-    } = equality
+    } = equality.semantic()
     else {
         return None;
     };
@@ -1430,7 +1815,7 @@ fn merge_equality_and_less(equality: &Expr, less: &Expr) -> Option<Expr> {
         op,
         lhs: less_lhs,
         rhs: less_rhs,
-    } = less
+    } = less.semantic()
     else {
         return None;
     };
@@ -1438,7 +1823,9 @@ fn merge_equality_and_less(equality: &Expr, less: &Expr) -> Option<Expr> {
     // signed and unsigned views as interchangeable here is value-correct for
     // the equality alone, but prematurely rewrites GCC switch range flags into
     // inequalities and destroys the comparison ladder before switch recovery.
-    if equality_lhs != less_lhs || equality_rhs != less_rhs {
+    if equality_lhs.semantic() != less_lhs.semantic()
+        || equality_rhs.semantic() != less_rhs.semantic()
+    {
         return None;
     }
     let op = match op {
@@ -1446,11 +1833,34 @@ fn merge_equality_and_less(equality: &Expr, less: &Expr) -> Option<Expr> {
         CmpOp::Ult => CmpOp::Ule,
         _ => return None,
     };
-    Some(Expr::Cmp {
-        op,
-        lhs: equality_lhs.clone(),
-        rhs: equality_rhs.clone(),
-    })
+    let origins = equality
+        .origins()
+        .into_iter()
+        .chain(less.origins())
+        .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+            owners.union(next)
+        });
+    let merge_operand = |first: &Expr, second: &Expr| {
+        let origins = first
+            .origins()
+            .into_iter()
+            .chain(second.origins())
+            .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+                owners.union(next)
+            });
+        first
+            .semantic()
+            .clone()
+            .with_optional_origins((!origins.is_empty()).then_some(origins))
+    };
+    Some(
+        Expr::Cmp {
+            op,
+            lhs: Box::new(merge_operand(equality_lhs, less_lhs)),
+            rhs: Box::new(merge_operand(equality_rhs, less_rhs)),
+        }
+        .with_optional_origins((!origins.is_empty()).then_some(origins)),
+    )
 }
 
 /// Prove and invert `(unsigned(x) == K) | (signed(x) < K)` as `K < signed(x)`.
@@ -1463,20 +1873,22 @@ fn invert_mixed_view_equal_or_signed_less(expr: &Expr) -> Option<Expr> {
         op: BinOp::Or,
         lhs,
         rhs,
-    } = expr
+    } = expr.semantic()
     else {
         return None;
     };
-    let (equality, less) = match (lhs.as_ref(), rhs.as_ref()) {
-        (equality @ Expr::Cmp { op: CmpOp::Eq, .. }, less) => (equality, less),
-        (less, equality @ Expr::Cmp { op: CmpOp::Eq, .. }) => (equality, less),
-        _ => return None,
+    let (equality, less) = if matches!(lhs.semantic(), Expr::Cmp { op: CmpOp::Eq, .. }) {
+        (lhs.as_ref(), rhs.as_ref())
+    } else if matches!(rhs.semantic(), Expr::Cmp { op: CmpOp::Eq, .. }) {
+        (rhs.as_ref(), lhs.as_ref())
+    } else {
+        return None;
     };
     let Expr::Cmp {
         lhs: equality_lhs,
         rhs: equality_rhs,
         ..
-    } = equality
+    } = equality.semantic()
     else {
         return None;
     };
@@ -1484,38 +1896,64 @@ fn invert_mixed_view_equal_or_signed_less(expr: &Expr) -> Option<Expr> {
         op: CmpOp::Slt,
         lhs: less_lhs,
         rhs: less_rhs,
-    } = less
+    } = less.semantic()
     else {
         return None;
     };
-    let Expr::Const(equality_constant) = equality_rhs.as_ref() else {
+    let Expr::Const(equality_constant) = equality_rhs.semantic() else {
         return None;
     };
-    let Expr::Const(less_constant) = less_rhs.as_ref() else {
+    let Expr::Const(less_constant) = less_rhs.semantic() else {
         return None;
     };
     if equality_constant != less_constant {
         return None;
     }
-    let (equality_signed, equality_outer, equality_inner, equality_value) =
+    let (equality_signed, equality_outer, equality_inner, equality_value, equality_origins) =
         common_extended_operand(equality_lhs, CmpOp::Eq)?;
-    let (less_signed, less_outer, less_inner, less_value) =
+    let (less_signed, less_outer, less_inner, less_value, less_origins) =
         common_extended_operand(less_lhs, CmpOp::Slt)?;
     if equality_signed
         || !less_signed
         || equality_outer != less_outer
         || equality_inner != less_inner
-        || equality_value != less_value
+        || equality_value.semantic() != less_value.semantic()
         || *equality_constant < 0
         || !cast_preserves_constant(*equality_constant, true, equality_inner)
     {
         return None;
     }
-    Some(Expr::Cmp {
-        op: CmpOp::Slt,
-        lhs: less_rhs.clone(),
-        rhs: less_lhs.clone(),
-    })
+    let origins = expr
+        .origins()
+        .into_iter()
+        .chain(equality.origins())
+        .chain(less.origins())
+        .chain((!equality_origins.is_empty()).then_some(&equality_origins))
+        .chain((!less_origins.is_empty()).then_some(&less_origins))
+        .chain(equality_value.origins())
+        .chain(less_value.origins())
+        .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+            owners.union(next)
+        });
+    let constant_origins = equality_rhs
+        .origins()
+        .into_iter()
+        .chain(less_rhs.origins())
+        .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+            owners.union(next)
+        });
+    Some(
+        Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: Box::new(
+                Expr::Const(*less_constant).with_optional_origins(
+                    (!constant_origins.is_empty()).then_some(constant_origins),
+                ),
+            ),
+            rhs: less_lhs.clone(),
+        }
+        .with_optional_origins((!origins.is_empty()).then_some(origins)),
+    )
 }
 
 fn invert_comparison(op: CmpOp, lhs: &Expr, rhs: &Expr) -> Expr {
@@ -1630,6 +2068,178 @@ mod tests {
     }
 
     #[test]
+    fn attributed_constant_select_hoists_selected_and_control_origins() {
+        let select_owner = crate::ir::ast::OriginSet::one(0x1000);
+        let condition_owner = crate::ir::ast::OriginSet::one(0x1004);
+        let selected_owner = crate::ir::ast::OriginSet::one(0x1008);
+        let unreachable_owner = crate::ir::ast::OriginSet::one(0x100c);
+        let mut function = one_stmt(
+            Expr::Select {
+                cond: Box::new(Expr::Const(1).with_origins(condition_owner.clone())),
+                if_true: Box::new(Expr::Reg(reg("selected")).with_origins(selected_owner.clone())),
+                if_false: Box::new(
+                    Expr::Reg(reg("unreachable")).with_origins(unreachable_owner.clone()),
+                ),
+                width: 8,
+            }
+            .with_origins(select_owner.clone()),
+        );
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        assert_eq!(src.semantic(), &Expr::Reg(reg("selected")));
+        let expected = select_owner.union(&condition_owner).union(&selected_owner);
+        assert_eq!(src.origins(), Some(&expected));
+        assert!(!src
+            .origins()
+            .expect("selected value must remain attributed")
+            .addresses()
+            .contains(&0x100c));
+    }
+
+    #[test]
+    fn repeated_select_condition_drops_unreachable_prior_values() {
+        let condition = Expr::Cmp {
+            op: CmpOp::Ule,
+            lhs: Box::new(Expr::Reg(reg("count"))),
+            rhs: Box::new(Expr::Const(64)),
+        };
+        let mut function = one_stmt(Expr::Select {
+            cond: Box::new(condition.clone()),
+            if_true: Box::new(Expr::Select {
+                cond: Box::new(condition),
+                if_true: Box::new(Expr::Const(0)),
+                if_false: Box::new(Expr::Reg(reg("undefined_prior"))),
+                width: 4,
+            }),
+            if_false: Box::new(Expr::Const(1)),
+            width: 4,
+        });
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("fixture assignment disappeared: {:#?}", function.body);
+        };
+        assert!(
+            matches!(src, Expr::Select { if_true, .. } if if_true.as_ref() == &Expr::Const(0)),
+            "{src:#?}"
+        );
+        assert!(!format!("{src:?}").contains("undefined_prior"));
+    }
+
+    #[test]
+    fn attributed_repeated_select_unions_removed_control_origins() {
+        let condition = || Expr::Cmp {
+            op: CmpOp::Ule,
+            lhs: Box::new(Expr::Reg(reg("count"))),
+            rhs: Box::new(Expr::Const(64)),
+        };
+        let outer_select_owner = crate::ir::ast::OriginSet::one(0x1000);
+        let outer_condition_owner = crate::ir::ast::OriginSet::one(0x1004);
+        let inner_select_owner = crate::ir::ast::OriginSet::one(0x1008);
+        let inner_condition_owner = crate::ir::ast::OriginSet::one(0x100c);
+        let unreachable_owner = crate::ir::ast::OriginSet::one(0x1010);
+        let mut function = one_stmt(
+            Expr::Select {
+                cond: Box::new(condition().with_origins(outer_condition_owner)),
+                if_true: Box::new(
+                    Expr::Select {
+                        cond: Box::new(condition().with_origins(inner_condition_owner.clone())),
+                        if_true: Box::new(Expr::Const(0)),
+                        if_false: Box::new(
+                            Expr::Reg(reg("undefined_prior"))
+                                .with_origins(unreachable_owner.clone()),
+                        ),
+                        width: 4,
+                    }
+                    .with_origins(inner_select_owner.clone()),
+                ),
+                if_false: Box::new(Expr::Const(1)),
+                width: 4,
+            }
+            .with_origins(outer_select_owner.clone()),
+        );
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        assert!(matches!(src.semantic(), Expr::Select { if_true, .. }
+            if if_true.semantic() == &Expr::Const(0)));
+        let expected = outer_select_owner
+            .union(&inner_select_owner)
+            .union(&inner_condition_owner);
+        assert_eq!(src.origins(), Some(&expected));
+        assert!(!format!("{src:?}").contains("undefined_prior"));
+        assert!(!src
+            .origins()
+            .expect("collapsed select must remain attributed")
+            .addresses()
+            .contains(&unreachable_owner.addresses()[0]));
+    }
+
+    #[test]
+    fn repeated_effectful_select_condition_is_not_collapsed() {
+        let condition = Expr::Call {
+            target: Box::new(Expr::Addr(0x1234)),
+            args: Vec::new(),
+            call_spec: None,
+            result_width: Some(4),
+        };
+        let original = Expr::Select {
+            cond: Box::new(condition.clone()),
+            if_true: Box::new(Expr::Select {
+                cond: Box::new(condition),
+                if_true: Box::new(Expr::Const(0)),
+                if_false: Box::new(Expr::Reg(reg("prior"))),
+                width: 4,
+            }),
+            if_false: Box::new(Expr::Const(1)),
+            width: 4,
+        };
+        let mut function = one_stmt(original.clone());
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("fixture assignment disappeared: {:#?}", function.body);
+        };
+        assert_eq!(src, &original);
+    }
+
+    #[test]
+    fn repeated_false_arm_condition_drops_unreachable_prior_value() {
+        let condition = Expr::Reg(reg("condition"));
+        let mut function = one_stmt(Expr::Select {
+            cond: Box::new(condition.clone()),
+            if_true: Box::new(Expr::Const(1)),
+            if_false: Box::new(Expr::Select {
+                cond: Box::new(condition),
+                if_true: Box::new(Expr::Reg(reg("undefined_prior"))),
+                if_false: Box::new(Expr::Const(0)),
+                width: 4,
+            }),
+            width: 4,
+        });
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("fixture assignment disappeared: {:#?}", function.body);
+        };
+        assert!(
+            matches!(src, Expr::Select { if_false, .. } if if_false.as_ref() == &Expr::Const(0)),
+            "{src:#?}"
+        );
+        assert!(!format!("{src:?}").contains("undefined_prior"));
+    }
+
+    #[test]
     fn xor_self_collapses_to_zero() {
         let mut f = one_stmt(bin(
             BinOp::Xor,
@@ -1723,6 +2333,58 @@ mod tests {
         }
     }
 
+    #[test]
+    fn attributed_constant_arithmetic_folds_and_unions_origins() {
+        let outer_owner = crate::ir::ast::OriginSet::one(0x1000);
+        let lhs_owner = crate::ir::ast::OriginSet::one(0x1004);
+        let rhs_owner = crate::ir::ast::OriginSet::one(0x1008);
+        let mut f = one_stmt(
+            bin(
+                BinOp::Mul,
+                Expr::Const(6).with_origins(lhs_owner.clone()),
+                Expr::Const(7).with_origins(rhs_owner.clone()),
+            )
+            .with_origins(outer_owner.clone()),
+        );
+
+        fold_constants(&mut f);
+
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!("expected assignment");
+        };
+        assert_eq!(src.semantic(), &Expr::Const(42));
+        assert_eq!(
+            src.origins(),
+            Some(&outer_owner.union(&lhs_owner).union(&rhs_owner))
+        );
+    }
+
+    #[test]
+    fn attributed_constant_comparison_folds_and_unions_origins() {
+        let outer_owner = crate::ir::ast::OriginSet::one(0x1010);
+        let lhs_owner = crate::ir::ast::OriginSet::one(0x1014);
+        let rhs_owner = crate::ir::ast::OriginSet::one(0x1018);
+        let mut f = one_stmt(
+            Expr::Cmp {
+                op: CmpOp::Slt,
+                lhs: Box::new(Expr::Const(3).with_origins(lhs_owner.clone())),
+                rhs: Box::new(Expr::Const(5).with_origins(rhs_owner.clone())),
+            }
+            .with_origins(outer_owner.clone()),
+        );
+
+        fold_constants(&mut f);
+
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!("expected assignment");
+        };
+        assert_eq!(src.semantic(), &Expr::Const(1));
+        assert_eq!(
+            src.origins(),
+            Some(&outer_owner.union(&lhs_owner).union(&rhs_owner))
+        );
+    }
+
     /// `adrp` + `add` must reassemble into one address.
     ///
     /// This is the AArch64 spelling of `lea rax, [rip+disp]`, and without the
@@ -1736,6 +2398,32 @@ mod tests {
             panic!("expected assignment");
         };
         assert_eq!(*src, Expr::Addr(0x1f2a8));
+    }
+
+    #[test]
+    fn attributed_address_reconstruction_unions_base_and_offset_origins() {
+        let add_owner = crate::ir::ast::OriginSet::one(0x1060);
+        let page_owner = crate::ir::ast::OriginSet::one(0x1064);
+        let offset_owner = crate::ir::ast::OriginSet::one(0x1068);
+        let mut f = one_stmt(
+            bin(
+                BinOp::Add,
+                Expr::Addr(0x1f000).with_origins(page_owner.clone()),
+                Expr::Const(0x2a8).with_origins(offset_owner.clone()),
+            )
+            .with_origins(add_owner.clone()),
+        );
+
+        fold_constants(&mut f);
+
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!("expected assignment")
+        };
+        assert_eq!(src.semantic(), &Expr::Addr(0x1f2a8));
+        assert_eq!(
+            src.origins(),
+            Some(&add_owner.union(&page_owner).union(&offset_owner))
+        );
     }
 
     /// A NAMED base folds too, and loses the name.
@@ -1824,6 +2512,186 @@ mod tests {
     }
 
     #[test]
+    fn attributed_xor_cancellation_retains_origin() {
+        let less = Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: Box::new(Expr::Reg(reg("rax"))),
+            rhs: Box::new(Expr::Reg(reg("rbx"))),
+        };
+        let sign = Expr::Reg(reg("sf"));
+        let owner = crate::ir::ast::OriginSet::one(0x1000);
+        let mut f = one_stmt(
+            bin(
+                BinOp::Xor,
+                sign.clone(),
+                bin(BinOp::Xor, less.clone(), sign),
+            )
+            .with_origins(owner.clone()),
+        );
+
+        fold_constants(&mut f);
+
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!("expected assignment")
+        };
+        assert_eq!(src.semantic(), &less);
+        assert_eq!(src.origins(), Some(&owner));
+    }
+
+    #[test]
+    fn attributed_xor_cancellation_unions_consumed_flag_origins() {
+        let outer_owner = crate::ir::ast::OriginSet::one(0x1070);
+        let first_flag_owner = crate::ir::ast::OriginSet::one(0x1074);
+        let nested_owner = crate::ir::ast::OriginSet::one(0x1078);
+        let relation_owner = crate::ir::ast::OriginSet::one(0x107c);
+        let repeated_flag_owner = crate::ir::ast::OriginSet::one(0x1080);
+        let relation = Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: Box::new(Expr::Reg(reg("rax"))),
+            rhs: Box::new(Expr::Reg(reg("rbx"))),
+        };
+        let mut function = one_stmt(
+            bin(
+                BinOp::Xor,
+                Expr::Reg(reg("sf")).with_origins(first_flag_owner.clone()),
+                bin(
+                    BinOp::Xor,
+                    relation.clone().with_origins(relation_owner.clone()),
+                    Expr::Reg(reg("sf")).with_origins(repeated_flag_owner.clone()),
+                )
+                .with_origins(nested_owner.clone()),
+            )
+            .with_origins(outer_owner.clone()),
+        );
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        assert_eq!(src.semantic(), &relation);
+        assert_eq!(
+            src.origins(),
+            Some(
+                &outer_owner
+                    .union(&first_flag_owner)
+                    .union(&nested_owner)
+                    .union(&relation_owner)
+                    .union(&repeated_flag_owner)
+            )
+        );
+    }
+
+    #[test]
+    fn attributed_same_operand_identity_unions_both_owners() {
+        let outer_owner = crate::ir::ast::OriginSet::one(0x1020);
+        let lhs_owner = crate::ir::ast::OriginSet::one(0x1024);
+        let rhs_owner = crate::ir::ast::OriginSet::one(0x1028);
+        let mut f = one_stmt(
+            bin(
+                BinOp::Xor,
+                Expr::Reg(reg("rax")).with_origins(lhs_owner.clone()),
+                Expr::Reg(reg("rax")).with_origins(rhs_owner.clone()),
+            )
+            .with_origins(outer_owner.clone()),
+        );
+
+        fold_constants(&mut f);
+
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!("expected assignment")
+        };
+        assert_eq!(src.semantic(), &Expr::Const(0));
+        assert_eq!(
+            src.origins(),
+            Some(&outer_owner.union(&lhs_owner).union(&rhs_owner))
+        );
+    }
+
+    #[test]
+    fn attributed_constant_identities_keep_only_semantic_contributors() {
+        let neutral_outer = crate::ir::ast::OriginSet::one(0x1030);
+        let neutral_value = crate::ir::ast::OriginSet::one(0x1034);
+        let neutral_zero = crate::ir::ast::OriginSet::one(0x1038);
+        let absorbing_outer = crate::ir::ast::OriginSet::one(0x1040);
+        let discarded_value = crate::ir::ast::OriginSet::one(0x1044);
+        let absorbing_zero = crate::ir::ast::OriginSet::one(0x1048);
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: bin(
+                        BinOp::Add,
+                        Expr::Reg(reg("value")).with_origins(neutral_value.clone()),
+                        Expr::Const(0).with_origins(neutral_zero.clone()),
+                    )
+                    .with_origins(neutral_outer.clone()),
+                },
+                Stmt::Assign {
+                    dst: reg("rbx"),
+                    src: bin(
+                        BinOp::Mul,
+                        Expr::Reg(reg("discarded")).with_origins(discarded_value.clone()),
+                        Expr::Const(0).with_origins(absorbing_zero.clone()),
+                    )
+                    .with_origins(absorbing_outer.clone()),
+                },
+            ],
+        };
+
+        fold_constants(&mut f);
+
+        let Stmt::Assign { src: neutral, .. } = &f.body[0] else {
+            panic!("expected neutral assignment")
+        };
+        assert_eq!(neutral.semantic(), &Expr::Reg(reg("value")));
+        assert_eq!(
+            neutral.origins(),
+            Some(&neutral_outer.union(&neutral_value).union(&neutral_zero))
+        );
+
+        let Stmt::Assign { src: absorbing, .. } = &f.body[1] else {
+            panic!("expected absorbing assignment")
+        };
+        assert_eq!(absorbing.semantic(), &Expr::Const(0));
+        assert_eq!(
+            absorbing.origins(),
+            Some(&absorbing_outer.union(&absorbing_zero))
+        );
+    }
+
+    #[test]
+    fn zero_test_inverts_attributed_comparison_and_retains_origin() {
+        let owner = crate::ir::ast::OriginSet::one(0x1000);
+        let comparison = Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: Box::new(Expr::Reg(reg("a"))),
+            rhs: Box::new(Expr::Reg(reg("b"))),
+        }
+        .with_origins(owner.clone());
+        let mut function = one_stmt(Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs: Box::new(comparison),
+            rhs: Box::new(Expr::Const(0)),
+        });
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        assert!(matches!(
+            src.semantic(),
+            Expr::Cmp { op: CmpOp::Sle, lhs, rhs }
+                if matches!(lhs.as_ref(), Expr::Reg(register) if register == &reg("b"))
+                    && matches!(rhs.as_ref(), Expr::Reg(register) if register == &reg("a"))
+        ));
+        assert_eq!(src.origins(), Some(&owner));
+    }
+
+    #[test]
     fn equality_or_less_merges_to_less_equal() {
         let lhs = Expr::Reg(reg("rax"));
         let rhs = Expr::Reg(reg("rbx"));
@@ -1851,6 +2719,98 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn attributed_equality_or_less_merges_and_unions_origins() {
+        let lhs = Expr::Reg(reg("rax"));
+        let rhs = Expr::Reg(reg("rbx"));
+        let equality_owner = crate::ir::ast::OriginSet::one(0x1000);
+        let less_owner = crate::ir::ast::OriginSet::one(0x1004);
+        let equality_lhs_owner = crate::ir::ast::OriginSet::one(0x1008);
+        let equality_rhs_owner = crate::ir::ast::OriginSet::one(0x100c);
+        let less_lhs_owner = crate::ir::ast::OriginSet::one(0x1010);
+        let less_rhs_owner = crate::ir::ast::OriginSet::one(0x1014);
+        let mut function = one_stmt(bin(
+            BinOp::Or,
+            Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(lhs.clone().with_origins(equality_lhs_owner.clone())),
+                rhs: Box::new(rhs.clone().with_origins(equality_rhs_owner.clone())),
+            }
+            .with_origins(equality_owner.clone()),
+            Expr::Cmp {
+                op: CmpOp::Slt,
+                lhs: Box::new(lhs.clone().with_origins(less_lhs_owner.clone())),
+                rhs: Box::new(rhs.clone().with_origins(less_rhs_owner.clone())),
+            }
+            .with_origins(less_owner.clone()),
+        ));
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        assert!(matches!(
+            src.semantic(),
+            Expr::Cmp { op: CmpOp::Sle, lhs, rhs }
+                if matches!(lhs.semantic(), Expr::Reg(register) if register == &reg("rax"))
+                    && matches!(rhs.semantic(), Expr::Reg(register) if register == &reg("rbx"))
+        ));
+        assert_eq!(src.origins(), Some(&equality_owner.union(&less_owner)));
+        let Expr::Cmp {
+            lhs: merged_lhs,
+            rhs: merged_rhs,
+            ..
+        } = src.semantic()
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            merged_lhs.origins(),
+            Some(&equality_lhs_owner.union(&less_lhs_owner))
+        );
+        assert_eq!(
+            merged_rhs.origins(),
+            Some(&equality_rhs_owner.union(&less_rhs_owner))
+        );
+    }
+
+    #[test]
+    fn attributed_subtraction_zero_test_recovers_relation_and_unions_origins() {
+        let lhs = Expr::Reg(reg("rax"));
+        let rhs = Expr::Reg(reg("rbx"));
+        let comparison_owner = crate::ir::ast::OriginSet::one(0x1000);
+        let subtraction_owner = crate::ir::ast::OriginSet::one(0x1004);
+        let subtraction =
+            bin(BinOp::Sub, lhs.clone(), rhs.clone()).with_origins(subtraction_owner.clone());
+        let mut function = one_stmt(
+            Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(subtraction),
+                rhs: Box::new(Expr::Const(0)),
+            }
+            .with_origins(comparison_owner.clone()),
+        );
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        assert_eq!(
+            src.semantic(),
+            &Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            }
+        );
+        assert_eq!(
+            src.origins(),
+            Some(&comparison_owner.union(&subtraction_owner))
+        );
     }
 
     #[test]
@@ -1936,6 +2896,85 @@ mod tests {
                 rhs: Box::new(signed_value),
             }
         );
+    }
+
+    #[test]
+    fn attributed_terminal_mixed_view_relation_unions_consumed_origins() {
+        let value = Expr::Reg(reg("arg0"));
+        let view = |signed: bool, value: Expr| Expr::Cast {
+            signed,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed,
+                width: 4,
+                expr: Box::new(value),
+            }),
+        };
+        let terminal_owner = crate::ir::ast::OriginSet::one(0x1000);
+        let relation_owner = crate::ir::ast::OriginSet::one(0x1004);
+        let equality_owner = crate::ir::ast::OriginSet::one(0x1008);
+        let less_owner = crate::ir::ast::OriginSet::one(0x100c);
+        let zero_owner = crate::ir::ast::OriginSet::one(0x1010);
+        let equality_constant_owner = crate::ir::ast::OriginSet::one(0x1014);
+        let less_constant_owner = crate::ir::ast::OriginSet::one(0x1018);
+        let equality_value_owner = crate::ir::ast::OriginSet::one(0x101c);
+        let less_value_owner = crate::ir::ast::OriginSet::one(0x1020);
+        let signed_value = view(true, value.clone().with_origins(less_value_owner.clone()));
+        let relation = bin(
+            BinOp::Or,
+            Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(view(
+                    false,
+                    value.with_origins(equality_value_owner.clone()),
+                )),
+                rhs: Box::new(Expr::Const(100).with_origins(equality_constant_owner.clone())),
+            }
+            .with_origins(equality_owner.clone()),
+            Expr::Cmp {
+                op: CmpOp::Slt,
+                lhs: Box::new(signed_value.clone()),
+                rhs: Box::new(Expr::Const(100).with_origins(less_constant_owner.clone())),
+            }
+            .with_origins(less_owner.clone()),
+        )
+        .with_origins(relation_owner.clone());
+        let mut function = one_stmt(
+            Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(relation),
+                rhs: Box::new(Expr::Const(0).with_origins(zero_owner.clone())),
+            }
+            .with_origins(terminal_owner.clone()),
+        );
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        let Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs,
+            rhs,
+        } = src.semantic()
+        else {
+            panic!("expected recovered signed relation: {src:#?}")
+        };
+        assert_eq!(lhs.semantic(), &Expr::Const(100));
+        assert_eq!(rhs.semantic(), signed_value.semantic());
+        assert_eq!(
+            lhs.origins(),
+            Some(&equality_constant_owner.union(&less_constant_owner))
+        );
+        let expected = terminal_owner
+            .union(&relation_owner)
+            .union(&equality_owner)
+            .union(&less_owner)
+            .union(&zero_owner)
+            .union(&equality_value_owner)
+            .union(&less_value_owner);
+        assert_eq!(src.origins(), Some(&expected));
     }
 
     #[test]
@@ -2194,6 +3233,66 @@ mod tests {
     }
 
     #[test]
+    fn attributed_observed_mask_keeps_surviving_low_bit_origins() {
+        let observed_owner = crate::ir::ast::OriginSet::one(0x1000);
+        let merge_owner = crate::ir::ast::OriginSet::one(0x1004);
+        let predicate_owner = crate::ir::ast::OriginSet::one(0x1008);
+        let discarded_owner = crate::ir::ast::OriginSet::one(0x100c);
+        let mask_owner = crate::ir::ast::OriginSet::one(0x1010);
+        let discarded_mask_tree_owner = crate::ir::ast::OriginSet::one(0x1014);
+        let discarded_mask_owner = crate::ir::ast::OriginSet::one(0x1018);
+        let old = Expr::Reg(reg("old_parent")).with_origins(discarded_owner.clone());
+        let predicate = Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs: Box::new(Expr::Reg(reg("state"))),
+            rhs: Box::new(Expr::Const(3)),
+        }
+        .with_origins(predicate_owner.clone());
+        let merged = bin(
+            BinOp::Or,
+            bin(
+                BinOp::And,
+                old,
+                Expr::Const(-256).with_origins(discarded_mask_owner.clone()),
+            )
+            .with_origins(discarded_mask_tree_owner.clone()),
+            bin(
+                BinOp::And,
+                bin(BinOp::And, predicate, Expr::Const(255)),
+                Expr::Const(1),
+            ),
+        )
+        .with_origins(merge_owner.clone());
+        let mut function = one_stmt(
+            bin(
+                BinOp::And,
+                merged,
+                Expr::Const(255).with_origins(mask_owner.clone()),
+            )
+            .with_origins(observed_owner.clone()),
+        );
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        assert!(matches!(src.semantic(), Expr::Cmp { op: CmpOp::Eq, .. }));
+        let expected = observed_owner
+            .union(&merge_owner)
+            .union(&predicate_owner)
+            .union(&mask_owner)
+            .union(&discarded_mask_tree_owner)
+            .union(&discarded_mask_owner);
+        assert_eq!(src.origins(), Some(&expected));
+        assert!(!src
+            .origins()
+            .expect("observed predicate must remain attributed")
+            .addresses()
+            .contains(&discarded_owner.addresses()[0]));
+    }
+
+    #[test]
     fn casts_of_in_range_constants_and_predicates_keep_the_same_value() {
         let predicate = Expr::Cmp {
             op: CmpOp::Eq,
@@ -2332,6 +3431,130 @@ mod tests {
                 ..
             } if source == &reg("arg0")
         ));
+    }
+
+    #[test]
+    fn exact_opaque_identity_removes_its_redundant_unsigned_view() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let value = reg("opaque_value");
+        let mut function = one_stmt(Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: false,
+                width: 4,
+                expr: Box::new(Expr::Reg(value.clone())),
+            }),
+        });
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            value.clone(),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            value.clone(),
+            crate::ir::ssa::SsaValue {
+                base: reg("eax"),
+                version: 1,
+            },
+        );
+
+        fold_typed_declared_views_with_identities(&mut function, &types, Some(&identities));
+
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Assign { src: Expr::Reg(source), .. } if source == &value
+        ));
+    }
+
+    #[test]
+    fn ambiguous_opaque_identity_keeps_its_unsigned_view() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let value = reg("opaque_value");
+        let view = Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: false,
+                width: 4,
+                expr: Box::new(Expr::Reg(value.clone())),
+            }),
+        };
+        let mut function = one_stmt(view.clone());
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            value.clone(),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for (base, version) in [("eax", 1), ("ebx", 2)] {
+            identities.record(
+                value.clone(),
+                crate::ir::ssa::SsaValue {
+                    base: reg(base),
+                    version,
+                },
+            );
+        }
+
+        fold_typed_declared_views_with_identities(&mut function, &types, Some(&identities));
+
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Assign { src, .. } if src == &view
+        ));
+    }
+
+    #[test]
+    fn attributed_typed_register_view_unions_both_cast_and_source_origins() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let outer_owner = crate::ir::ast::OriginSet::one(0x10a0);
+        let inner_owner = crate::ir::ast::OriginSet::one(0x10a4);
+        let source_owner = crate::ir::ast::OriginSet::one(0x10a8);
+        let mut function = one_stmt(
+            Expr::Cast {
+                signed: false,
+                width: 8,
+                expr: Box::new(
+                    Expr::Cast {
+                        signed: false,
+                        width: 4,
+                        expr: Box::new(Expr::Reg(reg("arg0")).with_origins(source_owner.clone())),
+                    }
+                    .with_origins(inner_owner.clone()),
+                ),
+            }
+            .with_origins(outer_owner.clone()),
+        );
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            reg("arg0"),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+
+        fold_typed_declared_views(&mut function, &types);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        assert_eq!(src.semantic(), &Expr::Reg(reg("arg0")));
+        assert_eq!(
+            src.origins(),
+            Some(&outer_owner.union(&inner_owner).union(&source_owner))
+        );
     }
 
     #[test]
@@ -2508,6 +3731,169 @@ mod tests {
     }
 
     #[test]
+    fn exact_opaque_identities_remove_matching_comparison_extensions() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let extended = |name| Expr::Cast {
+            signed: true,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: true,
+                width: 4,
+                expr: Box::new(Expr::Reg(reg(name))),
+            }),
+        };
+        let mut function = one_stmt(Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: Box::new(extended("opaque_left")),
+            rhs: Box::new(extended("opaque_right")),
+        });
+        let mut types = TypeMap::default();
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for (name, base) in [("opaque_left", "eax"), ("opaque_right", "ebx")] {
+            types.upsert_public(
+                reg(name),
+                TypeHint::Int {
+                    signed: true,
+                    width: 4,
+                },
+            );
+            identities.record(
+                reg(name),
+                crate::ir::ssa::SsaValue {
+                    base: reg(base),
+                    version: 1,
+                },
+            );
+        }
+
+        fold_typed_comparison_extensions_with_identities(&mut function, &types, Some(&identities));
+
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Assign {
+                src: Expr::Cmp { lhs, rhs, .. },
+                ..
+            } if matches!(lhs.as_ref(), Expr::Reg(value) if value == &reg("opaque_left"))
+                && matches!(rhs.as_ref(), Expr::Reg(value) if value == &reg("opaque_right"))
+        ));
+    }
+
+    #[test]
+    fn ambiguous_opaque_identity_keeps_comparison_extensions() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let extended = |name| Expr::Cast {
+            signed: true,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: true,
+                width: 4,
+                expr: Box::new(Expr::Reg(reg(name))),
+            }),
+        };
+        let mut function = one_stmt(Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: Box::new(extended("opaque_left")),
+            rhs: Box::new(extended("opaque_right")),
+        });
+        let mut types = TypeMap::default();
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for name in ["opaque_left", "opaque_right"] {
+            types.upsert_public(
+                reg(name),
+                TypeHint::Int {
+                    signed: true,
+                    width: 4,
+                },
+            );
+        }
+        identities.record(
+            reg("opaque_left"),
+            crate::ir::ssa::SsaValue {
+                base: reg("eax"),
+                version: 1,
+            },
+        );
+        for (base, version) in [("ebx", 1), ("ecx", 2)] {
+            identities.record(
+                reg("opaque_right"),
+                crate::ir::ssa::SsaValue {
+                    base: reg(base),
+                    version,
+                },
+            );
+        }
+
+        fold_typed_comparison_extensions_with_identities(&mut function, &types, Some(&identities));
+
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Assign {
+                src: Expr::Cmp { lhs, rhs, .. },
+                ..
+            } if matches!(lhs.as_ref(), Expr::Cast { width: 8, .. })
+                && matches!(rhs.as_ref(), Expr::Cast { width: 8, .. })
+        ));
+    }
+
+    #[test]
+    fn typed_comparison_views_preserve_cast_and_source_origins() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let extended = |name, base| {
+            Expr::Cast {
+                signed: true,
+                width: 8,
+                expr: Box::new(
+                    Expr::Cast {
+                        signed: true,
+                        width: 4,
+                        expr: Box::new(
+                            Expr::Reg(reg(name))
+                                .with_origins(crate::ir::ast::OriginSet::one(base + 8)),
+                        ),
+                    }
+                    .with_origins(crate::ir::ast::OriginSet::one(base + 4)),
+                ),
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(base))
+        };
+        let mut function = one_stmt(Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: Box::new(extended("arg0", 0x1000)),
+            rhs: Box::new(extended("arg1", 0x1010)),
+        });
+        let mut types = TypeMap::default();
+        for name in ["arg0", "arg1"] {
+            types.upsert_public(
+                reg(name),
+                TypeHint::Int {
+                    signed: true,
+                    width: 4,
+                },
+            );
+        }
+
+        fold_typed_comparison_extensions(&mut function, &types);
+
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Assign {
+                src: Expr::Cmp { lhs, rhs, .. },
+                ..
+            } if matches!(lhs.semantic(), Expr::Reg(register) if register == &reg("arg0"))
+                && matches!(rhs.semantic(), Expr::Reg(register) if register == &reg("arg1"))
+                && lhs.origins() == Some(&crate::ir::ast::OriginSet::from_addresses([
+                    0x1000, 0x1004, 0x1008,
+                ]))
+                && rhs.origins() == Some(&crate::ir::ast::OriginSet::from_addresses([
+                    0x1010, 0x1014, 0x1018,
+                ]))
+        ));
+    }
+
+    #[test]
     fn equal_zero_extensions_keep_the_source_width_without_a_wide_compare() {
         use crate::ir::types_recover::{TypeHint, TypeMap};
 
@@ -2617,6 +4003,34 @@ mod tests {
     }
 
     #[test]
+    fn attributed_store_width_fold_unions_cast_and_value_origins() {
+        let cast_owner = crate::ir::ast::OriginSet::one(0x1090);
+        let value_owner = crate::ir::ast::OriginSet::one(0x1094);
+        let mut function = Function {
+            name: "store".into(),
+            entry_va: 0,
+            body: vec![Stmt::Store {
+                addr: Expr::Reg(reg("destination")),
+                src: Expr::Cast {
+                    signed: false,
+                    width: 4,
+                    expr: Box::new(Expr::Reg(reg("value")).with_origins(value_owner.clone())),
+                }
+                .with_origins(cast_owner.clone()),
+                size: 1,
+            }],
+        };
+
+        fold_constants(&mut function);
+
+        let Stmt::Store { src, .. } = &function.body[0] else {
+            panic!("expected store")
+        };
+        assert_eq!(src.semantic(), &Expr::Reg(reg("value")));
+        assert_eq!(src.origins(), Some(&cast_owner.union(&value_owner)));
+    }
+
+    #[test]
     fn logical_not_of_comparison_reverses_relation() {
         let lhs = Expr::Reg(reg("rax"));
         let rhs = Expr::Reg(reg("rbx"));
@@ -2684,6 +4098,79 @@ mod tests {
                 ),
             }
         );
+    }
+
+    #[test]
+    fn attributed_eager_boolean_tree_recovers_logical_origins() {
+        let terminal_owner = crate::ir::ast::OriginSet::one(0x1000);
+        let cast_owner = crate::ir::ast::OriginSet::one(0x1004);
+        let tree_owner = crate::ir::ast::OriginSet::one(0x1008);
+        let first_owner = crate::ir::ast::OriginSet::one(0x100c);
+        let second_owner = crate::ir::ast::OriginSet::one(0x1010);
+        let mask_tree_owner = crate::ir::ast::OriginSet::one(0x1014);
+        let mask_owner = crate::ir::ast::OriginSet::one(0x1018);
+        let comparison = |name: &str, owner: crate::ir::ast::OriginSet| {
+            Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(Expr::Reg(reg(name))),
+                rhs: Box::new(Expr::Const(0)),
+            }
+            .with_origins(owner)
+        };
+        let eager = bin(
+            BinOp::Or,
+            comparison("arg0", first_owner.clone()),
+            comparison("arg1", second_owner.clone()),
+        )
+        .with_origins(tree_owner.clone());
+        let mut function = one_stmt(
+            Expr::Cmp {
+                op: CmpOp::Ne,
+                lhs: Box::new(
+                    Expr::Cast {
+                        signed: false,
+                        width: 1,
+                        expr: Box::new(
+                            bin(
+                                BinOp::And,
+                                eager,
+                                Expr::Const(255).with_origins(mask_owner.clone()),
+                            )
+                            .with_origins(mask_tree_owner.clone()),
+                        ),
+                    }
+                    .with_origins(cast_owner.clone()),
+                ),
+                rhs: Box::new(Expr::Const(0)),
+            }
+            .with_origins(terminal_owner.clone()),
+        );
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        let Expr::Bin {
+            op: BinOp::LogicalOr,
+            lhs,
+            rhs,
+        } = src.semantic()
+        else {
+            panic!("expected logical disjunction: {src:#?}")
+        };
+        assert_eq!(
+            src.origins(),
+            Some(
+                &terminal_owner
+                    .union(&cast_owner)
+                    .union(&mask_tree_owner)
+                    .union(&mask_owner)
+                    .union(&tree_owner),
+            )
+        );
+        assert_eq!(lhs.origins(), Some(&first_owner));
+        assert_eq!(rhs.origins(), Some(&second_owner));
     }
 
     #[test]
@@ -2936,6 +4423,67 @@ mod tests {
     }
 
     #[test]
+    fn attributed_redundant_literal_cast_unions_cast_and_value_origins() {
+        let cast_owner = crate::ir::ast::OriginSet::one(0x1050);
+        let value_owner = crate::ir::ast::OriginSet::one(0x1054);
+        let mut function = one_stmt(
+            Expr::Cast {
+                signed: false,
+                width: 8,
+                expr: Box::new(Expr::Const(7).with_origins(value_owner.clone())),
+            }
+            .with_origins(cast_owner.clone()),
+        );
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        assert_eq!(src.semantic(), &Expr::Const(7));
+        assert_eq!(src.origins(), Some(&cast_owner.union(&value_owner)));
+    }
+
+    #[test]
+    fn attributed_equal_or_wider_inner_cast_is_subsumed_with_origins() {
+        let outer_owner = crate::ir::ast::OriginSet::one(0x1000);
+        let inner_owner = crate::ir::ast::OriginSet::one(0x1004);
+        let source_owner = crate::ir::ast::OriginSet::one(0x1008);
+        let mut function = one_stmt(
+            Expr::Cast {
+                signed: false,
+                width: 4,
+                expr: Box::new(
+                    Expr::Cast {
+                        signed: true,
+                        width: 8,
+                        expr: Box::new(Expr::Reg(reg("rax")).with_origins(source_owner.clone())),
+                    }
+                    .with_origins(inner_owner.clone()),
+                ),
+            }
+            .with_origins(outer_owner.clone()),
+        );
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        let Expr::Cast {
+            signed: false,
+            width: 4,
+            expr,
+        } = src.semantic()
+        else {
+            panic!("expected one surviving outer cast: {src:#?}")
+        };
+        assert_eq!(expr.semantic(), &Expr::Reg(reg("rax")));
+        assert_eq!(expr.origins(), Some(&source_owner));
+        assert_eq!(src.origins(), Some(&outer_owner.union(&inner_owner)));
+    }
+
+    #[test]
     fn narrowing_inner_cast_is_preserved() {
         // (u64)((u8)rax) must keep the u8 truncation.
         let original = Expr::Cast {
@@ -2974,6 +4522,84 @@ mod tests {
                 ..
             } if parameter == &reg("arg0")
         ));
+    }
+
+    #[test]
+    fn parameter_address_load_requires_a_typed_parameter_role() {
+        let original = Expr::Deref {
+            addr: Box::new(Expr::StackAddr {
+                object: reg("arg0"),
+                size: 4,
+            }),
+            size: 4,
+        };
+        let mut unowned = one_stmt(original.clone());
+        let identities = crate::ir::value_number::ValueIdentities::default();
+
+        assert!(!fold_constants_with_identities(&mut unowned, &identities));
+        assert!(matches!(
+            &unowned.body[0],
+            Stmt::Assign { src, .. } if src == &original
+        ));
+
+        let parameter = identities.with_role_aliases_and_parameter_slots(
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::from([0]),
+        );
+        let mut owned = one_stmt(original);
+        assert!(fold_constants_with_identities(&mut owned, &parameter));
+        assert!(matches!(
+            &owned.body[0],
+            Stmt::Assign {
+                src: Expr::Reg(value),
+                ..
+            } if value == &reg("arg0")
+        ));
+
+        let mut slot_unowned = one_stmt(Expr::Deref {
+            addr: Box::new(Expr::StackAddr {
+                object: reg("arg0"),
+                size: 4,
+            }),
+            size: 4,
+        });
+        assert!(!fold_constants_with_identities(
+            &mut slot_unowned,
+            &identities,
+        ));
+        let stack_parameter =
+            identities.with_parameter_slots(&std::collections::HashSet::from([0]));
+        assert!(fold_constants_with_identities(
+            &mut slot_unowned,
+            &stack_parameter,
+        ));
+    }
+
+    #[test]
+    fn attributed_full_width_parameter_load_unions_address_and_load_origins() {
+        let load_owner = crate::ir::ast::OriginSet::one(0x1000);
+        let address_owner = crate::ir::ast::OriginSet::one(0x1004);
+        let mut function = one_stmt(
+            Expr::Deref {
+                addr: Box::new(
+                    Expr::StackAddr {
+                        object: reg("arg0"),
+                        size: 4,
+                    }
+                    .with_origins(address_owner.clone()),
+                ),
+                size: 4,
+            }
+            .with_origins(load_owner.clone()),
+        );
+
+        assert!(fold_constants(&mut function));
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        assert_eq!(src.semantic(), &Expr::Reg(reg("arg0")));
+        assert_eq!(src.origins(), Some(&load_owner.union(&address_owner)));
     }
 
     #[test]

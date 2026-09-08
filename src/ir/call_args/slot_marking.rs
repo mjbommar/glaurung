@@ -25,34 +25,88 @@
 
 use crate::ir::ast::{Expr, Stmt};
 use crate::ir::types::VReg;
+use crate::ir::value_number::ValueIdentities;
 
 use super::{slot_of, CallConv};
 
-pub(super) fn mark_slot_write(reg: &VReg, arch: CallConv, blocked_incoming: &mut [bool]) {
-    let VReg::Phys(name) = reg else {
-        return;
-    };
-    if let Some(slot) = slot_of(arch, name.as_str()) {
-        if let Some(blocked) = blocked_incoming.get_mut(slot) {
-            *blocked = true;
+pub(super) fn mark_slot_write_with_identities(
+    reg: &VReg,
+    arch: CallConv,
+    blocked_incoming: &mut [bool],
+    identities: Option<&ValueIdentities>,
+) {
+    match argument_slot_of_register(reg, arch, identities) {
+        Some(Some(slot)) => {
+            if let Some(blocked) = blocked_incoming.get_mut(slot) {
+                *blocked = true;
+            }
         }
+        Some(None) => {}
+        None => blocked_incoming.fill(true),
     }
 }
 
-fn mark_slot_read(reg: &VReg, arch: CallConv, read_between: &mut [bool]) {
-    let VReg::Phys(name) = reg else {
-        return;
-    };
-    if let Some(slot) = slot_of(arch, name.as_str()) {
-        if let Some(read) = read_between.get_mut(slot) {
-            *read = true;
+fn mark_slot_read(
+    reg: &VReg,
+    arch: CallConv,
+    read_between: &mut [bool],
+    identities: Option<&ValueIdentities>,
+) {
+    match argument_slot_of_register(reg, arch, identities) {
+        Some(Some(slot)) => {
+            if let Some(read) = read_between.get_mut(slot) {
+                *read = true;
+            }
         }
+        Some(None) => {}
+        None => read_between.fill(true),
     }
 }
 
-pub(super) fn mark_arg_reads_in_expr(e: &Expr, arch: CallConv, read_between: &mut [bool]) {
+fn argument_slot_of_register(
+    reg: &VReg,
+    arch: CallConv,
+    identities: Option<&ValueIdentities>,
+) -> Option<Option<usize>> {
+    let name = match identities {
+        Some(identities) => {
+            let Some(candidates) = identities.candidates(reg) else {
+                return Some(None);
+            };
+            let classifications = candidates
+                .iter()
+                .map(|identity| {
+                    identity
+                        .canonical_physical_base()
+                        .and_then(|name| slot_of(arch, name))
+                })
+                .collect::<std::collections::BTreeSet<_>>();
+            if classifications.len() != 1 {
+                return None;
+            }
+            return classifications.first().copied();
+        }
+        None => {
+            let VReg::Phys(name) = reg else {
+                return Some(None);
+            };
+            name.as_str()
+        }
+    };
+    Some(slot_of(arch, name))
+}
+
+pub(super) fn mark_arg_reads_in_expr_with_identities(
+    e: &Expr,
+    arch: CallConv,
+    read_between: &mut [bool],
+    identities: Option<&ValueIdentities>,
+) {
     match e {
-        Expr::Reg(r) => mark_slot_read(r, arch, read_between),
+        Expr::Origin { expr, .. } => {
+            mark_arg_reads_in_expr_with_identities(expr, arch, read_between, identities)
+        }
+        Expr::Reg(r) => mark_slot_read(r, arch, read_between, identities),
         Expr::Const(_)
         | Expr::FloatConst { .. }
         | Expr::Addr(_)
@@ -62,22 +116,24 @@ pub(super) fn mark_arg_reads_in_expr(e: &Expr, arch: CallConv, read_between: &mu
         | Expr::Unknown(_) => {}
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
             if let Some(base) = base {
-                mark_slot_read(base, arch, read_between);
+                mark_slot_read(base, arch, read_between, identities);
             }
             if let Some(index) = index {
-                mark_slot_read(index, arch, read_between);
+                mark_slot_read(index, arch, read_between, identities);
             }
         }
-        Expr::Deref { addr, .. } => mark_arg_reads_in_expr(addr, arch, read_between),
+        Expr::Deref { addr, .. } => {
+            mark_arg_reads_in_expr_with_identities(addr, arch, read_between, identities)
+        }
         Expr::Call { target, args, .. } => {
-            mark_arg_reads_in_expr(target, arch, read_between);
+            mark_arg_reads_in_expr_with_identities(target, arch, read_between, identities);
             for argument in args {
-                mark_arg_reads_in_expr(argument, arch, read_between);
+                mark_arg_reads_in_expr_with_identities(argument, arch, read_between, identities);
             }
         }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-            mark_arg_reads_in_expr(lhs, arch, read_between);
-            mark_arg_reads_in_expr(rhs, arch, read_between);
+            mark_arg_reads_in_expr_with_identities(lhs, arch, read_between, identities);
+            mark_arg_reads_in_expr_with_identities(rhs, arch, read_between, identities);
         }
         Expr::Select {
             cond,
@@ -85,40 +141,56 @@ pub(super) fn mark_arg_reads_in_expr(e: &Expr, arch: CallConv, read_between: &mu
             if_false,
             ..
         } => {
-            mark_arg_reads_in_expr(cond, arch, read_between);
-            mark_arg_reads_in_expr(if_true, arch, read_between);
-            mark_arg_reads_in_expr(if_false, arch, read_between);
+            mark_arg_reads_in_expr_with_identities(cond, arch, read_between, identities);
+            mark_arg_reads_in_expr_with_identities(if_true, arch, read_between, identities);
+            mark_arg_reads_in_expr_with_identities(if_false, arch, read_between, identities);
         }
-        Expr::Un { src, .. } => mark_arg_reads_in_expr(src, arch, read_between),
+        Expr::Un { src, .. } => {
+            mark_arg_reads_in_expr_with_identities(src, arch, read_between, identities)
+        }
         Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
-            mark_arg_reads_in_expr(expr, arch, read_between)
+            mark_arg_reads_in_expr_with_identities(expr, arch, read_between, identities)
         }
-        Expr::FunctionTableEntry { index, .. } => mark_arg_reads_in_expr(index, arch, read_between),
+        Expr::FunctionTableEntry { index, .. } => {
+            mark_arg_reads_in_expr_with_identities(index, arch, read_between, identities)
+        }
         Expr::WideArithmetic { args, .. } => {
             for argument in args {
-                mark_arg_reads_in_expr(argument, arch, read_between);
+                mark_arg_reads_in_expr_with_identities(argument, arch, read_between, identities);
             }
         }
     }
 }
 
-pub(super) fn mark_arg_reads_in_stmt(s: &Stmt, arch: CallConv, read_between: &mut [bool]) {
+pub(super) fn mark_arg_reads_in_stmt_with_identities(
+    s: &Stmt,
+    arch: CallConv,
+    read_between: &mut [bool],
+    identities: Option<&ValueIdentities>,
+) {
     match s {
-        Stmt::IndirectGoto { target } => mark_arg_reads_in_expr(target, arch, read_between),
-        Stmt::Assign { src, .. } => mark_arg_reads_in_expr(src, arch, read_between),
+        Stmt::Origin { stmt, .. } => {
+            mark_arg_reads_in_stmt_with_identities(stmt, arch, read_between, identities)
+        }
+        Stmt::IndirectGoto { target } => {
+            mark_arg_reads_in_expr_with_identities(target, arch, read_between, identities)
+        }
+        Stmt::Assign { src, .. } => {
+            mark_arg_reads_in_expr_with_identities(src, arch, read_between, identities)
+        }
         Stmt::Store { addr, src, .. } => {
-            mark_arg_reads_in_expr(addr, arch, read_between);
-            mark_arg_reads_in_expr(src, arch, read_between);
+            mark_arg_reads_in_expr_with_identities(addr, arch, read_between, identities);
+            mark_arg_reads_in_expr_with_identities(src, arch, read_between, identities);
         }
         Stmt::Call { target, args, .. } => {
-            mark_arg_reads_in_expr(target, arch, read_between);
+            mark_arg_reads_in_expr_with_identities(target, arch, read_between, identities);
             for arg in args {
-                mark_arg_reads_in_expr(arg, arch, read_between);
+                mark_arg_reads_in_expr_with_identities(arg, arch, read_between, identities);
             }
         }
         Stmt::Return { value } => {
             if let Some(value) = value {
-                mark_arg_reads_in_expr(value, arch, read_between);
+                mark_arg_reads_in_expr_with_identities(value, arch, read_between, identities);
             }
         }
         Stmt::If {
@@ -126,20 +198,20 @@ pub(super) fn mark_arg_reads_in_stmt(s: &Stmt, arch: CallConv, read_between: &mu
             then_body,
             else_body,
         } => {
-            mark_arg_reads_in_expr(cond, arch, read_between);
+            mark_arg_reads_in_expr_with_identities(cond, arch, read_between, identities);
             for stmt in then_body {
-                mark_arg_reads_in_stmt(stmt, arch, read_between);
+                mark_arg_reads_in_stmt_with_identities(stmt, arch, read_between, identities);
             }
             if let Some(else_body) = else_body {
                 for stmt in else_body {
-                    mark_arg_reads_in_stmt(stmt, arch, read_between);
+                    mark_arg_reads_in_stmt_with_identities(stmt, arch, read_between, identities);
                 }
             }
         }
         Stmt::While { cond, body } => {
-            mark_arg_reads_in_expr(cond, arch, read_between);
+            mark_arg_reads_in_expr_with_identities(cond, arch, read_between, identities);
             for stmt in body {
-                mark_arg_reads_in_stmt(stmt, arch, read_between);
+                mark_arg_reads_in_stmt_with_identities(stmt, arch, read_between, identities);
             }
         }
         Stmt::For {
@@ -148,29 +220,29 @@ pub(super) fn mark_arg_reads_in_stmt(s: &Stmt, arch: CallConv, read_between: &mu
             step,
             body,
         } => {
-            mark_arg_reads_in_stmt(init, arch, read_between);
-            mark_arg_reads_in_expr(cond, arch, read_between);
+            mark_arg_reads_in_stmt_with_identities(init, arch, read_between, identities);
+            mark_arg_reads_in_expr_with_identities(cond, arch, read_between, identities);
             for stmt in body {
-                mark_arg_reads_in_stmt(stmt, arch, read_between);
+                mark_arg_reads_in_stmt_with_identities(stmt, arch, read_between, identities);
             }
-            mark_arg_reads_in_stmt(step, arch, read_between);
+            mark_arg_reads_in_stmt_with_identities(step, arch, read_between, identities);
         }
         Stmt::DoWhile { body, cond } => {
             for stmt in body {
-                mark_arg_reads_in_stmt(stmt, arch, read_between);
+                mark_arg_reads_in_stmt_with_identities(stmt, arch, read_between, identities);
             }
-            mark_arg_reads_in_expr(cond, arch, read_between);
+            mark_arg_reads_in_expr_with_identities(cond, arch, read_between, identities);
         }
         Stmt::Push { value } | Stmt::Throw { value } => {
-            mark_arg_reads_in_expr(value, arch, read_between)
+            mark_arg_reads_in_expr_with_identities(value, arch, read_between, identities)
         }
         Stmt::TryCatch { try_body, catches } => {
             for stmt in try_body {
-                mark_arg_reads_in_stmt(stmt, arch, read_between);
+                mark_arg_reads_in_stmt_with_identities(stmt, arch, read_between, identities);
             }
             for catch in catches {
                 for stmt in &catch.body {
-                    mark_arg_reads_in_stmt(stmt, arch, read_between);
+                    mark_arg_reads_in_stmt_with_identities(stmt, arch, read_between, identities);
                 }
             }
         }
@@ -179,15 +251,15 @@ pub(super) fn mark_arg_reads_in_stmt(s: &Stmt, arch: CallConv, read_between: &mu
             cases,
             default,
         } => {
-            mark_arg_reads_in_expr(discriminant, arch, read_between);
+            mark_arg_reads_in_expr_with_identities(discriminant, arch, read_between, identities);
             for (_case, body) in cases {
                 for stmt in body {
-                    mark_arg_reads_in_stmt(stmt, arch, read_between);
+                    mark_arg_reads_in_stmt_with_identities(stmt, arch, read_between, identities);
                 }
             }
             if let Some(default) = default {
                 for stmt in default {
-                    mark_arg_reads_in_stmt(stmt, arch, read_between);
+                    mark_arg_reads_in_stmt_with_identities(stmt, arch, read_between, identities);
                 }
             }
         }
@@ -218,6 +290,7 @@ pub(super) fn mark_arg_reads_in_stmt(s: &Stmt, arch: CallConv, read_between: &mu
 /// Fail-closed: anything not proven to leave counts as falling through.
 fn body_falls_through(body: &[Stmt]) -> bool {
     match body.last() {
+        Some(Stmt::Origin { stmt, .. }) => body_falls_through(std::slice::from_ref(stmt)),
         Some(
             Stmt::Return { .. }
             | Stmt::Throw { .. }
@@ -233,8 +306,16 @@ fn body_falls_through(body: &[Stmt]) -> bool {
     }
 }
 
-pub(super) fn mark_arg_writes_in_stmt(s: &Stmt, arch: CallConv, blocked_incoming: &mut [bool]) {
+pub(super) fn mark_arg_writes_in_stmt_with_identities(
+    s: &Stmt,
+    arch: CallConv,
+    blocked_incoming: &mut [bool],
+    identities: Option<&ValueIdentities>,
+) {
     match s {
+        Stmt::Origin { stmt, .. } => {
+            mark_arg_writes_in_stmt_with_identities(stmt, arch, blocked_incoming, identities)
+        }
         // A computed transfer writes no argument slot.
         Stmt::IndirectGoto { .. } => {}
         // Every ABI argument register is caller-clobbered. A top-level call is
@@ -242,7 +323,7 @@ pub(super) fn mark_arg_writes_in_stmt(s: &Stmt, arch: CallConv, blocked_incoming
         // structured branch/loop before the call currently being recovered.
         Stmt::Call { .. } => blocked_incoming.fill(true),
         Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => {
-            mark_slot_write(dst, arch, blocked_incoming);
+            mark_slot_write_with_identities(dst, arch, blocked_incoming, identities);
         }
         // Only the arms that can fall through are on the path into whatever
         // follows this branch. See `body_falls_through`.
@@ -253,50 +334,75 @@ pub(super) fn mark_arg_writes_in_stmt(s: &Stmt, arch: CallConv, blocked_incoming
         } => {
             if body_falls_through(then_body) {
                 for stmt in then_body {
-                    mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+                    mark_arg_writes_in_stmt_with_identities(
+                        stmt,
+                        arch,
+                        blocked_incoming,
+                        identities,
+                    );
                 }
             }
             if let Some(else_body) = else_body {
                 if body_falls_through(else_body) {
                     for stmt in else_body {
-                        mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+                        mark_arg_writes_in_stmt_with_identities(
+                            stmt,
+                            arch,
+                            blocked_incoming,
+                            identities,
+                        );
                     }
                 }
             }
         }
         Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
             for stmt in body {
-                mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+                mark_arg_writes_in_stmt_with_identities(stmt, arch, blocked_incoming, identities);
             }
         }
         Stmt::For {
             init, step, body, ..
         } => {
-            mark_arg_writes_in_stmt(init, arch, blocked_incoming);
+            mark_arg_writes_in_stmt_with_identities(init, arch, blocked_incoming, identities);
             for stmt in body {
-                mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+                mark_arg_writes_in_stmt_with_identities(stmt, arch, blocked_incoming, identities);
             }
-            mark_arg_writes_in_stmt(step, arch, blocked_incoming);
+            mark_arg_writes_in_stmt_with_identities(step, arch, blocked_incoming, identities);
         }
         Stmt::Switch { cases, default, .. } => {
             for (_case, body) in cases {
                 for stmt in body {
-                    mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+                    mark_arg_writes_in_stmt_with_identities(
+                        stmt,
+                        arch,
+                        blocked_incoming,
+                        identities,
+                    );
                 }
             }
             if let Some(default) = default {
                 for stmt in default {
-                    mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+                    mark_arg_writes_in_stmt_with_identities(
+                        stmt,
+                        arch,
+                        blocked_incoming,
+                        identities,
+                    );
                 }
             }
         }
         Stmt::TryCatch { try_body, catches } => {
             for stmt in try_body {
-                mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+                mark_arg_writes_in_stmt_with_identities(stmt, arch, blocked_incoming, identities);
             }
             for catch in catches {
                 for stmt in &catch.body {
-                    mark_arg_writes_in_stmt(stmt, arch, blocked_incoming);
+                    mark_arg_writes_in_stmt_with_identities(
+                        stmt,
+                        arch,
+                        blocked_incoming,
+                        identities,
+                    );
                 }
             }
         }

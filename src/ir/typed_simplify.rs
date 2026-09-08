@@ -19,7 +19,16 @@ use crate::ir::types_recover::TypeMap;
 /// therefore exact and keeps C arithmetic defined modulo 2^N. Lone extensions,
 /// signed inner views, division, and shifts remain untouched.
 pub fn fold_consumed_extensions(function: &mut Function, types: &TypeMap) {
-    fold_body(&mut function.body, types);
+    fold_consumed_extensions_with_identities(function, types, None);
+}
+
+/// Remove consumed extensions using exact opaque SSA identities when available.
+pub fn fold_consumed_extensions_with_identities(
+    function: &mut Function,
+    types: &TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
+    fold_body(&mut function.body, types, identities);
 }
 
 fn narrow_machine_parent(expression: &mut Expr, observed_width: u8) {
@@ -59,18 +68,28 @@ fn fold_modular_expression(expression: &mut Expr, observed_width: u8) {
     narrow_machine_parent(rhs, observed_width);
 }
 
-fn destination_width(register: &VReg, types: &TypeMap) -> Option<u8> {
+fn destination_width(
+    register: &VReg,
+    types: &TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<u8> {
     let VReg::Phys(name) = register else {
         return None;
     };
-    crate::ir::ast::declared_int_type(name, Some(types)).map(|(_, width)| width)
+    crate::ir::ast::declared_int_type_with_identities(name, Some(types), identities)
+        .map(|(_, width)| width)
 }
 
-fn fold_body(statements: &mut [Stmt], types: &TypeMap) {
+fn fold_body(
+    statements: &mut [Stmt],
+    types: &TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     for statement in statements {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
-                if let Some(width) = destination_width(dst, types) {
+                if let Some(width) = destination_width(dst, types, identities) {
                     fold_modular_expression(src, width);
                 }
             }
@@ -79,7 +98,7 @@ fn fold_body(statements: &mut [Stmt], types: &TypeMap) {
                 src,
                 ..
             } if is_promoted_local_reg(destination) => {
-                if let Some(width) = destination_width(destination, types) {
+                if let Some(width) = destination_width(destination, types, identities) {
                     fold_modular_expression(src, width);
                 }
             }
@@ -102,9 +121,9 @@ fn fold_body(statements: &mut [Stmt], types: &TypeMap) {
                 else_body,
                 ..
             } => {
-                fold_body(then_body, types);
+                fold_body(then_body, types, identities);
                 if let Some(else_body) = else_body {
-                    fold_body(else_body, types);
+                    fold_body(else_body, types, identities);
                 }
             }
             Stmt::While {
@@ -112,29 +131,29 @@ fn fold_body(statements: &mut [Stmt], types: &TypeMap) {
             }
             | Stmt::DoWhile {
                 body: loop_body, ..
-            } => fold_body(loop_body, types),
+            } => fold_body(loop_body, types, identities),
             Stmt::For {
                 init,
                 step,
                 body: loop_body,
                 ..
             } => {
-                fold_body(std::slice::from_mut(init.as_mut()), types);
-                fold_body(loop_body, types);
-                fold_body(std::slice::from_mut(step.as_mut()), types);
+                fold_body(std::slice::from_mut(init.as_mut()), types, identities);
+                fold_body(loop_body, types, identities);
+                fold_body(std::slice::from_mut(step.as_mut()), types, identities);
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, case_body) in cases {
-                    fold_body(case_body, types);
+                    fold_body(case_body, types, identities);
                 }
                 if let Some(default_body) = default {
-                    fold_body(default_body, types);
+                    fold_body(default_body, types, identities);
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                fold_body(try_body, types);
+                fold_body(try_body, types, identities);
                 for catch in catches {
-                    fold_body(&mut catch.body, types);
+                    fold_body(&mut catch.body, types, identities);
                 }
             }
         }
@@ -145,6 +164,90 @@ fn fold_body(statements: &mut [Stmt], types: &TypeMap) {
 mod tests {
     use super::*;
     use crate::ir::types_recover::TypeHint;
+
+    fn extended_add(destination: VReg) -> Function {
+        Function {
+            name: "sum".into(),
+            entry_va: 0,
+            body: vec![Stmt::Assign {
+                dst: destination.clone(),
+                src: Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 8,
+                        expr: Box::new(Expr::Cast {
+                            signed: false,
+                            width: 4,
+                            expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        }),
+                    }),
+                    rhs: Box::new(Expr::Reg(destination)),
+                },
+            }],
+        }
+    }
+
+    #[test]
+    fn exact_opaque_destination_consumes_machine_only_extension() {
+        let destination = VReg::phys("opaque_destination");
+        let mut function = extended_add(destination.clone());
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            destination.clone(),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            destination,
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("eax"),
+                version: 2,
+            },
+        );
+
+        fold_consumed_extensions_with_identities(&mut function, &types, Some(&identities));
+
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Assign {
+                src: Expr::Bin { lhs, .. },
+                ..
+            } if matches!(lhs.as_ref(), Expr::Cast { width: 4, .. })
+        ));
+    }
+
+    #[test]
+    fn ambiguous_opaque_destination_keeps_machine_extension() {
+        let destination = VReg::phys("opaque_destination");
+        let mut function = extended_add(destination.clone());
+        let before = function.clone();
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            destination.clone(),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for (base, version) in [("eax", 1), ("ebx", 2)] {
+            identities.record(
+                destination.clone(),
+                crate::ir::ssa::SsaValue {
+                    base: VReg::phys(base),
+                    version,
+                },
+            );
+        }
+
+        fold_consumed_extensions_with_identities(&mut function, &types, Some(&identities));
+
+        assert_eq!(function, before);
+    }
 
     #[test]
     fn narrow_destination_consumes_machine_only_operand_extension() {

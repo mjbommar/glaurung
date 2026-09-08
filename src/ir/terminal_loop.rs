@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::ir::ast::{Expr, Function, Stmt};
+use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 
 /// Recover exact terminal `label; goto label` tails.
 pub fn recover_terminal_self_loops(function: &mut Function) {
@@ -13,7 +13,7 @@ pub fn recover_terminal_self_loops(function: &mut Function) {
 
 fn recover_in_body(body: &mut Vec<Stmt>, incoming: &HashMap<u64, usize>) {
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
             Stmt::If {
                 then_body,
                 else_body,
@@ -45,22 +45,31 @@ fn recover_in_body(body: &mut Vec<Stmt>, incoming: &HashMap<u64, usize>) {
         }
     }
 
-    let Some((Stmt::Label(label), Stmt::Goto { target })) = body
-        .len()
-        .checked_sub(2)
-        .map(|index| (&body[index], &body[index + 1]))
-    else {
+    let Some((label, target)) = body.len().checked_sub(2).and_then(|index| {
+        let Stmt::Label(label) = body[index].semantic() else {
+            return None;
+        };
+        let Stmt::Goto { target } = body[index + 1].semantic() else {
+            return None;
+        };
+        Some((*label, *target))
+    }) else {
         return;
     };
     if label != target {
         return;
     }
+    let terminal = body.len() - 1;
+    let origins = body[terminal - 1..=terminal]
+        .iter()
+        .filter_map(Stmt::origins)
+        .fold(OriginSet::empty(), |origins, next| origins.union(next));
     let loop_statement = Stmt::While {
         cond: Expr::Const(1),
         body: Vec::new(),
-    };
-    let terminal = body.len() - 1;
-    if incoming.get(target).copied() == Some(1) {
+    }
+    .with_optional_origins((!origins.is_empty()).then_some(origins));
+    if incoming.get(&target).copied() == Some(1) {
         body.splice(terminal - 1..=terminal, [loop_statement]);
     } else {
         body[terminal] = loop_statement;
@@ -69,7 +78,7 @@ fn recover_in_body(body: &mut Vec<Stmt>, incoming: &HashMap<u64, usize>) {
 
 fn count_gotos(body: &[Stmt], incoming: &mut HashMap<u64, usize>) {
     for statement in body {
-        match statement {
+        match statement.semantic() {
             Stmt::Goto { target } => *incoming.entry(*target).or_default() += 1,
             Stmt::If {
                 then_body,
@@ -129,6 +138,25 @@ mod tests {
                 cond: Expr::Const(1),
                 body: vec![],
             }]
+        );
+    }
+
+    #[test]
+    fn attributed_terminal_self_branch_unions_origins() {
+        let mut function = function(vec![
+            Stmt::Label(0x1010).with_origins(OriginSet::one(0x1000)),
+            Stmt::Goto { target: 0x1010 }.with_origins(OriginSet::one(0x1004)),
+        ]);
+
+        recover_terminal_self_loops(&mut function);
+
+        assert!(matches!(function.body[0].semantic(), Stmt::While { .. }));
+        assert_eq!(
+            function.body[0]
+                .origins()
+                .expect("terminal-loop origins")
+                .addresses(),
+            &[0x1000, 0x1004]
         );
     }
 

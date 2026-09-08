@@ -22,6 +22,7 @@ spelling does not.
 from __future__ import annotations
 
 import importlib
+import re
 import sys
 from pathlib import Path
 
@@ -63,8 +64,8 @@ LOOPS_GCC_O0 = FIXTURES / "build" / "03_loop_shapes-gcc-O0.so"
 PACKET_GCC_O0 = FIXTURES / "build" / "07_packet_parser-gcc-O0.so"
 
 
-def test_shadow_batch_locally_declines_an_unavailable_function() -> None:
-    """One typed refusal must not discard a verified sibling's v2 output."""
+def test_shadow_batch_returns_each_verified_function() -> None:
+    """A newly verified sibling must join the batch instead of staying stale-red."""
     exports = D.exported_functions(str(LOOPS_GCC_O0))
     rows = g.ir.decompile_many(
         str(LOOPS_GCC_O0),
@@ -75,7 +76,8 @@ def test_shadow_batch_locally_declines_an_unavailable_function() -> None:
     )
 
     assert [(name, va) for name, va, *_rest in rows] == [
-        ("for_sum", exports["for_sum"])
+        ("for_sum", exports["for_sum"]),
+        ("dowhile_recompute", exports["dowhile_recompute"]),
     ]
 
 
@@ -121,8 +123,14 @@ def test_verified_shadow_region_uses_the_normal_typed_render_pipeline() -> None:
     signature = next(
         line for line in body.splitlines() if "wide154_dense_effects(" in line
     )
-    assert "int32_t" in signature, signature
-    assert "int32_t *" in signature, signature
+    # On the pinned LP64 fixture, DWARF's `int32_t` is the same C type as
+    # `int`.  The typed pipeline may retain the typedef spelling or render its
+    # canonical underlying type; require the three exact scalar/pointer roles.
+    assert re.fullmatch(
+        r"(?:int32_t|int) wide154_dense_effects\((?:int32_t|int) selector, "
+        r"(?:int32_t|int) \*out, (?:int32_t|int) slots\) \{",
+        signature.strip(),
+    ), signature
     assert "switch (" in body
     assert "case 0:" in body
     assert "case 255:" in body

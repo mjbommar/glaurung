@@ -44,19 +44,21 @@ use super::{is_promoted_local, parse_arg_index, Expr, Stmt, VReg};
 pub(super) fn coalesce_param_spills(
     body: &mut Vec<Stmt>,
     protected_locals: &std::collections::HashSet<String>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
-    coalesce_frame_object_param_spills(body);
-    coalesce_named_param_spills(body, protected_locals);
+    coalesce_frame_object_param_spills(body, identities);
+    coalesce_named_param_spills(body, protected_locals, identities);
 }
 
 /// Coalesce promoted named slots without reopening frame-object alias proofs.
 pub(super) fn coalesce_named_param_spills(
     body: &mut Vec<Stmt>,
     protected_locals: &std::collections::HashSet<String>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
     // local name -> the single argument it is spilled from ("" = disqualified).
     let mut home: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    collect_param_homes(body, &mut home);
+    collect_param_homes(body, &mut home, identities);
     let map: std::collections::HashMap<String, String> = home
         .into_iter()
         .filter(|(_, arg)| !arg.is_empty())
@@ -84,7 +86,7 @@ pub(super) fn coalesce_named_param_spills(
     }
     // Convert the slot's own stores to assignments BEFORE renaming, while the name
     // still says `local_`/`stack_` — see `slot_stores_to_assigns`.
-    slot_stores_to_assigns(body, &map);
+    slot_stores_to_assigns(body, &map, identities);
     rename_phys_in_body(body, &map);
     drop_self_stores(body);
 }
@@ -109,9 +111,12 @@ struct FrameParamHome {
 /// immutable home: replace exact same-width reloads by the argument and remove
 /// the redundant store. Any second store disqualifies the address, including a
 /// source-level reassignment, so this cannot erase mutable stack state.
-fn coalesce_frame_object_param_spills(body: &mut Vec<Stmt>) {
+fn coalesce_frame_object_param_spills(
+    body: &mut Vec<Stmt>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     let mut homes = Vec::new();
-    collect_frame_param_homes(body, &mut homes);
+    collect_frame_param_homes(body, &mut homes, identities);
     homes.retain(|home| {
         home.stores == 1 && home.arg.is_some() && body_reads_exact_frame_home(body, home)
     });
@@ -152,7 +157,8 @@ fn expr_reads_exact_frame_home(expr: &Expr, home: &FrameParamHome) -> bool {
 }
 
 fn body_reads_exact_frame_home(body: &[Stmt], home: &FrameParamHome) -> bool {
-    body.iter().any(|statement| match statement {
+    body.iter().any(|statement| match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { src, .. } => expr_reads_exact_frame_home(src, home),
         Stmt::Store { addr, src, .. } => {
             expr_reads_exact_frame_home(addr, home) || expr_reads_exact_frame_home(src, home)
@@ -240,21 +246,38 @@ fn expression_contains_stack_object(expr: &Expr) -> bool {
     }
 }
 
-fn parameter_source(expr: &Expr) -> Option<String> {
+fn parameter_source(
+    expr: &Expr,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<String> {
     match expr {
-        Expr::Reg(VReg::Phys(name)) if parse_arg_index(name).is_some() => Some(name.clone()),
-        Expr::Cast { expr, .. } => parameter_source(expr),
+        Expr::Reg(register @ VReg::Phys(name))
+            if match identities {
+                Some(identities) => identities.parameter_slot(register).is_some(),
+                None => parse_arg_index(name).is_some(),
+            } =>
+        {
+            Some(name.clone())
+        }
+        Expr::Cast { expr, .. } => parameter_source(expr, identities),
         _ => None,
     }
 }
 
-fn record_frame_store(addr: &Expr, size: u8, src: &Expr, homes: &mut Vec<FrameParamHome>) {
+fn record_frame_store(
+    addr: &Expr,
+    size: u8,
+    src: &Expr,
+    homes: &mut Vec<FrameParamHome>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     if !expression_contains_stack_object(addr) {
         return;
     }
     if let Some(home) = homes.iter_mut().find(|home| home.addr == *addr) {
         home.stores += 1;
-        if home.size != size || home.arg.as_deref() != parameter_source(src).as_deref() {
+        if home.size != size || home.arg.as_deref() != parameter_source(src, identities).as_deref()
+        {
             home.arg = None;
         }
         return;
@@ -262,47 +285,54 @@ fn record_frame_store(addr: &Expr, size: u8, src: &Expr, homes: &mut Vec<FramePa
     homes.push(FrameParamHome {
         addr: addr.clone(),
         size,
-        arg: parameter_source(src),
+        arg: parameter_source(src, identities),
         stores: 1,
     });
 }
 
-fn collect_frame_param_homes(body: &[Stmt], homes: &mut Vec<FrameParamHome>) {
+fn collect_frame_param_homes(
+    body: &[Stmt],
+    homes: &mut Vec<FrameParamHome>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     for statement in body {
-        match statement {
-            Stmt::Store { addr, src, size } => record_frame_store(addr, *size, src, homes),
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
+            Stmt::Store { addr, src, size } => {
+                record_frame_store(addr, *size, src, homes, identities)
+            }
             Stmt::If {
                 then_body,
                 else_body,
                 ..
             } => {
-                collect_frame_param_homes(then_body, homes);
+                collect_frame_param_homes(then_body, homes, identities);
                 if let Some(else_body) = else_body {
-                    collect_frame_param_homes(else_body, homes);
+                    collect_frame_param_homes(else_body, homes, identities);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                collect_frame_param_homes(body, homes)
+                collect_frame_param_homes(body, homes, identities)
             }
             Stmt::For {
                 init, step, body, ..
             } => {
-                collect_frame_param_homes(std::slice::from_ref(init.as_ref()), homes);
-                collect_frame_param_homes(body, homes);
-                collect_frame_param_homes(std::slice::from_ref(step.as_ref()), homes);
+                collect_frame_param_homes(std::slice::from_ref(init.as_ref()), homes, identities);
+                collect_frame_param_homes(body, homes, identities);
+                collect_frame_param_homes(std::slice::from_ref(step.as_ref()), homes, identities);
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, case) in cases {
-                    collect_frame_param_homes(case, homes);
+                    collect_frame_param_homes(case, homes, identities);
                 }
                 if let Some(default) = default {
-                    collect_frame_param_homes(default, homes);
+                    collect_frame_param_homes(default, homes, identities);
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                collect_frame_param_homes(try_body, homes);
+                collect_frame_param_homes(try_body, homes, identities);
                 for catch in catches {
-                    collect_frame_param_homes(&catch.body, homes);
+                    collect_frame_param_homes(&catch.body, homes, identities);
                 }
             }
             _ => {}
@@ -350,12 +380,13 @@ fn rewrite_frame_home_expr(expr: &mut Expr, homes: &[FrameParamHome]) {
 
 fn rewrite_frame_param_homes(body: &mut Vec<Stmt>, homes: &[FrameParamHome]) {
     body.retain(|statement| {
-        !matches!(statement,
+        !matches!(statement.semantic(),
             Stmt::Store { addr, size, .. }
                 if homes.iter().any(|home| home.size == *size && home.addr == *addr))
     });
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { src, .. } => rewrite_frame_home_expr(src, homes),
             Stmt::Store { addr, src, .. } => {
                 rewrite_frame_home_expr(addr, homes);
@@ -438,25 +469,30 @@ fn rewrite_frame_param_homes(body: &mut Vec<Stmt>, homes: &[FrameParamHome]) {
 /// `Store { addr: Reg(arg0) }` could equally be a genuine `*arg0 = v` through a
 /// pointer parameter, and converting that would silently turn a memory write into a
 /// local assignment. The pre-rename name cannot be confused that way.
-fn slot_stores_to_assigns(body: &mut Vec<Stmt>, slots: &std::collections::HashMap<String, String>) {
+fn slot_stores_to_assigns(
+    body: &mut Vec<Stmt>,
+    slots: &std::collections::HashMap<String, String>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     for s in body.iter_mut() {
-        match s {
+        let statement = s.semantic_mut();
+        match statement {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Store {
                 addr: Expr::Reg(VReg::Phys(name)),
                 src,
                 ..
             } if slots.contains_key(name) => {
-                if slots
-                    .get(name)
-                    .is_some_and(|argument| parameter_source(src).as_ref() == Some(argument))
-                {
+                if slots.get(name).is_some_and(|argument| {
+                    parameter_source(src, identities).as_ref() == Some(argument)
+                }) {
                     // The defining spill is redundant even when the machine
                     // width made it `local = (uint32_t)arg0`.  Retaining that
                     // cast as `arg0 = (uint32_t)arg0` truncates a pointer when a
                     // foreign-width host recompiles the recovered C.
-                    *s = Stmt::Nop;
+                    *statement = Stmt::Nop;
                 } else {
-                    *s = Stmt::Assign {
+                    *statement = Stmt::Assign {
                         dst: VReg::phys(name.clone()),
                         src: src.clone(),
                     };
@@ -467,21 +503,27 @@ fn slot_stores_to_assigns(body: &mut Vec<Stmt>, slots: &std::collections::HashMa
                 else_body,
                 ..
             } => {
-                slot_stores_to_assigns(then_body, slots);
+                slot_stores_to_assigns(then_body, slots, identities);
                 if let Some(eb) = else_body {
-                    slot_stores_to_assigns(eb, slots);
+                    slot_stores_to_assigns(eb, slots, identities);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                slot_stores_to_assigns(body, slots)
+                slot_stores_to_assigns(body, slots, identities)
             }
-            Stmt::For { body, .. } => slot_stores_to_assigns(body, slots),
+            Stmt::For { body, .. } => slot_stores_to_assigns(body, slots, identities),
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases.iter_mut() {
-                    slot_stores_to_assigns(b, slots);
+                    slot_stores_to_assigns(b, slots, identities);
                 }
                 if let Some(b) = default {
-                    slot_stores_to_assigns(b, slots);
+                    slot_stores_to_assigns(b, slots, identities);
+                }
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                slot_stores_to_assigns(try_body, slots, identities);
+                for catch in catches {
+                    slot_stores_to_assigns(&mut catch.body, slots, identities);
                 }
             }
             _ => {}
@@ -495,20 +537,30 @@ fn slot_stores_to_assigns(body: &mut Vec<Stmt>, slots: &std::collections::HashMa
 /// from a different parameter disqualify it; ordinary in-place updates remain
 /// candidates because the symmetric reaching-definitions check at the caller
 /// can prove whether the original argument and slot are still interchangeable.
-fn collect_param_homes(body: &[Stmt], home: &mut std::collections::HashMap<String, String>) {
-    collect_param_homes_with_aliases(body, home, &mut std::collections::HashMap::new());
+fn collect_param_homes(
+    body: &[Stmt],
+    home: &mut std::collections::HashMap<String, String>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
+    collect_param_homes_with_aliases(
+        body,
+        home,
+        &mut std::collections::HashMap::new(),
+        identities,
+    );
 }
 
 fn parameter_alias(
     expr: &Expr,
     aliases: &std::collections::HashMap<VReg, String>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Option<String> {
     match expr {
         Expr::Reg(register) => aliases
             .get(register)
             .cloned()
-            .or_else(|| parameter_source(expr)),
-        Expr::Cast { expr, .. } => parameter_alias(expr, aliases),
+            .or_else(|| parameter_source(expr, identities)),
+        Expr::Cast { expr, .. } => parameter_alias(expr, aliases, identities),
         _ => None,
     }
 }
@@ -524,11 +576,13 @@ fn collect_param_homes_with_aliases(
     body: &[Stmt],
     home: &mut std::collections::HashMap<String, String>,
     aliases: &mut std::collections::HashMap<VReg, String>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
     for s in body {
-        match s {
+        match s.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
-                if let Some(argument) = parameter_alias(src, aliases) {
+                if let Some(argument) = parameter_alias(src, aliases, identities) {
                     aliases.insert(dst.clone(), argument);
                 } else {
                     aliases.remove(dst);
@@ -539,7 +593,7 @@ fn collect_param_homes_with_aliases(
                 src,
                 ..
             } if is_promoted_local(local) => {
-                let argument = parameter_alias(src, aliases);
+                let argument = parameter_alias(src, aliases, identities);
                 let entry = home.entry(local.clone());
                 match entry {
                     std::collections::hash_map::Entry::Vacant(v) => {
@@ -552,7 +606,7 @@ fn collect_param_homes_with_aliases(
                         // status temporary can share one incoming provenance on
                         // another path, yet its store reuses the stack bytes for
                         // a different source object.
-                        let same_parameter = parameter_source(src)
+                        let same_parameter = parameter_source(src, identities)
                             .as_ref()
                             .is_some_and(|candidate| candidate == o.get());
                         let in_place_update = src.contains_reg(&VReg::phys(local.clone()));
@@ -570,14 +624,14 @@ fn collect_param_homes_with_aliases(
                 else_body,
                 ..
             } => {
-                collect_param_homes_with_aliases(then_body, home, &mut aliases.clone());
+                collect_param_homes_with_aliases(then_body, home, &mut aliases.clone(), identities);
                 if let Some(eb) = else_body {
-                    collect_param_homes_with_aliases(eb, home, &mut aliases.clone());
+                    collect_param_homes_with_aliases(eb, home, &mut aliases.clone(), identities);
                 }
                 aliases.clear();
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                collect_param_homes_with_aliases(body, home, &mut aliases.clone());
+                collect_param_homes_with_aliases(body, home, &mut aliases.clone(), identities);
                 aliases.clear();
             }
             Stmt::For {
@@ -587,21 +641,23 @@ fn collect_param_homes_with_aliases(
                     std::slice::from_ref(init.as_ref()),
                     home,
                     &mut aliases.clone(),
+                    identities,
                 );
-                collect_param_homes_with_aliases(body, home, &mut aliases.clone());
+                collect_param_homes_with_aliases(body, home, &mut aliases.clone(), identities);
                 collect_param_homes_with_aliases(
                     std::slice::from_ref(step.as_ref()),
                     home,
                     &mut aliases.clone(),
+                    identities,
                 );
                 aliases.clear();
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases {
-                    collect_param_homes_with_aliases(b, home, &mut aliases.clone());
+                    collect_param_homes_with_aliases(b, home, &mut aliases.clone(), identities);
                 }
                 if let Some(b) = default {
-                    collect_param_homes_with_aliases(b, home, &mut aliases.clone());
+                    collect_param_homes_with_aliases(b, home, &mut aliases.clone(), identities);
                 }
                 aliases.clear();
             }
@@ -622,6 +678,7 @@ fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String
     }
     fn re(e: &mut Expr, map: &std::collections::HashMap<String, String>) {
         match e {
+            Expr::Origin { expr, .. } => re(expr, map),
             Expr::Reg(v) => rn(v, map),
             Expr::StackAddr { object, .. } => rn(object, map),
             Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
@@ -671,6 +728,9 @@ fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String
     }
     for s in body.iter_mut() {
         match s {
+            Stmt::Origin { stmt, .. } => {
+                rename_phys_in_body(std::slice::from_mut(stmt.as_mut()), map)
+            }
             Stmt::Assign { dst, src } => {
                 rn(dst, map);
                 re(src, map);
@@ -760,7 +820,7 @@ fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String
 pub(super) fn drop_self_stores(body: &mut Vec<Stmt>) {
     body.retain(|s| {
         !matches!(
-            s,
+            s.semantic(),
             Stmt::Store {
                 addr: Expr::Reg(VReg::Phys(a)),
                 src: Expr::Reg(VReg::Phys(b)),
@@ -769,7 +829,7 @@ pub(super) fn drop_self_stores(body: &mut Vec<Stmt>) {
         ) && !matches!(
             // Same collapse, in assignment form: the spill store is now an Assign
             // (see `slot_stores_to_assigns`), so `arg0 = arg0` must go too.
-            s,
+            s.semantic(),
             Stmt::Assign {
                 dst: VReg::Phys(a),
                 src: Expr::Reg(VReg::Phys(b)),
@@ -777,7 +837,8 @@ pub(super) fn drop_self_stores(body: &mut Vec<Stmt>) {
         )
     });
     for s in body.iter_mut() {
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -800,5 +861,164 @@ pub(super) fn drop_self_stores(body: &mut Vec<Stmt>) {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::ast::OriginSet;
+
+    fn simple_named_home() -> Vec<Stmt> {
+        vec![
+            Stmt::Store {
+                addr: Expr::Reg(VReg::phys("local_4")),
+                src: Expr::Reg(VReg::phys("arg0")),
+                size: 4,
+            },
+            Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("local_4"))),
+            },
+        ]
+    }
+
+    #[test]
+    fn named_parameter_home_requires_a_typed_parameter_role() {
+        let identities = crate::ir::value_number::ValueIdentities::default();
+        let mut unowned = simple_named_home();
+
+        coalesce_named_param_spills(
+            &mut unowned,
+            &std::collections::HashSet::new(),
+            Some(&identities),
+        );
+        assert!(matches!(unowned[0].semantic(), Stmt::Store { .. }));
+
+        let parameter = identities.with_role_aliases_and_parameter_slots(
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::from([0]),
+        );
+        let mut owned = simple_named_home();
+        coalesce_named_param_spills(
+            &mut owned,
+            &std::collections::HashSet::new(),
+            Some(&parameter),
+        );
+        assert!(matches!(owned[0].semantic(), Stmt::Nop));
+        assert!(matches!(
+            owned[1].semantic(),
+            Stmt::Return {
+                value: Some(Expr::Reg(parameter))
+            } if parameter == &VReg::phys("arg0")
+        ));
+    }
+
+    #[test]
+    fn frame_parameter_home_requires_a_typed_parameter_role() {
+        fn frame_home() -> Vec<Stmt> {
+            let address = Expr::StackAddr {
+                object: VReg::phys("frame_10"),
+                size: 16,
+            };
+            vec![
+                Stmt::Store {
+                    addr: address.clone(),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                    size: 8,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Deref {
+                        addr: Box::new(address),
+                        size: 8,
+                    }),
+                },
+            ]
+        }
+
+        let identities = crate::ir::value_number::ValueIdentities::default();
+        let mut unowned = frame_home();
+        coalesce_frame_object_param_spills(&mut unowned, Some(&identities));
+        assert_eq!(unowned.len(), 2);
+
+        let parameter = identities.with_role_aliases_and_parameter_slots(
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::from([0]),
+        );
+        let mut owned = frame_home();
+        coalesce_frame_object_param_spills(&mut owned, Some(&parameter));
+        assert_eq!(owned.len(), 1);
+        assert!(matches!(
+            owned[0].semantic(),
+            Stmt::Return {
+                value: Some(Expr::Reg(value))
+            } if value == &VReg::phys("arg0")
+        ));
+    }
+
+    #[test]
+    fn attributed_named_parameter_home_is_coalesced() {
+        let spill_owner = OriginSet::one(0x1000);
+        let return_owner = OriginSet::one(0x1004);
+        let mut body = vec![
+            Stmt::Store {
+                addr: Expr::Reg(VReg::phys("local_4")),
+                src: Expr::Reg(VReg::phys("arg0")),
+                size: 4,
+            }
+            .with_origins(spill_owner.clone()),
+            Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("local_4"))),
+            }
+            .with_origins(return_owner.clone()),
+        ];
+
+        coalesce_named_param_spills(&mut body, &std::collections::HashSet::new(), None);
+
+        assert_eq!(body.len(), 2);
+        assert_eq!(body[0].origins(), Some(&spill_owner));
+        assert!(matches!(body[0].semantic(), Stmt::Nop));
+        assert_eq!(body[1].origins(), Some(&return_owner));
+        assert!(matches!(
+            body[1].semantic(),
+            Stmt::Return {
+                value: Some(Expr::Reg(register))
+            } if register == &VReg::phys("arg0")
+        ));
+    }
+
+    #[test]
+    fn attributed_frame_object_parameter_home_is_coalesced() {
+        let frame = VReg::phys("frame_10");
+        let address = Expr::StackAddr {
+            object: frame,
+            size: 16,
+        };
+        let return_owner = OriginSet::one(0x2004);
+        let mut body = vec![
+            Stmt::Store {
+                addr: address.clone(),
+                src: Expr::Reg(VReg::phys("arg0")),
+                size: 8,
+            }
+            .with_origins(OriginSet::one(0x2000)),
+            Stmt::Return {
+                value: Some(Expr::Deref {
+                    addr: Box::new(address),
+                    size: 8,
+                }),
+            }
+            .with_origins(return_owner.clone()),
+        ];
+
+        coalesce_frame_object_param_spills(&mut body, None);
+
+        assert_eq!(body.len(), 1);
+        assert_eq!(body[0].origins(), Some(&return_owner));
+        assert!(matches!(
+            body[0].semantic(),
+            Stmt::Return {
+                value: Some(Expr::Reg(register))
+            } if register == &VReg::phys("arg0")
+        ));
     }
 }

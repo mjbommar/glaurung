@@ -27,7 +27,8 @@ pub fn resolve_names(f: &mut Function, addr_map: &HashMap<u64, String>) {
 
 fn resolve_body(body: &mut [Stmt], addr_map: &HashMap<u64, String>) {
     for s in body.iter_mut() {
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::IndirectGoto { target } => resolve_expr(target, addr_map),
             Stmt::Assign { src, .. } => resolve_expr(src, addr_map),
             Stmt::Store { addr, src, .. } => {
@@ -105,6 +106,7 @@ fn resolve_body(body: &mut [Stmt], addr_map: &HashMap<u64, String>) {
 
 fn resolve_expr(e: &mut Expr, addr_map: &HashMap<u64, String>) {
     match e {
+        Expr::Origin { expr, .. } => resolve_expr(expr, addr_map),
         Expr::Addr(a) => {
             if let Some(name) = addr_map.get(a) {
                 *e = Expr::Named {
@@ -233,6 +235,7 @@ pub fn collect_address_map_and_data_symbols(
 ) -> (HashMap<u64, String>, crate::ir::data_symbols::DataSymbols) {
     let mut out = HashMap::new();
     let mut data_symbols = crate::ir::data_symbols::DataSymbols::new();
+    let mut got_names = Vec::new();
     // Defined symbols (functions + exported vars). Several symbols routinely share
     // one address, so the FIRST one seen must not simply win — see `symbol_rank`.
     if let Ok(obj) = crate::decompile::profile::parse_object(data) {
@@ -268,13 +271,14 @@ pub fn collect_address_map_and_data_symbols(
         // 20 to 21 and tripped the object-parse ceiling. Parsing an image
         // twice to ask it two questions is what that test exists to prevent.
         data_symbols = crate::ir::data_symbols::from_object(&obj);
+        got_names = crate::analysis::elf_got::elf_got_map_from_object(data, &obj);
     }
     // PE exports. The object crate does not expose PE exports through
     // dynamic_symbols(), so recover the export table directly for Windows
     // decompile output.
     collect_pe_exports(data, &mut out);
     // ELF GOT (may name something the symbol table doesn't).
-    for (va, name) in crate::analysis::elf_got::elf_got_map(data) {
+    for (va, name) in got_names {
         out.insert(va, name);
     }
     // ELF PLT.

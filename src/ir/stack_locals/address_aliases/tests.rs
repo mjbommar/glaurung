@@ -57,6 +57,76 @@ fn loaded_address(body: &[Stmt]) -> &Expr {
 }
 
 #[test]
+fn opaque_ssa_stack_address_chain_is_expanded_by_identity() {
+    let shift = reg("opaque_shift");
+    let offset = reg("opaque_offset");
+    let address = reg("opaque_address");
+    let mut body = vec![
+        Stmt::Label(0x59c),
+        Stmt::Assign {
+            dst: shift.clone(),
+            src: bin(BinOp::Shl, Expr::Reg(reg("side")), Expr::Const(2)),
+        },
+        Stmt::Assign {
+            dst: offset.clone(),
+            src: bin(BinOp::Sub, Expr::Reg(shift.clone()), Expr::Const(4)),
+        },
+        Stmt::Assign {
+            dst: address.clone(),
+            src: bin(BinOp::Add, Expr::Reg(offset.clone()), Expr::Reg(reg("fp"))),
+        },
+        load_through("opaque_address", -132),
+    ];
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
+    for (register, version) in [(&shift, 38), (&offset, 39), (&address, 40)] {
+        identities.record(
+            register.clone(),
+            crate::ir::ssa::SsaValue {
+                base: reg("r3"),
+                version,
+            },
+        );
+    }
+
+    expand_with_identities(&mut body, arm_context(), Some(&identities));
+
+    let loaded = loaded_address(&body);
+    for transient in [&shift, &offset, &address] {
+        assert!(
+            !contains_register(loaded, transient),
+            "opaque affine component survived in {loaded:#?}"
+        );
+    }
+    assert!(contains_register(loaded, &reg("fp")), "{loaded:#?}");
+    assert!(contains_register(loaded, &reg("side")), "{loaded:#?}");
+}
+
+#[test]
+fn identity_version_outranks_a_misleading_stack_alias_spelling() {
+    let opaque = reg("opaque_component");
+    let misleading = reg("r3#fake");
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
+    identities.record(
+        opaque.clone(),
+        crate::ir::ssa::SsaValue {
+            base: reg("r3"),
+            version: 1,
+        },
+    );
+    identities.record(
+        misleading.clone(),
+        crate::ir::ssa::SsaValue {
+            base: reg("r3"),
+            version: 0,
+        },
+    );
+
+    assert!(is_versioned_local_value(&opaque, Some(&identities)));
+    assert!(!is_versioned_local_value(&misleading, Some(&identities)));
+    assert!(is_versioned_local_value(&misleading, None));
+}
+
+#[test]
 fn a32_split_index_constant_is_expanded_into_the_frame_address() {
     // GCC -O0: lsl r3, side, #2; sub r3, #4; add r3, fp;
     // ldr r3, [r3, #-132]. The -4 is part of the effective displacement,

@@ -319,6 +319,7 @@ class DecompileCommand(BaseCommand):
                     style=style,
                     pdb_cache=args.pdb_cache or config.pdb_cache_dir or "",
                     max_functions=_requested_function_budget(vas),
+                    include_line_mappings=True,
                 )
                 report = _take_render_verification() if annotate_conflicts else None
                 if report is not None:
@@ -339,6 +340,7 @@ class DecompileCommand(BaseCommand):
                     timeout_ms=timeout_ms,
                     pdb_cache=args.pdb_cache or config.pdb_cache_dir or "",
                     style=style,
+                    include_line_mappings=True,
                 )
                 report = _take_render_verification() if annotate_conflicts else None
                 if report is not None:
@@ -776,8 +778,8 @@ def _requested_function_budget(vas: list[int]) -> int:
 def _function_record(record: tuple) -> dict:
     """One per-function JSON object from a `decompile_many`/`decompile_all` row.
 
-    The row is `(name, entry_va, pseudocode, size, variables)`. `size` and
-    `variables` are additive: every previously-emitted key keeps its name and
+    The row is `(name, entry_va, pseudocode, size, variables, line_mappings)`.
+    The trailing fields are additive: every previously-emitted key keeps its name and
     meaning, so a consumer reading only the original three is unaffected.
 
     `variables` is the structured inventory from `ir::recovered_variables` --
@@ -791,18 +793,20 @@ def _function_record(record: tuple) -> dict:
     the fail-closed rules and for the two configurations (an omitted frame
     pointer, ARM32) where it is deliberately silent.
 
-    There are still no LINE numbers. That needs AST-node-to-instruction lineage,
-    which lowering discards, and is a different problem from this one.
+    `line_mappings` comes directly from AST statement origins while rendering;
+    it is never reconstructed by parsing pseudocode.
     """
     name, entry_va, text = record[0], record[1], record[2]
     size = record[3] if len(record) > 3 else None
     variables = record[4] if len(record) > 4 else []
+    line_mappings = record[5] if len(record) > 5 else []
     return {
         "name": name,
         "entry_va": int(entry_va),
         "pseudocode": text,
         "size": int(size) if size is not None else None,
         "variables": variables,
+        "line_mappings": line_mappings,
     }
 
 

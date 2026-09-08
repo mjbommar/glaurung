@@ -21,9 +21,15 @@ use std::collections::HashMap;
 use crate::ir::types::{BinOp, LlirFunction, Op, VReg, Value};
 
 use super::{
-    int_for_reg, recover_types, reg_width_bytes, scalar_float_intrinsic_width, scalar_vfp_register,
-    TypeHint, TypeMap,
+    int_for_reg, recover_types, recover_types_with_identities, reg_width_bytes,
+    scalar_float_intrinsic_width, scalar_vfp_register, TypeHint, TypeMap,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum FrameBaseIdentity {
+    Exact(crate::ir::ssa::SsaValue),
+    CompatibilitySpelling(String),
+}
 
 pub(super) fn merge_type_hint(current: Option<TypeHint>, new: TypeHint) -> TypeHint {
     match (current, new) {
@@ -239,11 +245,38 @@ pub(super) fn tag_value_regs(op: &Op, tm: &mut TypeMap) {
 
 /// True for a frame-relative base register (`rbp`/`rsp` on x86-64,
 /// `x29`/`sp`/`w29` on AArch64) — the anchors `-O0` code spills locals against.
+#[cfg(test)]
 pub(super) fn is_frame_base(v: &VReg) -> bool {
+    frame_base_identity(v, None).is_some()
+}
+
+#[cfg(test)]
+pub(super) fn is_frame_base_with_identities(
+    v: &VReg,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> bool {
+    frame_base_identity(v, Some(identities)).is_some()
+}
+
+fn frame_base_identity(
+    v: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<FrameBaseIdentity> {
+    if let Some(identities) = identities {
+        let identity = identities.exact(v)?;
+        let VReg::Phys(base) = &identity.base else {
+            return None;
+        };
+        return is_frame_base_name(base).then(|| FrameBaseIdentity::Exact(identity.clone()));
+    }
     let VReg::Phys(name) = v else {
-        return false;
+        return None;
     };
     let base = name.split_once('#').map_or(name.as_str(), |(base, _)| base);
+    is_frame_base_name(base).then(|| FrameBaseIdentity::CompatibilitySpelling(name.clone()))
+}
+
+fn is_frame_base_name(base: &str) -> bool {
     matches!(
         base,
         "rbp" | "rsp" | "ebp" | "esp" | "x29" | "sp" | "w29" | "r7" | "r11" | "fp"
@@ -254,9 +287,13 @@ pub(super) fn is_frame_base(v: &VReg) -> bool {
 ///   1. record `slot -> register` for each spill store `[frame+disp] = reg`;
 ///   2. for each reload `reg = [frame+disp]` whose destination is already a
 ///      pointer in `tm`, propagate that pointer back to the spilled register.
-pub(super) fn propagate_spill_slot_pointers(lf: &LlirFunction, tm: &mut TypeMap) {
+pub(super) fn propagate_spill_slot_pointers_with_optional_identities(
+    lf: &LlirFunction,
+    tm: &mut TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     // slot (frame-base name, disp) -> the register most recently spilled there.
-    let mut spilled_from: HashMap<(String, i64), VReg> = HashMap::new();
+    let mut spilled_from: HashMap<(FrameBaseIdentity, i64), VReg> = HashMap::new();
     for block in &lf.blocks {
         for ins in &block.instrs {
             if let Op::Store {
@@ -264,12 +301,13 @@ pub(super) fn propagate_spill_slot_pointers(lf: &LlirFunction, tm: &mut TypeMap)
                 src: Value::Reg(r @ VReg::Phys(_)),
             } = &ins.op
             {
-                if let Some(base) = &addr.base {
-                    if is_frame_base(base) && addr.index.is_none() {
-                        if let VReg::Phys(bn) = base {
-                            spilled_from.insert((bn.clone(), addr.disp), r.clone());
-                        }
-                    }
+                if let Some(frame) = addr
+                    .base
+                    .as_ref()
+                    .and_then(|base| frame_base_identity(base, identities))
+                    .filter(|_| addr.index.is_none())
+                {
+                    spilled_from.insert((frame, addr.disp), r.clone());
                 }
             }
         }
@@ -280,15 +318,16 @@ pub(super) fn propagate_spill_slot_pointers(lf: &LlirFunction, tm: &mut TypeMap)
     for block in &lf.blocks {
         for ins in &block.instrs {
             if let Op::Load { dst, addr } = &ins.op {
-                if let Some(base) = &addr.base {
-                    if is_frame_base(base) && addr.index.is_none() {
-                        if let VReg::Phys(bn) = base {
-                            if let (Some(src_reg), Some(TypeHint::Pointer { pointee_width })) =
-                                (spilled_from.get(&(bn.clone(), addr.disp)), tm.get(dst))
-                            {
-                                tm.upsert(src_reg.clone(), TypeHint::Pointer { pointee_width });
-                            }
-                        }
+                if let Some(frame) = addr
+                    .base
+                    .as_ref()
+                    .and_then(|base| frame_base_identity(base, identities))
+                    .filter(|_| addr.index.is_none())
+                {
+                    if let (Some(src_reg), Some(TypeHint::Pointer { pointee_width })) =
+                        (spilled_from.get(&(frame, addr.disp)), tm.get(dst))
+                    {
+                        tm.upsert(src_reg.clone(), TypeHint::Pointer { pointee_width });
                     }
                 }
             }
@@ -332,14 +371,26 @@ fn op_dst_reg(op: &Op) -> Option<&VReg> {
 /// view, we overwrite every return-register alias with that concrete integer
 /// width, clearing any spurious pointer classification. A genuine pointer
 /// return writes the full 64-bit register and is left untouched.
-fn refine_return_type(lf: &LlirFunction, tm: &mut TypeMap, cc: crate::ir::call_args::CallConv) {
+fn refine_return_type(
+    lf: &LlirFunction,
+    tm: &mut TypeMap,
+    cc: crate::ir::call_args::CallConv,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    definition_widths: Option<&std::collections::HashMap<VReg, u8>>,
+) {
     let ret_names = return_reg_names(cc);
     let mut last_dst: Option<VReg> = None;
     for block in &lf.blocks {
         for ins in &block.instrs {
-            if let Some(VReg::Phys(n)) = op_dst_reg(&ins.op) {
-                if ret_names.contains(&n.as_str()) {
-                    last_dst = Some(VReg::phys(n));
+            if let Some(dst) = op_dst_reg(&ins.op) {
+                let is_result = match identities {
+                    Some(identities) => identities.exact(dst).is_some_and(|identity| {
+                        matches!(&identity.base, VReg::Phys(base) if ret_names.contains(&base.as_str()))
+                    }),
+                    None => matches!(dst, VReg::Phys(name) if ret_names.contains(&name.as_str())),
+                };
+                if is_result {
+                    last_dst = Some(dst.clone());
                 }
             }
         }
@@ -347,7 +398,9 @@ fn refine_return_type(lf: &LlirFunction, tm: &mut TypeMap, cc: crate::ir::call_a
     let Some(dst) = last_dst else {
         return;
     };
-    let w = reg_width_bytes(&dst);
+    let w = definition_widths
+        .and_then(|widths| widths.get(&dst).copied())
+        .unwrap_or_else(|| reg_width_bytes(&dst));
     if w == 0 || w >= 8 {
         // Full-width (or unknown) last definition: could legitimately be a
         // pointer or a `long`; leave the recovered classification alone.
@@ -358,10 +411,17 @@ fn refine_return_type(lf: &LlirFunction, tm: &mut TypeMap, cc: crate::ir::call_a
         _ => true,
     };
     let hint = TypeHint::Int { signed, width: w };
-    for n in ret_names {
-        let key = VReg::phys(*n);
-        if tm.inner.contains_key(&key) {
-            tm.inner.insert(key, hint);
+    match identities {
+        Some(_) => {
+            tm.inner.insert(dst, hint);
+        }
+        None => {
+            for n in ret_names {
+                let key = VReg::phys(*n);
+                if tm.inner.contains_key(&key) {
+                    tm.inner.insert(key, hint);
+                }
+            }
         }
     }
 }
@@ -371,7 +431,42 @@ fn refine_return_type(lf: &LlirFunction, tm: &mut TypeMap, cc: crate::ir::call_a
 /// should prefer this over the bare [`recover_types`].
 pub fn recover_types_for(lf: &LlirFunction, cc: crate::ir::call_args::CallConv) -> TypeMap {
     let mut tm = recover_types(lf);
-    refine_return_type(lf, &mut tm, cc);
+    refine_return_type(lf, &mut tm, cc, None, None);
+    tm
+}
+
+/// Production type recovery with exact semantic register identity.
+pub fn recover_types_for_with_identities(
+    lf: &LlirFunction,
+    cc: crate::ir::call_args::CallConv,
+    identities: &crate::ir::value_number::ValueIdentities,
+    definition_widths: &std::collections::HashMap<VReg, u8>,
+    valued_types: &super::TypeMapV,
+) -> TypeMap {
+    let mut tm = recover_types_with_identities(lf, identities);
+    let numbered_values = tm
+        .iter()
+        .map(|(value, _)| value.clone())
+        .collect::<Vec<_>>();
+    for value in numbered_values {
+        let Some(identity) = identities.exact(&value) else {
+            continue;
+        };
+        if let Some(hint) = valued_types.get(identity) {
+            tm.refine_from_value(value, hint);
+        }
+    }
+    for (value, &width) in definition_widths {
+        if width == 0 || identities.candidates(value).is_none() {
+            continue;
+        }
+        let signed = match tm.get(value) {
+            Some(TypeHint::Int { signed, .. }) => signed,
+            _ => true,
+        };
+        tm.upsert(value.clone(), TypeHint::Int { signed, width });
+    }
+    refine_return_type(lf, &mut tm, cc, Some(identities), Some(definition_widths));
     tm
 }
 
@@ -418,13 +513,16 @@ fn offset_registers(lf: &LlirFunction) -> std::collections::HashSet<VReg> {
 /// reload operand of an address `add` is the pointer base (the other operand is
 /// the index). Feeding these to [`propagate_spill_slot_pointers`] then carries
 /// the pointer type back to the incoming argument register.
-fn frame_slot_reloads(lf: &LlirFunction) -> std::collections::HashSet<VReg> {
+fn frame_slot_reloads(
+    lf: &LlirFunction,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> std::collections::HashSet<VReg> {
     let mut reloads = std::collections::HashSet::new();
     for block in &lf.blocks {
         for ins in &block.instrs {
             if let Op::Load { dst, addr } = &ins.op {
                 if let Some(base) = &addr.base {
-                    if is_frame_base(base) && addr.index.is_none() {
+                    if frame_base_identity(base, identities).is_some() && addr.index.is_none() {
                         reloads.insert(dst.clone());
                     }
                 }
@@ -448,9 +546,13 @@ fn frame_slot_reloads(lf: &LlirFunction) -> std::collections::HashSet<VReg> {
 ///    ([`offset_registers`]) — so the other operand is the base; and
 ///  * the *base* operand is a frame-slot reload ([`frame_slot_reloads`]) — the
 ///    reloaded spilled pointer — so the other operand is the index.
-pub(super) fn propagate_pointer_arithmetic(lf: &LlirFunction, tm: &mut TypeMap) {
+pub(super) fn propagate_pointer_arithmetic_with_optional_identities(
+    lf: &LlirFunction,
+    tm: &mut TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     let offsets = offset_registers(lf);
-    let reloads = frame_slot_reloads(lf);
+    let reloads = frame_slot_reloads(lf, identities);
     let is_offset = |v: &Value| match v {
         Value::Const(_) => true,
         Value::Reg(r) => offsets.contains(r),

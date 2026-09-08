@@ -10,10 +10,26 @@
 
 use super::{BinOp, ScalarFloatOperation, ScalarType};
 use crate::ir::types::{LlirFunction, Op, VReg, Value};
+use crate::ir::value_number::ValueIdentities;
 
-fn scalar_vfp_register(register: &VReg) -> bool {
-    matches!(register, VReg::Phys(name) if {
-        let base = crate::ir::abi::ssa_base(name);
+fn physical_base<'a>(
+    register: &'a VReg,
+    identities: Option<&'a ValueIdentities>,
+) -> Option<&'a str> {
+    match identities {
+        Some(identities) => match &identities.exact(register)?.base {
+            VReg::Phys(base) => Some(base),
+            _ => None,
+        },
+        None => match register {
+            VReg::Phys(name) => Some(crate::ir::abi::ssa_base(name)),
+            _ => None,
+        },
+    }
+}
+
+fn scalar_vfp_register(register: &VReg, identities: Option<&ValueIdentities>) -> bool {
+    physical_base(register, identities).is_some_and(|base| {
         base.strip_prefix('s').is_some_and(|n| n.parse::<u8>().is_ok())
             || base.strip_prefix('d').is_some_and(|n| n.parse::<u8>().is_ok())
             // x86-64 carries every scalar float in an SSE register.
@@ -27,10 +43,20 @@ fn scalar_vfp_register(register: &VReg) -> bool {
     })
 }
 
+#[cfg(test)]
 pub(super) fn scalar_float_intrinsic(
     name: &str,
     ins: &[Value],
     outs: &[(VReg, crate::ir::types::Width)],
+) -> Option<(ScalarFloatOperation, u8)> {
+    scalar_float_intrinsic_with_identities(name, ins, outs, None)
+}
+
+pub(super) fn scalar_float_intrinsic_with_identities(
+    name: &str,
+    ins: &[Value],
+    outs: &[(VReg, crate::ir::types::Width)],
+    identities: Option<&ValueIdentities>,
 ) -> Option<(ScalarFloatOperation, u8)> {
     if let Some(converted) = arm_scalar_conversion_intrinsic(name) {
         return Some(converted);
@@ -40,8 +66,8 @@ pub(super) fn scalar_float_intrinsic(
     } else if let Some(base) = name.strip_suffix(".f64") {
         (base, 8)
     } else if name == "vmov"
-        && matches!(ins, [Value::Reg(source)] if !scalar_vfp_register(source))
-        && matches!(outs, [(destination, _)] if scalar_vfp_register(destination))
+        && matches!(ins, [Value::Reg(source)] if !scalar_vfp_register(source, identities))
+        && matches!(outs, [(destination, _)] if scalar_vfp_register(destination, identities))
     {
         let [(_, declared_width)] = outs else {
             return None;
@@ -251,7 +277,11 @@ fn unmodelled_x86_float_mnemonic(name: &str) -> bool {
 /// is not the shape the proof sees. `lift_window_at` shows the lifter's
 /// version, not this one, which is why the gate's decision cannot be read off
 /// the raw lift.
-fn scalar_float_gate_note(op: &Op, all_caller_saved: bool) -> Option<String> {
+fn scalar_float_gate_note(
+    op: &Op,
+    all_caller_saved: bool,
+    identities: Option<&ValueIdentities>,
+) -> Option<String> {
     let spell = |registers: Vec<String>| {
         if registers.is_empty() {
             "[]".to_string()
@@ -263,7 +293,8 @@ fn scalar_float_gate_note(op: &Op, all_caller_saved: bool) -> Option<String> {
         Op::Intrinsic {
             name, ins, outs, ..
         } => {
-            let verdict = match scalar_float_intrinsic(name, ins, outs) {
+            let verdict = match scalar_float_intrinsic_with_identities(name, ins, outs, identities)
+            {
                 Some((_, width)) => format!("scalar_float=yes width={width}"),
                 None if name.starts_with('v') || unmodelled_x86_float_mnemonic(name) => {
                     "opaque_float=yes -> gate SHUTS".to_string()
@@ -286,7 +317,7 @@ fn scalar_float_gate_note(op: &Op, all_caller_saved: bool) -> Option<String> {
         ),
         Op::Call { effects, .. } => {
             let result = effects.as_ref().and_then(|effects| effects.result.as_ref());
-            let verdict = if result.is_some_and(scalar_vfp_register) {
+            let verdict = if result.is_some_and(|result| scalar_vfp_register(result, identities)) {
                 "vfp result -> saw_scalar_float"
             } else if !all_caller_saved {
                 "no vfp result, float regs NOT all caller-saved -> gate SHUTS"
@@ -313,7 +344,7 @@ fn scalar_float_gate_note(op: &Op, all_caller_saved: bool) -> Option<String> {
 /// purpose: a function that does float arithmetic without ever naming an SSE
 /// register is the shape that misled the old predicate, and it is invisible in
 /// the recovered C.
-fn trace_scalar_float_gate(lf: &LlirFunction, closed: bool) {
+fn trace_scalar_float_gate(lf: &LlirFunction, identities: Option<&ValueIdentities>, closed: bool) {
     if std::env::var_os("GLAURUNG_PASS_HEALTH").is_none() {
         return;
     }
@@ -321,8 +352,8 @@ fn trace_scalar_float_gate(lf: &LlirFunction, closed: bool) {
     // walks every instruction and calls `def_uses`, which allocates a `Vec` and
     // clones each `VReg` name. Passing it as an argument made the caller pay for
     // it on every lowered function whether or not the trace was enabled.
-    let all_caller_saved = float_registers_are_all_caller_saved(lf);
-    let float_bank_seen = any_physical_register(lf, |base| {
+    let all_caller_saved = float_registers_are_all_caller_saved(lf, identities);
+    let float_bank_seen = any_physical_register(lf, identities, |base| {
         base.starts_with("xmm") || crate::ir::x87::is_slot_name(base)
     });
     eprintln!(
@@ -332,7 +363,7 @@ fn trace_scalar_float_gate(lf: &LlirFunction, closed: bool) {
         lf.entry_va
     );
     for instruction in lf.blocks.iter().flat_map(|block| &block.instrs) {
-        if let Some(note) = scalar_float_gate_note(&instruction.op, all_caller_saved) {
+        if let Some(note) = scalar_float_gate_note(&instruction.op, all_caller_saved, identities) {
             eprintln!("[glaurung-float-gate]   va={:#x} {note}", instruction.va);
         }
     }
@@ -398,13 +429,23 @@ fn x86_register_base(base: &str) -> bool {
 /// Keeping i386 on the caller-saved side is what stops the
 /// `call __x86.get_pc_thunk.*` opening every PIC i386 function from sending its
 /// whole body back to opaque comments.
-fn float_registers_are_all_caller_saved(lf: &LlirFunction) -> bool {
-    any_physical_register(lf, x86_register_base)
+fn float_registers_are_all_caller_saved(
+    lf: &LlirFunction,
+    identities: Option<&ValueIdentities>,
+) -> bool {
+    any_physical_register(lf, identities, x86_register_base)
 }
 
-/// Whether any physical register defined or used in `lf` satisfies `predicate`,
-/// which receives the SSA-version-stripped register name.
-fn any_physical_register(lf: &LlirFunction, predicate: impl Fn(&str) -> bool) -> bool {
+/// Whether any physical register defined or used in `lf` satisfies `predicate`.
+///
+/// Production lowering resolves the canonical register from the exact value
+/// identity. The spelling fallback is reserved for compatibility callers that
+/// do not own the sidecar.
+fn any_physical_register(
+    lf: &LlirFunction,
+    identities: Option<&ValueIdentities>,
+    predicate: impl Fn(&str) -> bool,
+) -> bool {
     lf.blocks
         .iter()
         .flat_map(|block| &block.instrs)
@@ -412,9 +453,7 @@ fn any_physical_register(lf: &LlirFunction, predicate: impl Fn(&str) -> bool) ->
             let (definition, uses) = crate::ir::use_def::def_uses(&instruction.op);
             definition.into_iter().chain(uses)
         })
-        .any(|register| {
-            matches!(&register, VReg::Phys(name) if predicate(crate::ir::abi::ssa_base(name)))
-        })
+        .any(|register| physical_base(&register, identities).is_some_and(&predicate))
 }
 
 /// Whether every VFP value used by the scalar arithmetic subset has a modeled
@@ -426,20 +465,28 @@ fn any_physical_register(lf: &LlirFunction, predicate: impl Fn(&str) -> bool) ->
 /// would be actively misleading: an unmodeled `vldr` followed by
 /// `vadd.f32 s0, s15, s15` becomes `var = var + var` with an invented live-in.
 /// Keep the entire scalar-float subset opaque until those producers are modeled.
+#[cfg(test)]
 pub(super) fn scalar_float_semantics_are_closed(lf: &LlirFunction) -> bool {
-    let closed = scalar_float_semantics_proof(lf);
-    trace_scalar_float_gate(lf, closed);
+    scalar_float_semantics_are_closed_with_identities(lf, None)
+}
+
+pub(super) fn scalar_float_semantics_are_closed_with_identities(
+    lf: &LlirFunction,
+    identities: Option<&ValueIdentities>,
+) -> bool {
+    let closed = scalar_float_semantics_proof(lf, identities);
+    trace_scalar_float_gate(lf, identities, closed);
     closed
 }
 
-fn scalar_float_semantics_proof(lf: &LlirFunction) -> bool {
-    let float_registers_are_all_caller_saved = float_registers_are_all_caller_saved(lf);
+fn scalar_float_semantics_proof(lf: &LlirFunction, identities: Option<&ValueIdentities>) -> bool {
+    let float_registers_are_all_caller_saved = float_registers_are_all_caller_saved(lf, identities);
     let mut saw_scalar_float = false;
     for instruction in lf.blocks.iter().flat_map(|block| &block.instrs) {
         match &instruction.op {
             Op::Intrinsic {
                 name, ins, outs, ..
-            } if scalar_float_intrinsic(name, ins, outs).is_some() => {
+            } if scalar_float_intrinsic_with_identities(name, ins, outs, identities).is_some() => {
                 saw_scalar_float = true;
             }
             Op::Intrinsic { name, .. } | Op::Unknown { mnemonic: name }
@@ -459,7 +506,7 @@ fn scalar_float_semantics_proof(lf: &LlirFunction) -> bool {
                         ..
                     }),
                 ..
-            } if scalar_vfp_register(result) => saw_scalar_float = true,
+            } if scalar_vfp_register(result, identities) => saw_scalar_float = true,
             // A call with no typed VFP result may still clobber the value a
             // later scalar op appears to consume. Keep that region opaque —
             // UNLESS the convention makes that impossible.
@@ -480,7 +527,9 @@ fn scalar_float_semantics_proof(lf: &LlirFunction) -> bool {
             // Scalar VFP memory traffic is represented by ordinary typed
             // Load/Store nodes. Those operations close dataflow rather than
             // creating an opaque producer.
-            Op::Load { dst, .. } | Op::CondLoad { dst, .. } if scalar_vfp_register(dst) => {
+            Op::Load { dst, .. } | Op::CondLoad { dst, .. }
+                if scalar_vfp_register(dst, identities) =>
+            {
                 saw_scalar_float = true
             }
             Op::Store {
@@ -490,7 +539,7 @@ fn scalar_float_semantics_proof(lf: &LlirFunction) -> bool {
             | Op::CondStore {
                 src: Value::Reg(src),
                 ..
-            } if scalar_vfp_register(src) => saw_scalar_float = true,
+            } if scalar_vfp_register(src, identities) => saw_scalar_float = true,
             _ => {}
         }
     }
@@ -523,5 +572,40 @@ mod tests {
                 4,
             ))
         ));
+    }
+
+    #[test]
+    fn float_register_roles_use_exact_identity_not_display_spelling() {
+        let misleading = VReg::phys("xmm0#looks_float");
+        let opaque_float = VReg::phys("opaque_value");
+        let ambiguous = VReg::phys("xmm1#ambiguous");
+        let mut identities = ValueIdentities::default();
+        identities.record(
+            misleading.clone(),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rax"),
+                version: 3,
+            },
+        );
+        identities.record(
+            opaque_float.clone(),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("xmm0"),
+                version: 7,
+            },
+        );
+        for base in ["xmm1", "rcx"] {
+            identities.record(
+                ambiguous.clone(),
+                crate::ir::ssa::SsaValue {
+                    base: VReg::phys(base),
+                    version: 2,
+                },
+            );
+        }
+
+        assert!(!scalar_vfp_register(&misleading, Some(&identities)));
+        assert!(scalar_vfp_register(&opaque_float, Some(&identities)));
+        assert!(!scalar_vfp_register(&ambiguous, Some(&identities)));
     }
 }

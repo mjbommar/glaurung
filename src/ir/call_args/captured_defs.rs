@@ -19,8 +19,9 @@
 
 use crate::ir::ast::{Expr, Stmt};
 use crate::ir::types::VReg;
+use crate::ir::value_number::ValueIdentities;
 
-use super::{outgoing_sysv_stack_push, reads_reg_in_expr, ssa_base};
+use super::{outgoing_sysv_stack_push_with_identities, reads_reg_in_expr, ssa_base};
 
 /// Resolve one reaching register definition in every argument captured so far.
 ///
@@ -91,14 +92,19 @@ pub(super) fn resolve_captured_definition_in(
 /// fixed frame slot or be an exact lowered outgoing push below the frame; an
 /// unknown pointer store, overlapping slot, frame-base write, call, or control
 /// boundary rejects substitution.
-pub(super) fn is_stable_frame_arg_definition(
+/// Decide whether a captured impure definition is a stable frame read.
+///
+/// Production value-numbered input must prove the frame base from its exact
+/// SSA identity. Display spellings such as `rbp#4` are not semantic evidence.
+pub(super) fn is_stable_frame_arg_definition_with_identities(
     expr: &Expr,
     body: &[Stmt],
     definition_index: usize,
     call_index: usize,
+    identities: Option<&ValueIdentities>,
 ) -> bool {
     let mut reads = Vec::new();
-    if !collect_fixed_frame_reads(expr, &mut reads) || reads.is_empty() {
+    if !collect_fixed_frame_reads(expr, &mut reads, identities) || reads.is_empty() {
         return false;
     }
     for (index, statement) in body
@@ -107,20 +113,20 @@ pub(super) fn is_stable_frame_arg_definition(
         .take(call_index)
         .skip(definition_index + 1)
     {
-        match statement {
-            Stmt::Assign {
-                dst: VReg::Phys(name),
-                ..
-            } if matches!(ssa_base(name), "ebp" | "rbp") => return false,
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
+            Stmt::Assign { dst, .. } if frame_base_identity(dst, identities).is_some() => {
+                return false
+            }
             Stmt::Store {
                 addr,
                 size: store_size,
                 ..
             } => {
-                if outgoing_sysv_stack_push(body, index).is_some() {
+                if outgoing_sysv_stack_push_with_identities(body, index, identities).is_some() {
                     continue;
                 }
-                let Some((base, store_disp)) = fixed_frame_address(addr) else {
+                let Some((base, store_disp)) = fixed_frame_address(addr, identities) else {
                     return false;
                 };
                 if reads.iter().any(|(read_base, read_disp, read_size)| {
@@ -151,17 +157,23 @@ pub(super) fn is_stable_frame_arg_definition(
     true
 }
 
-fn collect_fixed_frame_reads(expr: &Expr, reads: &mut Vec<(String, i64, u8)>) -> bool {
+fn collect_fixed_frame_reads(
+    expr: &Expr,
+    reads: &mut Vec<(VReg, i64, u8)>,
+    identities: Option<&ValueIdentities>,
+) -> bool {
     match expr {
+        Expr::Origin { expr, .. } => collect_fixed_frame_reads(expr, reads, identities),
         Expr::Deref { addr, size } => {
-            let Some((base, disp)) = fixed_frame_address(addr) else {
+            let Some((base, disp)) = fixed_frame_address(addr, identities) else {
                 return false;
             };
             reads.push((base, disp, *size));
             true
         }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-            collect_fixed_frame_reads(lhs, reads) && collect_fixed_frame_reads(rhs, reads)
+            collect_fixed_frame_reads(lhs, reads, identities)
+                && collect_fixed_frame_reads(rhs, reads, identities)
         }
         Expr::Select {
             cond,
@@ -169,17 +181,17 @@ fn collect_fixed_frame_reads(expr: &Expr, reads: &mut Vec<(String, i64, u8)>) ->
             if_false,
             ..
         } => {
-            collect_fixed_frame_reads(cond, reads)
-                && collect_fixed_frame_reads(if_true, reads)
-                && collect_fixed_frame_reads(if_false, reads)
+            collect_fixed_frame_reads(cond, reads, identities)
+                && collect_fixed_frame_reads(if_true, reads, identities)
+                && collect_fixed_frame_reads(if_false, reads, identities)
         }
-        Expr::Un { src, .. } => collect_fixed_frame_reads(src, reads),
+        Expr::Un { src, .. } => collect_fixed_frame_reads(src, reads, identities),
         Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
-            collect_fixed_frame_reads(expr, reads)
+            collect_fixed_frame_reads(expr, reads, identities)
         }
         Expr::WideArithmetic { args, .. } => args
             .iter()
-            .all(|argument| collect_fixed_frame_reads(argument, reads)),
+            .all(|argument| collect_fixed_frame_reads(argument, reads, identities)),
         Expr::Call { .. } => false,
         Expr::Const(_)
         | Expr::FloatConst { .. }
@@ -195,9 +207,9 @@ fn collect_fixed_frame_reads(expr: &Expr, reads: &mut Vec<(String, i64, u8)>) ->
     }
 }
 
-fn fixed_frame_address(expr: &Expr) -> Option<(String, i64)> {
+fn fixed_frame_address(expr: &Expr, identities: Option<&ValueIdentities>) -> Option<(VReg, i64)> {
     let Expr::Lea {
-        base: Some(VReg::Phys(base)),
+        base: Some(base),
         index: None,
         disp,
         ..
@@ -205,7 +217,24 @@ fn fixed_frame_address(expr: &Expr) -> Option<(String, i64)> {
     else {
         return None;
     };
-    matches!(ssa_base(base), "ebp" | "rbp").then(|| (ssa_base(base).to_string(), *disp))
+    frame_base_identity(base, identities).map(|identity| (identity, *disp))
+}
+
+fn frame_base_identity(register: &VReg, identities: Option<&ValueIdentities>) -> Option<VReg> {
+    match identities {
+        Some(identities) => identities
+            .exact(register)
+            .filter(|identity| {
+                matches!(&identity.base, VReg::Phys(base) if matches!(base.as_str(), "ebp" | "rbp"))
+            })
+            .map(|identity| identity.base.clone()),
+        None => {
+            let VReg::Phys(name) = register else {
+                return None;
+            };
+            matches!(ssa_base(name), "ebp" | "rbp").then(|| VReg::phys(ssa_base(name)))
+        }
+    }
 }
 
 fn byte_ranges_overlap(left: i64, left_size: i64, right: i64, right_size: i64) -> bool {
@@ -219,6 +248,7 @@ fn byte_ranges_overlap(left: i64, left_size: i64, right: i64, right_size: i64) -
 /// identity and intentionally does not participate in scalar substitution.
 pub(super) fn substitute_exact_reg(expr: &mut Expr, target: &VReg, replacement: &Expr) -> bool {
     match expr {
+        Expr::Origin { expr, .. } => substitute_exact_reg(expr, target, replacement),
         Expr::Reg(reg) if reg == target => {
             *expr = replacement.clone();
             true

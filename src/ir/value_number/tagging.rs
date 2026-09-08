@@ -190,8 +190,14 @@ fn tag_memop_uses(
 /// Apply the def version and the ordered use versions to one op's registers.
 /// The use order mirrors `use_def::def_uses` exactly (memory base before index,
 /// operands left-to-right), so the SSA `use_versions` line up by index.
-pub(crate) fn tag_op(op: &mut Op, def_ver: u32, use_values: &[Option<SsaValue>], ctx: &VnCtx) {
+pub(crate) fn tag_op(
+    op: &mut Op,
+    def_versions: &[u32],
+    use_values: &[Option<SsaValue>],
+    ctx: &VnCtx,
+) {
     let mut ui = 0usize;
+    let def_ver = def_versions.first().copied().unwrap_or(0);
     match op {
         Op::Assign { dst, src } => {
             tag_value(src, use_values, &mut ui, ctx);
@@ -299,20 +305,21 @@ pub(crate) fn tag_op(op: &mut Op, def_ver: u32, use_values: &[Option<SsaValue>],
             tag_value(e, use_values, &mut ui, ctx);
             tag_phys(dst, def_ver, ctx);
         }
-        // Effect-only and single-output intrinsics fit the ordinary SSA model
-        // exactly. This includes memory effects such as `memory.fill` and
-        // scalar VFP operations such as `vneg s15, s15`; tagging every input is
-        // what connects each use to its reaching definition.
-        Op::Intrinsic { ins, outs, .. } if outs.len() <= 1 => {
+        // Intrinsic outputs are positional SSA definitions. This includes
+        // effect-only operations, scalar VFP operations, and multi-output
+        // instructions such as `cpuid`.
+        Op::Intrinsic { ins, outs, .. } => {
             for input in ins {
                 tag_value(input, use_values, &mut ui, ctx);
             }
-            if let Some((output, _)) = outs.first_mut() {
-                tag_phys(output, def_ver, ctx);
+            for (output_index, (output, _)) in outs.iter_mut().enumerate() {
+                tag_phys(
+                    output,
+                    def_versions.get(output_index).copied().unwrap_or(0),
+                    ctx,
+                );
             }
         }
-        // Multi-output intrinsics (`cpuid`, ...) don't fit the single-def SSA
-        // model cleanly, so leave them untagged for now.
-        Op::Intrinsic { .. } | Op::Jump { .. } | Op::Return | Op::Nop | Op::Unknown { .. } => {}
+        Op::Jump { .. } | Op::Return | Op::Nop | Op::Unknown { .. } => {}
     }
 }

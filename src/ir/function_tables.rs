@@ -341,20 +341,39 @@ fn is_image_relative(architecture: Architecture, flags: RelocationFlags) -> bool
 
 /// Replace exact pointer-sized loads from complete tables with semantic entries.
 pub fn resolve_function_table_entries(function: &mut Function, tables: &[FunctionPointerTable]) {
+    resolve_function_table_entries_impl(function, tables, None);
+}
+
+/// Replace exact pointer-sized loads using pipeline-owned SSA value identities.
+pub fn resolve_function_table_entries_with_identities(
+    function: &mut Function,
+    tables: &[FunctionPointerTable],
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    resolve_function_table_entries_impl(function, tables, Some(identities));
+}
+
+fn resolve_function_table_entries_impl(
+    function: &mut Function,
+    tables: &[FunctionPointerTable],
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     if tables.is_empty() {
         return;
     }
-    resolve_body(&mut function.body, tables, &HashMap::new());
+    resolve_body(&mut function.body, tables, &HashMap::new(), identities);
 }
 
 fn resolve_body(
     body: &mut [Stmt],
     tables: &[FunctionPointerTable],
     inherited_definitions: &HashMap<VReg, Expr>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
     let mut definitions = inherited_definitions.clone();
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::IndirectGoto { target } | Stmt::Push { value: target } => {
                 resolve_expr(target, tables, &definitions);
                 promote_table_copy(target, &definitions);
@@ -376,25 +395,26 @@ fn resolve_body(
                     resolve_expr(value, tables, &definitions);
                 }
             }
+            Stmt::Throw { value } => resolve_expr(value, tables, &definitions),
             Stmt::If {
                 cond,
                 then_body,
                 else_body,
             } => {
                 resolve_expr(cond, tables, &definitions);
-                resolve_body(then_body, tables, &definitions);
+                resolve_body(then_body, tables, &definitions, identities);
                 if let Some(else_body) = else_body.as_deref_mut() {
-                    resolve_body(else_body, tables, &definitions);
+                    resolve_body(else_body, tables, &definitions, identities);
                 }
-                forget_definitions_written_in(then_body, &mut definitions);
+                forget_definitions_written_in(then_body, &mut definitions, identities);
                 if let Some(else_body) = else_body.as_deref() {
-                    forget_definitions_written_in(else_body, &mut definitions);
+                    forget_definitions_written_in(else_body, &mut definitions, identities);
                 }
             }
             Stmt::While { cond, body } | Stmt::DoWhile { cond, body } => {
                 resolve_expr(cond, tables, &definitions);
-                resolve_body(body, tables, &definitions);
-                forget_definitions_written_in(body, &mut definitions);
+                resolve_body(body, tables, &definitions, identities);
+                forget_definitions_written_in(body, &mut definitions, identities);
             }
             Stmt::For {
                 init,
@@ -402,18 +422,30 @@ fn resolve_body(
                 step,
                 body,
             } => {
-                resolve_body(std::slice::from_mut(init.as_mut()), tables, &definitions);
+                resolve_body(
+                    std::slice::from_mut(init.as_mut()),
+                    tables,
+                    &definitions,
+                    identities,
+                );
                 resolve_expr(cond, tables, &definitions);
-                resolve_body(body, tables, &definitions);
-                resolve_body(std::slice::from_mut(step.as_mut()), tables, &definitions);
+                resolve_body(body, tables, &definitions, identities);
+                resolve_body(
+                    std::slice::from_mut(step.as_mut()),
+                    tables,
+                    &definitions,
+                    identities,
+                );
                 forget_definitions_written_in(
                     std::slice::from_ref(init.as_ref()),
                     &mut definitions,
+                    identities,
                 );
-                forget_definitions_written_in(body, &mut definitions);
+                forget_definitions_written_in(body, &mut definitions, identities);
                 forget_definitions_written_in(
                     std::slice::from_ref(step.as_ref()),
                     &mut definitions,
+                    identities,
                 );
             }
             Stmt::Switch {
@@ -423,16 +455,26 @@ fn resolve_body(
             } => {
                 resolve_expr(discriminant, tables, &definitions);
                 for (_, case) in cases.iter_mut() {
-                    resolve_body(case, tables, &definitions);
+                    resolve_body(case, tables, &definitions, identities);
                 }
                 if let Some(default) = default.as_deref_mut() {
-                    resolve_body(default, tables, &definitions);
+                    resolve_body(default, tables, &definitions, identities);
                 }
                 for (_, case) in cases.iter() {
-                    forget_definitions_written_in(case, &mut definitions);
+                    forget_definitions_written_in(case, &mut definitions, identities);
                 }
                 if let Some(default) = default.as_deref() {
-                    forget_definitions_written_in(default, &mut definitions);
+                    forget_definitions_written_in(default, &mut definitions, identities);
+                }
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                resolve_body(try_body, tables, &definitions, identities);
+                for catch in catches.iter_mut() {
+                    resolve_body(&mut catch.body, tables, &definitions, identities);
+                }
+                forget_definitions_written_in(try_body, &mut definitions, identities);
+                for catch in catches.iter() {
+                    forget_definitions_written_in(&catch.body, &mut definitions, identities);
                 }
             }
             Stmt::Pop { .. }
@@ -442,14 +484,15 @@ fn resolve_body(
             | Stmt::Continue
             | Stmt::Nop
             | Stmt::Unknown(_)
-            | Stmt::Comment(_)
-            | Stmt::Throw { .. }
-            | Stmt::TryCatch { .. } => {}
+            | Stmt::Comment(_) => {}
         }
 
-        if let Stmt::Assign { dst, src } = statement {
+        if let Stmt::Assign { dst, src } = statement.semantic() {
             definitions.insert(dst.clone(), src.clone());
-        } else if matches!(statement, Stmt::Call { .. } | Stmt::IndirectGoto { .. }) {
+        } else if matches!(
+            statement.semantic(),
+            Stmt::Call { .. } | Stmt::IndirectGoto { .. }
+        ) {
             // Unversioned physical registers may be clobbered by a transfer.
             // Never carry an address proof across that boundary.
             definitions.clear();
@@ -470,7 +513,11 @@ fn resolve_body(
 /// it. A call or indirect transfer anywhere inside it can leave any UNVERSIONED
 /// physical register in an unknown state, so those are all forgotten — an
 /// SSA-versioned name is defined exactly once and cannot be one of them.
-fn forget_definitions_written_in(body: &[Stmt], definitions: &mut HashMap<VReg, Expr>) {
+fn forget_definitions_written_in(
+    body: &[Stmt],
+    definitions: &mut HashMap<VReg, Expr>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     if definitions.is_empty() {
         return;
     }
@@ -481,7 +528,12 @@ fn forget_definitions_written_in(body: &[Stmt], definitions: &mut HashMap<VReg, 
     }
     if clobbers_registers {
         definitions.retain(|register, _| match register {
-            VReg::Phys(name) => name.contains('#'),
+            VReg::Phys(name) => match identities {
+                Some(identities) => identities.candidates(register).is_some_and(|values| {
+                    !values.is_empty() && values.iter().all(|value| value.version > 0)
+                }),
+                None => name.contains('#'),
+            },
             _ => true,
         });
     }
@@ -495,7 +547,8 @@ fn collect_written(body: &[Stmt], out: &mut Vec<VReg>, depth: usize) -> bool {
     }
     let mut clobbers = false;
     for statement in body {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, .. } => out.push(dst.clone()),
             Stmt::Call { .. } | Stmt::IndirectGoto { .. } => clobbers = true,
             Stmt::If {
@@ -526,7 +579,24 @@ fn collect_written(body: &[Stmt], out: &mut Vec<VReg>, depth: usize) -> bool {
                     clobbers |= collect_written(default, out, depth + 1);
                 }
             }
-            _ => {}
+            Stmt::TryCatch { try_body, catches } => {
+                clobbers |= collect_written(try_body, out, depth + 1);
+                for catch in catches {
+                    clobbers |= collect_written(&catch.body, out, depth + 1);
+                }
+            }
+            Stmt::Store { .. }
+            | Stmt::Return { .. }
+            | Stmt::Pop { .. }
+            | Stmt::Goto { .. }
+            | Stmt::Label(_)
+            | Stmt::Break
+            | Stmt::Continue
+            | Stmt::Push { .. }
+            | Stmt::Nop
+            | Stmt::Unknown(_)
+            | Stmt::Comment(_)
+            | Stmt::Throw { .. } => {}
         }
     }
     clobbers
@@ -538,6 +608,7 @@ fn resolve_expr(
     definitions: &HashMap<VReg, Expr>,
 ) {
     match expression {
+        Expr::Origin { expr, .. } => resolve_expr(expr, tables, definitions),
         Expr::Deref { addr, .. } => resolve_expr(addr, tables, definitions),
         Expr::Call { target, args, .. } => {
             resolve_expr(target, tables, definitions);
@@ -884,6 +955,9 @@ fn is_zero(expression: &Expr, definitions: &HashMap<VReg, Expr>, depth: usize) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ast::{CatchClause, OriginSet};
+    use crate::ir::ssa::SsaValue;
+    use crate::ir::value_number::ValueIdentities;
 
     /// ELF32 relocations are `Rel`: the value to relocate lives at the relocated
     /// address, not in an addend field. Read from a real armhf binary whose
@@ -981,6 +1055,111 @@ mod tests {
             ),
             "expected the ops[] entry, got {src:?}"
         );
+    }
+
+    #[test]
+    fn an_attributed_table_base_remains_available_to_the_following_load() {
+        let base_owner = OriginSet::one(0x11d0);
+        let load_owner = OriginSet::one(0x11d8);
+        let mut function = Function {
+            name: "dispatch".into(),
+            entry_va: 0x11c5,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("rax#2"),
+                    src: Expr::Addr(0x3ff4),
+                }
+                .with_origins(base_owner.clone()),
+                Stmt::Assign {
+                    dst: VReg::phys("rax#3"),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Lea {
+                            base: Some(VReg::phys("rax#2")),
+                            index: Some(VReg::phys("rdx#1")),
+                            scale: 4,
+                            disp: 0x10,
+                            segment: None,
+                        }),
+                        size: 4,
+                    },
+                }
+                .with_origins(load_owner.clone()),
+            ],
+        };
+
+        resolve_function_table_entries(&mut function, &[ops_table()]);
+
+        assert!(matches!(
+            function.body[1].semantic(),
+            Stmt::Assign {
+                src: Expr::FunctionTableEntry {
+                    table_va: 0x4004,
+                    ..
+                },
+                ..
+            }
+        ));
+        assert_eq!(function.body[0].origins(), Some(&base_owner));
+        assert_eq!(function.body[1].origins(), Some(&load_owner));
+    }
+
+    #[test]
+    fn exception_and_transfer_expressions_share_the_table_resolution_surface() {
+        let indexed_load = || Expr::Deref {
+            addr: Box::new(Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Addr(0x4004)),
+                rhs: Box::new(Expr::Bin {
+                    op: BinOp::Mul,
+                    lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                    rhs: Box::new(Expr::Const(4)),
+                }),
+            }),
+            size: 4,
+        };
+        let owner = OriginSet::one(0x1200);
+        let mut function = Function {
+            name: "dispatch".into(),
+            entry_va: 0x11c5,
+            body: vec![Stmt::TryCatch {
+                try_body: vec![Stmt::Throw {
+                    value: indexed_load(),
+                }],
+                catches: vec![CatchClause {
+                    type_name: "void *".into(),
+                    binding: VReg::phys("caught"),
+                    body: vec![Stmt::IndirectGoto {
+                        target: indexed_load(),
+                    }],
+                }],
+            }
+            .with_origins(owner.clone())],
+        };
+
+        resolve_function_table_entries(&mut function, &[ops_table()]);
+
+        let Stmt::TryCatch { try_body, catches } = function.body[0].semantic() else {
+            panic!("exception shape changed")
+        };
+        assert!(matches!(
+            try_body.as_slice(),
+            [Stmt::Throw {
+                value: Expr::FunctionTableEntry {
+                    table_va: 0x4004,
+                    ..
+                }
+            }]
+        ));
+        assert!(matches!(
+            catches[0].body.as_slice(),
+            [Stmt::IndirectGoto {
+                target: Expr::FunctionTableEntry {
+                    table_va: 0x4004,
+                    ..
+                }
+            }]
+        ));
+        assert_eq!(function.body[0].origins(), Some(&owner));
     }
 
     /// The wrong displacement names a different object and must not resolve.
@@ -1111,6 +1290,123 @@ mod tests {
             panic!("statement shape changed");
         };
         assert_eq!(*src, load);
+    }
+
+    #[test]
+    fn an_opaque_ssa_table_base_survives_a_nested_call_by_identity() {
+        let base = VReg::phys("opaque_base");
+        let load = Expr::Deref {
+            addr: Box::new(Expr::Lea {
+                base: Some(base.clone()),
+                index: Some(VReg::phys("opaque_index")),
+                scale: 4,
+                disp: 0x10,
+                segment: None,
+            }),
+            size: 4,
+        };
+        let mut function = Function {
+            name: "dispatch".into(),
+            entry_va: 0x11c5,
+            body: vec![
+                Stmt::Assign {
+                    dst: base.clone(),
+                    src: Expr::Addr(0x3ff4),
+                },
+                Stmt::If {
+                    cond: Expr::Reg(VReg::phys("guard")),
+                    then_body: vec![Stmt::Call {
+                        target: Expr::Named {
+                            va: 0x2000,
+                            name: "observe".into(),
+                        },
+                        args: Vec::new(),
+                        dst: None,
+                        call_spec: None,
+                    }],
+                    else_body: None,
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("loaded_entry"),
+                    src: load,
+                },
+            ],
+        };
+        let mut identities = ValueIdentities::default();
+        identities.record(
+            base,
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 2,
+            },
+        );
+
+        resolve_function_table_entries_with_identities(&mut function, &[ops_table()], &identities);
+
+        assert!(matches!(
+            function.body[2].semantic(),
+            Stmt::Assign {
+                src: Expr::FunctionTableEntry { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_misleading_version_spelling_does_not_survive_a_nested_call() {
+        let base = VReg::phys("rax#2");
+        let load = Expr::Deref {
+            addr: Box::new(Expr::Lea {
+                base: Some(base.clone()),
+                index: Some(VReg::phys("rdx#1")),
+                scale: 4,
+                disp: 0x10,
+                segment: None,
+            }),
+            size: 4,
+        };
+        let mut function = Function {
+            name: "dispatch".into(),
+            entry_va: 0x11c5,
+            body: vec![
+                Stmt::Assign {
+                    dst: base.clone(),
+                    src: Expr::Addr(0x3ff4),
+                },
+                Stmt::If {
+                    cond: Expr::Reg(VReg::phys("guard")),
+                    then_body: vec![Stmt::Call {
+                        target: Expr::Named {
+                            va: 0x2000,
+                            name: "clobber".into(),
+                        },
+                        args: Vec::new(),
+                        dst: None,
+                        call_spec: None,
+                    }],
+                    else_body: None,
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("loaded_entry"),
+                    src: load.clone(),
+                },
+            ],
+        };
+        let mut identities = ValueIdentities::default();
+        identities.record(
+            base,
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 0,
+            },
+        );
+
+        resolve_function_table_entries_with_identities(&mut function, &[ops_table()], &identities);
+
+        let Stmt::Assign { src, .. } = function.body[2].semantic() else {
+            panic!("statement shape changed")
+        };
+        assert_eq!(src, &load);
     }
 
     /// A 64-bit `Rela` image keeps using the explicit addend field.

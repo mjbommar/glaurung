@@ -31,18 +31,34 @@ use super::{
 /// unless the prepared high-variable proof classifies them as pointers. Other
 /// raw machine registers and temps are also declared `long`.
 pub(crate) fn declared_int_type(ident: &str, tm: Option<&TypeMap>) -> Option<(bool, u8)> {
-    if is_high_variable(ident) {
-        return match tm.and_then(|types| types.get(&VReg::Phys(ident.to_string()))) {
+    declared_int_type_with_identities(ident, tm, None)
+}
+
+/// The declared integer type, recognizing exact opaque SSA identities.
+pub(crate) fn declared_int_type_with_identities(
+    ident: &str,
+    tm: Option<&TypeMap>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<(bool, u8)> {
+    let value = VReg::Phys(ident.to_string());
+    if is_high_variable(ident)
+        || identities.is_some_and(|identities| identities.exact(&value).is_some())
+    {
+        return match tm.and_then(|types| types.get(&value)) {
             Some(TypeHint::Int { signed, width }) => Some((signed, width)),
             Some(TypeHint::Pointer { .. } | TypeHint::CodePointer | TypeHint::Float { .. }) => None,
             _ => Some((true, 8)),
         };
     }
-    if parse_arg_index(ident).is_none() && !is_promoted_local(ident) {
+    let is_parameter = match identities {
+        Some(identities) => identities.parameter_slot(&value).is_some(),
+        None => parse_arg_index(ident).is_some(),
+    };
+    if !is_parameter && !is_promoted_local(ident) {
         // Declared `long`: already machine-wide, never narrowed.
         return Some((true, 8));
     }
-    match tm?.get(&VReg::Phys(ident.to_string()))? {
+    match tm?.get(&value)? {
         TypeHint::Int { signed, width } => Some((signed, width)),
         _ => None,
     }
@@ -219,7 +235,8 @@ fn fold_return_abi_extensions_body(
     signed_return: bool,
 ) {
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Return { value: Some(value) } => {
                 let replacement = match value {
                     Expr::Cast {
@@ -281,7 +298,8 @@ fn first_return_value_ctype(
     skip_nulls: SkipNullReturns,
 ) -> Option<&'static str> {
     for s in body {
-        match s {
+        match s.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Return { value: Some(e) } => {
                 if skip_nulls == SkipNullReturns::Yes && matches!(e, Expr::Const(0)) {
                     continue;
@@ -369,6 +387,32 @@ mod tests {
         ]
     }
 
+    #[test]
+    fn declared_integer_parameters_require_typed_parameter_roles() {
+        let tm = type_map(&[(
+            "arg0",
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        )]);
+        let identities = crate::ir::value_number::ValueIdentities::default();
+
+        assert_eq!(
+            declared_int_type_with_identities("arg0", Some(&tm), Some(&identities)),
+            Some((true, 8))
+        );
+
+        let parameter = identities.with_role_aliases_and_parameter_slots(
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::from([0]),
+        );
+        assert_eq!(
+            declared_int_type_with_identities("arg0", Some(&tm), Some(&parameter)),
+            Some((false, 4))
+        );
+    }
+
     /// `if (!buf) return 0;` is a null POINTER constant as readily as it is an
     /// `int`, so it must not declare a pointer-returning function `int` — which
     /// truncates the returned address to its low half.
@@ -400,6 +444,27 @@ mod tests {
     fn a_nonzero_literal_guard_still_decides_the_return_type() {
         let tm = type_map(&[("arg0", TypeHint::Pointer { pointee_width: 4 })]);
         let body = guarded(Expr::Const(-1), Expr::Reg(VReg::phys("arg0")));
+        assert_eq!(infer_return_ctype(&body, Some(&tm)), "int");
+    }
+
+    #[test]
+    fn origin_wrapped_return_keeps_its_expression_type() {
+        let tm = type_map(&[(
+            "ret",
+            TypeHint::Int {
+                signed: false,
+                width: 1,
+            },
+        )]);
+        let body = vec![Stmt::Return {
+            value: Some(Expr::Cast {
+                signed: true,
+                width: 4,
+                expr: Box::new(Expr::Reg(VReg::phys("ret"))),
+            }),
+        }
+        .with_origins(crate::ir::ast::OriginSet::one(0x1000))];
+
         assert_eq!(infer_return_ctype(&body, Some(&tm)), "int");
     }
 }

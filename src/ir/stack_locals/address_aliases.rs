@@ -27,7 +27,16 @@ const MAX_AFFINE_COMPONENT_NODES: usize = 32;
 /// single linear control-flow run. Stack-pointer writes and every control
 /// boundary clear the map, so an address can never move into a different frame
 /// phase or predecessor.
+#[cfg(test)]
 pub(super) fn expand(body: &mut [Stmt], ctx: StackContext) {
+    expand_with_identities(body, ctx, None);
+}
+
+pub(super) fn expand_with_identities(
+    body: &mut [Stmt],
+    ctx: StackContext,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     if !matches!(ctx.cc, Some(CallConv::Arm | CallConv::ArmHardFloat)) {
         return;
     }
@@ -38,11 +47,13 @@ pub(super) fn expand(body: &mut [Stmt], ctx: StackContext) {
         &mut HashMap::new(),
         &mut HashMap::new(),
         &mut HashMap::new(),
+        identities,
     );
 }
 
 fn pure_address_expression(expr: &Expr) -> bool {
     match expr {
+        Expr::Origin { expr, .. } => pure_address_expression(expr),
         Expr::Reg(_)
         | Expr::Const(_)
         | Expr::StackAddr { .. }
@@ -100,12 +111,24 @@ fn affine_component_size(expr: &Expr) -> Option<usize> {
     (size <= MAX_AFFINE_COMPONENT_NODES).then_some(size)
 }
 
-fn is_versioned_local_value(register: &VReg) -> bool {
-    matches!(register, VReg::Phys(name) if name.contains('#')) || matches!(register, VReg::Temp(_))
+fn is_versioned_local_value(
+    register: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    if matches!(register, VReg::Temp(_)) {
+        return true;
+    }
+    match identities {
+        Some(identities) => identities
+            .candidates(register)
+            .is_some_and(|values| values.iter().any(|value| value.version > 0)),
+        None => matches!(register, VReg::Phys(name) if name.contains('#')),
+    }
 }
 
 fn contains_active_stack_base(expr: &Expr, ctx: StackContext) -> bool {
     match expr {
+        Expr::Origin { expr, .. } => contains_active_stack_base(expr, ctx),
         Expr::Reg(VReg::Phys(name)) => is_active_stack_base(name, ctx),
         Expr::Reg(_) => false,
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
@@ -152,6 +175,7 @@ fn contains_active_stack_base(expr: &Expr, ctx: StackContext) -> bool {
 
 fn contains_register(expr: &Expr, target: &VReg) -> bool {
     match expr {
+        Expr::Origin { expr, .. } => contains_register(expr, target),
         Expr::Reg(register) => register == target,
         Expr::StackAddr { object, .. } => object == target,
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
@@ -199,6 +223,7 @@ fn contains_register(expr: &Expr, target: &VReg) -> bool {
 
 fn replace_register(expr: &mut Expr, target: &VReg, replacement: &VReg) {
     match expr {
+        Expr::Origin { expr, .. } => replace_register(expr, target, replacement),
         Expr::Reg(register) => {
             if register == target {
                 *register = replacement.clone();
@@ -316,6 +341,7 @@ fn expand_expr(expr: &mut Expr, aliases: &HashMap<VReg, Expr>) {
         return;
     }
     match expr {
+        Expr::Origin { expr, .. } => expand_expr(expr, aliases),
         Expr::Deref { addr, .. } => expand_expr(addr, aliases),
         Expr::Call { target, args, .. } => {
             expand_expr(target, aliases);
@@ -405,6 +431,7 @@ fn expand_affine_definition(expr: &mut Expr, components: &HashMap<VReg, Expr>) {
 /// out of the general copy-propagation business.
 fn expand_memory_address_components(expr: &mut Expr, components: &HashMap<VReg, Expr>) {
     match expr {
+        Expr::Origin { expr, .. } => expand_memory_address_components(expr, components),
         Expr::Deref { addr, .. } => expand_affine_definition(addr, components),
         Expr::Call { target, args, .. } => {
             expand_memory_address_components(target, components);
@@ -487,9 +514,11 @@ fn walk(
     aliases: &mut HashMap<VReg, Expr>,
     components: &mut HashMap<VReg, Expr>,
     snapshots: &mut HashMap<VReg, VReg>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
                 expand_expr(src, aliases);
                 expand_memory_address_components(src, components);
@@ -506,7 +535,7 @@ fn walk(
                     aliases.clear();
                     components.clear();
                     snapshots.clear();
-                } else if is_versioned_local_value(dst)
+                } else if is_versioned_local_value(dst, identities)
                     && !contains_register(&expanded_definition, dst)
                 {
                     if components.len() < MAX_AFFINE_COMPONENTS
@@ -566,6 +595,7 @@ fn walk(
                     &mut branch_aliases,
                     &mut branch_components,
                     &mut branch_snapshots,
+                    identities,
                 );
                 if let Some(else_body) = else_body {
                     let mut branch_aliases = aliases.clone();
@@ -577,6 +607,7 @@ fn walk(
                         &mut branch_aliases,
                         &mut branch_components,
                         &mut branch_snapshots,
+                        identities,
                     );
                 }
                 aliases.clear();
@@ -601,6 +632,7 @@ fn walk(
                     &mut loop_aliases,
                     &mut loop_components,
                     &mut loop_snapshots,
+                    identities,
                 );
                 aliases.clear();
                 components.clear();
@@ -618,6 +650,7 @@ fn walk(
                     aliases,
                     components,
                     snapshots,
+                    identities,
                 );
                 expand_expr(cond, aliases);
                 let mut loop_aliases = aliases.clone();
@@ -629,6 +662,7 @@ fn walk(
                     &mut loop_aliases,
                     &mut loop_components,
                     &mut loop_snapshots,
+                    identities,
                 );
                 walk(
                     std::slice::from_mut(step.as_mut()),
@@ -636,6 +670,7 @@ fn walk(
                     &mut loop_aliases,
                     &mut loop_components,
                     &mut loop_snapshots,
+                    identities,
                 );
                 aliases.clear();
                 components.clear();
@@ -657,6 +692,7 @@ fn walk(
                         &mut case_aliases,
                         &mut case_components,
                         &mut case_snapshots,
+                        identities,
                     );
                 }
                 if let Some(default) = default {
@@ -669,6 +705,7 @@ fn walk(
                         &mut default_aliases,
                         &mut default_components,
                         &mut default_snapshots,
+                        identities,
                     );
                 }
                 aliases.clear();

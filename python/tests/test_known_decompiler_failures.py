@@ -1,6 +1,6 @@
 """Every decompiler failure the fixture corpus can currently demonstrate.
 
-**874 of them**, measured rather than asserted, each one a strict xfail that
+**864 of them**, measured rather than asserted, each one a strict xfail that
 turns red the day it is fixed.
 
 Why this file
@@ -11,7 +11,7 @@ the trade-offs. Before this, the estate could tell you that output *behaved*
 correctly (the execution differential) and roughly how *readable* it was in
 aggregate (the readability census), but it could not name a single function
 whose recovered prototype disagreed with the source, and it could not name the
-713 functions that emit `goto` for source containing none.
+711 functions that emit `goto` for source containing none.
 
 Two axes, both against ground truth rather than against yesterday's output:
 
@@ -19,7 +19,7 @@ Two axes, both against ground truth rather than against yesterday's output:
 emitted. DWARF states the source signature exactly, so a disagreement is a
 recovery gap, not a stylistic choice. 72 are signedness, 10 are width.
 
-**structure** (713, totalling 6,823 `goto` statements) — a `goto` in recovered
+**structure** (711, totalling 6,502 `goto` statements) — a `goto` in recovered
 C for a function whose source file contains no `goto` anywhere. This is the
 class `docs/development/decompiler-parity-backlog.md` measures at 28.8% of
 scored DecBench functions, and the execution differential is blind to it by
@@ -256,12 +256,12 @@ def test_inventory_reports_language_split_counts():
     by_language = _summary("counts_by_language")
     assert by_language.get("c") == {
         "types": 0,
-        "structure": 619,
+        "structure": 617,
         "returns": 15,
         "pointers": 0,
-        "unrecovered": 34,
+        "unrecovered": 26,
         "no_body": 0,
-        "goto_statements": 6257,
+        "goto_statements": 5936,
     }
     assert by_language.get("rust") == {
         "types": 82,
@@ -281,12 +281,12 @@ def test_inventory_reports_provenance_deduplicated_counts():
     deduplicated = _summary("deduplicated_counts")
     assert deduplicated == {
         "types": 65,
-        "structure": 472,
+        "structure": 471,
         "returns": 33,
         "pointers": 0,
-        "unrecovered": 25,
+        "unrecovered": 21,
         "no_body": 0,
-        "goto_statements": 4655,
+        "goto_statements": 4490,
     }
     deduplicated_by_language = _summary("deduplicated_counts_by_language")
     for axis, total in deduplicated.items():
@@ -401,8 +401,8 @@ def test_generated_inventory_summaries_are_current():
     assert _summary("deduplicated_counts") == deduplicated
     assert _summary("deduplicated_counts_by_language") == deduplicated_by_language
     counts = _counts()
-    assert sum(v for k, v in counts.items() if k != "goto_statements") == 874, (
-        f"the inventory records only {counts}; it should hold the 874 "
+    assert sum(v for k, v in counts.items() if k != "goto_statements") == 864, (
+        f"the inventory records only {counts}; it should hold the 864 "
         "failures the corpus demonstrates. An empty inventory makes this whole "
         "file silently vacuous."
     )
@@ -411,9 +411,9 @@ def test_generated_inventory_summaries_are_current():
         for row in rows["structure"]
         if row["obj"] == "158_weak_symbols-gcc-O2.so" and row["fn"] == "weak_fold"
     ]
-    assert [row["gotos"] for row in weak_fold] == [2], (
-        "shared return-tail ownership must not replace weak_fold's two direct "
-        "loop-exit returns with extra gotos"
+    assert weak_fold == [], (
+        "weak_fold now structures without goto; do not reintroduce it into the "
+        "known-failure inventory"
     )
 
 

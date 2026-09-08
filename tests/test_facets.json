@@ -289,6 +289,9 @@
   "test_decompiler_emission_invariants.py": [
    "toolchain"
   ],
+  "test_decompiler_entrypoint_equivalence.py": [
+   "core"
+  ],
   "test_decompiler_fixture_build_cache.py": [
    "fixtures",
    "docker"

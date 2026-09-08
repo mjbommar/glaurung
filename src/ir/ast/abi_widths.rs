@@ -50,6 +50,16 @@ pub(crate) fn refine_decbench_abi_widths_with_value_widths(
     tm: &mut TypeMap,
     value_widths: Option<&std::collections::HashMap<String, u8>>,
 ) {
+    refine_decbench_abi_widths_with_identities(f, tm, value_widths, None);
+}
+
+/// Refine declarations with exact width and opaque SSA identity evidence.
+pub(crate) fn refine_decbench_abi_widths_with_identities(
+    f: &Function,
+    tm: &mut TypeMap,
+    value_widths: Option<&std::collections::HashMap<String, u8>>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     refine_signed_comparison_operands(&f.body, tm);
 
     let mut required_wide = std::collections::HashSet::new();
@@ -64,10 +74,10 @@ pub(crate) fn refine_decbench_abi_widths_with_value_widths(
             break;
         }
     }
-    for name in required_wide
-        .iter()
-        .filter(|name| parse_arg_index(name).is_some())
-    {
+    for name in required_wide.iter().filter(|name| match identities {
+        Some(identities) => identities.parameter_slot(&VReg::phys(*name)).is_some(),
+        None => parse_arg_index(name).is_some(),
+    }) {
         tm.force_int_width(VReg::phys(name), 8);
     }
 
@@ -82,7 +92,9 @@ pub(crate) fn refine_decbench_abi_widths_with_value_widths(
         }
     }
     for (name, &ast_definition_width) in &defs {
-        if !is_high_variable(name) || !all_definitions_proven_scalar(&f.body, name, tm) {
+        if !is_width_refinement_value(name, identities)
+            || !all_definitions_proven_scalar(&f.body, name, tm)
+        {
             continue;
         }
         let value = VReg::phys(name);
@@ -137,6 +149,16 @@ pub(crate) fn refine_decbench_abi_widths_with_value_widths(
     refine_pointer_access_widths(&f.body, tm);
 }
 
+fn is_width_refinement_value(
+    name: &str,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    if is_high_variable(name) {
+        return true;
+    }
+    identities.is_some_and(|identities| identities.exact(&VReg::phys(name)).is_some())
+}
+
 /// Signed comparison operators carry source-level signedness evidence that is
 /// lost when raw-register recovery also observes a zero-extended/index use.
 /// Apply that evidence only to direct integer operands: signed arithmetic over
@@ -145,6 +167,7 @@ pub(crate) fn refine_decbench_abi_widths_with_value_widths(
 fn refine_signed_comparison_operands(body: &[Stmt], tm: &mut TypeMap) {
     fn direct_signed_value(expr: &Expr) -> Option<&VReg> {
         match expr {
+            Expr::Origin { expr, .. } => direct_signed_value(expr),
             Expr::Reg(reg) => Some(reg),
             Expr::Cast {
                 signed: true, expr, ..
@@ -155,6 +178,7 @@ fn refine_signed_comparison_operands(body: &[Stmt], tm: &mut TypeMap) {
 
     fn expression(expr: &Expr, tm: &mut TypeMap) {
         match expr {
+            Expr::Origin { expr, .. } => expression(expr, tm),
             Expr::Cmp { op, lhs, rhs } => {
                 if matches!(op, CmpOp::Slt | CmpOp::Sle) {
                     for operand in [lhs.as_ref(), rhs.as_ref()] {
@@ -210,7 +234,8 @@ fn refine_signed_comparison_operands(body: &[Stmt], tm: &mut TypeMap) {
 
     fn statements(body: &[Stmt], tm: &mut TypeMap) {
         for statement in body {
-            match statement {
+            match statement.semantic() {
+                Stmt::Origin { stmt, .. } => statements(std::slice::from_ref(stmt), tm),
                 Stmt::Assign { src, .. } | Stmt::Return { value: Some(src) } => expression(src, tm),
                 Stmt::Store { addr, src, .. } => {
                     expression(addr, tm);
@@ -290,7 +315,7 @@ fn refine_signed_comparison_operands(body: &[Stmt], tm: &mut TypeMap) {
 fn all_definitions_proven_scalar(body: &[Stmt], target: &str, tm: &TypeMap) -> bool {
     fn walk(body: &[Stmt], target: &str, tm: &TypeMap, found: &mut bool, valid: &mut bool) {
         for statement in body {
-            match statement {
+            match statement.semantic() {
                 Stmt::Assign {
                     dst: VReg::Phys(name),
                     src,
@@ -360,6 +385,7 @@ fn all_definitions_proven_scalar(body: &[Stmt], target: &str, tm: &TypeMap) -> b
 
 fn expression_proven_scalar(expr: &Expr, tm: &TypeMap) -> bool {
     match expr {
+        Expr::Origin { expr, .. } => expression_proven_scalar(expr, tm),
         Expr::Const(_)
         | Expr::FloatConst { .. }
         | Expr::Cmp { .. }
@@ -410,13 +436,164 @@ fn refine_pointer_access_widths(body: &[Stmt], tm: &mut TypeMap) {
     }
 }
 
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    fn wide_opaque_value() -> Function {
+        Function {
+            name: "wide_opaque".into(),
+            entry_va: 0,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("opaque-value"),
+                src: Expr::Cast {
+                    signed: true,
+                    width: 8,
+                    expr: Box::new(Expr::Const(1)),
+                },
+            }],
+        }
+    }
+
+    fn narrow_types() -> TypeMap {
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            VReg::phys("opaque-value"),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+        types
+    }
+
+    #[test]
+    fn exact_opaque_identity_authorizes_definition_width_refinement() {
+        let function = wide_opaque_value();
+        let value = VReg::phys("opaque-value");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            value.clone(),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rax"),
+                version: 1,
+            },
+        );
+        let widths = std::collections::HashMap::from([("opaque-value".to_string(), 8)]);
+        let mut types = narrow_types();
+
+        refine_decbench_abi_widths_with_identities(
+            &function,
+            &mut types,
+            Some(&widths),
+            Some(&identities),
+        );
+
+        assert_eq!(
+            types.get(&value),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 8,
+            })
+        );
+    }
+
+    #[test]
+    fn ambiguous_opaque_identity_declines_definition_width_refinement() {
+        let function = wide_opaque_value();
+        let value = VReg::phys("opaque-value");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for (base, version) in [("rax", 1), ("rbx", 2)] {
+            identities.record(
+                value.clone(),
+                crate::ir::ssa::SsaValue {
+                    base: VReg::phys(base),
+                    version,
+                },
+            );
+        }
+        let widths = std::collections::HashMap::from([("opaque-value".to_string(), 8)]);
+        let mut types = narrow_types();
+
+        refine_decbench_abi_widths_with_identities(
+            &function,
+            &mut types,
+            Some(&widths),
+            Some(&identities),
+        );
+
+        assert_eq!(
+            types.get(&value),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn high_half_parameter_width_uses_typed_slots_not_arg_spelling() {
+        let function = Function {
+            name: "wide_parameters".into(),
+            entry_va: 0,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Bin {
+                    op: BinOp::Or,
+                    lhs: Box::new(Expr::Bin {
+                        op: BinOp::Shr,
+                        lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        rhs: Box::new(Expr::Const(32)),
+                    }),
+                    rhs: Box::new(Expr::Bin {
+                        op: BinOp::Shr,
+                        lhs: Box::new(Expr::Reg(VReg::phys("arg99"))),
+                        rhs: Box::new(Expr::Const(32)),
+                    }),
+                }),
+            }],
+        };
+        let mut types = TypeMap::default();
+        for name in ["arg0", "arg99"] {
+            types.upsert_public(
+                VReg::phys(name),
+                TypeHint::Int {
+                    signed: true,
+                    width: 4,
+                },
+            );
+        }
+        let identities = crate::ir::value_number::ValueIdentities::default()
+            .with_role_aliases_and_parameter_slots(
+                &std::collections::HashMap::new(),
+                &std::collections::HashSet::from([0]),
+            );
+
+        refine_decbench_abi_widths_with_identities(&function, &mut types, None, Some(&identities));
+
+        assert_eq!(
+            types.get(&VReg::phys("arg0")),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 8,
+            })
+        );
+        assert_eq!(
+            types.get(&VReg::phys("arg99")),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            })
+        );
+    }
+}
+
 fn collect_pointer_accesses_body(
     body: &[Stmt],
     tm: &TypeMap,
     observed: &mut std::collections::HashMap<String, std::collections::BTreeSet<u8>>,
 ) {
     for statement in body {
-        match statement {
+        match statement.semantic() {
             Stmt::Assign { src, .. } | Stmt::Push { value: src } => {
                 collect_pointer_accesses_expr(src, tm, observed)
             }
@@ -565,7 +742,7 @@ fn constant_needs_wide_word(value: i64) -> bool {
 
 fn collect_high_half_requirements(body: &[Stmt], required: &mut std::collections::HashSet<String>) {
     for stmt in body {
-        match stmt {
+        match stmt.semantic() {
             Stmt::Assign { src, .. } | Stmt::Push { value: src } => {
                 collect_high_half_expr(src, required)
             }
@@ -688,7 +865,7 @@ fn require_wide_expr(expr: &Expr, required: &mut std::collections::HashSet<Strin
 
 fn propagate_required_widths(body: &[Stmt], required: &mut std::collections::HashSet<String>) {
     for stmt in body {
-        match stmt {
+        match stmt.semantic() {
             Stmt::Assign {
                 dst: VReg::Phys(name),
                 src,
@@ -741,6 +918,7 @@ fn expression_value_width(
     defs: &std::collections::HashMap<String, u8>,
 ) -> Option<u8> {
     match expr {
+        Expr::Origin { expr, .. } => expression_value_width(expr, tm, defs),
         Expr::Reg(VReg::Phys(name)) => defs
             .get(name)
             .copied()
@@ -801,7 +979,7 @@ fn collect_definition_widths(
     defs: &mut std::collections::HashMap<String, u8>,
 ) {
     for stmt in body {
-        match stmt {
+        match stmt.semantic() {
             Stmt::Assign {
                 dst: VReg::Phys(name),
                 src,
@@ -861,7 +1039,7 @@ fn widest_return_value(
     defs: &std::collections::HashMap<String, u8>,
 ) -> Option<u8> {
     body.iter()
-        .filter_map(|stmt| match stmt {
+        .filter_map(|stmt| match stmt.semantic() {
             Stmt::Return { value: Some(expr) } => expression_value_width(expr, tm, defs),
             Stmt::If {
                 then_body,

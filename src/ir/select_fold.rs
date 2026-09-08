@@ -1,6 +1,6 @@
 //! Collapse structurally proven assignment diamonds into pure selects.
 
-use crate::ir::ast::{Expr, Function, Stmt};
+use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 use crate::ir::expression_width::explicit_expression_width;
 use crate::ir::types::{is_promoted_local_name as is_promoted_local, UnOp, VReg};
 
@@ -21,7 +21,8 @@ fn fold_masks_in_body(body: &mut [Stmt]) {
 }
 
 fn fold_masks_in_stmt(statement: &mut Stmt) {
-    match statement {
+    match statement.semantic_mut() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { src, .. } => fold_masks_in_expr(src),
         Stmt::Store { addr, src, .. } => {
             fold_masks_in_expr(addr);
@@ -94,6 +95,7 @@ fn fold_masks_in_stmt(statement: &mut Stmt) {
 
 fn fold_masks_in_expr(expr: &mut Expr) {
     match expr {
+        Expr::Origin { expr, .. } => fold_masks_in_expr(expr),
         Expr::FunctionTableEntry { index, .. } => fold_masks_in_expr(index),
         Expr::Call { target, args, .. } => {
             fold_masks_in_expr(target);
@@ -211,7 +213,8 @@ pub fn recover_guarded_select_returns(function: &mut Function) {
 
 fn recover_guarded_select_returns_body(body: &mut Vec<Stmt>) {
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -233,13 +236,23 @@ fn recover_guarded_select_returns_body(body: &mut Vec<Stmt>) {
                     recover_guarded_select_returns_body(default);
                 }
             }
+            Stmt::TryCatch { try_body, catches } => {
+                recover_guarded_select_returns_body(try_body);
+                for catch in catches {
+                    recover_guarded_select_returns_body(&mut catch.body);
+                }
+            }
             _ => {}
         }
     }
 
     let mut index = 0;
     while index + 2 < body.len() {
-        let candidate = match (&body[index], &body[index + 1], &body[index + 2]) {
+        let candidate = match (
+            body[index].semantic(),
+            body[index + 1].semantic(),
+            body[index + 2].semantic(),
+        ) {
             (
                 Stmt::Assign {
                     dst: result,
@@ -254,7 +267,11 @@ fn recover_guarded_select_returns_body(body: &mut Vec<Stmt>) {
                     value: Some(Expr::Reg(returned)),
                 },
             ) if result == returned && movable_register_view(default_value) => {
-                let [Stmt::Assign {
+                let [selected_statement] = then_body.as_slice() else {
+                    index += 1;
+                    continue;
+                };
+                let Stmt::Assign {
                     dst: selected_result,
                     src:
                         Expr::Select {
@@ -263,7 +280,7 @@ fn recover_guarded_select_returns_body(body: &mut Vec<Stmt>) {
                             if_false,
                             ..
                         },
-                }] = then_body.as_slice()
+                } = selected_statement.semantic()
                 else {
                     index += 1;
                     continue;
@@ -285,29 +302,51 @@ fn recover_guarded_select_returns_body(body: &mut Vec<Stmt>) {
                     select_condition.as_ref().clone(),
                     if_true.as_ref().clone(),
                     if_false.as_ref().clone(),
+                    origins_of(&body[index + 1]),
+                    origins_of(selected_statement),
+                    origins_of(&body[index]).union(&origins_of(&body[index + 2])),
                 ))
             }
             _ => None,
         };
-        let Some((_result, default_value, outer_condition, select_condition, yes, no)) = candidate
+        let Some((
+            _result,
+            default_value,
+            outer_condition,
+            select_condition,
+            yes,
+            no,
+            outer_origins,
+            select_origins,
+            trailing_origins,
+        )) = candidate
         else {
             index += 1;
             continue;
         };
 
         let trailing_value = false_edge_value(&outer_condition, &default_value);
-        body[index] = Stmt::If {
-            cond: outer_condition,
-            then_body: vec![Stmt::If {
-                cond: select_condition,
-                then_body: vec![Stmt::Return { value: Some(yes) }],
-                else_body: Some(vec![Stmt::Return { value: Some(no) }]),
-            }],
-            else_body: None,
-        };
-        body[index + 1] = Stmt::Return {
-            value: Some(trailing_value),
-        };
+        body[index] = attach_origins(
+            Stmt::If {
+                cond: outer_condition,
+                then_body: vec![attach_origins(
+                    Stmt::If {
+                        cond: select_condition,
+                        then_body: vec![Stmt::Return { value: Some(yes) }],
+                        else_body: Some(vec![Stmt::Return { value: Some(no) }]),
+                    },
+                    select_origins,
+                )],
+                else_body: None,
+            },
+            outer_origins,
+        );
+        body[index + 1] = attach_origins(
+            Stmt::Return {
+                value: Some(trailing_value),
+            },
+            trailing_origins,
+        );
         body.remove(index + 2);
         index += 2;
     }
@@ -350,6 +389,7 @@ fn false_edge_value(condition: &Expr, default_value: &Expr) -> Expr {
 
 fn expression_reads_register(expression: &Expr, target: &VReg) -> bool {
     match expression {
+        Expr::Origin { expr, .. } => expression_reads_register(expr, target),
         Expr::Reg(reg) => reg == target,
         Expr::StackAddr { object, .. } => object == target,
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => base
@@ -404,7 +444,8 @@ fn expression_reads_register(expression: &Expr, target: &VReg) -> bool {
 fn collapse_body(body: &mut Vec<Stmt>, joined_result: Option<VReg>) {
     for index in 0..body.len() {
         let returned = immediately_returned_register(body, index).or_else(|| joined_result.clone());
-        match &mut body[index] {
+        match body[index].semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -424,6 +465,12 @@ fn collapse_body(body: &mut Vec<Stmt>, joined_result: Option<VReg>) {
                 }
                 if let Some(default) = default {
                     collapse_body(default, None);
+                }
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                collapse_body(try_body, None);
+                for catch in catches {
+                    collapse_body(&mut catch.body, None);
                 }
             }
             _ => {}
@@ -447,10 +494,13 @@ fn collapse_body(body: &mut Vec<Stmt>, joined_result: Option<VReg>) {
 /// select rather than the tail of an `if`/`return` chain.
 fn immediately_returned_register(body: &[Stmt], index: usize) -> Option<VReg> {
     let mut cursor = index + 1;
-    while matches!(body.get(cursor), Some(Stmt::Comment(_) | Stmt::Nop)) {
+    while body
+        .get(cursor)
+        .is_some_and(|statement| matches!(statement.semantic(), Stmt::Comment(_) | Stmt::Nop))
+    {
         cursor += 1;
     }
-    match body.get(cursor) {
+    match body.get(cursor).map(Stmt::semantic) {
         Some(Stmt::Return { value: Some(value) }) => match strip_integer_views(value) {
             Expr::Reg(register) => Some(register.clone()),
             _ => None,
@@ -460,7 +510,7 @@ fn immediately_returned_register(body: &[Stmt], index: usize) -> Option<VReg> {
 }
 
 fn fold_created_select_return(body: &mut Vec<Stmt>, index: usize) -> bool {
-    let (destination, selected) = match body.get(index) {
+    let (destination, selected) = match body.get(index).map(Stmt::semantic) {
         Some(Stmt::Assign {
             dst,
             src: selected @ Expr::Select { .. },
@@ -473,27 +523,34 @@ fn fold_created_select_return(body: &mut Vec<Stmt>, index: usize) -> bool {
         _ => return false,
     };
     let mut return_index = index + 1;
-    while matches!(body.get(return_index), Some(Stmt::Comment(_) | Stmt::Nop)) {
+    while body
+        .get(return_index)
+        .is_some_and(|statement| matches!(statement.semantic(), Stmt::Comment(_) | Stmt::Nop))
+    {
         return_index += 1;
     }
     let Some(Stmt::Return {
         value: Some(Expr::Reg(returned)),
-    }) = body.get(return_index)
+    }) = body.get(return_index).map(Stmt::semantic)
     else {
         return false;
     };
     if returned != &destination {
         return false;
     }
-    body[return_index] = Stmt::Return {
-        value: Some(selected),
-    };
+    let origins = origins_of(&body[index]).union(&origins_of(&body[return_index]));
+    body[return_index] = attach_origins(
+        Stmt::Return {
+            value: Some(selected),
+        },
+        origins,
+    );
     body.remove(index);
     true
 }
 
 fn select_from_diamond(statement: &Stmt, immediately_returned: Option<&VReg>) -> Option<Stmt> {
-    match statement {
+    match statement.semantic() {
         Stmt::If {
             cond,
             then_body,
@@ -513,10 +570,15 @@ fn select_from_diamond(statement: &Stmt, immediately_returned: Option<&VReg>) ->
                     Some(AssignmentValue::Register(then_dst, then_src)),
                     Some(AssignmentValue::Register(else_dst, else_src)),
                 ) if then_dst == else_dst && immediately_returned != Some(then_dst) => {
-                    Some(Stmt::Assign {
-                        dst: then_dst.clone(),
-                        src: make_select(cond, then_src, else_src),
-                    })
+                    Some(attach_origins(
+                        Stmt::Assign {
+                            dst: then_dst.clone(),
+                            src: make_select(cond, then_src, else_src),
+                        },
+                        origins_of(statement)
+                            .union(&origins_of(then_statement))
+                            .union(&origins_of(else_statement)),
+                    ))
                 }
                 (
                     Some(AssignmentValue::PromotedLocal(then_dst, then_src, then_size)),
@@ -525,11 +587,16 @@ fn select_from_diamond(statement: &Stmt, immediately_returned: Option<&VReg>) ->
                     && then_size == else_size
                     && immediately_returned != Some(then_dst) =>
                 {
-                    Some(Stmt::Store {
-                        addr: Expr::Reg(then_dst.clone()),
-                        src: make_select(cond, then_src, else_src),
-                        size: then_size,
-                    })
+                    Some(attach_origins(
+                        Stmt::Store {
+                            addr: Expr::Reg(then_dst.clone()),
+                            src: make_select(cond, then_src, else_src),
+                            size: then_size,
+                        },
+                        origins_of(statement)
+                            .union(&origins_of(then_statement))
+                            .union(&origins_of(else_statement)),
+                    ))
                 }
                 _ => None,
             }
@@ -544,7 +611,7 @@ enum AssignmentValue<'a> {
 }
 
 fn assignment_value(statement: &Stmt) -> Option<AssignmentValue<'_>> {
-    match statement {
+    match statement.semantic() {
         Stmt::Assign { dst, src } => Some(AssignmentValue::Register(dst, src)),
         Stmt::Store {
             addr: Expr::Reg(dst @ VReg::Phys(name)),
@@ -552,6 +619,21 @@ fn assignment_value(statement: &Stmt) -> Option<AssignmentValue<'_>> {
             size,
         } if is_promoted_local(name) => Some(AssignmentValue::PromotedLocal(dst, src, *size)),
         _ => None,
+    }
+}
+
+fn origins_of(statement: &Stmt) -> OriginSet {
+    statement
+        .origins()
+        .cloned()
+        .unwrap_or_else(OriginSet::empty)
+}
+
+fn attach_origins(statement: Stmt, origins: OriginSet) -> Stmt {
+    if origins.is_empty() {
+        statement
+    } else {
+        statement.with_origins(origins)
     }
 }
 
@@ -575,7 +657,7 @@ fn select_width(if_true: &Expr, if_false: &Expr) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::ast::{Expr, Stmt};
+    use crate::ir::ast::{Expr, OriginSet, Stmt};
     use crate::ir::types::{CmpOp, VReg};
 
     fn reg(name: &str) -> VReg {
@@ -818,6 +900,63 @@ mod tests {
     }
 
     #[test]
+    fn attributed_diamond_unions_every_consumed_owner() {
+        let diamond = Stmt::If {
+            cond: Expr::Reg(reg("cond")),
+            then_body: vec![assign("scratch", Expr::Const(1)).with_origins(OriginSet::one(0x1110))],
+            else_body: Some(vec![
+                assign("scratch", Expr::Const(2)).with_origins(OriginSet::one(0x1120))
+            ]),
+        }
+        .with_origins(OriginSet::one(0x1100));
+        let mut f = function(vec![diamond, assign("other", Expr::Reg(reg("scratch")))]);
+
+        collapse_assignment_diamonds(&mut f);
+
+        assert!(matches!(
+            f.body[0].semantic(),
+            Stmt::Assign {
+                src: Expr::Select { .. },
+                ..
+            }
+        ));
+        assert_eq!(
+            f.body[0].origins(),
+            Some(&OriginSet::from_addresses([0x1100, 0x1110, 0x1120]))
+        );
+    }
+
+    #[test]
+    fn attributed_try_body_is_part_of_the_select_fold_surface() {
+        let diamond = Stmt::If {
+            cond: Expr::Reg(reg("cond")),
+            then_body: vec![assign("scratch", Expr::Const(1))],
+            else_body: Some(vec![assign("scratch", Expr::Const(2))]),
+        }
+        .with_origins(OriginSet::one(0x1180));
+        let mut f = function(vec![Stmt::TryCatch {
+            try_body: vec![diamond, assign("other", Expr::Reg(reg("scratch")))],
+            catches: Vec::new(),
+        }
+        .with_origins(OriginSet::one(0x1170))]);
+
+        collapse_assignment_diamonds(&mut f);
+
+        let Stmt::TryCatch { try_body, .. } = f.body[0].semantic() else {
+            unreachable!()
+        };
+        assert!(matches!(
+            try_body[0].semantic(),
+            Stmt::Assign {
+                src: Expr::Select { .. },
+                ..
+            }
+        ));
+        assert_eq!(try_body[0].origins(), Some(&OriginSet::one(0x1180)));
+        assert_eq!(f.body[0].origins(), Some(&OriginSet::one(0x1170)));
+    }
+
+    #[test]
     fn guarded_return_select_recovers_nested_direct_returns() {
         let arg0 = Expr::Reg(reg("arg0"));
         let arg1 = Expr::Reg(reg("arg1"));
@@ -884,6 +1023,44 @@ mod tests {
                     && matches!(no.as_slice(), [Stmt::Return { .. }])
             )
         ));
+    }
+
+    #[test]
+    fn attributed_guarded_select_distributes_consumed_origins() {
+        let result = reg("ret");
+        let mut f = function(vec![
+            assign("ret", Expr::Reg(reg("arg0"))).with_origins(OriginSet::one(0x1200)),
+            Stmt::If {
+                cond: Expr::Reg(reg("outer")),
+                then_body: vec![Stmt::Assign {
+                    dst: result,
+                    src: Expr::Select {
+                        cond: Box::new(Expr::Reg(reg("inner"))),
+                        if_true: Box::new(Expr::Const(1)),
+                        if_false: Box::new(Expr::Const(2)),
+                        width: 4,
+                    },
+                }
+                .with_origins(OriginSet::one(0x1220))],
+                else_body: None,
+            }
+            .with_origins(OriginSet::one(0x1210)),
+            return_reg("ret").with_origins(OriginSet::one(0x1230)),
+        ]);
+
+        recover_guarded_select_returns(&mut f);
+
+        assert_eq!(f.body.len(), 2, "{:#?}", f.body);
+        assert!(matches!(f.body[0].semantic(), Stmt::If { .. }));
+        assert_eq!(f.body[0].origins(), Some(&OriginSet::one(0x1210)));
+        let Stmt::If { then_body, .. } = f.body[0].semantic() else {
+            unreachable!()
+        };
+        assert_eq!(then_body[0].origins(), Some(&OriginSet::one(0x1220)));
+        assert_eq!(
+            f.body[1].origins(),
+            Some(&OriginSet::from_addresses([0x1200, 0x1230]))
+        );
     }
 
     #[test]
@@ -1029,6 +1206,34 @@ mod tests {
             ),
             "{:?}",
             f.body
+        );
+    }
+
+    #[test]
+    fn attributed_created_select_return_unions_both_statements() {
+        let selected = Expr::Select {
+            cond: Box::new(Expr::Reg(reg("cond"))),
+            if_true: Box::new(Expr::Const(1)),
+            if_false: Box::new(Expr::Const(2)),
+            width: 4,
+        };
+        let mut f = function(vec![
+            assign("result", selected).with_origins(OriginSet::one(0x1300)),
+            return_reg("result").with_origins(OriginSet::one(0x1310)),
+        ]);
+
+        collapse_assignment_diamonds(&mut f);
+
+        assert_eq!(f.body.len(), 1, "{:#?}", f.body);
+        assert!(matches!(
+            f.body[0].semantic(),
+            Stmt::Return {
+                value: Some(Expr::Select { .. })
+            }
+        ));
+        assert_eq!(
+            f.body[0].origins(),
+            Some(&OriginSet::from_addresses([0x1300, 0x1310]))
         );
     }
 

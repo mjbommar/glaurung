@@ -38,7 +38,8 @@ fn observe_body(body: &[Stmt], observations: &mut Observations) {
     for statement in body {
         let source = AccessSource::AstStatement(observations.next_statement);
         observations.next_statement = observations.next_statement.saturating_add(1);
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
                 observe_definition(dst, src, source, observations);
                 observe_expr(src, ExprContext::Value, source, observations);
@@ -186,6 +187,7 @@ fn observe_expr(
     observations: &mut Observations,
 ) {
     match expression {
+        Expr::Origin { expr, .. } => observe_expr(expr, context, source, observations),
         Expr::Reg(register) => {
             if matches!(context, ExprContext::Integer) {
                 observations.non_address_uses.insert(register.clone());

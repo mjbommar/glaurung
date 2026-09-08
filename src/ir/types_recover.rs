@@ -44,15 +44,16 @@ use result_hint::{
     output_trial_is_dedicated, qualified_result_hint, ResultHintClass,
 };
 use tagging::{
-    classify_int_default, float_return_reg_names, merge_type_hint, propagate_pointer_arithmetic,
-    propagate_spill_slot_pointers, return_reg_names, tag_value_regs,
+    classify_int_default, float_return_reg_names, merge_type_hint,
+    propagate_pointer_arithmetic_with_optional_identities,
+    propagate_spill_slot_pointers_with_optional_identities, return_reg_names, tag_value_regs,
 };
 // `is_frame_base` has no caller outside `tagging` itself except `mod tests`
 // below, which reaches it through `use super::*`. Re-exporting it
 // unconditionally would be an unused import in the shipped lib build.
 #[cfg(test)]
-use tagging::is_frame_base;
-pub use tagging::recover_types_for;
+use tagging::{is_frame_base, is_frame_base_with_identities};
+pub use tagging::{recover_types_for, recover_types_for_with_identities};
 pub use valued::recover_types_valued;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -543,6 +544,15 @@ pub enum RecoveredOutputKind {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RecoveredPrototype {
     parameters: Vec<RecoveredParameter>,
+    /// Source parameter slot -> the low/high AAPCS32 entry values for one
+    /// declared eight-byte integer. `RecoveredParameter::value` remains the
+    /// primary storage identity for existing scalar consumers; this auxiliary
+    /// fact prevents the second word from becoming an invented source local.
+    wide_integer_parameter_parts: BTreeMap<usize, [SsaValue; 2]>,
+    /// Source parameter slot -> low/high byte offsets within the cdecl32
+    /// incoming argument area. Offsets are relative to its first argument,
+    /// after the return address (and after saved EBP in that coordinate).
+    wide_integer_stack_parameter_parts: BTreeMap<usize, [i64; 2]>,
     parameter_arity_locked: bool,
     locked_parameters: HashSet<usize>,
     result: Option<RecoveredResult>,
@@ -878,6 +888,8 @@ impl RecoveredPrototype {
         cc: crate::ir::call_args::CallConv,
         declared: &[Option<TypeHint>],
     ) {
+        self.wide_integer_parameter_parts.clear();
+        self.wide_integer_stack_parameter_parts.clear();
         // BTreeMap rather than HashMap: the recovered-spelling search below
         // scans every prior parameter, and a HashMap's iteration order is not
         // reproducible between runs. A prototype that differs run to run is the
@@ -898,6 +910,60 @@ impl RecoveredPrototype {
             crate::ir::call_args::CallConv::Arm | crate::ir::call_args::CallConv::ArmHardFloat
         )
         .then(|| locked_aapcs_parameter_storage(cc, declared));
+        if let Some(storage) = aapcs_storage.as_ref() {
+            for (slot, hint) in declared.iter().copied().enumerate() {
+                let Some(TypeHint::Int { width: 8, .. }) = hint else {
+                    continue;
+                };
+                let Some(VReg::Phys(low)) = storage.get(slot) else {
+                    continue;
+                };
+                let Some(low_index) = low.strip_prefix('r').and_then(|n| n.parse::<u8>().ok())
+                else {
+                    continue;
+                };
+                if low_index >= 3 {
+                    continue;
+                }
+                self.wide_integer_parameter_parts.insert(
+                    slot,
+                    [
+                        SsaValue {
+                            base: VReg::phys(format!("r{low_index}")),
+                            version: 0,
+                        },
+                        SsaValue {
+                            base: VReg::phys(format!("r{}", low_index + 1)),
+                            version: 0,
+                        },
+                    ],
+                );
+            }
+        }
+        if cc == crate::ir::call_args::CallConv::Cdecl32 {
+            let mut byte_offset = 0i64;
+            for (slot, hint) in declared.iter().copied().enumerate() {
+                let Some(hint) = hint else {
+                    break;
+                };
+                let footprint = match hint {
+                    TypeHint::Int { width: 8, .. } | TypeHint::Float { width: 8 } => 8,
+                    TypeHint::Int {
+                        width: 1 | 2 | 4, ..
+                    }
+                    | TypeHint::Float { width: 4 }
+                    | TypeHint::BoolLike
+                    | TypeHint::Pointer { .. }
+                    | TypeHint::CodePointer => 4,
+                    TypeHint::Int { .. } | TypeHint::Float { .. } => break,
+                };
+                if matches!(hint, TypeHint::Int { width: 8, .. }) {
+                    self.wide_integer_stack_parameter_parts
+                        .insert(slot, [byte_offset, byte_offset + 4]);
+                }
+                byte_offset += footprint;
+            }
+        }
         // x86-64 SysV has the same two-independent-banks shape, with the same
         // consequence when it is missing: the positional fallback below reaches
         // into `argument_registers`, which holds only the INTEGER bank, and
@@ -1079,6 +1145,22 @@ impl RecoveredPrototype {
                 VReg::Phys(name) => Some((name.clone(), parameter.slot)),
                 _ => None,
             })
+            .collect()
+    }
+
+    /// Exact AAPCS32 low/high live-in words for declared eight-byte integers.
+    pub(crate) fn wide_integer_parameter_parts(&self) -> Vec<(usize, [VReg; 2])> {
+        self.wide_integer_parameter_parts
+            .iter()
+            .map(|(slot, parts)| (*slot, [parts[0].base.clone(), parts[1].base.clone()]))
+            .collect()
+    }
+
+    /// Exact low/high offsets in cdecl32's incoming stack-argument area.
+    pub(crate) fn wide_integer_stack_parameter_parts(&self) -> Vec<(usize, [i64; 2])> {
+        self.wide_integer_stack_parameter_parts
+            .iter()
+            .map(|(slot, offsets)| (*slot, *offsets))
             .collect()
     }
 
@@ -1736,6 +1818,8 @@ pub fn recover_prototype_with_arm_vfp_args(
     parameters.sort_by_key(|parameter| parameter.slot);
     RecoveredPrototype {
         parameters,
+        wide_integer_parameter_parts: BTreeMap::new(),
+        wide_integer_stack_parameter_parts: BTreeMap::new(),
         parameter_arity_locked: false,
         locked_parameters: HashSet::new(),
         result,
@@ -1775,6 +1859,21 @@ fn int_for_reg(v: &VReg) -> TypeHint {
 
 /// Produce a [`TypeMap`] for all register VRegs touched by `lf`.
 pub fn recover_types(lf: &LlirFunction) -> TypeMap {
+    recover_types_with_optional_identities(lf, None)
+}
+
+/// Recover types using exact SSA identity for semantic register roles.
+pub fn recover_types_with_identities(
+    lf: &LlirFunction,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> TypeMap {
+    recover_types_with_optional_identities(lf, Some(identities))
+}
+
+fn recover_types_with_optional_identities(
+    lf: &LlirFunction,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> TypeMap {
     let mut tm = TypeMap::default();
 
     // First pass: gather registers that ever receive a plain constant
@@ -1914,8 +2013,8 @@ pub fn recover_types(lf: &LlirFunction) -> TypeMap {
     // `*(param + i*scale)` resolves through the reload to the parameter. Iterated
     // together so either order of discovery converges.
     for _ in 0..4 {
-        propagate_pointer_arithmetic(lf, &mut tm);
-        propagate_spill_slot_pointers(lf, &mut tm);
+        propagate_pointer_arithmetic_with_optional_identities(lf, &mut tm, identities);
+        propagate_spill_slot_pointers_with_optional_identities(lf, &mut tm, identities);
     }
 
     // Demote pointer / code-pointer classifications for regs that get a
@@ -1966,6 +2065,87 @@ mod tests {
             );
             assert!(!is_frame_base(&VReg::phys(format!("{name}#2"))));
         }
+    }
+
+    #[test]
+    fn frame_base_uses_exact_identity_not_display_spelling() {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            VReg::phys("opaque_frame"),
+            SsaValue {
+                base: VReg::phys("rbp"),
+                version: 3,
+            },
+        );
+        identities.record(
+            VReg::phys("rbp#3"),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 3,
+            },
+        );
+
+        assert!(is_frame_base_with_identities(
+            &VReg::phys("opaque_frame"),
+            &identities,
+        ));
+        assert!(!is_frame_base_with_identities(
+            &VReg::phys("rbp#3"),
+            &identities,
+        ));
+    }
+
+    #[test]
+    fn spill_pointer_does_not_cross_frame_ssa_versions() {
+        let lf = mk_block(vec![
+            Op::Store {
+                addr: MemOp {
+                    base: Some(VReg::phys("store_frame")),
+                    disp: -8,
+                    size: 8,
+                    ..Default::default()
+                },
+                src: Value::Reg(VReg::phys("rdi")),
+            },
+            Op::Load {
+                dst: VReg::phys("rax"),
+                addr: MemOp {
+                    base: Some(VReg::phys("load_frame")),
+                    disp: -8,
+                    size: 8,
+                    ..Default::default()
+                },
+            },
+            Op::Load {
+                dst: VReg::phys("rcx"),
+                addr: MemOp {
+                    base: Some(VReg::phys("rax")),
+                    size: 1,
+                    ..Default::default()
+                },
+            },
+        ]);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            VReg::phys("store_frame"),
+            SsaValue {
+                base: VReg::phys("rbp"),
+                version: 1,
+            },
+        );
+        identities.record(
+            VReg::phys("load_frame"),
+            SsaValue {
+                base: VReg::phys("rbp"),
+                version: 2,
+            },
+        );
+
+        let types = recover_types_with_identities(&lf, &identities);
+        assert!(!matches!(
+            types.get(&VReg::phys("rdi")),
+            Some(TypeHint::Pointer { .. })
+        ));
     }
 
     fn mk_block(ops: Vec<Op>) -> LlirFunction {
@@ -4778,6 +4958,203 @@ int never_returns(void) { for (;;) {} }
                 width: 4
             }),
             "return should be narrowed to int from the 32-bit last def"
+        );
+    }
+
+    #[test]
+    fn return_refinement_uses_identity_and_definition_width() {
+        use crate::ir::call_args::CallConv;
+
+        let exact = mk_block(vec![Op::Assign {
+            dst: VReg::phys("opaque_result"),
+            src: Value::Const(1),
+        }]);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            VReg::phys("opaque_result"),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 1,
+            },
+        );
+        let widths = HashMap::from([(VReg::phys("opaque_result"), 4)]);
+        let types = recover_types_for_with_identities(
+            &exact,
+            CallConv::SysVAmd64,
+            &identities,
+            &widths,
+            &TypeMapV::default(),
+        );
+        assert_eq!(
+            types.get(&VReg::phys("opaque_result")),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            })
+        );
+
+        let misleading = mk_block(vec![Op::Assign {
+            dst: VReg::phys("rax#9"),
+            src: Value::Const(1),
+        }]);
+        identities.record(
+            VReg::phys("rax#9"),
+            SsaValue {
+                base: VReg::phys("rdi"),
+                version: 9,
+            },
+        );
+        let widths = HashMap::from([(VReg::phys("rax#9"), 4)]);
+        let types = recover_types_for_with_identities(
+            &misleading,
+            CallConv::SysVAmd64,
+            &identities,
+            &widths,
+            &TypeMapV::default(),
+        );
+        assert_eq!(
+            types.get(&VReg::phys("rax#9")),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            }),
+            "the misleading name is not a return, but its own exact definition width still applies"
+        );
+    }
+
+    #[test]
+    fn ordinary_definition_width_comes_from_the_exact_width_sidecar() {
+        use crate::ir::call_args::CallConv;
+
+        let function = mk_block(vec![Op::Assign {
+            dst: VReg::phys("opaque_local"),
+            src: Value::Const(1),
+        }]);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            VReg::phys("opaque_local"),
+            SsaValue {
+                base: VReg::phys("rbx"),
+                version: 2,
+            },
+        );
+        let widths = HashMap::from([(VReg::phys("opaque_local"), 4)]);
+
+        let types = recover_types_for_with_identities(
+            &function,
+            CallConv::SysVAmd64,
+            &identities,
+            &widths,
+            &TypeMapV::default(),
+        );
+
+        assert_eq!(
+            types.get(&VReg::phys("opaque_local")),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn use_only_width_comes_from_exact_value_facts_not_numbered_spelling() {
+        use crate::ir::call_args::CallConv;
+
+        let raw = mk_block(vec![Op::Bin {
+            dst: VReg::phys("eax"),
+            op: BinOp::Add,
+            lhs: Value::Reg(VReg::phys("edi")),
+            rhs: Value::Const(1),
+        }]);
+        let ssa = crate::ir::ssa::compute_ssa(&raw);
+        let valued_types = recover_types_valued(&raw, &ssa);
+        let (numbered, definition_widths, _, identities) =
+            crate::ir::value_number::value_number_with_parameter_slots_lifetimes_and_identities(
+                &raw,
+                &ssa,
+                CallConv::SysVAmd64,
+                &[],
+            );
+        let Op::Bin {
+            lhs: Value::Reg(source),
+            ..
+        } = &numbered.blocks[0].instrs[0].op
+        else {
+            panic!("numbering must preserve the binary operation")
+        };
+        assert_eq!(
+            reg_width_bytes(source),
+            8,
+            "opaque numbering loses the raw view"
+        );
+
+        let types = recover_types_for_with_identities(
+            &numbered,
+            CallConv::SysVAmd64,
+            &identities,
+            &definition_widths,
+            &valued_types,
+        );
+
+        assert_eq!(
+            types.get(&source),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            }),
+            "an opaque numbered use must retain its exact raw SSA width"
+        );
+    }
+
+    #[test]
+    fn ambiguous_numbered_use_declines_value_keyed_width_projection() {
+        use crate::ir::call_args::CallConv;
+
+        let source = VReg::phys("coalesced_source");
+        let function = mk_block(vec![Op::Bin {
+            dst: VReg::phys("opaque_destination"),
+            op: BinOp::Add,
+            lhs: Value::Reg(source.clone()),
+            rhs: Value::Const(1),
+        }]);
+        let narrow = SsaValue {
+            base: VReg::phys("rdi"),
+            version: 0,
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(source.clone(), narrow.clone());
+        identities.record(
+            source.clone(),
+            SsaValue {
+                base: VReg::phys("rsi"),
+                version: 0,
+            },
+        );
+        let mut valued_types = TypeMapV::default();
+        valued_types.upsert(
+            narrow,
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        let types = recover_types_for_with_identities(
+            &function,
+            CallConv::SysVAmd64,
+            &identities,
+            &HashMap::new(),
+            &valued_types,
+        );
+
+        assert_eq!(
+            types.get(&source),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 8,
+            }),
+            "coalesced ambiguity must not guess which exact value owns the width"
         );
     }
 

@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::ir::ast::{negate_cmp_expr, Expr, Function, Stmt};
+use crate::ir::ast::{negate_cmp_expr, Expr, Function, OriginSet, Stmt};
 use crate::ir::const_fold::{is_exact_boolean, is_short_circuit_safe_boolean};
 use crate::ir::types::{BinOp, CmpOp};
 
@@ -12,6 +12,7 @@ struct GuardLadder {
     exit_body: Vec<Stmt>,
     continuation: Vec<Stmt>,
     consumed_gotos: usize,
+    origins: Option<OriginSet>,
 }
 
 /// Collapse a nested validation ladder that jumps to one pure shared exit.
@@ -70,6 +71,82 @@ pub fn collapse_nested_terminal_return_guards(function: &mut Function) {
     while collapse_nested_return_one(&mut function.body) {}
 }
 
+/// Remove a leading nested guard contradicted by its exact outer path fact.
+///
+/// `if (x <= k) { if (k < x) { dead; } live; }` evaluates `dead` on no input.
+/// The comparison operands must be structurally identical (casts included),
+/// both conditions must be side-effect-free, the inner guard must have no
+/// `else`, and only comments may precede it. Those restrictions make this a
+/// path contradiction rather than a guess about correlated expressions.
+pub fn prune_contradictory_nested_guards(function: &mut Function) {
+    while prune_one_contradictory_nested_guard(&mut function.body) {}
+}
+
+fn prune_one_contradictory_nested_guard(body: &mut Vec<Stmt>) -> bool {
+    for statement in body.iter_mut() {
+        let changed = match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
+            Stmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => {
+                let leading = then_body.iter().position(|statement| {
+                    !matches!(statement.semantic(), Stmt::Comment(_) | Stmt::Nop)
+                });
+                if let Some(index) = leading {
+                    let contradicted = match then_body[index].semantic() {
+                        Stmt::If {
+                            cond: inner,
+                            else_body: None,
+                            ..
+                        } => exact_pure_complements(cond, inner),
+                        _ => false,
+                    };
+                    if contradicted {
+                        then_body.remove(index);
+                        return true;
+                    }
+                }
+                prune_one_contradictory_nested_guard(then_body)
+                    || else_body
+                        .as_mut()
+                        .is_some_and(prune_one_contradictory_nested_guard)
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                prune_one_contradictory_nested_guard(body)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                cases
+                    .iter_mut()
+                    .any(|(_, body)| prune_one_contradictory_nested_guard(body))
+                    || default
+                        .as_mut()
+                        .is_some_and(prune_one_contradictory_nested_guard)
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                prune_one_contradictory_nested_guard(try_body)
+                    || catches
+                        .iter_mut()
+                        .any(|catch| prune_one_contradictory_nested_guard(&mut catch.body))
+            }
+            _ => false,
+        };
+        if changed {
+            return true;
+        }
+    }
+    false
+}
+
+fn exact_pure_complements(left: &Expr, right: &Expr) -> bool {
+    matches!(left, Expr::Cmp { .. })
+        && matches!(right, Expr::Cmp { .. })
+        && is_short_circuit_safe_boolean(left)
+        && is_short_circuit_safe_boolean(right)
+        && (negate_cmp_expr(left.clone()) == *right || negate_cmp_expr(right.clone()) == *left)
+}
+
 /// Keep one shared terminal return when an early guard returns the exact same
 /// value as the function's final statement.
 ///
@@ -87,27 +164,44 @@ pub fn collapse_matching_terminal_return_guard(function: &mut Function) {
     if collapse_matching_terminal_guard_pair(body) {
         return;
     }
-    let Some(final_return @ Stmt::Return { .. }) = body.last().cloned() else {
+    let Some(mut final_return) = body
+        .last()
+        .filter(|statement| matches!(statement.semantic(), Stmt::Return { .. }))
+        .cloned()
+    else {
         return;
     };
     for index in 0..body.len() - 2 {
-        let Stmt::If {
-            cond,
-            then_body,
-            else_body: None,
-        } = &body[index]
-        else {
-            continue;
+        let (condition, guard_origins, early_return_origins) = {
+            let Stmt::If {
+                cond,
+                then_body,
+                else_body: None,
+            } = body[index].semantic()
+            else {
+                continue;
+            };
+            let [early_return] = then_body.as_slice() else {
+                continue;
+            };
+            if early_return.semantic() != final_return.semantic() {
+                continue;
+            }
+            (
+                cond.clone(),
+                body[index].origins().cloned(),
+                early_return.origins().cloned(),
+            )
         };
-        if then_body.as_slice() != std::slice::from_ref(&final_return) {
-            continue;
-        }
-        let Some(continuation_condition) = negate_exact_condition(cond.clone()) else {
+        let Some(continuation_condition) = negate_exact_condition(condition) else {
             continue;
         };
         let continuation = body[index + 1..body.len() - 1].to_vec();
         if continuation.is_empty() || contains_unstructured_transfer(&continuation) {
             continue;
+        }
+        if let Some(origins) = early_return_origins {
+            final_return.merge_origins(&origins);
         }
         body.splice(
             index..,
@@ -116,7 +210,8 @@ pub fn collapse_matching_terminal_return_guard(function: &mut Function) {
                     cond: continuation_condition,
                     then_body: continuation,
                     else_body: None,
-                },
+                }
+                .with_optional_origins(guard_origins),
                 final_return,
             ],
         );
@@ -137,24 +232,25 @@ fn collapse_matching_terminal_guard_pair(body: &mut Vec<Stmt>) -> bool {
     };
     let final_tail = body[final_start..].to_vec();
     for index in 0..final_start.saturating_sub(1) {
-        let (
-            Stmt::If {
-                cond: exit_condition,
-                then_body: exit_tail,
-                else_body: None,
-            },
-            Stmt::If {
-                cond: success_condition,
-                then_body: success_tail,
-                else_body: None,
-            },
-        ) = (&body[index], &body[index + 1])
-        else {
-            continue;
-        };
+        let (exit_condition, exit_tail, success_condition, success_tail) =
+            match (body[index].semantic(), body[index + 1].semantic()) {
+                (
+                    Stmt::If {
+                        cond: exit_condition,
+                        then_body: exit_tail,
+                        else_body: None,
+                    },
+                    Stmt::If {
+                        cond: success_condition,
+                        then_body: success_tail,
+                        else_body: None,
+                    },
+                ) => (exit_condition, exit_tail, success_condition, success_tail),
+                _ => continue,
+            };
         if index + 2 != final_start
             || terminal_return_tail_start(exit_tail) != Some(0)
-            || exit_tail != &final_tail
+            || !semantic_body_eq(exit_tail, &final_tail)
             || terminal_return_tail_start(success_tail) != Some(0)
         {
             continue;
@@ -166,15 +262,22 @@ fn collapse_matching_terminal_guard_pair(body: &mut Vec<Stmt>) -> bool {
         let Some(failed_success) = negate_exact_condition(success_condition.clone()) else {
             continue;
         };
+        let guard_origins = match (body[index].origins(), body[index + 1].origins()) {
+            (Some(exit), Some(success)) => Some(exit.union(success)),
+            (Some(origins), None) | (None, Some(origins)) => Some(origins.clone()),
+            (None, None) => None,
+        };
+        let merged_final_tail = merge_corresponding_origins(&final_tail, exit_tail);
         let mut replacement = vec![Stmt::If {
             cond: Expr::Bin {
                 op: BinOp::LogicalOr,
                 lhs: Box::new(exit_condition),
                 rhs: Box::new(failed_success),
             },
-            then_body: final_tail,
+            then_body: merged_final_tail,
             else_body: None,
-        }];
+        }
+        .with_optional_origins(guard_origins)];
         replacement.extend(success_tail.clone());
         body.splice(index.., replacement);
         return true;
@@ -186,14 +289,36 @@ fn collapse_matching_terminal_guard_pair(body: &mut Vec<Stmt>) -> bool {
 /// trivia followed by one return.
 fn terminal_return_tail_start(body: &[Stmt]) -> Option<usize> {
     let return_index = body.len().checked_sub(1)?;
-    if !matches!(body[return_index], Stmt::Return { .. }) {
+    if !matches!(body[return_index].semantic(), Stmt::Return { .. }) {
         return None;
     }
     let mut start = return_index;
-    while start > 0 && matches!(body[start - 1], Stmt::Comment(_) | Stmt::Nop) {
+    while start > 0 && matches!(body[start - 1].semantic(), Stmt::Comment(_) | Stmt::Nop) {
         start -= 1;
     }
     Some(start)
+}
+
+fn semantic_body_eq(left: &[Stmt], right: &[Stmt]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| left.semantic() == right.semantic())
+}
+
+fn merge_corresponding_origins(primary: &[Stmt], duplicate: &[Stmt]) -> Vec<Stmt> {
+    primary
+        .iter()
+        .zip(duplicate)
+        .map(|(primary, duplicate)| {
+            let mut merged = primary.clone();
+            if let Some(origins) = duplicate.origins() {
+                merged.merge_origins(origins);
+            }
+            merged
+        })
+        .collect()
 }
 
 fn is_safe_exact_eager_boolean(condition: &Expr) -> bool {
@@ -220,7 +345,7 @@ pub fn collapse_redundant_copy_nested_guards(function: &mut Function) {
 fn collapse_redundant_copy_nested_one(body: &mut Vec<Stmt>) -> bool {
     for index in 0..body.len() {
         if index + 1 < body.len() {
-            let replacement = match (&body[index], &body[index + 1]) {
+            let replacement = match (body[index].semantic(), body[index + 1].semantic()) {
                 (
                     previous @ Stmt::Assign { src, .. },
                     Stmt::If {
@@ -229,30 +354,52 @@ fn collapse_redundant_copy_nested_one(body: &mut Vec<Stmt>) -> bool {
                         else_body: None,
                     },
                 ) if matches!(src, Expr::Reg(_) | Expr::Const(_)) => match then_body.as_slice() {
-                    [duplicate, Stmt::If {
-                        cond: inner_condition,
-                        then_body: inner_body,
-                        else_body: None,
-                    }] if duplicate == previous => Some(Stmt::If {
-                        cond: Expr::Bin {
-                            op: BinOp::LogicalAnd,
-                            lhs: Box::new(outer_condition.clone()),
-                            rhs: Box::new(inner_condition.clone()),
-                        },
-                        then_body: inner_body.clone(),
-                        else_body: None,
-                    }),
+                    [duplicate, inner] if duplicate.semantic() == previous => {
+                        match inner.semantic() {
+                            Stmt::If {
+                                cond: inner_condition,
+                                then_body: inner_body,
+                                else_body: None,
+                            } => {
+                                let origins = match (body[index + 1].origins(), inner.origins()) {
+                                    (Some(outer), Some(inner)) => Some(outer.union(inner)),
+                                    (Some(origins), None) | (None, Some(origins)) => {
+                                        Some(origins.clone())
+                                    }
+                                    (None, None) => None,
+                                };
+                                Some((
+                                    Stmt::If {
+                                        cond: Expr::Bin {
+                                            op: BinOp::LogicalAnd,
+                                            lhs: Box::new(outer_condition.clone()),
+                                            rhs: Box::new(inner_condition.clone()),
+                                        },
+                                        then_body: inner_body.clone(),
+                                        else_body: None,
+                                    }
+                                    .with_optional_origins(origins),
+                                    duplicate.origins().cloned(),
+                                ))
+                            }
+                            _ => None,
+                        }
+                    }
                     _ => None,
                 },
                 _ => None,
             };
-            if let Some(replacement) = replacement {
+            if let Some((replacement, duplicate_origins)) = replacement {
+                if let Some(origins) = duplicate_origins {
+                    body[index].merge_origins(&origins);
+                }
                 body[index + 1] = replacement;
                 return true;
             }
         }
 
-        let changed = match &mut body[index] {
+        let changed = match body[index].semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -290,7 +437,8 @@ fn collapse_redundant_copy_nested_one(body: &mut Vec<Stmt>) -> bool {
 }
 
 fn contains_unstructured_transfer(body: &[Stmt]) -> bool {
-    body.iter().any(|statement| match statement {
+    body.iter().any(|statement| match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Label(_) | Stmt::Goto { .. } | Stmt::IndirectGoto { .. } => true,
         Stmt::If {
             then_body,
@@ -325,25 +473,39 @@ fn contains_unstructured_transfer(body: &[Stmt]) -> bool {
 
 fn collapse_nested_return_one(body: &mut Vec<Stmt>) -> bool {
     for index in 0..body.len() {
-        let replacement = match &body[index] {
+        let replacement = match body[index].semantic() {
             Stmt::If {
                 cond: outer_condition,
                 then_body,
                 else_body: None,
             } => match then_body.as_slice() {
-                [Stmt::If {
-                    cond: inner_condition,
-                    then_body: return_body,
-                    else_body: None,
-                }] if matches!(return_body.as_slice(), [Stmt::Return { .. }]) => Some(Stmt::If {
-                    cond: Expr::Bin {
-                        op: BinOp::LogicalAnd,
-                        lhs: Box::new(outer_condition.clone()),
-                        rhs: Box::new(inner_condition.clone()),
-                    },
-                    then_body: return_body.clone(),
-                    else_body: None,
-                }),
+                [inner] => match inner.semantic() {
+                    Stmt::If {
+                        cond: inner_condition,
+                        then_body: return_body,
+                        else_body: None,
+                    } if matches!(return_body.as_slice(), [statement] if matches!(statement.semantic(), Stmt::Return { .. })) =>
+                    {
+                        let origins = match (body[index].origins(), inner.origins()) {
+                            (Some(outer), Some(inner)) => Some(outer.union(inner)),
+                            (Some(origins), None) | (None, Some(origins)) => Some(origins.clone()),
+                            (None, None) => None,
+                        };
+                        Some(
+                            Stmt::If {
+                                cond: Expr::Bin {
+                                    op: BinOp::LogicalAnd,
+                                    lhs: Box::new(outer_condition.clone()),
+                                    rhs: Box::new(inner_condition.clone()),
+                                },
+                                then_body: return_body.clone(),
+                                else_body: None,
+                            }
+                            .with_optional_origins(origins),
+                        )
+                    }
+                    _ => None,
+                },
                 _ => None,
             },
             _ => None,
@@ -353,7 +515,8 @@ fn collapse_nested_return_one(body: &mut Vec<Stmt>) -> bool {
             return true;
         }
 
-        let changed = match &mut body[index] {
+        let changed = match body[index].semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -392,6 +555,11 @@ fn collapse_break_one(body: &mut Vec<Stmt>) -> bool {
             let left = break_guard_condition(&body[index]);
             let right = break_guard_condition(&body[index + 1]);
             if let (Some(left), Some(right)) = (left, right) {
+                let origins = match (body[index].origins(), body[index + 1].origins()) {
+                    (Some(left), Some(right)) => Some(left.union(right)),
+                    (Some(origins), None) | (None, Some(origins)) => Some(origins.clone()),
+                    (None, None) => None,
+                };
                 body[index] = Stmt::If {
                     cond: Expr::Bin {
                         op: BinOp::LogicalOr,
@@ -400,13 +568,15 @@ fn collapse_break_one(body: &mut Vec<Stmt>) -> bool {
                     },
                     then_body: vec![Stmt::Break],
                     else_body: None,
-                };
+                }
+                .with_optional_origins(origins);
                 body.remove(index + 1);
                 return true;
             }
         }
 
-        let changed = match &mut body[index] {
+        let changed = match body[index].semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -441,11 +611,12 @@ fn break_guard_condition(statement: &Stmt) -> Option<Expr> {
         cond,
         then_body,
         else_body: None,
-    } = statement
+    } = statement.semantic()
     else {
         return None;
     };
-    matches!(then_body.as_slice(), [Stmt::Break]).then(|| cond.clone())
+    matches!(then_body.as_slice(), [statement] if matches!(statement.semantic(), Stmt::Break))
+        .then(|| cond.clone())
 }
 
 fn collapse_assignment_one(
@@ -455,7 +626,7 @@ fn collapse_assignment_one(
 ) -> bool {
     for index in 0..body.len() {
         if index + 1 < body.len() {
-            if let Some((condition, update_body, update_label, join_label)) =
+            if let Some((condition, update_body, update_label, join_label, origins)) =
                 recover_shared_assignment(&body[index], &body[index + 1])
             {
                 let labels_are_owned = labels.get(&update_label).copied() == Some(1)
@@ -469,14 +640,16 @@ fn collapse_assignment_one(
                             cond: condition,
                             then_body: update_body,
                             else_body: None,
-                        }],
+                        }
+                        .with_optional_origins(origins)],
                     );
                     return true;
                 }
             }
         }
 
-        let changed = match &mut body[index] {
+        let changed = match body[index].semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -516,46 +689,61 @@ fn collapse_assignment_one(
 fn recover_shared_assignment(
     statement: &Stmt,
     following: &Stmt,
-) -> Option<(Expr, Vec<Stmt>, u64, u64)> {
+) -> Option<(Expr, Vec<Stmt>, u64, u64, Option<OriginSet>)> {
     let Stmt::If {
         cond: outer_condition,
         then_body,
         else_body: None,
-    } = statement
+    } = statement.semantic()
     else {
         return None;
     };
-    let [Stmt::If {
+    let [direct_guard] = then_body.as_slice() else {
+        return None;
+    };
+    let Stmt::If {
         cond: direct_update_condition,
         then_body: direct_update_body,
         else_body: Some(indirect_update_body),
-    }] = then_body.as_slice()
+    } = direct_guard.semantic()
     else {
         return None;
     };
-    let (Stmt::Label(update_label), update_body) = direct_update_body.split_first()? else {
+    let (update_label_statement, update_body) = direct_update_body.split_first()?;
+    let Stmt::Label(update_label) = update_label_statement.semantic() else {
         return None;
     };
-    if !matches!(update_body, [Stmt::Assign { .. } | Stmt::Store { .. }]) {
+    if !matches!(update_body, [statement] if matches!(statement.semantic(), Stmt::Assign { .. } | Stmt::Store { .. }))
+    {
         return None;
     }
-    let [Stmt::If {
+    let [skip_guard, indirect_update_goto] = indirect_update_body.as_slice() else {
+        return None;
+    };
+    let Stmt::If {
         cond: skip_condition,
         then_body: skip_body,
         else_body: None,
-    }, Stmt::Goto {
+    } = skip_guard.semantic()
+    else {
+        return None;
+    };
+    let Stmt::Goto {
         target: indirect_update_label,
-    }] = indirect_update_body.as_slice()
+    } = indirect_update_goto.semantic()
     else {
         return None;
     };
-    let [Stmt::Goto {
+    let [skipped_update_goto] = skip_body.as_slice() else {
+        return None;
+    };
+    let Stmt::Goto {
         target: skipped_update_label,
-    }] = skip_body.as_slice()
+    } = skipped_update_goto.semantic()
     else {
         return None;
     };
-    let Stmt::Label(join_label) = following else {
+    let Stmt::Label(join_label) = following.semantic() else {
         return None;
     };
     if update_label != indirect_update_label
@@ -571,6 +759,23 @@ fn recover_shared_assignment(
         lhs: Box::new(direct_update_condition.clone()),
         rhs: Box::new(indirect_condition),
     };
+    let mut origins: Option<OriginSet> = None;
+    for control in [
+        statement,
+        direct_guard,
+        update_label_statement,
+        skip_guard,
+        skipped_update_goto,
+        indirect_update_goto,
+        following,
+    ] {
+        if let Some(next) = control.origins() {
+            match &mut origins {
+                Some(origins) => origins.merge(next),
+                None => origins = Some(next.clone()),
+            }
+        }
+    }
     Some((
         Expr::Bin {
             op: BinOp::LogicalAnd,
@@ -580,12 +785,14 @@ fn recover_shared_assignment(
         update_body.to_vec(),
         *update_label,
         *join_label,
+        origins,
     ))
 }
 
 fn count_targets(body: &[Stmt], labels: &mut HashMap<u64, usize>, gotos: &mut HashMap<u64, usize>) {
     for statement in body {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Label(target) => *labels.entry(*target).or_default() += 1,
             Stmt::Goto { target } => *gotos.entry(*target).or_default() += 1,
             Stmt::If {
@@ -644,12 +851,14 @@ fn collapse_one(
                     cond: condition,
                     then_body: candidate.exit_body,
                     else_body: Some(candidate.continuation),
-                };
+                }
+                .with_optional_origins(candidate.origins);
                 return true;
             }
         }
 
-        let changed = match &mut body[index] {
+        let changed = match body[index].semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
                 then_body,
                 else_body,
@@ -691,20 +900,24 @@ fn recover_ladder(statement: &Stmt) -> Option<GuardLadder> {
         cond,
         then_body,
         else_body: Some(else_body),
-    } = statement
+    } = statement.semantic()
     else {
         return None;
     };
-    let (Stmt::Label(target), exit_body) = then_body.split_first()? else {
+    let (target_statement, exit_body) = then_body.split_first()?;
+    let Stmt::Label(target) = target_statement.semantic() else {
         return None;
     };
     if exit_body.is_empty() || else_body.len() != 1 {
         return None;
     }
-    let Stmt::If { .. } = &else_body[0] else {
+    let Stmt::If { .. } = else_body[0].semantic() else {
         return None;
     };
-    let (mut exit_conditions, continuation, consumed_gotos) = recover_tail(&else_body[0], *target)?;
+    let (mut exit_conditions, continuation, consumed_gotos, mut origins) =
+        recover_tail(&else_body[0], *target)?;
+    merge_statement_origin(&mut origins, statement);
+    merge_statement_origin(&mut origins, target_statement);
     exit_conditions.insert(0, cond.clone());
     Some(GuardLadder {
         target: *target,
@@ -712,38 +925,67 @@ fn recover_ladder(statement: &Stmt) -> Option<GuardLadder> {
         exit_body: exit_body.to_vec(),
         continuation,
         consumed_gotos,
+        origins,
     })
 }
 
-fn recover_tail(statement: &Stmt, target: u64) -> Option<(Vec<Expr>, Vec<Stmt>, usize)> {
+fn recover_tail(
+    statement: &Stmt,
+    target: u64,
+) -> Option<(Vec<Expr>, Vec<Stmt>, usize, Option<OriginSet>)> {
     let Stmt::If {
         cond,
         then_body,
         else_body: Some(else_body),
-    } = statement
+    } = statement.semantic()
     else {
         return None;
     };
 
-    if is_only_goto(then_body, target) {
-        if let [next @ Stmt::If { .. }] = else_body.as_slice() {
-            let (mut conditions, continuation, gotos) = recover_tail(next, target)?;
-            conditions.insert(0, cond.clone());
-            return Some((conditions, continuation, gotos + 1));
+    if let Some(exit_goto) = only_goto(then_body, target) {
+        if let [next] = else_body.as_slice() {
+            if matches!(next.semantic(), Stmt::If { .. }) {
+                let (mut conditions, continuation, gotos, mut origins) =
+                    recover_tail(next, target)?;
+                merge_statement_origin(&mut origins, statement);
+                merge_statement_origin(&mut origins, exit_goto);
+                conditions.insert(0, cond.clone());
+                return Some((conditions, continuation, gotos + 1, origins));
+            }
         }
-        return Some((vec![cond.clone()], else_body.clone(), 1));
+        let mut origins = None;
+        merge_statement_origin(&mut origins, statement);
+        merge_statement_origin(&mut origins, exit_goto);
+        return Some((vec![cond.clone()], else_body.clone(), 1, origins));
     }
 
-    if is_only_goto(else_body, target) {
+    if let Some(exit_goto) = only_goto(else_body, target) {
         let negated = negate_exact_condition(cond.clone())?;
-        return Some((vec![negated], then_body.clone(), 1));
+        let mut origins = None;
+        merge_statement_origin(&mut origins, statement);
+        merge_statement_origin(&mut origins, exit_goto);
+        return Some((vec![negated], then_body.clone(), 1, origins));
     }
 
     None
 }
 
-fn is_only_goto(body: &[Stmt], target: u64) -> bool {
-    matches!(body, [Stmt::Goto { target: candidate }] if *candidate == target)
+fn only_goto(body: &[Stmt], target: u64) -> Option<&Stmt> {
+    let [statement] = body else {
+        return None;
+    };
+    matches!(statement.semantic(), Stmt::Goto { target: candidate } if *candidate == target)
+        .then_some(statement)
+}
+
+fn merge_statement_origin(origins: &mut Option<OriginSet>, statement: &Stmt) {
+    let Some(next) = statement.origins() else {
+        return;
+    };
+    match origins {
+        Some(origins) => origins.merge(next),
+        None => *origins = Some(next.clone()),
+    }
 }
 
 /// Negate only comparison predicates whose inverse the AST represents exactly.
@@ -796,7 +1038,7 @@ fn negate_exact_condition(condition: Expr) -> Option<Expr> {
 
 #[cfg(test)]
 mod tests {
-    use crate::ir::ast::{render_decbench, Expr, Function, Stmt};
+    use crate::ir::ast::{render_decbench, Expr, Function, OriginSet, Stmt};
     use crate::ir::types::{BinOp, CmpOp, VReg};
 
     fn reg(name: &str) -> VReg {
@@ -856,6 +1098,41 @@ mod tests {
         assert!(!rendered.contains("L_117a"), "{rendered}");
         assert!(rendered.contains("local_4 = 1;"), "{rendered}");
         assert!(rendered.contains("ret = 0;"), "{rendered}");
+    }
+
+    #[test]
+    fn attributed_shared_exit_ladder_preserves_control_and_body_origins() {
+        let mut function = dijkstra_style_ladder(false);
+        let mut next = 0x1100;
+        for statement in &mut function.body {
+            attribute_statement_tree(statement, &mut next);
+        }
+        let mut expected_control = Vec::new();
+        collect_control_origins(&function.body[0], &mut expected_control);
+        expected_control.sort_unstable();
+        expected_control.dedup();
+
+        super::collapse_shared_exit_guard_ladders(&mut function);
+
+        assert_eq!(
+            function.body[0]
+                .origins()
+                .expect("combined ladder origins")
+                .addresses(),
+            expected_control
+        );
+        let Stmt::If {
+            then_body,
+            else_body: Some(else_body),
+            ..
+        } = function.body[0].semantic()
+        else {
+            panic!("expected attributed shared-exit guard")
+        };
+        assert!(matches!(then_body[0].semantic(), Stmt::Assign { .. }));
+        assert!(then_body[0].origins().is_some());
+        assert!(matches!(else_body[0].semantic(), Stmt::Assign { .. }));
+        assert!(else_body[0].origins().is_some());
     }
 
     #[test]
@@ -921,6 +1198,54 @@ mod tests {
         }
     }
 
+    fn attribute_statement_tree(statement: &mut Stmt, next: &mut u64) {
+        match statement {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                for nested in then_body {
+                    attribute_statement_tree(nested, next);
+                }
+                if let Some(else_body) = else_body {
+                    for nested in else_body {
+                        attribute_statement_tree(nested, next);
+                    }
+                }
+            }
+            _ => {}
+        }
+        let origin = *next;
+        *next += 4;
+        let semantic = std::mem::replace(statement, Stmt::Nop);
+        *statement = semantic.with_origins(OriginSet::one(origin));
+    }
+
+    fn collect_control_origins(statement: &Stmt, origins: &mut Vec<u64>) {
+        if !matches!(
+            statement.semantic(),
+            Stmt::Assign { .. } | Stmt::Return { .. }
+        ) {
+            origins.extend_from_slice(statement.origins().expect("attributed tree").addresses());
+        }
+        if let Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } = statement.semantic()
+        {
+            for nested in then_body {
+                collect_control_origins(nested, origins);
+            }
+            if let Some(else_body) = else_body {
+                for nested in else_body {
+                    collect_control_origins(nested, origins);
+                }
+            }
+        }
+    }
+
     #[test]
     fn cross_branch_shared_assignment_becomes_one_short_circuit_guard() {
         let mut function = best_node_ladder(false);
@@ -935,6 +1260,53 @@ mod tests {
         assert!(!rendered.contains("L_122d"), "{rendered}");
         assert!(!rendered.contains("L_1233"), "{rendered}");
         assert!(rendered.contains("best = candidate;"), "{rendered}");
+    }
+
+    #[test]
+    fn attributed_shared_assignment_preserves_control_and_update_origins() {
+        let mut function = best_node_ladder(false);
+        let mut next = 0x1200;
+        for statement in &mut function.body {
+            attribute_statement_tree(statement, &mut next);
+        }
+        let mut expected_control = Vec::new();
+        collect_control_origins(&function.body[0], &mut expected_control);
+        collect_control_origins(&function.body[1], &mut expected_control);
+        expected_control.sort_unstable();
+        expected_control.dedup();
+        let Stmt::If { then_body, .. } = function.body[0].semantic() else {
+            panic!("expected outer guard")
+        };
+        let Stmt::If {
+            then_body: direct_update_body,
+            ..
+        } = then_body[0].semantic()
+        else {
+            panic!("expected direct update guard")
+        };
+        let update_origin = direct_update_body[1]
+            .origins()
+            .expect("attributed update")
+            .addresses()
+            .to_vec();
+
+        super::collapse_shared_assignment_guards(&mut function);
+
+        assert_eq!(
+            function.body[0]
+                .origins()
+                .expect("combined guard origins")
+                .addresses(),
+            expected_control
+        );
+        let Stmt::If { then_body, .. } = function.body[0].semantic() else {
+            panic!("expected attributed shared-assignment guard")
+        };
+        assert_eq!(then_body.len(), 1);
+        assert_eq!(
+            then_body[0].origins().expect("update origin").addresses(),
+            update_origin
+        );
     }
 
     #[test]
@@ -1016,6 +1388,45 @@ mod tests {
         assert_eq!(rendered.matches("if (").count(), 1, "{rendered}");
         assert_eq!(rendered.matches(" && ").count(), 1, "{rendered}");
         assert_eq!(rendered.matches("return result;").count(), 1, "{rendered}");
+    }
+
+    #[test]
+    fn attributed_nested_return_guard_unions_the_consumed_control_origins() {
+        let mut function = Function {
+            name: "attributed_bounded_return".into(),
+            entry_va: 0x1350,
+            body: vec![Stmt::If {
+                cond: Expr::Reg(reg("outer")),
+                then_body: vec![Stmt::If {
+                    cond: Expr::Reg(reg("inner")),
+                    then_body: vec![Stmt::Return {
+                        value: Some(Expr::Reg(reg("result"))),
+                    }
+                    .with_origins(OriginSet::one(0x1358))],
+                    else_body: None,
+                }
+                .with_origins(OriginSet::one(0x1354))],
+                else_body: None,
+            }
+            .with_origins(OriginSet::one(0x1350))],
+        };
+
+        super::collapse_nested_terminal_return_guards(&mut function);
+
+        assert_eq!(
+            function.body[0]
+                .origins()
+                .expect("combined guard origins")
+                .addresses(),
+            &[0x1350, 0x1354]
+        );
+        let Stmt::If { then_body, .. } = function.body[0].semantic() else {
+            panic!("expected attributed combined guard")
+        };
+        assert_eq!(
+            then_body[0].origins().expect("return origin").addresses(),
+            &[0x1358]
+        );
     }
 
     #[test]
@@ -1111,6 +1522,64 @@ mod tests {
         assert!(rendered.contains("work = 1;"), "{rendered}");
     }
 
+    #[test]
+    fn attributed_matching_returns_preserve_guard_and_both_terminal_origins() {
+        let result = Expr::Reg(reg("result"));
+        let mut function = Function {
+            name: "attributed_shared_terminal".into(),
+            entry_va: 0x1370,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Eq,
+                        lhs: Box::new(Expr::Reg(reg("pointer"))),
+                        rhs: Box::new(Expr::Const(0)),
+                    },
+                    then_body: vec![Stmt::Return {
+                        value: Some(result.clone()),
+                    }
+                    .with_origins(OriginSet::one(0x1374))],
+                    else_body: None,
+                }
+                .with_origins(OriginSet::one(0x1370)),
+                Stmt::Assign {
+                    dst: reg("work"),
+                    src: Expr::Const(1),
+                }
+                .with_origins(OriginSet::one(0x1378)),
+                Stmt::Return {
+                    value: Some(result),
+                }
+                .with_origins(OriginSet::one(0x137c)),
+            ],
+        };
+
+        super::collapse_matching_terminal_return_guard(&mut function);
+
+        assert_eq!(function.body.len(), 2);
+        assert_eq!(
+            function.body[0]
+                .origins()
+                .expect("guard origin")
+                .addresses(),
+            &[0x1370]
+        );
+        assert_eq!(
+            function.body[1]
+                .origins()
+                .expect("shared terminal origins")
+                .addresses(),
+            &[0x1374, 0x137c]
+        );
+        let Stmt::If { then_body, .. } = function.body[0].semantic() else {
+            panic!("expected attributed continuation guard")
+        };
+        assert_eq!(
+            then_body[0].origins().expect("work origin").addresses(),
+            &[0x1378]
+        );
+    }
+
     /// Machine-epilogue comments are renderer metadata rather than control
     /// flow.  They must not prevent two paths reaching the same return from
     /// being represented by one shared source-level terminal.
@@ -1169,6 +1638,71 @@ mod tests {
         assert_eq!(rendered.matches("if (").count(), 1, "{rendered}");
         assert!(rendered.contains(" || "), "{rendered}");
         assert!(rendered.contains("return 0x82d0;"), "{rendered}");
+    }
+
+    #[test]
+    fn attributed_terminal_pair_merges_guard_and_duplicate_tail_origins() {
+        let shared = Stmt::Return {
+            value: Some(Expr::Const(-7)),
+        };
+        let mut function = Function {
+            name: "attributed_terminal_pair".into(),
+            entry_va: 0x4080,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Eq,
+                        lhs: Box::new(Expr::Reg(reg("length"))),
+                        rhs: Box::new(Expr::Const(0)),
+                    },
+                    then_body: vec![shared.clone().with_origins(OriginSet::one(0x4084))],
+                    else_body: None,
+                }
+                .with_origins(OriginSet::one(0x4080)),
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Ule,
+                        lhs: Box::new(Expr::Reg(reg("length"))),
+                        rhs: Box::new(Expr::Const(21)),
+                    },
+                    then_body: vec![Stmt::Return {
+                        value: Some(Expr::Const(42)),
+                    }
+                    .with_origins(OriginSet::one(0x408c))],
+                    else_body: None,
+                }
+                .with_origins(OriginSet::one(0x4088)),
+                shared.with_origins(OriginSet::one(0x4090)),
+            ],
+        };
+
+        super::collapse_matching_terminal_return_guard(&mut function);
+
+        assert_eq!(function.body.len(), 2);
+        assert_eq!(
+            function.body[0]
+                .origins()
+                .expect("combined guard origins")
+                .addresses(),
+            &[0x4080, 0x4088]
+        );
+        let Stmt::If { then_body, .. } = function.body[0].semantic() else {
+            panic!("expected attributed combined terminal guard")
+        };
+        assert_eq!(
+            then_body[0]
+                .origins()
+                .expect("merged shared return origins")
+                .addresses(),
+            &[0x4084, 0x4090]
+        );
+        assert_eq!(
+            function.body[1]
+                .origins()
+                .expect("success return origin")
+                .addresses(),
+            &[0x408c]
+        );
     }
 
     #[test]
@@ -1315,6 +1849,63 @@ mod tests {
     }
 
     #[test]
+    fn attributed_duplicate_copy_and_nested_guards_preserve_separate_origins() {
+        let copy = Stmt::Assign {
+            dst: reg("top"),
+            src: Expr::Reg(reg("previous_top")),
+        };
+        let mut function = Function {
+            name: "attributed_bounded_descent".into(),
+            entry_va: 0x1390,
+            body: vec![
+                copy.clone().with_origins(OriginSet::one(0x1390)),
+                Stmt::If {
+                    cond: Expr::Reg(reg("valid_node")),
+                    then_body: vec![
+                        copy.with_origins(OriginSet::one(0x1394)),
+                        Stmt::If {
+                            cond: Expr::Reg(reg("stack_has_room")),
+                            then_body: vec![Stmt::Assign {
+                                dst: reg("descended"),
+                                src: Expr::Const(1),
+                            }
+                            .with_origins(OriginSet::one(0x139c))],
+                            else_body: None,
+                        }
+                        .with_origins(OriginSet::one(0x1398)),
+                    ],
+                    else_body: None,
+                }
+                .with_origins(OriginSet::one(0x138c)),
+            ],
+        };
+
+        super::collapse_redundant_copy_nested_guards(&mut function);
+
+        assert_eq!(
+            function.body[0]
+                .origins()
+                .expect("merged copy origins")
+                .addresses(),
+            &[0x1390, 0x1394]
+        );
+        assert_eq!(
+            function.body[1]
+                .origins()
+                .expect("combined guard origins")
+                .addresses(),
+            &[0x138c, 0x1398]
+        );
+        let Stmt::If { then_body, .. } = function.body[1].semantic() else {
+            panic!("expected attributed combined guard")
+        };
+        assert_eq!(
+            then_body[0].origins().expect("update origin").addresses(),
+            &[0x139c]
+        );
+    }
+
+    #[test]
     fn changed_or_memory_backed_copy_blocks_nested_conjunction() {
         let mut function = Function {
             name: "mutable_copy".into(),
@@ -1380,5 +1971,195 @@ mod tests {
         assert_eq!(rendered.matches("if (").count(), 2, "{rendered}");
         assert!(!rendered.contains(" || "), "{rendered}");
         assert_eq!(rendered.matches("break;").count(), 2, "{rendered}");
+    }
+
+    #[test]
+    fn an_exact_contradictory_leading_nested_guard_is_removed() {
+        let outer = Expr::Cmp {
+            op: CmpOp::Ule,
+            lhs: Box::new(Expr::Reg(reg("op"))),
+            rhs: Box::new(Expr::Const(5)),
+        };
+        let inner = super::negate_cmp_expr(outer.clone());
+        let mut function = Function {
+            name: "guarded_table".into(),
+            entry_va: 0x1500,
+            body: vec![Stmt::If {
+                cond: outer,
+                then_body: vec![
+                    Stmt::Comment("compiler duplicate compare".into()),
+                    Stmt::If {
+                        cond: inner,
+                        then_body: vec![Stmt::Return {
+                            value: Some(Expr::Const(30)),
+                        }],
+                        else_body: None,
+                    },
+                    Stmt::IndirectGoto {
+                        target: Expr::Reg(reg("table_target")),
+                    },
+                ],
+                else_body: None,
+            }],
+        };
+
+        super::prune_contradictory_nested_guards(&mut function);
+
+        let Stmt::If { then_body, .. } = &function.body[0] else {
+            panic!("expected outer guard")
+        };
+        assert!(
+            !then_body
+                .iter()
+                .any(|statement| matches!(statement, Stmt::If { .. })),
+            "the impossible branch must be absent: {function:#?}"
+        );
+        assert!(
+            then_body
+                .iter()
+                .any(|statement| matches!(statement, Stmt::IndirectGoto { .. })),
+            "the live table dispatch must remain"
+        );
+    }
+
+    #[test]
+    fn attributed_contradictory_guard_is_pruned_without_losing_outer_origin() {
+        let outer = Expr::Cmp {
+            op: CmpOp::Ule,
+            lhs: Box::new(Expr::Reg(reg("op"))),
+            rhs: Box::new(Expr::Const(5)),
+        };
+        let inner = super::negate_cmp_expr(outer.clone());
+        let mut function = Function {
+            name: "attributed_guarded_table".into(),
+            entry_va: 0x1500,
+            body: vec![Stmt::If {
+                cond: outer,
+                then_body: vec![
+                    Stmt::Comment("compiler duplicate compare".into())
+                        .with_origins(OriginSet::one(0x1504)),
+                    Stmt::If {
+                        cond: inner,
+                        then_body: vec![Stmt::Return {
+                            value: Some(Expr::Const(30)),
+                        }],
+                        else_body: None,
+                    }
+                    .with_origins(OriginSet::one(0x1508)),
+                    Stmt::IndirectGoto {
+                        target: Expr::Reg(reg("table_target")),
+                    }
+                    .with_origins(OriginSet::one(0x150c)),
+                ],
+                else_body: None,
+            }
+            .with_origins(OriginSet::one(0x1500))],
+        };
+
+        super::prune_contradictory_nested_guards(&mut function);
+
+        assert_eq!(
+            function.body[0]
+                .origins()
+                .expect("outer origin")
+                .addresses(),
+            &[0x1500]
+        );
+        let Stmt::If { then_body, .. } = function.body[0].semantic() else {
+            panic!("expected attributed outer guard")
+        };
+        assert!(
+            !then_body
+                .iter()
+                .any(|statement| matches!(statement.semantic(), Stmt::If { .. })),
+            "the attributed impossible branch must be absent: {function:#?}"
+        );
+        assert!(then_body
+            .iter()
+            .any(|statement| matches!(statement.semantic(), Stmt::IndirectGoto { .. })));
+    }
+
+    #[test]
+    fn target_counting_and_transfer_detection_see_through_origins() {
+        let body = vec![Stmt::If {
+            cond: Expr::Reg(reg("guard")),
+            then_body: vec![
+                Stmt::Label(0x1600).with_origins(OriginSet::one(0x1600)),
+                Stmt::Goto { target: 0x1600 }.with_origins(OriginSet::one(0x1604)),
+            ],
+            else_body: None,
+        }
+        .with_origins(OriginSet::one(0x1500))];
+        let mut labels = std::collections::HashMap::new();
+        let mut gotos = std::collections::HashMap::new();
+
+        super::count_targets(&body, &mut labels, &mut gotos);
+
+        assert_eq!(labels.get(&0x1600), Some(&1));
+        assert_eq!(gotos.get(&0x1600), Some(&1));
+        assert!(super::contains_unstructured_transfer(&body));
+    }
+
+    #[test]
+    fn changed_width_memory_or_intervening_work_blocks_contradiction_pruning() {
+        let outer = Expr::Cmp {
+            op: CmpOp::Ule,
+            lhs: Box::new(Expr::Reg(reg("op"))),
+            rhs: Box::new(Expr::Const(5)),
+        };
+        let candidates = [
+            (
+                Expr::Cmp {
+                    op: CmpOp::Ult,
+                    lhs: Box::new(Expr::Const(5)),
+                    rhs: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 4,
+                        expr: Box::new(Expr::Reg(reg("op"))),
+                    }),
+                },
+                Vec::new(),
+            ),
+            (
+                Expr::Cmp {
+                    op: CmpOp::Ult,
+                    lhs: Box::new(Expr::Const(5)),
+                    rhs: Box::new(Expr::Deref {
+                        addr: Box::new(Expr::Reg(reg("op"))),
+                        size: 8,
+                    }),
+                },
+                Vec::new(),
+            ),
+            (
+                super::negate_cmp_expr(outer.clone()),
+                vec![Stmt::Assign {
+                    dst: reg("op"),
+                    src: Expr::Const(0),
+                }],
+            ),
+        ];
+
+        for (inner, mut prefix) in candidates {
+            prefix.push(Stmt::If {
+                cond: inner,
+                then_body: vec![Stmt::Return { value: None }],
+                else_body: None,
+            });
+            let mut function = Function {
+                name: "decline_guard".into(),
+                entry_va: 0x1500,
+                body: vec![Stmt::If {
+                    cond: outer.clone(),
+                    then_body: prefix,
+                    else_body: None,
+                }],
+            };
+            let original = function.clone();
+
+            super::prune_contradictory_nested_guards(&mut function);
+
+            assert_eq!(function, original);
+        }
     }
 }

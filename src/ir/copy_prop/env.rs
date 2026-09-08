@@ -37,6 +37,7 @@ use super::reads::visit_expr_reads;
 /// value can change or their operands be clobbered before the use.
 pub(super) fn is_pure_copyable(e: &Expr) -> bool {
     match e {
+        Expr::Origin { expr, .. } => is_pure_copyable(expr),
         Expr::Reg(_)
         | Expr::Const(_)
         | Expr::Addr(_)
@@ -66,6 +67,7 @@ pub(super) fn is_repeatable_versioned_flag_expr(dst: &VReg, expression: &Expr) -
     }
     fn pure(expression: &Expr) -> bool {
         match expression {
+            Expr::Origin { expr, .. } => pure(expr),
             Expr::Reg(_) | Expr::Const(_) => true,
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => pure(lhs) && pure(rhs),
             Expr::Un { src, .. }
@@ -245,14 +247,16 @@ pub(super) fn invalidate(copies: &mut Copies, written: &VReg) {
 fn collect_written_regs(body: &[Stmt], written: &mut RegSet) {
     for statement in body {
         match statement {
+            Stmt::Origin { stmt, .. } => {
+                collect_written_regs(std::slice::from_ref(stmt.as_ref()), written)
+            }
             Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => {
                 written.insert(dst.clone());
             }
-            Stmt::Store {
-                addr: Expr::Reg(dst),
-                ..
-            } => {
-                written.insert(dst.clone());
+            Stmt::Store { addr, .. } => {
+                if let Expr::Reg(dst) = addr.semantic() {
+                    written.insert(dst.clone());
+                }
             }
             Stmt::Call { dst: Some(dst), .. } => {
                 written.insert(dst.clone());
@@ -291,8 +295,7 @@ fn collect_written_regs(body: &[Stmt], written: &mut RegSet) {
                     collect_written_regs(&catch.body, written);
                 }
             }
-            Stmt::Store { .. }
-            | Stmt::Call { dst: None, .. }
+            Stmt::Call { dst: None, .. }
             | Stmt::Return { .. }
             | Stmt::Push { .. }
             | Stmt::IndirectGoto { .. }
@@ -317,5 +320,39 @@ pub(super) fn copies_stable_across_loop(copies: &Copies, body: &[Stmt]) -> Copie
 }
 
 pub(super) fn is_self_ref(dst: &VReg, src: &Expr) -> bool {
-    matches!(src, Expr::Reg(r) if r == dst)
+    matches!(src.semantic(), Expr::Reg(r) if r == dst)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::ast::OriginSet;
+
+    #[test]
+    fn attributed_loop_store_target_invalidates_preloop_copy() {
+        let written = VReg::phys("local_0");
+        let alias = VReg::phys("var0");
+        let mut copies = Copies::new();
+        copies.insert(alias.clone(), Expr::Reg(written.clone()));
+        let loop_body = vec![Stmt::Store {
+            addr: Expr::Reg(written).with_origins(OriginSet::one(0x1010)),
+            src: Expr::Const(1),
+            size: 4,
+        }];
+
+        let stable = copies_stable_across_loop(&copies, &loop_body);
+
+        assert!(
+            stable.get(&alias).is_none(),
+            "a loop write must invalidate copies of its entry value"
+        );
+    }
+
+    #[test]
+    fn attributed_self_copy_is_still_a_self_reference() {
+        let destination = VReg::phys("var0");
+        let source = Expr::Reg(destination.clone()).with_origins(OriginSet::one(0x1020));
+
+        assert!(is_self_ref(&destination, &source));
+    }
 }

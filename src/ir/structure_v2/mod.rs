@@ -14,6 +14,9 @@ mod region;
 pub(crate) mod render;
 mod verify;
 
+pub use crate::ir::structure::{
+    SwitchCaseEvidence, SwitchDefaultEvidence, SwitchEvidence, SwitchEvidenceProvenance,
+};
 pub use cleanup::{
     DuplicatedTail, MAX_TAIL_DUPLICATION_BLOCKS, MAX_TAIL_DUPLICATION_INSTRUCTIONS,
     MAX_TOTAL_TAIL_DUPLICATION_INSTRUCTIONS,
@@ -25,10 +28,7 @@ pub use recover::{
     LocalExitRegion, LocalLabelRegion, LoopExitRegion, StructuredRegion, StructuredTree,
     SwitchCaseRegion, SwitchDefaultRegion,
 };
-pub use region::{
-    BlockRegion, RegionCandidate, SwitchCaseEvidence, SwitchDefaultEvidence, SwitchEvidence,
-    Terminal, Transfer,
-};
+pub use region::{BlockRegion, RegionCandidate, Terminal, Transfer};
 pub use verify::{CandidateError, TreeError};
 
 use crate::ir::ssa::SsaInfo;
@@ -212,6 +212,49 @@ mod tests {
                 block(0x1400, Op::Return, vec![]),
             ],
         }
+    }
+
+    #[test]
+    fn incomplete_switch_evidence_declines_before_tree_recovery() {
+        let function = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                block(
+                    0x1000,
+                    Op::IndirectJump {
+                        target: Value::Reg(VReg::phys("target")),
+                        index: Some(Value::Reg(VReg::phys("index"))),
+                    },
+                    vec![0x1100, 0x1200, 0x1300],
+                ),
+                block(0x1100, Op::Return, vec![]),
+                block(0x1200, Op::Return, vec![]),
+                block(0x1300, Op::Return, vec![]),
+            ],
+        };
+        let ssa = compute_ssa(&function);
+        let cfg = crate::ir::structure::Cfg::from(&function, &ssa);
+        let loops = LoopForest::from_cfg(&cfg);
+        let locals = LocalRegions::from_cfg(&cfg, &loops);
+        let predicates = cfg.branch_predicates();
+        let conditions =
+            ConditionDag::from_cfg(&cfg, &loops, &locals, &predicates).expect("condition facts");
+        let duplicated_tails = cleanup::plan_tail_duplication(&cfg, &locals);
+        let mut candidate = RegionCandidate::from_cfg(&cfg, &loops, &locals).expect("candidate");
+        candidate.switches[0].complete = false;
+
+        assert!(
+            recover::recover_tree(
+                &cfg,
+                &conditions,
+                &candidate,
+                &loops,
+                &locals,
+                &duplicated_tails,
+            )
+            .is_none(),
+            "tree recovery must decline before incomplete evidence reaches rendering"
+        );
     }
 
     fn shared_return_cfg(return_instruction_count: usize) -> LlirFunction {
@@ -1018,9 +1061,13 @@ mod tests {
                 .collect::<Vec<_>>(),
             (0..8).collect::<Vec<_>>()
         );
-        assert_eq!(candidate.switch_defaults().len(), 1, "{candidate:#?}");
+        assert_eq!(candidate.switch_defaults().count(), 1, "{candidate:#?}");
         assert_eq!(
-            candidate.switch_defaults()[0].dispatch,
+            candidate
+                .switch_defaults()
+                .next()
+                .expect("typed default")
+                .dispatch,
             Some(dispatch.dispatch)
         );
         let tree = report
@@ -1165,6 +1212,19 @@ mod tests {
             .iter()
             .find(|switch| lifted.blocks[switch.dispatch].start_va == 0x123c)
             .unwrap_or_else(|| panic!("0x123c is a typed dispatch: {candidate:#?}"));
+        assert!(dispatch.complete, "{dispatch:#?}");
+        assert_eq!(dispatch.provenance, SwitchEvidenceProvenance::TypedCfgEdges);
+        let default = dispatch
+            .default
+            .as_ref()
+            .unwrap_or_else(|| panic!("fixture has one typed range default: {dispatch:#?}"));
+        assert_eq!(default.dispatch, Some(dispatch.dispatch));
+        assert!(
+            lifted.blocks[default.guard]
+                .succs
+                .contains(&lifted.blocks[default.target].start_va),
+            "default evidence must name a real guard edge: {default:#?}"
+        );
         assert_eq!(
             dispatch
                 .cases
@@ -1173,6 +1233,16 @@ mod tests {
                 .collect::<Vec<_>>(),
             (0..7).collect::<Vec<_>>()
         );
+        assert_eq!(
+            production_labels,
+            dispatch
+                .cases
+                .iter()
+                .map(|case| case.values.clone())
+                .collect::<Vec<_>>(),
+            "production and v2 must consume the same ordered case facts"
+        );
+        assert_eq!(production_default.is_some(), dispatch.default.is_some());
         let pseudocode = report
             .raw_pseudocode
             .as_deref()
@@ -1186,6 +1256,68 @@ mod tests {
         );
         assert_prepared_c(&report);
         assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
+
+        fn delete_proven_default(region: &mut StructuredRegion) -> Option<usize> {
+            match region {
+                StructuredRegion::Switch {
+                    dispatch,
+                    cases,
+                    default,
+                    ..
+                } => {
+                    if default.take().is_some() {
+                        return Some(*dispatch);
+                    }
+                    cases
+                        .iter_mut()
+                        .find_map(|case| delete_proven_default(&mut case.region))
+                }
+                StructuredRegion::Sequence(parts) => {
+                    parts.iter_mut().find_map(delete_proven_default)
+                }
+                StructuredRegion::If {
+                    then_region,
+                    else_region,
+                    ..
+                } => delete_proven_default(then_region)
+                    .or_else(|| else_region.as_deref_mut().and_then(delete_proven_default)),
+                StructuredRegion::Loop { body, exits, .. } => {
+                    delete_proven_default(body).or_else(|| {
+                        exits
+                            .iter_mut()
+                            .find_map(|exit| delete_proven_default(&mut exit.region))
+                    })
+                }
+                StructuredRegion::Empty
+                | StructuredRegion::Block(_)
+                | StructuredRegion::Return { .. }
+                | StructuredRegion::DuplicatedReturn { .. }
+                | StructuredRegion::Break { .. }
+                | StructuredRegion::Continue { .. }
+                | StructuredRegion::LocalGoto { .. }
+                | StructuredRegion::SharedGoto { .. } => None,
+            }
+        }
+
+        let mut forged = report.tree.clone().expect("fixture has verified tree");
+        let forged_dispatch = delete_proven_default(&mut forged.root)
+            .expect("fixture tree contains its proven formal default");
+        let cfg = crate::ir::structure::Cfg::from(&lifted, &ssa);
+        let locals = LocalRegions::from_cfg(&cfg, &report.loops);
+        let errors = verify::verify_tree(
+            report.candidate.as_ref().expect("verified candidate"),
+            report.conditions.as_ref().expect("condition facts"),
+            &report.loops,
+            &locals,
+            &report.duplicated_tails,
+            &forged,
+        );
+        assert!(
+            errors.contains(&TreeError::SwitchInvalid {
+                dispatch: forged_dispatch,
+            }),
+            "removing a proven default must invalidate the tree: {errors:#?}"
+        );
     }
 
     #[test]

@@ -36,12 +36,12 @@
 //! * `vreg_walk` -- the order-free mutable walk over an operation's registers.
 //! * `coalesce` -- merging the phi copies liveness and width prove removable.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::ir::call_args::CallConv;
-use crate::ir::ssa::SsaValue;
+use crate::ir::ssa::{ssa_def_width, SsaValue};
 use crate::ir::types::{LlirFunction, LlirInstr, Op, VReg, Value};
-use crate::ir::use_def::{def_ref, for_each_use, use_count, InstrAddr};
+use crate::ir::use_def::{def_mut, def_ref, for_each_def, for_each_use, use_count, InstrAddr};
 
 mod architectural_reads;
 mod coalesce;
@@ -53,12 +53,201 @@ mod vreg_walk;
 
 pub use coalesce::SourceRegisterLifetime;
 pub(crate) use keep_bare::{def_reaches_return, def_reaches_unresolved_return};
-pub use parameter_slots::live_in_arg_slots_llir;
+pub use parameter_slots::{live_in_arg_slots_llir, live_in_arg_slots_llir_with_identities};
 pub(crate) use vreg_walk::for_each_vreg_mut;
 
 use coalesce::{coalesce_phi_copies_with_definition_sites, DefinitionWidthsBySite};
 use tagging::{tag_op, tag_phys, VnCtx};
 use temp_remap::build_temp_remap;
+
+/// Exact SSA identities carried beside value-numbered LLIR and its lowered AST.
+///
+/// A rendered variable may represent several non-interfering SSA values after
+/// phi-copy coalescing. Callers therefore receive an exact identity only when
+/// the numbered name has one candidate; ambiguity stays explicit rather than
+/// being guessed from a `register#version` display spelling.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ValueIdentities {
+    by_numbered_value: HashMap<VReg, BTreeSet<SsaValue>>,
+    parameter_slots_by_value: HashMap<VReg, BTreeSet<usize>>,
+    result_roles: HashSet<VReg>,
+    machine_saved_slots: HashSet<VReg>,
+}
+
+impl ValueIdentities {
+    /// Return the sole SSA identity represented by `value`, if unambiguous.
+    pub fn exact(&self, value: &VReg) -> Option<&SsaValue> {
+        let candidates = self.by_numbered_value.get(value)?;
+        (candidates.len() == 1)
+            .then(|| candidates.first())
+            .flatten()
+    }
+
+    /// Return every SSA identity represented by a coalesced numbered value.
+    pub fn candidates(&self, value: &VReg) -> Option<&BTreeSet<SsaValue>> {
+        self.by_numbered_value.get(value)
+    }
+
+    /// Return the authoritative source-parameter slot represented by `value`.
+    pub(crate) fn parameter_slot(&self, value: &VReg) -> Option<usize> {
+        let slots = self.parameter_slots_by_value.get(value)?;
+        (slots.len() == 1).then(|| slots.first().copied()).flatten()
+    }
+
+    /// Whether `value` carries the pipeline-owned source result role.
+    pub(crate) fn is_result_role(&self, value: &VReg) -> bool {
+        self.result_roles.contains(value)
+    }
+
+    /// Whether stack promotion proved this object stores ABI entry state.
+    pub(crate) fn is_machine_saved_slot(&self, value: &VReg) -> bool {
+        self.machine_saved_slots.contains(value)
+    }
+
+    /// Publish machine-save storage identities discovered during promotion.
+    pub(crate) fn attach_machine_saved_slots(&mut self, slots: &HashSet<String>) {
+        self.machine_saved_slots
+            .extend(slots.iter().cloned().map(VReg::phys));
+    }
+
+    pub(crate) fn record(&mut self, numbered: VReg, identity: SsaValue) {
+        self.by_numbered_value
+            .entry(numbered)
+            .or_default()
+            .insert(identity);
+    }
+
+    /// Attach ABI parameter slots to exact version-zero values.
+    fn attach_abi_parameter_slots(&mut self, cc: CallConv, live_slots: &HashSet<usize>) {
+        for (numbered, candidates) in &self.by_numbered_value {
+            let slots = candidates
+                .iter()
+                .filter(|identity| identity.version == 0)
+                .filter_map(|identity| {
+                    identity
+                        .canonical_physical_base()
+                        .and_then(|name| crate::ir::abi::argument_slot_of(cc, name))
+                })
+                .filter(|slot| live_slots.contains(slot))
+                .collect::<BTreeSet<_>>();
+            if !slots.is_empty() {
+                self.parameter_slots_by_value
+                    .entry(numbered.clone())
+                    .or_default()
+                    .extend(slots);
+            }
+        }
+    }
+
+    /// Clone this sidecar into the AST's presentation-name key space.
+    ///
+    /// `aliases` is the exact raw-name to role-name map returned by naming.
+    /// The original keys remain available because later type projection still
+    /// consumes storage spellings. Multiple raw values mapped to one role are
+    /// unioned, preserving explicit ambiguity rather than choosing one.
+    pub(crate) fn with_role_aliases(&self, aliases: &HashMap<String, String>) -> Self {
+        let mut projected = self.clone();
+        for (value, identities) in &self.by_numbered_value {
+            let VReg::Phys(storage) = value else {
+                continue;
+            };
+            let Some(role) = aliases.get(storage) else {
+                continue;
+            };
+            projected
+                .by_numbered_value
+                .entry(VReg::Phys(role.clone()))
+                .or_default()
+                .extend(identities.iter().cloned());
+            if role == "ret" {
+                projected.result_roles.insert(VReg::Phys(role.clone()));
+            }
+        }
+        for (value, slots) in &self.parameter_slots_by_value {
+            let VReg::Phys(storage) = value else {
+                continue;
+            };
+            let Some(role) = aliases.get(storage) else {
+                continue;
+            };
+            projected
+                .parameter_slots_by_value
+                .entry(VReg::Phys(role.clone()))
+                .or_default()
+                .extend(slots.iter().copied());
+        }
+        projected
+    }
+
+    /// Project identities and attach pipeline-owned source-parameter slots.
+    pub(crate) fn with_role_aliases_and_parameter_slots(
+        &self,
+        aliases: &HashMap<String, String>,
+        parameter_slots: &HashSet<usize>,
+    ) -> Self {
+        self.with_role_aliases(aliases)
+            .with_parameter_slots(parameter_slots)
+    }
+
+    /// Attach pipeline-owned stack-parameter roles without parsing a name.
+    pub(crate) fn with_parameter_slots(&self, parameter_slots: &HashSet<usize>) -> Self {
+        let mut projected = self.clone();
+        for slot in parameter_slots {
+            projected
+                .parameter_slots_by_value
+                .entry(VReg::Phys(format!("arg{slot}")))
+                .or_default()
+                .insert(*slot);
+        }
+        projected
+    }
+
+    pub(crate) fn apply_renames(&mut self, renames: &HashMap<VReg, VReg>) {
+        if renames.is_empty() {
+            return;
+        }
+        let previous = std::mem::take(&mut self.by_numbered_value);
+        for (value, identities) in previous {
+            let numbered = renames.get(&value).cloned().unwrap_or(value);
+            self.by_numbered_value
+                .entry(numbered)
+                .or_default()
+                .extend(identities);
+        }
+        let previous = std::mem::take(&mut self.parameter_slots_by_value);
+        for (value, slots) in previous {
+            let numbered = renames.get(&value).cloned().unwrap_or(value);
+            self.parameter_slots_by_value
+                .entry(numbered)
+                .or_default()
+                .extend(slots);
+        }
+        let previous = std::mem::take(&mut self.machine_saved_slots);
+        self.machine_saved_slots.extend(
+            previous
+                .into_iter()
+                .map(|value| renames.get(&value).cloned().unwrap_or(value)),
+        );
+        let previous = std::mem::take(&mut self.result_roles);
+        for value in previous {
+            self.result_roles
+                .insert(renames.get(&value).cloned().unwrap_or(value));
+        }
+    }
+
+    /// Move identity candidates through an AST presentation-name rewrite.
+    ///
+    /// Naming owns physical role spellings only. Converting the exact map here
+    /// keeps that string boundary out of semantic consumers while preserving
+    /// [`Self::apply_renames`]'s explicit collision/ambiguity behavior.
+    pub(crate) fn apply_role_renames(&mut self, renames: &HashMap<String, String>) {
+        let renames = renames
+            .iter()
+            .map(|(from, to)| (VReg::Phys(from.clone()), VReg::Phys(to.clone())))
+            .collect();
+        self.apply_renames(&renames);
+    }
+}
 
 #[cfg(test)]
 use coalesce::{coalesce_phi_copies, coalesce_phi_copies_with_lifetimes};
@@ -158,6 +347,24 @@ pub fn value_number_with_parameter_slots_and_lifetimes(
     cc: CallConv,
     source_lifetimes: &[SourceRegisterLifetime],
 ) -> (LlirFunction, HashMap<VReg, u8>, HashSet<usize>) {
+    let (numbered, widths, slots, _) =
+        value_number_with_parameter_slots_lifetimes_and_identities(lf, ssa, cc, source_lifetimes);
+    (numbered, widths, slots)
+}
+
+/// Value-number while retaining opaque SSA identities for downstream AST
+/// consumers.
+pub fn value_number_with_parameter_slots_lifetimes_and_identities(
+    lf: &LlirFunction,
+    ssa: &crate::ir::ssa::SsaInfo,
+    cc: CallConv,
+    source_lifetimes: &[SourceRegisterLifetime],
+) -> (
+    LlirFunction,
+    HashMap<VReg, u8>,
+    HashSet<usize>,
+    ValueIdentities,
+) {
     let keep = keep_bare::definitions(lf, ssa, cc);
     let ctx = VnCtx::new(lf, keep, build_temp_remap(lf, ssa));
 
@@ -165,8 +372,10 @@ pub fn value_number_with_parameter_slots_and_lifetimes(
     let mut definition_widths = HashMap::new();
     let mut definition_widths_by_site = DefinitionWidthsBySite::new();
     let mut definition_widths_by_value = DefinitionWidthsByValue::new();
+    let mut identities = ValueIdentities::default();
     // One buffer for every instruction's use versions. The per-instruction
     // `Vec` was a heap allocation for a list that is normally one or two long.
+    let mut def_versions: Vec<u32> = Vec::new();
     let mut use_values: Vec<Option<SsaValue>> = Vec::new();
     for (bi, block) in out.blocks.iter_mut().enumerate() {
         for (ii, ins) in block.instrs.iter_mut().enumerate() {
@@ -175,20 +384,70 @@ pub fn value_number_with_parameter_slots_and_lifetimes(
                 instr_idx: ii,
             };
             // Read out of the indexed SSA tables rather than the
-            // address-keyed maps: same answer, no hashing. See
-            // `SsaInfo::def_version`.
-            let def_ver = ssa.def_version(lf, addr);
+            // address-keyed maps: same answer, no hashing. Keep the base as
+            // well as the version so target-qualified aliases stay coherent.
+            def_versions.clear();
+            def_versions.extend((0..ssa_def_width(&ins.op)).map(|output_index| {
+                ssa.def_value_ref_at(lf, addr, output_index)
+                    .map_or(0, |value| value.version)
+            }));
             // Only the use ARITY is wanted here; `def_uses` would allocate a
             // vector of cloned register spellings to report it.
             use_values.clear();
             use_values.extend((0..use_count(&ins.op)).map(|k| ssa.use_value(lf, addr, k)));
-            tag_op(&mut ins.op, def_ver, &use_values, &ctx);
-            if let (Some(dst), Some(width)) = (
-                def_ref(&ins.op),
-                operation_definition_width(&lf.blocks[bi].instrs[ii].op),
-            ) {
+            // SSA definitions and uses must agree on their target-qualified
+            // base. The ordinary tagger already handles x86/AArch64 view
+            // parents; adopt the side-car base only when that compatibility
+            // path cannot express the target alias (currently ARM32 fp/r11).
+            if matches!(cc, CallConv::Arm | CallConv::ArmHardFloat) {
+                if let (
+                    Some(VReg::Phys(definition)),
+                    Some(SsaValue {
+                        base: VReg::Phys(canonical),
+                        ..
+                    }),
+                ) = (def_mut(&mut ins.op), ssa.def_value_ref(lf, addr))
+                {
+                    let compatibility = crate::ir::ssa::parent64(definition).unwrap_or(definition);
+                    if compatibility != canonical {
+                        *definition = canonical.clone();
+                    }
+                }
+            }
+            tag_op(&mut ins.op, &def_versions, &use_values, &ctx);
+            let mut output_index = 0usize;
+            for_each_def(&ins.op, |numbered| {
+                if let Some(identity) = ssa.def_value_ref_at(lf, addr, output_index) {
+                    identities.record(numbered.clone(), identity.clone());
+                }
+                output_index += 1;
+            });
+            let mut use_index = 0usize;
+            for_each_use(&ins.op, |numbered| {
+                if let Some(Some(identity)) = use_values.get(use_index) {
+                    identities.record(numbered.clone(), identity.clone());
+                }
+                use_index += 1;
+            });
+            let raw_op = &lf.blocks[bi].instrs[ii].op;
+            if let (Op::Intrinsic { outs: numbered, .. }, Op::Intrinsic { outs: raw, .. }) =
+                (&ins.op, raw_op)
+            {
+                for (output_index, ((destination, _), (_, width))) in
+                    numbered.iter().zip(raw).enumerate()
+                {
+                    let width = width_bytes(*width);
+                    definition_widths.insert(destination.clone(), width);
+                    definition_widths_by_site.insert((addr, output_index), width);
+                    if let Some(value) = ssa.def_value_ref_at(lf, addr, output_index) {
+                        definition_widths_by_value.insert(value.clone(), width);
+                    }
+                }
+            } else if let (Some(dst), Some(width)) =
+                (def_ref(&ins.op), operation_definition_width(raw_op))
+            {
                 definition_widths.insert(dst.clone(), width);
-                definition_widths_by_site.insert(addr, width);
+                definition_widths_by_site.insert((addr, 0), width);
                 if let Some(value) = ssa.def_value_ref(lf, addr) {
                     definition_widths_by_value.insert(value.clone(), width);
                 }
@@ -202,9 +461,10 @@ pub fn value_number_with_parameter_slots_and_lifetimes(
         &ctx,
         &mut definition_widths,
         &definition_widths_by_value,
+        &mut identities,
     );
-    let parameter_slots = live_in_arg_slots_llir(&out, cc);
-    coalesce_phi_copies_with_definition_sites(
+    let parameter_slots = live_in_arg_slots_llir_with_identities(&out, cc, Some(&identities));
+    let renames = coalesce_phi_copies_with_definition_sites(
         &mut out,
         &phi_copies.pairs,
         &mut definition_widths,
@@ -212,7 +472,9 @@ pub fn value_number_with_parameter_slots_and_lifetimes(
         &phi_copies.incoming_widths,
         source_lifetimes,
     );
-    (out, definition_widths, parameter_slots)
+    identities.apply_renames(&renames);
+    identities.attach_abi_parameter_slots(cc, &parameter_slots);
+    (out, definition_widths, parameter_slots, identities)
 }
 
 /// Translate *out* of SSA: give every phi result an actual definition.
@@ -274,6 +536,7 @@ fn insert_phi_copies(
     ctx: &VnCtx,
     definition_widths: &mut HashMap<VReg, u8>,
     definition_widths_by_value: &DefinitionWidthsByValue,
+    identities: &mut ValueIdentities,
 ) -> PhiCopies {
     let mut created = PhiCopies::default();
     if ssa.phis.is_empty() {
@@ -324,6 +587,13 @@ fn insert_phi_copies(
     for phi in &ssa.phis {
         let mut dst = phi.base.clone();
         tag_phys(&mut dst, phi.dst_version, ctx);
+        identities.record(
+            dst.clone(),
+            SsaValue {
+                base: phi.base.clone(),
+                version: phi.dst_version,
+            },
+        );
         if !matches!(dst, VReg::Phys(_) | VReg::FlagValue { .. }) {
             // A temp phi would need the remap to agree across blocks, which
             // `build_temp_remap` does not guarantee, so leave it alone rather than
@@ -384,6 +654,13 @@ fn insert_phi_copies(
             }
             let mut src = phi.base.clone();
             tag_phys(&mut src, *ver, ctx);
+            identities.record(
+                src.clone(),
+                SsaValue {
+                    base: phi.base.clone(),
+                    version: *ver,
+                },
+            );
             if src == dst {
                 continue; // a version kept bare on both sides: `rax = rax`
             }
@@ -438,6 +715,229 @@ mod tests {
     use crate::ir::use_def::def_uses;
 
     #[test]
+    fn opaque_ssa_identity_survives_llir_to_ast_lowering() {
+        let lf = mk(vec![
+            Op::Assign {
+                dst: VReg::phys("rax"),
+                src: Value::Const(7),
+            },
+            Op::Assign {
+                dst: VReg::phys("rbx"),
+                src: Value::Reg(VReg::phys("rax")),
+            },
+        ]);
+        let ssa = compute_ssa(&lf);
+        let (numbered, _, _, identities) =
+            value_number_with_parameter_slots_lifetimes_and_identities(
+                &lf,
+                &ssa,
+                CallConv::SysVAmd64,
+                &[],
+            );
+        let ast = crate::ir::ast::lower(
+            &numbered,
+            &crate::ir::structure::Region::Block(0),
+            "identity",
+        );
+        let numbered_use = ast
+            .body
+            .iter()
+            .find_map(|statement| match statement.semantic() {
+                crate::ir::ast::Stmt::Assign {
+                    src: crate::ir::ast::Expr::Reg(value),
+                    ..
+                } => Some(value),
+                _ => None,
+            })
+            .expect("lowered AST keeps the numbered register occurrence");
+
+        assert_eq!(numbered_use, &VReg::phys("rax#1"));
+        assert_eq!(
+            identities.exact(numbered_use),
+            Some(&SsaValue {
+                base: VReg::phys("rax"),
+                version: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn coalesced_value_with_multiple_ssa_candidates_is_not_exact() {
+        let numbered = VReg::phys("rax#1");
+        let mut identities = ValueIdentities::default();
+        identities.record(
+            numbered.clone(),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 1,
+            },
+        );
+        identities.record(
+            numbered.clone(),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 2,
+            },
+        );
+
+        assert_eq!(identities.exact(&numbered), None);
+        assert_eq!(identities.candidates(&numbered).map(BTreeSet::len), Some(2));
+    }
+
+    #[test]
+    fn role_projection_preserves_original_keys_and_explicit_ambiguity() {
+        let first = SsaValue {
+            base: VReg::phys("rax"),
+            version: 1,
+        };
+        let second = SsaValue {
+            base: VReg::phys("rbx"),
+            version: 2,
+        };
+        let mut identities = ValueIdentities::default();
+        identities.record(VReg::phys("opaque-a"), first.clone());
+        identities.record(VReg::phys("opaque-b"), second.clone());
+        let aliases = HashMap::from([
+            ("opaque-a".to_string(), "var0".to_string()),
+            ("opaque-b".to_string(), "var0".to_string()),
+        ]);
+
+        let projected = identities.with_role_aliases(&aliases);
+
+        assert_eq!(projected.exact(&VReg::phys("opaque-a")), Some(&first));
+        assert_eq!(projected.exact(&VReg::phys("opaque-b")), Some(&second));
+        assert_eq!(
+            projected.candidates(&VReg::phys("var0")).map(BTreeSet::len),
+            Some(2)
+        );
+        assert_eq!(projected.exact(&VReg::phys("var0")), None);
+    }
+
+    #[test]
+    fn role_projection_records_parameter_slots_without_parsing_alias_spelling() {
+        let identities = ValueIdentities::default();
+        let aliases = HashMap::from([("stale".to_string(), "arg99".to_string())]);
+        let slots = std::collections::HashSet::from([0]);
+
+        let projected = identities.with_role_aliases_and_parameter_slots(&aliases, &slots);
+
+        assert_eq!(projected.parameter_slot(&VReg::phys("arg0")), Some(0));
+        assert_eq!(projected.parameter_slot(&VReg::phys("arg99")), None);
+    }
+
+    #[test]
+    fn stack_parameter_projection_records_only_owned_slots() {
+        let projected = ValueIdentities::default().with_parameter_slots(&HashSet::from([0, 2]));
+
+        assert_eq!(projected.parameter_slot(&VReg::phys("arg0")), Some(0));
+        assert_eq!(projected.parameter_slot(&VReg::phys("arg1")), None);
+        assert_eq!(projected.parameter_slot(&VReg::phys("arg2")), Some(2));
+        assert_eq!(projected.parameter_slot(&VReg::phys("arg99")), None);
+    }
+
+    #[test]
+    fn abi_parameter_slots_attach_only_to_live_version_zero_values() {
+        let function = mk(vec![
+            Op::Assign {
+                dst: VReg::phys("rbx"),
+                src: Value::Reg(VReg::phys("rdi")),
+            },
+            Op::Assign {
+                dst: VReg::phys("rdi"),
+                src: Value::Const(5),
+            },
+        ]);
+        let ssa = compute_ssa(&function);
+        let (_, _, live_slots, identities) =
+            value_number_with_parameter_slots_lifetimes_and_identities(
+                &function,
+                &ssa,
+                CallConv::SysVAmd64,
+                &[],
+            );
+
+        assert_eq!(live_slots, HashSet::from([0]));
+        assert_eq!(identities.parameter_slot(&VReg::phys("rdi")), Some(0));
+        assert_eq!(identities.parameter_slot(&VReg::phys("rdi#1")), None);
+        assert_eq!(identities.parameter_slot(&VReg::phys("rsi")), None);
+    }
+
+    #[test]
+    fn abi_parameter_slots_decline_a_noncanonical_identity_base() {
+        let mut identities = ValueIdentities::default();
+        identities.record(
+            VReg::phys("valid_entry"),
+            SsaValue {
+                base: VReg::phys("rdi"),
+                version: 0,
+            },
+        );
+        identities.record(
+            VReg::phys("malformed_entry"),
+            SsaValue {
+                base: VReg::phys("rdi#not_canonical"),
+                version: 0,
+            },
+        );
+
+        identities.attach_abi_parameter_slots(CallConv::SysVAmd64, &HashSet::from([0]));
+
+        assert_eq!(
+            identities.parameter_slot(&VReg::phys("valid_entry")),
+            Some(0)
+        );
+        assert_eq!(
+            identities.parameter_slot(&VReg::phys("malformed_entry")),
+            None
+        );
+    }
+
+    #[test]
+    fn presentation_renames_move_identity_candidates_to_the_rendered_name() {
+        let identity = SsaValue {
+            base: VReg::phys("rax"),
+            version: 1,
+        };
+        let mut identities = ValueIdentities::default();
+        identities.record(VReg::phys("local_8"), identity.clone());
+
+        identities.apply_role_renames(&HashMap::from([("local_8".to_string(), "sum".to_string())]));
+
+        assert!(identities.candidates(&VReg::phys("local_8")).is_none());
+        assert_eq!(identities.exact(&VReg::phys("sum")), Some(&identity));
+    }
+
+    #[test]
+    fn colliding_presentation_renames_preserve_explicit_identity_ambiguity() {
+        let mut identities = ValueIdentities::default();
+        identities.record(
+            VReg::phys("local_8"),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 1,
+            },
+        );
+        identities.record(
+            VReg::phys("local_c"),
+            SsaValue {
+                base: VReg::phys("rbx"),
+                version: 2,
+            },
+        );
+
+        identities.apply_role_renames(&HashMap::from([
+            ("local_8".to_string(), "sum".to_string()),
+            ("local_c".to_string(), "sum".to_string()),
+        ]));
+
+        assert_eq!(
+            identities.candidates(&VReg::phys("sum")).map(BTreeSet::len),
+            Some(2)
+        );
+        assert!(identities.exact(&VReg::phys("sum")).is_none());
+    }
+
+    #[test]
     fn target_aware_numbering_preserves_the_parent_identity_of_partial_reads() {
         use crate::core::binary::{Arch, Endianness, Format};
         use crate::ir::types::Width;
@@ -471,6 +971,46 @@ mod tests {
             }
             other => panic!("expected sign extension, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn target_aware_numbering_uses_the_arm32_parent_for_defs_and_uses() {
+        use crate::core::binary::{Arch, Endianness, Format};
+        use crate::ir::types::MemOp;
+        use crate::target::TargetSpec;
+
+        let lf = mk(vec![
+            Op::Assign {
+                dst: VReg::phys("fp"),
+                src: Value::Reg(VReg::phys("sp")),
+            },
+            Op::Load {
+                dst: VReg::phys("r0"),
+                addr: MemOp {
+                    base: Some(VReg::phys("r11")),
+                    index: None,
+                    scale: 0,
+                    disp: -16,
+                    size: 4,
+                    segment: None,
+                    endian: crate::ir::types::Endian::Little,
+                },
+            },
+        ]);
+        let target =
+            TargetSpec::from_image_metadata(Arch::ARM, Endianness::Little, Format::ELF, false);
+        let ssa = compute_ssa_for_target(&lf, target);
+
+        let numbered = value_number(&lf, &ssa, CallConv::Arm);
+
+        assert_eq!(
+            def_uses(&numbered.blocks[0].instrs[0].op).0,
+            Some(VReg::phys("r11#1"))
+        );
+        let Op::Load { addr, .. } = &numbered.blocks[0].instrs[1].op else {
+            panic!("expected ARM frame load: {numbered:#?}")
+        };
+        assert_eq!(addr.base, Some(VReg::phys("r11#1")));
     }
 
     #[test]
@@ -2226,6 +2766,64 @@ mod tests {
     }
 
     #[test]
+    fn every_multi_output_intrinsic_definition_keeps_its_ssa_identity() {
+        let lf = mk(vec![
+            Op::Intrinsic {
+                name: "pair.result".into(),
+                ins: Vec::new(),
+                outs: vec![
+                    (VReg::phys("rax"), crate::ir::types::Width::W32),
+                    (VReg::phys("rdx"), crate::ir::types::Width::W64),
+                ],
+                reads_mem: false,
+                writes_mem: false,
+            },
+            Op::Assign {
+                dst: VReg::phys("rcx"),
+                src: Value::Reg(VReg::phys("rdx")),
+            },
+        ]);
+        let ssa = compute_ssa(&lf);
+
+        let (numbered, definition_widths, _, identities) =
+            value_number_with_parameter_slots_lifetimes_and_identities(
+                &lf,
+                &ssa,
+                CallConv::SysVAmd64,
+                &[],
+            );
+
+        let Op::Intrinsic { outs, .. } = &numbered.blocks[0].instrs[0].op else {
+            panic!("expected intrinsic");
+        };
+        assert_eq!(outs[0].0, VReg::phys("rax#1"));
+        assert_eq!(outs[1].0, VReg::phys("rdx#1"));
+        assert_eq!(definition_widths.get(&outs[0].0), Some(&4));
+        assert_eq!(definition_widths.get(&outs[1].0), Some(&8));
+        assert!(matches!(
+            &numbered.blocks[0].instrs[1].op,
+            Op::Assign {
+                src: Value::Reg(source),
+                ..
+            } if source == &outs[1].0
+        ));
+        assert_eq!(
+            identities.exact(&outs[0].0),
+            Some(&SsaValue {
+                base: VReg::phys("rax"),
+                version: 1,
+            })
+        );
+        assert_eq!(
+            identities.exact(&outs[1].0),
+            Some(&SsaValue {
+                base: VReg::phys("rdx"),
+                version: 1,
+            })
+        );
+    }
+
+    #[test]
     fn effect_only_intrinsic_uses_every_reaching_ssa_value() {
         let lf = mk(vec![
             Op::Assign {
@@ -2395,6 +2993,49 @@ mod tests {
             !params.contains(&2),
             "rdx (slot 2) is sub-register scratch, not a parameter: {:?}",
             params
+        );
+    }
+
+    #[test]
+    fn live_in_arg_slots_use_exact_identity_not_display_spelling() {
+        use crate::ir::types::BinOp;
+
+        let lf = mk(vec![
+            Op::Bin {
+                op: BinOp::Add,
+                dst: VReg::phys("tmp0"),
+                lhs: Value::Reg(VReg::phys("opaque_entry")),
+                rhs: Value::Const(1),
+            },
+            Op::Bin {
+                op: BinOp::Add,
+                dst: VReg::phys("tmp1"),
+                lhs: Value::Reg(VReg::phys("rdi#looks_entry")),
+                rhs: Value::Const(1),
+            },
+        ]);
+        let mut identities = ValueIdentities::default();
+        identities.record(
+            VReg::phys("opaque_entry"),
+            SsaValue {
+                base: VReg::phys("rsi"),
+                version: 0,
+            },
+        );
+        identities.record(
+            VReg::phys("rdi#looks_entry"),
+            SsaValue {
+                base: VReg::phys("rdi"),
+                version: 3,
+            },
+        );
+
+        let params =
+            live_in_arg_slots_llir_with_identities(&lf, CallConv::SysVAmd64, Some(&identities));
+        assert!(params.contains(&1), "opaque version-zero rsi is arg1");
+        assert!(
+            !params.contains(&0),
+            "versioned rdi is not an entry value despite its spelling"
         );
     }
 

@@ -94,7 +94,7 @@ def test_stripped_call_driven_loop_keeps_seed_and_latch_calls(tmp_path: Path) ->
         if re.search(r"= .*\bsub_[0-9a-f]+\)?\(", line)
     ]
     assert "while (1)" not in generated, generated
-    assert re.search(r"while \(\(.+ != 0\)\)", generated), generated
+    assert re.search(r"while \([^()\n]+ != 0\)", generated), generated
     assert len(call_assignments) == 2, generated
     callees = re.findall(r"\b(sub_[0-9a-f]+)\)?\(", "\n".join(call_assignments))
     assert len(callees) == 2, generated

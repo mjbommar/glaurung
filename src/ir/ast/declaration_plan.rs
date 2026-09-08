@@ -66,6 +66,8 @@ pub(super) struct DeclarationInputs<'a> {
     pub(super) body: &'a [Stmt],
     /// Recovered declaration types.
     pub(super) tm: Option<&'a TypeMap>,
+    /// Opaque SSA identities projected into the displayed role-name space.
+    pub(super) value_identities: Option<&'a crate::ir::value_number::ValueIdentities>,
     /// Pre-canonicalisation machine widths (see `DeclarationPlan::integer_width`).
     pub(super) width_tm: Option<&'a TypeMap>,
     /// The recovered output contract for the function.
@@ -105,6 +107,7 @@ pub(super) struct DeclarationPlan {
     returns_void: bool,
     parameters: Vec<String>,
     parameter_names: Vec<String>,
+    parameter_roles: HashMap<String, usize>,
     variadic: bool,
     pointer_parameters: HashMap<String, String>,
     locals: Vec<(String, LocalDeclaration)>,
@@ -112,6 +115,7 @@ pub(super) struct DeclarationPlan {
     pointee_widths: HashMap<String, u8>,
     integer_widths: HashMap<String, u8>,
     integer_types: HashMap<String, (bool, u8)>,
+    authoritative_integer_parameters: HashMap<String, (bool, u8)>,
     stack_objects: BTreeSet<String>,
     aggregate_value_widths: HashMap<String, u8>,
     aggregate_parameters: HashMap<String, (String, u8)>,
@@ -130,6 +134,7 @@ impl Default for DeclarationPlan {
             returns_void: false,
             parameters: Vec::new(),
             parameter_names: Vec::new(),
+            parameter_roles: HashMap::new(),
             variadic: false,
             pointer_parameters: HashMap::new(),
             locals: Vec::new(),
@@ -137,6 +142,7 @@ impl Default for DeclarationPlan {
             pointee_widths: HashMap::new(),
             integer_widths: HashMap::new(),
             integer_types: HashMap::new(),
+            authoritative_integer_parameters: HashMap::new(),
             stack_objects: BTreeSet::new(),
             aggregate_value_widths: HashMap::new(),
             aggregate_parameters: HashMap::new(),
@@ -155,6 +161,7 @@ impl DeclarationPlan {
             ids,
             body,
             tm,
+            value_identities,
             width_tm,
             output_kind,
             declared_prototype,
@@ -179,15 +186,18 @@ impl DeclarationPlan {
         if let Some(tm) = tm {
             for (v, hint) in tm.iter() {
                 if let (VReg::Phys(n), TypeHint::Pointer { pointee_width }) = (v, hint) {
-                    if parse_arg_index(n).is_some()
+                    if is_parameter_role(n, value_identities)
                         || is_promoted_local_in(n, source_locals)
-                        || is_high_variable(n)
+                        || is_identity_value(n, value_identities)
                     {
                         pointee_widths.insert(n.clone(), *pointee_width);
                     }
                 }
                 if let (VReg::Phys(n), TypeHint::Int { signed, width }) = (v, hint) {
-                    if parse_arg_index(n).is_some() || is_promoted_local_in(n, source_locals) {
+                    if is_parameter_role(n, value_identities)
+                        || is_promoted_local_in(n, source_locals)
+                        || is_identity_value(n, value_identities)
+                    {
                         integer_types.insert(n.clone(), (*signed, *width));
                     }
                 }
@@ -206,7 +216,9 @@ impl DeclarationPlan {
             for (v, hint) in wtm.iter() {
                 if let (VReg::Phys(n), TypeHint::Int { width, .. }) = (v, hint) {
                     if *width > 0
-                        && (parse_arg_index(n).is_some() || is_promoted_local_in(n, source_locals))
+                        && (is_parameter_role(n, value_identities)
+                            || is_promoted_local_in(n, source_locals)
+                            || is_identity_value(n, value_identities))
                     {
                         integer_widths.insert(n.clone(), *width);
                     }
@@ -237,6 +249,7 @@ impl DeclarationPlan {
         let mut declared_ctypes = HashMap::new();
         let mut pointer_parameters = HashMap::new();
         let mut aggregate_parameters = HashMap::new();
+        let mut authoritative_integer_parameters = HashMap::new();
         let mut parameters = Vec::with_capacity(arg_count);
         let mut parameter_names = Vec::with_capacity(arg_count);
         let mut used_parameter_names = HashSet::new();
@@ -257,6 +270,22 @@ impl DeclarationPlan {
             }
             if let Some(integer_type) = selected_integer_type(&c_type, pointer_width) {
                 integer_types.insert(name.clone(), integer_type);
+                if declared_prototype.is_some_and(|prototype| {
+                    prototype.authority
+                        == crate::ir::call_contracts::CallPrototypeAuthority::Authoritative
+                        && prototype
+                            .parameter_types
+                            .get(index)
+                            .is_some_and(|source_type| {
+                                dwarf_prototype_type_is_renderable(
+                                    source_type,
+                                    false,
+                                    dwarf_type_env,
+                                )
+                            })
+                }) {
+                    authoritative_integer_parameters.insert(name.clone(), integer_type);
+                }
             }
             declared_ctypes.insert(name, c_type.clone());
             parameters.push(c_type);
@@ -308,7 +337,9 @@ impl DeclarationPlan {
                 .cloned()
                 .or_else(|| struct_pointer_types.get(local.as_str()).cloned())
                 .unwrap_or_else(|| {
-                    if is_promoted_local_in(local, source_locals) || is_high_variable(local) {
+                    if is_promoted_local_in(local, source_locals)
+                        || is_identity_value(local, value_identities)
+                    {
                         ctype_for(local, tm).to_string()
                     } else {
                         "long".to_string()
@@ -323,6 +354,11 @@ impl DeclarationPlan {
             returns_void,
             parameters,
             parameter_names,
+            parameter_roles: ids
+                .parameter_roles
+                .iter()
+                .map(|(role, slot)| (role.clone(), *slot))
+                .collect(),
             variadic,
             pointer_parameters,
             locals,
@@ -330,6 +366,7 @@ impl DeclarationPlan {
             pointee_widths,
             integer_widths,
             integer_types,
+            authoritative_integer_parameters,
             stack_objects: ids.stack_objects.keys().cloned().collect(),
             aggregate_value_widths: aggregate_value_widths.clone(),
             aggregate_parameters,
@@ -364,9 +401,15 @@ impl DeclarationPlan {
         self.parameter_names.get(index).map(String::as_str)
     }
 
-    /// Source spelling for an internal `argN` role, when one was declared.
+    /// Identity-proved source-parameter slot carried by a displayed role.
+    pub(super) fn parameter_slot(&self, role: &str) -> Option<usize> {
+        self.parameter_roles.get(role).copied()
+    }
+
+    /// Source spelling for an identity-owned parameter role, when declared.
     pub(super) fn displayed_parameter(&self, role: &str) -> Option<&str> {
-        parse_arg_index(role).and_then(|index| self.parameter_name(index))
+        self.parameter_slot(role)
+            .and_then(|index| self.parameter_name(index))
     }
 
     /// Whether the authoritative declaration accepts an unnamed argument tail.
@@ -427,6 +470,12 @@ impl DeclarationPlan {
         })
     }
 
+    /// Signedness and width of an integer parameter selected from an
+    /// authoritative source declaration rather than inferred from the body.
+    pub(super) fn authoritative_integer_parameter(&self, name: &str) -> Option<(bool, u8)> {
+        self.authoritative_integer_parameters.get(name).copied()
+    }
+
     /// Whether `displayed` was declared as a complete byte array because its
     /// address escapes.
     ///
@@ -449,6 +498,26 @@ impl DeclarationPlan {
     /// Body-local declarations, in the order they must be emitted.
     pub(super) fn locals(&self) -> &[(String, LocalDeclaration)] {
         &self.locals
+    }
+}
+
+fn is_identity_value(
+    name: &str,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    if is_high_variable(name) {
+        return true;
+    }
+    identities.is_some_and(|identities| identities.exact(&VReg::phys(name)).is_some())
+}
+
+fn is_parameter_role(
+    name: &str,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    match identities {
+        Some(identities) => identities.parameter_slot(&VReg::phys(name)).is_some(),
+        None => parse_arg_index(name).is_some(),
     }
 }
 
@@ -491,4 +560,215 @@ fn selected_integer_type(c_type: &str, pointer_width: u8) -> Option<(bool, u8)> 
     };
     crate::ir::call_contracts::integer_c_type_width(c_type, pointer_width)
         .map(|width| (signed, width))
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    fn planned_opaque_type(identities: &crate::ir::value_number::ValueIdentities) -> String {
+        let mut ids = DecIdents::default();
+        ids.locals.insert("opaque_value".to_string());
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            VReg::phys("opaque_value"),
+            TypeHint::Pointer { pointee_width: 1 },
+        );
+        let source_type_aliases = BTreeSet::new();
+        let dwarf_types = Vec::new();
+        let dwarf_type_env = DwarfTypeEnv::new(&dwarf_types);
+        let struct_pointer_types = HashMap::new();
+        let source_locals = HashSet::new();
+        let aggregate_value_widths = HashMap::new();
+        let plan = DeclarationPlan::compute(DeclarationInputs {
+            ids: &ids,
+            body: &[],
+            tm: Some(&types),
+            value_identities: Some(identities),
+            width_tm: None,
+            output_kind: RecoveredOutputKind::Void,
+            declared_prototype: None,
+            declared_parameter_names: None,
+            arg_count: 0,
+            pointer_width: 8,
+            source_type_aliases: &source_type_aliases,
+            dwarf_type_env: &dwarf_type_env,
+            struct_pointer_types: &struct_pointer_types,
+            source_locals: &source_locals,
+            aggregate_value_widths: &aggregate_value_widths,
+        });
+        let (_, LocalDeclaration::Scalar { c_type }) = &plan.locals[0] else {
+            panic!("expected scalar local")
+        };
+        c_type.clone()
+    }
+
+    fn planned_opaque_integer(
+        identities: &crate::ir::value_number::ValueIdentities,
+    ) -> (String, Option<(bool, u8)>, Option<u8>) {
+        let mut ids = DecIdents::default();
+        ids.locals.insert("opaque_value".to_string());
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            VReg::phys("opaque_value"),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+        let source_type_aliases = BTreeSet::new();
+        let dwarf_types = Vec::new();
+        let dwarf_type_env = DwarfTypeEnv::new(&dwarf_types);
+        let struct_pointer_types = HashMap::new();
+        let source_locals = HashSet::new();
+        let aggregate_value_widths = HashMap::new();
+        let plan = DeclarationPlan::compute(DeclarationInputs {
+            ids: &ids,
+            body: &[],
+            tm: Some(&types),
+            value_identities: Some(identities),
+            width_tm: Some(&types),
+            output_kind: RecoveredOutputKind::Void,
+            declared_prototype: None,
+            declared_parameter_names: None,
+            arg_count: 0,
+            pointer_width: 8,
+            source_type_aliases: &source_type_aliases,
+            dwarf_type_env: &dwarf_type_env,
+            struct_pointer_types: &struct_pointer_types,
+            source_locals: &source_locals,
+            aggregate_value_widths: &aggregate_value_widths,
+        });
+        (
+            plan.declared_ctype("opaque_value")
+                .expect("local declaration")
+                .to_string(),
+            plan.integer_type("opaque_value"),
+            plan.integer_width("opaque_value"),
+        )
+    }
+
+    #[test]
+    fn exact_opaque_identity_is_declaration_eligible() {
+        let value = VReg::phys("opaque_value");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            value,
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rax"),
+                version: 1,
+            },
+        );
+
+        assert!(is_identity_value("opaque_value", Some(&identities)));
+    }
+
+    #[test]
+    fn ambiguous_opaque_identity_is_not_declaration_eligible() {
+        let value = VReg::phys("opaque_value");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for (base, version) in [("rax", 1), ("rbx", 2)] {
+            identities.record(
+                value.clone(),
+                crate::ir::ssa::SsaValue {
+                    base: VReg::phys(base),
+                    version,
+                },
+            );
+        }
+
+        assert!(!is_identity_value("opaque_value", Some(&identities)));
+    }
+
+    #[test]
+    fn declaration_facts_do_not_trust_an_unowned_arg_spelling() {
+        let ids = DecIdents::default();
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            VReg::phys("arg0"),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+        types.upsert_public(VReg::phys("arg1"), TypeHint::Pointer { pointee_width: 1 });
+        let identities = crate::ir::value_number::ValueIdentities::default();
+        let source_type_aliases = BTreeSet::new();
+        let dwarf_types = Vec::new();
+        let dwarf_type_env = DwarfTypeEnv::new(&dwarf_types);
+        let struct_pointer_types = HashMap::new();
+        let source_locals = HashSet::new();
+        let aggregate_value_widths = HashMap::new();
+        let plan = DeclarationPlan::compute(DeclarationInputs {
+            ids: &ids,
+            body: &[],
+            tm: Some(&types),
+            value_identities: Some(&identities),
+            width_tm: Some(&types),
+            output_kind: RecoveredOutputKind::Void,
+            declared_prototype: None,
+            declared_parameter_names: None,
+            arg_count: 0,
+            pointer_width: 8,
+            source_type_aliases: &source_type_aliases,
+            dwarf_type_env: &dwarf_type_env,
+            struct_pointer_types: &struct_pointer_types,
+            source_locals: &source_locals,
+            aggregate_value_widths: &aggregate_value_widths,
+        });
+
+        assert_eq!(plan.integer_type("arg0"), None);
+        assert_eq!(plan.integer_width("arg0"), None);
+        assert_eq!(plan.pointee_width("arg1"), None);
+    }
+
+    #[test]
+    fn exact_opaque_identity_uses_recovered_pointer_declaration() {
+        let value = VReg::phys("opaque_value");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            value,
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rax"),
+                version: 1,
+            },
+        );
+
+        assert_eq!(planned_opaque_type(&identities), "char *");
+    }
+
+    #[test]
+    fn ambiguous_opaque_identity_keeps_machine_word_declaration() {
+        let value = VReg::phys("opaque_value");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for (base, version) in [("rax", 1), ("rbx", 2)] {
+            identities.record(
+                value.clone(),
+                crate::ir::ssa::SsaValue {
+                    base: VReg::phys(base),
+                    version,
+                },
+            );
+        }
+
+        assert_eq!(planned_opaque_type(&identities), "long");
+    }
+
+    #[test]
+    fn exact_opaque_integer_declaration_and_conversion_metadata_agree() {
+        let value = VReg::phys("opaque_value");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            value,
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("eax"),
+                version: 1,
+            },
+        );
+
+        assert_eq!(
+            planned_opaque_integer(&identities),
+            ("unsigned int".to_string(), Some((false, 4)), Some(4))
+        );
+    }
 }

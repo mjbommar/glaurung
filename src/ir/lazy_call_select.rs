@@ -1,6 +1,6 @@
 //! Recover value-producing calls inside lazy conditional expressions.
 
-use crate::ir::ast::{Expr, Function, Stmt};
+use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 use crate::ir::expression_width::explicit_expression_width;
 use crate::ir::types::{is_promoted_local_name, BinOp, CmpOp, VReg};
 
@@ -34,11 +34,11 @@ fn collect_call_results(body: &[Stmt], results: &mut Vec<VReg>) {
     for statement in body {
         if let Stmt::Call {
             dst: Some(result), ..
-        } = statement
+        } = statement.semantic()
         {
             results.push(result.clone());
         }
-        match statement {
+        match statement.semantic() {
             Stmt::If {
                 then_body,
                 else_body,
@@ -77,7 +77,7 @@ fn fold_adjacent_call_results_in_body(
     eligible: &std::collections::HashSet<VReg>,
 ) {
     for statement in body.iter_mut() {
-        match statement {
+        match statement.semantic_mut() {
             Stmt::If {
                 then_body,
                 else_body,
@@ -112,24 +112,27 @@ fn fold_adjacent_call_results_in_body(
     let mut index = 0;
     while index + 1 < body.len() {
         let eligible_result = matches!(
-            &body[index],
+            body[index].semantic(),
             Stmt::Call { dst: Some(result), .. } if eligible.contains(result)
         );
         if !eligible_result {
             index += 1;
             continue;
         }
-        let consumer_index =
-            (index + 1..body.len()).find(|candidate| !matches!(body[*candidate], Stmt::Nop));
+        let consumer_index = (index + 1..body.len())
+            .find(|candidate| !matches!(body[*candidate].semantic(), Stmt::Nop));
         let Some(consumer_index) = consumer_index else {
             break;
         };
         let pair = [body[index].clone(), body[consumer_index].clone()];
         if let Some((destination, value)) = call_arm(&pair, pointer_width) {
-            body[consumer_index] = assignment_with_value(destination, value);
+            let origins = origins_in_slice(&body[index..=consumer_index]);
+            body[consumer_index] =
+                attach_origins(assignment_with_value(destination, value), origins);
             body.drain(index..consumer_index);
         } else if let Some(value) = call_return(&pair, pointer_width) {
-            body[consumer_index] = Stmt::Return { value: Some(value) };
+            let origins = origins_in_slice(&body[index..=consumer_index]);
+            body[consumer_index] = attach_origins(Stmt::Return { value: Some(value) }, origins);
             body.drain(index..consumer_index);
         } else {
             index += 1;
@@ -186,19 +189,31 @@ fn collapse_conditional_jump(
     goto_counts: &std::collections::BTreeMap<u64, usize>,
     pointer_width: u8,
 ) -> Option<Stmt> {
-    let [Stmt::If {
+    let slice = body.get(index..index + 7)?;
+    let Stmt::If {
         cond,
         then_body,
         else_body: None,
-    }, first_call_statement, second_call_statement, Stmt::Goto { target: join }, Stmt::Label(constant_label), constant_statement, Stmt::Label(join_label)] =
-        body.get(index..index + 7)?
+    } = slice[0].semantic()
     else {
         return None;
     };
-    let [Stmt::Goto {
+    let [constant_jump] = then_body.as_slice() else {
+        return None;
+    };
+    let Stmt::Goto {
         target: constant_target,
-    }] = then_body.as_slice()
+    } = constant_jump.semantic()
     else {
+        return None;
+    };
+    let Stmt::Goto { target: join } = slice[3].semantic() else {
+        return None;
+    };
+    let Stmt::Label(constant_label) = slice[4].semantic() else {
+        return None;
+    };
+    let Stmt::Label(join_label) = slice[6].semantic() else {
         return None;
     };
     if constant_target != constant_label
@@ -208,19 +223,19 @@ fn collapse_conditional_jump(
     {
         return None;
     }
-    let call_statements = [first_call_statement.clone(), second_call_statement.clone()];
+    let call_statements = [slice[1].clone(), slice[2].clone()];
     let (destination, call_value) = call_arm(&call_statements, pointer_width)?;
-    let (constant_destination, constant_value) =
-        constant_arm(std::slice::from_ref(constant_statement))?;
+    let (constant_destination, constant_value) = constant_arm(std::slice::from_ref(&slice[5]))?;
     if destination != constant_destination {
         return None;
     }
-    selected_assignment(
+    let replacement = selected_assignment(
         destination,
         &negated_comparison(cond)?,
         call_value,
         constant_value,
-    )
+    )?;
+    Some(attach_origins(replacement, origins_in_slice(slice)))
 }
 
 fn negated_comparison(condition: &Expr) -> Option<Expr> {
@@ -239,7 +254,7 @@ fn negated_comparison(condition: &Expr) -> Option<Expr> {
 }
 
 fn visit_children(statement: &mut Stmt, pointer_width: u8) {
-    match statement {
+    match statement.semantic_mut() {
         Stmt::If {
             then_body,
             else_body,
@@ -281,30 +296,37 @@ fn collapse_linearized(
         cond,
         then_body,
         else_body: None,
-    } = body.get(index)?
+    } = body.get(index)?.semantic()
     else {
         return None;
     };
-    let (Stmt::Goto { target: join }, call_statements) = then_body.split_last()? else {
+    let (join_statement, call_statements) = then_body.split_last()?;
+    let Stmt::Goto { target: join } = join_statement.semantic() else {
         return None;
     };
     if goto_counts.get(join).copied() != Some(1)
-        || !matches!(body.get(index + 2), Some(Stmt::Label(label)) if label == join)
+        || !body.get(index + 2).is_some_and(
+            |statement| matches!(statement.semantic(), Stmt::Label(label) if label == join),
+        )
     {
         return None;
     }
     let (destination, call_value) = call_arm(call_statements, pointer_width)?;
     let (constant_destination, constant_value) =
         constant_arm(std::slice::from_ref(body.get(index + 1)?))?;
-    (destination == constant_destination)
+    let replacement = (destination == constant_destination)
         .then_some(())
-        .and_then(|()| selected_assignment(destination, cond, call_value, constant_value))
+        .and_then(|()| selected_assignment(destination, cond, call_value, constant_value))?;
+    Some(attach_origins(
+        replacement,
+        origins_in_slice(body.get(index..=index + 2)?),
+    ))
 }
 
 fn count_gotos(body: &[Stmt]) -> std::collections::BTreeMap<u64, usize> {
     fn body_counts(body: &[Stmt], counts: &mut std::collections::BTreeMap<u64, usize>) {
         for statement in body {
-            match statement {
+            match statement.semantic() {
                 Stmt::Goto { target } => *counts.entry(*target).or_default() += 1,
                 Stmt::If {
                     then_body,
@@ -353,7 +375,7 @@ fn collapse_statement(statement: &Stmt, pointer_width: u8) -> Option<Stmt> {
         cond,
         then_body,
         else_body: Some(else_body),
-    } = statement
+    } = statement.semantic()
     else {
         return None;
     };
@@ -362,14 +384,16 @@ fn collapse_statement(statement: &Stmt, pointer_width: u8) -> Option<Stmt> {
         (call_arm(then_body, pointer_width), constant_arm(else_body))
     {
         if destination == constant_destination {
-            return selected_assignment(destination, cond, call_value, constant_value);
+            return selected_assignment(destination, cond, call_value, constant_value)
+                .map(|replacement| attach_origins(replacement, origins_in_tree(statement)));
         }
     }
     if let (Some((constant_destination, constant_value)), Some((destination, call_value))) =
         (constant_arm(then_body), call_arm(else_body, pointer_width))
     {
         if destination == constant_destination {
-            return selected_assignment(destination, cond, constant_value, call_value);
+            return selected_assignment(destination, cond, constant_value, call_value)
+                .map(|replacement| attach_origins(replacement, origins_in_tree(statement)));
         }
     }
     None
@@ -491,7 +515,10 @@ fn call_arm(body: &[Stmt], pointer_width: u8) -> Option<(AssignmentTarget, Expr)
 }
 
 fn call_return(body: &[Stmt], pointer_width: u8) -> Option<Expr> {
-    let [call, Stmt::Return { value: Some(value) }] = body else {
+    let [call, return_statement] = body else {
+        return None;
+    };
+    let Stmt::Return { value: Some(value) } = return_statement.semantic() else {
         return None;
     };
     let (call_result, call) = call_expression(call, pointer_width)?;
@@ -504,7 +531,7 @@ fn call_expression(statement: &Stmt, pointer_width: u8) -> Option<(VReg, Expr)> 
         args,
         dst: Some(call_result),
         call_spec,
-    } = statement
+    } = statement.semantic()
     else {
         return None;
     };
@@ -548,7 +575,7 @@ fn call_result_width(
 }
 
 fn assignment(statement: &Stmt) -> Option<(AssignmentTarget, &Expr)> {
-    match statement {
+    match statement.semantic() {
         Stmt::Assign { dst, src } => Some((AssignmentTarget::Register(dst.clone()), src)),
         Stmt::Store {
             addr: Expr::Reg(register @ VReg::Phys(name)),
@@ -562,6 +589,61 @@ fn assignment(statement: &Stmt) -> Option<(AssignmentTarget, &Expr)> {
             src,
         )),
         _ => None,
+    }
+}
+
+fn origins_in_slice(body: &[Stmt]) -> OriginSet {
+    body.iter().fold(OriginSet::empty(), |all, statement| {
+        all.union(&origins_in_tree(statement))
+    })
+}
+
+fn origins_in_tree(statement: &Stmt) -> OriginSet {
+    let mut origins = statement.origins().cloned().unwrap_or_default();
+    let mut merge = |nested: &Stmt| origins.merge(&origins_in_tree(nested));
+    match statement.semantic() {
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            then_body.iter().for_each(&mut merge);
+            if let Some(else_body) = else_body {
+                else_body.iter().for_each(&mut merge);
+            }
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => body.iter().for_each(&mut merge),
+        Stmt::For {
+            init, step, body, ..
+        } => {
+            merge(init);
+            body.iter().for_each(&mut merge);
+            merge(step);
+        }
+        Stmt::Switch { cases, default, .. } => {
+            for (_, body) in cases {
+                body.iter().for_each(&mut merge);
+            }
+            if let Some(default) = default {
+                default.iter().for_each(&mut merge);
+            }
+        }
+        Stmt::TryCatch { try_body, catches } => {
+            try_body.iter().for_each(&mut merge);
+            for catch in catches {
+                catch.body.iter().for_each(&mut merge);
+            }
+        }
+        _ => {}
+    }
+    origins
+}
+
+fn attach_origins(statement: Stmt, origins: OriginSet) -> Stmt {
+    if origins.is_empty() {
+        statement
+    } else {
+        statement.with_origins(origins)
     }
 }
 
@@ -606,6 +688,7 @@ fn is_integer_view_of(expression: &Expr, target: &VReg) -> bool {
 /// across another lazy boundary or an opaque/memory effect.
 fn count_register_uses(expression: &Expr, target: &VReg) -> Option<usize> {
     match expression {
+        Expr::Origin { expr, .. } => count_register_uses(expr, target),
         Expr::Reg(register) => Some(usize::from(register == target)),
         Expr::Const(_)
         | Expr::FloatConst { .. }
@@ -641,6 +724,8 @@ fn count_register_uses(expression: &Expr, target: &VReg) -> Option<usize> {
 
 fn substitute_call_result(expression: &Expr, target: &VReg, call: &Expr) -> Option<Expr> {
     match expression {
+        Expr::Origin { origins, expr } => substitute_call_result(expr, target, call)
+            .map(|replacement| replacement.with_origins(origins.clone())),
         Expr::Reg(register) if register == target => Some(call.clone()),
         Expr::NumericConvert { from, to, expr } => Some(Expr::NumericConvert {
             from: *from,

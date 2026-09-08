@@ -33,12 +33,6 @@ mod type_maps;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyList};
 
-use callee_contracts::{
-    apply_recovered_direct_callee_effects, recover_direct_callee_layouts,
-    refine_passthrough_parameter_hints, DirectCalleeFacts,
-};
-
-use decbench_render::decbench_text;
 // `select_renderable_dwarf_local_facts` has no production caller in this module
 // -- its only consumer here is the `mod tests` below, so the import is gated the
 // same way `dwarf_return_hint` already is, rather than being dead in the shipped
@@ -52,19 +46,18 @@ use dwarf_contracts::dwarf_return_hint;
 // `callee_contracts` reaches it through `super::`, which is how it was already
 // wired before the split.
 use dwarf_contracts::{
-    calling_convention_pointer_width, debug_output_contracts, dwarf_render_prototype,
-    dwarf_return_hint_with_env, dwarf_stack_object_hints, merge_dwarf_register_local_facts,
+    calling_convention_pointer_width, dwarf_render_prototype, dwarf_return_hint_with_env,
     DwarfPrototypeContract,
 };
 
 use lift::{lift_bytes_py, lift_window_at_py};
 
 use pipeline::{
-    annotate_calls_in, inline_soft_helper_calls_in, prepare_llir_for_lowering, readonly_data_for,
-    recognise_machine_frame, run_ast_passes, target_calling_convention, PreparedLlir,
+    decompile_function, discover_program, prepare_program_debug_context,
+    prepare_program_name_context, prepare_program_render_context, target_calling_convention,
+    AnalysisBudget, DecompileRequest, DecompileResult, FunctionPipelineContext,
+    ProgramDebugContext, ProgramDiscovery, ProgramNameContext, ProgramRenderContext, RenderOptions,
 };
-
-use type_maps::{decbench_type_maps, remap_type_map};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct AnalystPrototype {
@@ -170,77 +163,88 @@ fn decompile_at_py(
         py,
         &session,
         &path,
-        func_va,
-        max_blocks,
-        max_instructions,
-        timeout_ms,
-        types,
-        style,
-        pdb_cache,
-        max_functions,
-        analyst_names.as_ref(),
-        analyst_locals.as_ref(),
-        analyst_prototype.as_ref(),
+        DecompileRequest {
+            va: func_va,
+            analysis_budget: AnalysisBudget {
+                discovery: pipeline::DiscoveryBudget {
+                    max_functions,
+                    total_timeout_ms: 0,
+                },
+                cfg: pipeline::CfgBudget {
+                    max_blocks,
+                    max_instructions,
+                    timeout_ms,
+                },
+                callee: pipeline::CalleeBudget::default(),
+                types: pipeline::TypeBudget::default(),
+                size: pipeline::SizeBudget::from_instruction_and_output_limits(
+                    max_instructions,
+                    max_functions,
+                ),
+            },
+            render_options: RenderOptions {
+                types,
+                style,
+                shadow_v2: false,
+                pdb_cache,
+                analyst_names: analyst_names.as_ref(),
+                analyst_locals: analyst_locals.as_ref(),
+                analyst_prototype: analyst_prototype.as_ref(),
+            },
+        },
     )
+    .map(|result| result.pseudocode)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn decompile_at_session(
+fn decompile_at_session(
     py: Python<'_>,
     session: &crate::program::session::ProgramSession,
     path: &str,
-    func_va: u64,
-    max_blocks: usize,
-    max_instructions: usize,
-    timeout_ms: u64,
-    types: bool,
-    style: &str,
-    pdb_cache: &str,
-    max_functions: usize,
-    analyst_names: Option<&std::collections::HashMap<u64, String>>,
-    analyst_locals: Option<&std::collections::HashMap<i64, (String, String)>>,
-    analyst_prototype: Option<&AnalystPrototype>,
-) -> PyResult<String> {
+    request: DecompileRequest<'_>,
+) -> PyResult<DecompileResult> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_at");
-    use crate::analysis::cfg::Budgets;
-    use crate::ir::ast::{lower, render, render_with_types};
-    use crate::ir::lift_function::lift_function_from_image;
-    use crate::ir::types_recover::recover_types_for;
+
+    let pipeline_fingerprint = request.fingerprint();
+    let DecompileRequest {
+        va: func_va,
+        analysis_budget,
+        render_options,
+    } = request;
+    let RenderOptions {
+        types,
+        style,
+        shadow_v2: _,
+        pdb_cache,
+        analyst_names,
+        analyst_locals,
+        analyst_prototype,
+    } = render_options;
 
     let image = session.image().clone();
-    let data = image.bytes();
     // An ARM32 Thumb symbol's value carries the Thumb bit; the entry it denotes
     // is one lower. Anything resolving a callee through `.symtab` hands us that
     // value verbatim, and decoding one byte in recovers a body with no
     // parameters at all. See `arm32_mode::normalise_entry`.
     let func_va = image.normalize_function_entry(func_va);
     let exception_sites = image.exception_call_sites();
-    let (dwarf_outputs, pdb_contract_vas, pdb_types) = if style == "decbench" && types {
-        let (contracts, pdb_addresses, pdb_types) = debug_output_contracts(&image, path, pdb_cache);
-        (Some(contracts), pdb_addresses, pdb_types)
-    } else {
-        (None, std::collections::HashSet::new(), Vec::new())
-    };
-    let dwarf_types = (style == "decbench" && types).then(|| {
-        let mut types = session.debug_types().to_vec();
-        types.extend(pdb_types);
-        types
-    });
+    let ProgramDebugContext {
+        output_contracts: dwarf_outputs,
+        pdb_contract_vas,
+        types: dwarf_types,
+    } = prepare_program_debug_context(
+        session,
+        &image,
+        path,
+        pdb_cache,
+        style == "decbench" && types,
+    );
     let dwarf_type_env = dwarf_types
         .as_deref()
         .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
-    let budgets = Budgets {
-        max_functions,
-        max_blocks,
-        max_instructions,
-        timeout_ms,
-        total_timeout_ms: 0,
-    };
-    // Whole-binary function discovery: seconds to minutes on a large image, and
-    // the reason `Ctrl-C` used to do nothing until it finished. `data` is an
-    // owned `Vec<u8>` and `Budgets` is `Copy`; no `Bound`/`Py` reference crosses
-    // the closure boundary. See `python_bindings::analysis`.
-    let funcs = py.detach(|| session.discover_functions(&budgets, &[func_va]));
+    let ProgramDiscovery {
+        budgets,
+        functions: funcs,
+    } = discover_program(py, session, analysis_budget, &[func_va]);
     let func = funcs
         .iter()
         .find(|f| f.entry_point.value == func_va)
@@ -252,7 +256,6 @@ pub(super) fn decompile_at_session(
             ))
         })?;
     let cc = target_calling_convention(&image)?;
-    let arch = image.target().architecture();
     let arm_vfp_args = image.arm_hard_float();
     // Build the address map first so we can apply a PDB public-symbol name
     // to the *outer* function header before lowering. The map already
@@ -261,15 +264,17 @@ pub(super) fn decompile_at_session(
     // It is also what tells `soft_helpers` which call targets are libgcc
     // division helpers, and that has to happen while the IR is still physical.
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
-    // ONE parse of the image yields both the call-target names and the
-    // named static storage. Two parses tripped the object-parse ceiling.
-    let (mut addr_map, data_symbols) =
-        crate::ir::name_resolve::collect_address_map_with_pdb_cache_and_data_symbols(
-            &data, &path, pdb_cache,
-        );
-    crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
-    crate::ir::name_resolve::add_flirt_referenced_function_names(&image, &mut addr_map, &funcs);
-    crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
+    let ProgramNameContext {
+        address_names: mut addr_map,
+        data_symbols,
+    } = prepare_program_name_context(&image, path, pdb_cache, &funcs);
+    let ProgramRenderContext {
+        data_symbols,
+        string_pool: str_pool,
+        readonly_data,
+        function_tables,
+        got_targets,
+    } = prepare_program_render_context(session, &image, data_symbols);
     // The analyst overlay is DELIBERATELY not applied here. Everything between
     // this point and `recover_direct_callee_layouts` resolves callees BY NAME
     // against what the binary calls them -- `session.environment`,
@@ -281,22 +286,6 @@ pub(super) fn decompile_at_session(
     // that depends on binary truth -- see below.
     let program_environment = (style == "decbench" && types)
         .then(|| session.environment(&budgets, cc, &addr_map, &[func_va]));
-    // The reason is the analyst-visible one. This used to blame the
-    // architecture unconditionally, so an x86-64 function whose blocks were all
-    // attributed to a neighbour reported "LLIR lifter does not support this
-    // architecture" about a lifter that supports it perfectly well.
-    let lf_raw = lift_function_from_image(&image, &func)
-        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-    // The ABI's call effects, recorded on the calls themselves, BEFORE SSA — so a
-    // call participates in def/use like any other instruction instead of every later
-    // pass having to special-case it (see `ir::abi`).
-    let mut lf_raw = lf_raw;
-    inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
-    annotate_calls_in(&mut lf_raw, cc, &addr_map);
-    // Recovered here rather than with the other AST-pass inputs below: a call
-    // through one of these tables needs its entries' parameter storage, and
-    // that is the same demand-driven callee analysis.
-    let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
     // Identity-keyed call structure for this exact discovery. `call_graph_for`
     // builds from `funcs` (already fetched above) instead of re-querying
     // `discover_functions`, so this one logical query registers exactly one
@@ -304,163 +293,8 @@ pub(super) fn decompile_at_session(
     // nested callee analysis decline to spend a layer inside a call cycle.
     let callee_call_graph = py.detach(|| session.call_graph_for(&budgets, &[func_va], &funcs));
     let mut callee_layout_cache = std::collections::HashMap::new();
-    let mut callee_facts = recover_direct_callee_layouts(
-        &image,
-        &funcs,
-        &lf_raw,
-        cc,
-        arm_vfp_args,
-        &budgets,
-        dwarf_outputs.as_ref(),
-        dwarf_type_env.as_ref(),
-        &mut addr_map,
-        &function_tables,
-        Some(callee_call_graph.as_ref()),
-        &mut callee_layout_cache,
-    );
-    apply_recovered_direct_callee_effects(&mut lf_raw, cc, &callee_facts);
-    // The analyst overlay, applied now that every name-keyed analysis above has
-    // run against what the binary calls things. It rewrites the address map --
-    // which `resolve_names` turns into `Expr::Named` -- so one overlay renames
-    // the definition AND every call site, and it rekeys the recovered symbol
-    // environment so the callee keeps the prototype recovered under its old
-    // name. See `apply_analyst_names` and `SymbolEnv::rename_display`.
-    if let Some(names) = analyst_names {
-        {
-            let renames = crate::ir::name_resolve::apply_analyst_names(&mut addr_map, names);
-            if !renames.is_empty() {
-                {
-                    callee_facts.env.rename_display(&renames);
-                }
-            }
-        }
-    }
-    // `value_number` canonicalises sub-registers to their 64-bit parent (`edi`
-    // -> `rdi`) so def/use versions line up for value correctness. But the
-    // register sub-name width (`edi`=4) is *the* -O0 type-recovery signal, and
-    // canonicalisation erases it. So type recovery runs on `lf_raw` (widths
-    // intact) while everything downstream uses the canonicalised `lf`; the
-    // remap merges the raw `edi`/`rdi` keys into one `argN` slot, keeping the
-    // narrower width.
-    // Live-in argument slots (authoritative parameter set) for the type-map
-    // remap, so scratch reuse of an arg register never becomes a spurious `argN`.
-    // Recover the semantic prototype while SSA value IDs are still available.
-    // It survives the AST pipeline as an immutable companion object; naming is
-    // now only a final projection (`value -> argN`), never a type-analysis key.
-    let prepared_llir = prepare_llir_for_lowering(
-        &mut lf_raw,
-        &image,
-        &exception_sites,
-        cc,
-        style == "decbench" && types,
-        arm_vfp_args,
-        dwarf_outputs
-            .as_ref()
-            .and_then(|outputs| outputs.get(&func_va)),
-        program_environment
-            .as_deref()
-            .and_then(|environment| environment.prototype_for(func_va)),
-        dwarf_type_env.as_ref(),
-    );
-    let PreparedLlir {
-        region,
-        cfg_health,
-        numbered: lf,
-        definition_widths,
-        parameter_slots: mut param_slots,
-        inferred_prototype,
-        mut prototype,
-        ..
-    } = prepared_llir;
-    if let Some(prototype) = prototype.as_mut() {
-        let exact_ssa = crate::ir::ssa::compute_ssa(&lf_raw);
-        refine_passthrough_parameter_hints(prototype, &lf_raw, &exact_ssa, &callee_facts);
-    }
-    if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
-        eprintln!("\n===== recovered prototype =====\n{prototype:#?}");
-    }
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
-    let outer_name =
-        resolve_outer_function_name_with_analyst(&func.name, func_va, &addr_map, analyst_names);
-    let mut profiler = crate::decompile::profile::FunctionProfiler::from_env(&outer_name, func_va);
-    let mut f = profiler.measure("lower", || lower(&lf, &region, outer_name));
-    crate::ir::exception_recover::mark_landing_pads(&mut f, &exception_sites);
-    // Pass-by-pass AST dump for debugging the decbench lowering pipeline. Set
-    // GLAURUNG_DUMP_PASSES=1 to print the rendered body after each pass to stderr
-    // (bisect which pass corrupts a function). No-op otherwise.
-    let dump_passes = std::env::var("GLAURUNG_DUMP_PASSES").is_ok();
-    macro_rules! dp {
-        ($n:expr) => {
-            crate::ir::health::trace_pass($n, &f, cfg_health);
-            if dump_passes {
-                eprintln!("\n===== after {} =====\n{}", $n, crate::ir::ast::render(&f));
-            }
-        };
-    }
-    dp!("lower");
-    let mut str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
-    data_symbols.remove_truncated_character_arrays(&mut str_pool);
-    let readonly_data = readonly_data_for(&session, &image, &str_pool);
-    // Slot -> the in-image address the loader stores there, so a `-fPIC` read
-    // of a locally-defined global folds to that global instead of dereferencing
-    // an unrelocated linkage word. See `ir::got_fold`.
-    let got_targets: std::collections::HashMap<u64, u64> =
-        crate::analysis::elf_got::elf_got_target_map(&data)
-            .into_iter()
-            .collect();
-    let stack_object_hints = dwarf_stack_object_hints(
-        dwarf_outputs
-            .as_ref()
-            .and_then(|outputs| outputs.get(&func_va)),
-        cc,
-    );
-    let (mut stack_facts, role_names) = run_ast_passes(
-        &mut f,
-        &mut profiler,
-        cfg_health,
-        cc,
-        false,
-        prototype.as_ref(),
-        &mut param_slots,
-        locked_parameter_count(prototype.as_ref()),
-        &callee_facts,
-        &addr_map,
-        &str_pool,
-        &function_tables,
-        &stack_object_hints,
-        &got_targets,
-    );
-    // The analyst's own names and types for frame slots, joined by frame
-    // offset and applied through the SAME mechanism debug names use --
-    // `source_names` / `source_types`, consumed by
-    // `naming::apply_authoritative_local_names` at the presentation boundary.
-    // Riding that path rather than building a second one means a rename cannot
-    // turn a scalar assignment into a pointer store, and an analyst who names a
-    // variable `int` gets the same rejection a bad DWARF name gets.
-    if let Some(locals) = analyst_locals {
-        crate::ir::stack_locals::apply_analyst_locals(&mut stack_facts, locals);
-    }
-    merge_dwarf_register_local_facts(
-        &mut stack_facts,
-        dwarf_outputs
-            .as_ref()
-            .and_then(|outputs| outputs.get(&func_va)),
-        &lf,
-        &role_names,
-        arch,
-        cc,
-        dwarf_type_env.as_ref(),
-    );
-    if style == "decbench" {
-        crate::ir::exception_recover::recover_typed_handlers(&mut f, &exception_sites);
-        crate::ir::exception_recover::mark_int_throws_with_address_map(&mut f, &addr_map);
-        crate::ir::exception_recover::recover_throws(&mut f);
-    }
-    recognise_machine_frame(&mut f, cc);
-    if let Some(field_map) = &field_map {
-        crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
-    }
     // Emit a `// PDB: <name>` provenance comment in C-style output when the
     // outer function name came from a PDB public symbol -- a hint that this
     // name is Microsoft-authoritative (and not LLM-proposed / FLIRT / CFG-
@@ -474,150 +308,66 @@ pub(super) fn decompile_at_session(
                 .cloned()
         })
         .filter(|name| !name.is_empty() && !name.starts_with("sub_"));
-    // Design Rule 8: a proof that did not complete becomes an explicit unknown
-    // in the output, not a silent omission. `func` carries whichever discovery
-    // budget stopped ITS OWN walk, so this can only ever fire for the function
-    // being rendered. See `analysis::completeness`.
-    let incompleteness_note =
-        crate::analysis::completeness::cfg_incompleteness_note(&func, &budgets);
-    let text = if style == "decbench" {
-        // DecBench wants concrete C types. Reuse the recovered TypeMap when it
-        // was computed, else recover on demand, then remap raw-reg keys to the
-        // AST's role names (`arg0`, `ret`, ...) before rendering.
-        let maps = types.then(|| {
-            decbench_type_maps(
-                &f,
-                &lf_raw,
-                &lf,
-                prototype.as_ref().expect("typed DecBench prototype"),
-                cc,
-                &param_slots,
-                &stack_facts.sizes,
-                &stack_facts.source_types,
-                &stack_facts.source_names,
-                dwarf_type_env.as_ref(),
-                &role_names,
-                &definition_widths,
-            )
-        });
-        let (decl, width, exact_value_widths) = match &maps {
-            Some((d, w, exact)) => (Some(d), Some(w), Some(exact)),
-            None => (None, None, None),
-        };
-        // The analyst's prototype outranks the compiler's, for the same reason
-        // their rename outranks the symbol table: it is a decision ABOUT the
-        // recovered facts rather than another one of them. It lands in the slot
-        // DWARF already uses -- `declared_prototype` overrides the recovered
-        // prototype for rendering and drives both the return type and the
-        // parameter c_types (`ast::declaration_plan`) -- so there is no second
-        // mechanism and the two cannot disagree.
-        // Analyst first, then DWARF -- see `CallPrototype::from_analyst`.
-        let dwarf_render_contract = dwarf_outputs
-            .as_ref()
-            .and_then(|outputs| outputs.get(&func_va));
-        let debug_source = if pdb_contract_vas.contains(&func_va) {
+    let output = decompile_function(FunctionPipelineContext {
+        image: &image,
+        functions: &funcs,
+        discovered: &func,
+        budgets: &budgets,
+        callee_budget: analysis_budget.callee,
+        type_budget: analysis_budget.types,
+        pipeline_fingerprint: pipeline_fingerprint.clone(),
+        render_options: RenderOptions {
+            types,
+            style,
+            shadow_v2: false,
+            pdb_cache: pdb_cache.and_then(|path| path.to_str()).unwrap_or(""),
+            analyst_names,
+            analyst_locals,
+            analyst_prototype,
+        },
+        debug_outputs: dwarf_outputs.as_ref(),
+        debug_types: dwarf_types.as_deref().unwrap_or(&[]),
+        debug_type_env: dwarf_type_env.as_ref(),
+        debug_source: if pdb_contract_vas.contains(&func_va) {
             crate::program::environment::DeclarationSource::Pdb
         } else {
             crate::program::environment::DeclarationSource::Dwarf
-        };
-        let debug_render = dwarf_render_contract.and_then(dwarf_render_prototype);
-        let analyst_render = analyst_prototype.map(|prototype| {
-            crate::ir::call_contracts::CallPrototype::from_analyst(
-                &prototype.return_type,
-                &prototype.parameter_types,
-                prototype.variadic,
-            )
-        });
-        let (declared_source, declared_render) = match (analyst_render, debug_render) {
-            (Some(analyst), Some(debug)) => {
-                crate::program::environment::DeclarationSource::strongest(
-                    (
-                        crate::program::environment::DeclarationSource::Analyst,
-                        Some(analyst),
-                    ),
-                    (debug_source, Some(debug)),
-                )
-            }
-            (Some(analyst), None) => (
-                crate::program::environment::DeclarationSource::Analyst,
-                Some(analyst),
-            ),
-            (None, debug) => (debug_source, debug),
-        };
-        let declared_parameter_names =
-            if declared_source == crate::program::environment::DeclarationSource::Analyst {
-                analyst_prototype.map(|prototype| prototype.parameter_names.as_slice())
-            } else {
-                dwarf_render_contract.map(|contract| contract.parameter_names.as_slice())
-            };
-        if analyst_prototype.is_some() {
-            use crate::program::environment::DeclarationSource;
-            record_prototype_conflict_with_candidate(
-                &f.name,
-                func_va,
-                DeclarationSource::Analyst.label(),
-                declared_render.as_ref(),
-                DeclarationSource::Dwarf.label(),
-                dwarf_render_contract
-                    .and_then(dwarf_render_prototype)
-                    .as_ref(),
-            );
-        }
-        record_recovered_prototype_conflict(
-            &f.name,
-            func_va,
-            declared_source.label(),
-            declared_render.as_ref(),
-            inferred_prototype.as_ref(),
-            cc,
-        );
-        decbench_text(
-            &f,
-            &mut profiler,
-            cfg_health,
-            &exception_sites,
-            decl,
-            width,
-            exact_value_widths,
-            &readonly_data,
-            &str_pool,
-            prototype.as_ref(),
-            declared_render.as_ref(),
-            declared_parameter_names,
-            dwarf_types.as_deref().unwrap_or(&[]),
-            &stack_facts.source_types,
-            &stack_facts.source_names,
-            dwarf_render_contract.map_or(&[], |contract| contract.static_locals.as_slice()),
-            cc,
-            &addr_map,
-            &callee_facts.env,
-            &data_symbols,
-        )
-    } else if style == "c" {
-        let body = profiler.measure("render_c", || crate::ir::ast::render_c(&f));
-        match pdb_outer_name {
-            Some(name) => format!("// PDB: {}\n{}", name, body),
-            None => body,
-        }
-    } else if types {
-        // Plain-with-types style. Non-decbench paths skip `value_number`, so the
-        // raw LLIR is the canonical one; remap the TypeMap keys from raw physical
-        // regs into the role-based names the AST now uses.
-        let renamed = remap_type_map(&recover_types_for(&lf_raw, cc), &f, cc, &param_slots);
-        profiler.measure("render_with_types", || render_with_types(&f, &renamed))
-    } else {
-        profiler.measure("render", || render(&f))
-    };
-    Ok(match incompleteness_note {
-        Some(note) => format!("{note}\n{text}"),
-        None => text,
+        },
+        exception_sites: &exception_sites,
+        program_fact: program_environment
+            .as_deref()
+            .and_then(|environment| environment.prototype_for(func_va)),
+        address_names: &mut addr_map,
+        function_tables: &function_tables,
+        got_targets: &got_targets,
+        string_pool: &str_pool,
+        readonly_data: &readonly_data,
+        data_symbols: &data_symbols,
+        field_map: field_map.as_ref(),
+        call_graph: Some(callee_call_graph.as_ref()),
+        callee_cache: &mut callee_layout_cache,
+        calling_convention: cc,
+        arm_vfp_args,
+        prefer_debug_function_name: false,
+        pdb_outer_name: pdb_outer_name.as_deref(),
     })
+    .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+    Ok(DecompileResult::from_rendered(
+        output.rendered.text,
+        &output.prepared.function,
+        output.prepared.cfg_health,
+        &func,
+        output.rendered.provenance,
+        output.rendered.line_mappings,
+        pipeline_fingerprint,
+    ))
 }
 
 #[pyfunction]
 #[pyo3(name = "decompile_range_at")]
-#[pyo3(signature = (path, func_va, range_start, range_end, max_blocks=256usize, max_instructions=10_000usize, timeout_ms=500u64, types=true, style="", pdb_cache=""))]
+#[pyo3(signature = (path, func_va, range_start, range_end, max_blocks=256usize, max_instructions=10_000usize, timeout_ms=500u64, types=true, style="", pdb_cache="", max_functions=1usize))]
 fn decompile_range_at_py(
+    py: Python<'_>,
     path: String,
     func_va: u64,
     range_start: u64,
@@ -628,15 +378,13 @@ fn decompile_range_at_py(
     types: bool,
     style: &str,
     pdb_cache: &str,
+    max_functions: usize,
 ) -> PyResult<String> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_range_at");
     use crate::core::address::{Address, AddressKind};
     use crate::core::address_range::AddressRange;
     use crate::core::basic_block::BasicBlock;
     use crate::core::function::{Function, FunctionKind};
-    use crate::ir::ast::{lower, render, render_with_types};
-    use crate::ir::lift_function::lift_function_from_image;
-    use crate::ir::types_recover::recover_types_for;
 
     if range_end <= range_start {
         return Err(pyo3::exceptions::PyValueError::new_err(
@@ -653,35 +401,75 @@ fn decompile_range_at_py(
             "max_blocks and max_instructions must be non-zero",
         ));
     }
-    let _ = timeout_ms;
+    let request = DecompileRequest {
+        va: func_va,
+        analysis_budget: AnalysisBudget {
+            discovery: pipeline::DiscoveryBudget {
+                max_functions,
+                total_timeout_ms: 0,
+            },
+            cfg: pipeline::CfgBudget {
+                max_blocks,
+                max_instructions,
+                timeout_ms,
+            },
+            callee: pipeline::CalleeBudget::default(),
+            types: pipeline::TypeBudget::default(),
+            size: pipeline::SizeBudget::from_instruction_and_output_limits(
+                max_instructions,
+                max_functions,
+            ),
+        },
+        render_options: RenderOptions {
+            types,
+            style,
+            shadow_v2: false,
+            pdb_cache,
+            analyst_names: None,
+            analyst_locals: None,
+            analyst_prototype: None,
+        },
+    };
+    let pipeline_fingerprint = request.fingerprint();
+    let DecompileRequest {
+        va: func_va,
+        analysis_budget,
+        render_options,
+    } = request;
+    let RenderOptions {
+        types,
+        style,
+        shadow_v2: _,
+        pdb_cache,
+        analyst_names: _,
+        analyst_locals: _,
+        analyst_prototype: _,
+    } = render_options;
 
     let image = load_program_image(&path)?;
     let session = crate::program::session::ProgramSession::from_image(image);
     let image = session.image().clone();
-    let data = image.bytes();
     let exception_sites = image.exception_call_sites();
-    let (dwarf_outputs, pdb_contract_vas, pdb_types) = if style == "decbench" && types {
-        let (contracts, pdb_addresses, pdb_types) =
-            debug_output_contracts(&image, &path, pdb_cache);
-        (Some(contracts), pdb_addresses, pdb_types)
-    } else {
-        (None, std::collections::HashSet::new(), Vec::new())
-    };
-    let dwarf_types = (style == "decbench" && types).then(|| {
-        let mut types = session.debug_types().to_vec();
-        types.extend(pdb_types);
-        types
-    });
+    let ProgramDebugContext {
+        output_contracts: dwarf_outputs,
+        pdb_contract_vas,
+        types: dwarf_types,
+    } = prepare_program_debug_context(
+        &session,
+        &image,
+        &path,
+        pdb_cache,
+        style == "decbench" && types,
+    );
     let dwarf_type_env = dwarf_types
         .as_deref()
         .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
     let cc = target_calling_convention(&image)?;
-    let arch = image.target().architecture();
     let arm_vfp_args = image.arm_hard_float();
     let bits = image.target().address_bits().ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err("target address width is unknown")
     })?;
-    let max_bytes = (max_instructions as u64).saturating_mul(16).max(1);
+    let max_bytes = analysis_budget.size.max_range_bytes;
     let capped_end = range_end.min(range_start.saturating_add(max_bytes));
     let entry = Address::new(AddressKind::VA, func_va, bits, None, None)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
@@ -691,219 +479,116 @@ fn decompile_range_at_py(
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     let range = AddressRange::new(block_start.clone(), capped_end - range_start, None)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-    let mut func = Function::new(format!("sub_{:x}", func_va), entry, FunctionKind::Normal)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-    func.range = Some(range.clone());
-    func.size = Some(range.size);
-    func.chunks.push(range);
-    func.basic_blocks.push(BasicBlock::new(
-        format!("bb_{:x}", range_start),
-        block_start,
-        block_end,
-        1,
-        Some(Vec::new()),
-        Some(Vec::new()),
-    ));
+    // Prefer the ordinary CFG for a discovered function when every recovered
+    // block lies inside the caller's explicit range. This makes range and
+    // address requests consume the same control-flow facts without weakening
+    // the range API's ability to lift an otherwise undiscovered byte window.
+    let ProgramDiscovery {
+        budgets,
+        functions: discovered,
+    } = discover_program(py, &session, analysis_budget, &[func_va]);
+    let discovered_function = discovered
+        .iter()
+        .find(|candidate| {
+            candidate.entry_point.value == func_va
+                && !candidate.basic_blocks.is_empty()
+                && candidate.basic_blocks.iter().all(|block| {
+                    block.start_address.value >= range_start
+                        && block.end_address.value <= capped_end
+                })
+        })
+        .cloned();
+    let func = if let Some(function) = discovered_function {
+        function
+    } else {
+        let mut function = Function::new(format!("sub_{:x}", func_va), entry, FunctionKind::Normal)
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        function.range = Some(range.clone());
+        function.size = Some(range.size);
+        function.chunks.push(range);
+        function.basic_blocks.push(BasicBlock::new(
+            format!("bb_{:x}", range_start),
+            block_start,
+            block_end,
+            1,
+            Some(Vec::new()),
+            Some(Vec::new()),
+        ));
+        function
+    };
 
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
-    // ONE parse of the image yields both the call-target names and the
-    // named static storage. Two parses tripped the object-parse ceiling.
-    let (addr_map, data_symbols) =
-        crate::ir::name_resolve::collect_address_map_with_pdb_cache_and_data_symbols(
-            &data, &path, pdb_cache,
-        );
-    let budgets = crate::analysis::cfg::Budgets {
-        max_functions: 1,
-        max_blocks,
-        max_instructions,
-        timeout_ms,
-        total_timeout_ms: 0,
-    };
+    let ProgramNameContext {
+        address_names: mut addr_map,
+        data_symbols,
+    } = prepare_program_name_context(&image, &path, pdb_cache, &discovered);
+    let ProgramRenderContext {
+        data_symbols,
+        string_pool: str_pool,
+        readonly_data,
+        function_tables,
+        got_targets,
+    } = prepare_program_render_context(&session, &image, data_symbols);
     let program_environment = (style == "decbench" && types)
         .then(|| session.environment(&budgets, cc, &addr_map, &[func_va]));
-    // The reason is the analyst-visible one. This used to blame the
-    // architecture unconditionally, so an x86-64 function whose blocks were all
-    // attributed to a neighbour reported "LLIR lifter does not support this
-    // architecture" about a lifter that supports it perfectly well.
-    let lf_raw = lift_function_from_image(&image, &func)
-        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-    // The ABI's call effects, recorded on the calls themselves, BEFORE SSA — so a
-    // call participates in def/use like any other instruction instead of every later
-    // pass having to special-case it (see `ir::abi`).
-    let mut lf_raw = lf_raw;
-    inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
-    annotate_calls_in(&mut lf_raw, cc, &addr_map);
-    // `value_number` canonicalises sub-registers to their 64-bit parent (`edi`
-    // -> `rdi`) so def/use versions line up for value correctness. But the
-    // register sub-name width (`edi`=4) is *the* -O0 type-recovery signal, and
-    // canonicalisation erases it. So type recovery runs on `lf_raw` (widths
-    // intact) while everything downstream uses the canonicalised `lf`; the
-    // remap merges the raw `edi`/`rdi` keys into one `argN` slot, keeping the
-    // narrower width.
-    let prepared_llir = prepare_llir_for_lowering(
-        &mut lf_raw,
-        &image,
-        &exception_sites,
-        cc,
-        style == "decbench" && types,
-        arm_vfp_args,
-        dwarf_outputs
-            .as_ref()
-            .and_then(|outputs| outputs.get(&func_va)),
-        program_environment
-            .as_deref()
-            .and_then(|environment| environment.prototype_for(func_va)),
-        dwarf_type_env.as_ref(),
-    );
-    let PreparedLlir {
-        region,
-        cfg_health,
-        numbered: lf,
-        definition_widths,
-        parameter_slots: mut param_slots,
-        inferred_prototype,
-        prototype,
-        ..
-    } = prepared_llir;
-    let declared_function_name = dwarf_outputs
-        .as_ref()
-        .and_then(|outputs| outputs.get(&func_va))
-        .and_then(|contract| contract.function_name.as_ref())
-        .cloned()
-        .unwrap_or_else(|| func.name.clone());
-    let mut profiler =
-        crate::decompile::profile::FunctionProfiler::from_env(&declared_function_name, func_va);
-    let mut f = profiler.measure("lower", || lower(&lf, &region, declared_function_name));
-    crate::ir::exception_recover::mark_landing_pads(&mut f, &exception_sites);
-    // An explicit byte range has no discovered callee Function objects from
-    // which to recover cross-function storage layouts.
-    let callee_facts = DirectCalleeFacts::default();
-    // Inputs the shared pipeline needs. These were interleaved BETWEEN passes here, which
-    // is why the four copies could not simply be diffed against each other — the pass
-    // list and the local setup were braided together. None of them touch `f`, so
-    // hoisting them is order-preserving.
+    let callee_call_graph = session.call_graph_for(&budgets, &[func_va], &discovered);
+    let mut callee_layout_cache = std::collections::HashMap::new();
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
-    let mut str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
-    data_symbols.remove_truncated_character_arrays(&mut str_pool);
-    let readonly_data = readonly_data_for(&session, &image, &str_pool);
-    let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
-    // Slot -> the in-image address the loader stores there, so a `-fPIC` read
-    // of a locally-defined global folds to that global instead of dereferencing
-    // an unrelocated linkage word. See `ir::got_fold`.
-    let got_targets: std::collections::HashMap<u64, u64> =
-        crate::analysis::elf_got::elf_got_target_map(&data)
-            .into_iter()
-            .collect();
-    let stack_object_hints = dwarf_stack_object_hints(
-        dwarf_outputs
-            .as_ref()
-            .and_then(|outputs| outputs.get(&func_va)),
-        cc,
-    );
-    let (mut stack_facts, role_names) = run_ast_passes(
-        &mut f,
-        &mut profiler,
-        cfg_health,
-        cc,
-        false,
-        prototype.as_ref(),
-        &mut param_slots,
-        locked_parameter_count(prototype.as_ref()),
-        &callee_facts,
-        &addr_map,
-        &str_pool,
-        &function_tables,
-        &stack_object_hints,
-        &got_targets,
-    );
-    merge_dwarf_register_local_facts(
-        &mut stack_facts,
-        dwarf_outputs
-            .as_ref()
-            .and_then(|outputs| outputs.get(&func_va)),
-        &lf,
-        &role_names,
-        arch,
-        cc,
-        dwarf_type_env.as_ref(),
-    );
-    if style == "decbench" {
-        crate::ir::exception_recover::recover_typed_handlers(&mut f, &exception_sites);
-        crate::ir::exception_recover::mark_int_throws_with_address_map(&mut f, &addr_map);
-        crate::ir::exception_recover::recover_throws(&mut f);
-    }
-    recognise_machine_frame(&mut f, cc);
-    if let Some(field_map) = &field_map {
-        crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
-    }
-    Ok(if style == "decbench" {
-        let maps = types.then(|| {
-            decbench_type_maps(
-                &f,
-                &lf_raw,
-                &lf,
-                prototype.as_ref().expect("typed DecBench prototype"),
-                cc,
-                &param_slots,
-                &stack_facts.sizes,
-                &stack_facts.source_types,
-                &stack_facts.source_names,
-                dwarf_type_env.as_ref(),
-                &role_names,
-                &definition_widths,
-            )
-        });
-        let (decl, width, exact_value_widths) = match &maps {
-            Some((d, w, exact)) => (Some(d), Some(w), Some(exact)),
-            None => (None, None, None),
-        };
-        let dwarf_render_contract = dwarf_outputs
-            .as_ref()
-            .and_then(|outputs| outputs.get(&func_va));
-        let declared_render = dwarf_render_contract.and_then(dwarf_render_prototype);
-        record_recovered_prototype_conflict(
-            &f.name,
-            func_va,
-            if pdb_contract_vas.contains(&func_va) {
-                crate::program::environment::DeclarationSource::Pdb.label()
-            } else {
-                crate::program::environment::DeclarationSource::Dwarf.label()
-            },
-            declared_render.as_ref(),
-            inferred_prototype.as_ref(),
-            cc,
-        );
-        decbench_text(
-            &f,
-            &mut profiler,
-            cfg_health,
-            &exception_sites,
-            decl,
-            width,
-            exact_value_widths,
-            &readonly_data,
-            &str_pool,
-            prototype.as_ref(),
-            declared_render.as_ref(),
-            dwarf_render_contract.map(|contract| contract.parameter_names.as_slice()),
-            dwarf_types.as_deref().unwrap_or(&[]),
-            &stack_facts.source_types,
-            &stack_facts.source_names,
-            dwarf_render_contract.map_or(&[], |contract| contract.static_locals.as_slice()),
-            cc,
-            &addr_map,
-            &callee_facts.env,
-            &data_symbols,
-        )
-    } else if style == "c" {
-        profiler.measure("render_c", || crate::ir::ast::render_c(&f))
-    } else if types {
-        let renamed = remap_type_map(&recover_types_for(&lf_raw, cc), &f, cc, &param_slots);
-        profiler.measure("render_with_types", || render_with_types(&f, &renamed))
-    } else {
-        profiler.measure("render", || render(&f))
+    let output = decompile_function(FunctionPipelineContext {
+        image: &image,
+        functions: &discovered,
+        discovered: &func,
+        budgets: &budgets,
+        callee_budget: analysis_budget.callee,
+        type_budget: analysis_budget.types,
+        pipeline_fingerprint: pipeline_fingerprint.clone(),
+        render_options: RenderOptions {
+            types,
+            style,
+            shadow_v2: false,
+            pdb_cache: pdb_cache.and_then(|path| path.to_str()).unwrap_or(""),
+            analyst_names: None,
+            analyst_locals: None,
+            analyst_prototype: None,
+        },
+        debug_outputs: dwarf_outputs.as_ref(),
+        debug_types: dwarf_types.as_deref().unwrap_or(&[]),
+        debug_type_env: dwarf_type_env.as_ref(),
+        debug_source: if pdb_contract_vas.contains(&func_va) {
+            crate::program::environment::DeclarationSource::Pdb
+        } else {
+            crate::program::environment::DeclarationSource::Dwarf
+        },
+        exception_sites: &exception_sites,
+        program_fact: program_environment
+            .as_deref()
+            .and_then(|environment| environment.prototype_for(func_va)),
+        address_names: &mut addr_map,
+        function_tables: &function_tables,
+        got_targets: &got_targets,
+        string_pool: &str_pool,
+        readonly_data: &readonly_data,
+        data_symbols: &data_symbols,
+        field_map: field_map.as_ref(),
+        call_graph: Some(callee_call_graph.as_ref()),
+        callee_cache: &mut callee_layout_cache,
+        calling_convention: cc,
+        arm_vfp_args,
+        prefer_debug_function_name: true,
+        pdb_outer_name: None,
     })
+    .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+    Ok(DecompileResult::from_rendered(
+        output.rendered.text,
+        &output.prepared.function,
+        output.prepared.cfg_health,
+        &func,
+        output.rendered.provenance,
+        output.rendered.line_mappings,
+        pipeline_fingerprint,
+    )
+    .pseudocode)
 }
 
 /// Recover machine-code prototype facts, then apply a stronger declared output
@@ -1215,12 +900,12 @@ fn record_prototype_conflict_with_candidate(
 /// Decompile the first `limit` discovered functions. Returns a list of
 /// `(func_name, entry_va, pseudocode)` triples.
 ///
-/// Default `limit=30000` matches the function-discovery cap so the
-/// `--all` flag really does emit every function unless the user
-/// explicitly opts back into a smaller window.
+/// `limit` bounds returned artifacts independently from `max_functions`, which
+/// bounds program discovery. Their defaults match so `--all` emits every
+/// discovered function unless the caller requests a smaller output window.
 #[pyfunction]
 #[pyo3(name = "decompile_all")]
-#[pyo3(signature = (path, limit=30_000usize, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=10_000u64, pdb_cache="", style="", analyst_names=None))]
+#[pyo3(signature = (path, limit=30_000usize, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=10_000u64, pdb_cache="", style="", analyst_names=None, max_functions=30_000usize, include_line_mappings=false))]
 fn decompile_all_py(
     py: Python<'_>,
     path: String,
@@ -1231,57 +916,58 @@ fn decompile_all_py(
     pdb_cache: &str,
     style: &str,
     analyst_names: Option<std::collections::HashMap<u64, String>>,
+    max_functions: usize,
+    include_line_mappings: bool,
 ) -> PyResult<PyObject> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_all");
-    use crate::analysis::cfg::Budgets;
-    use crate::ir::ast::{lower, render};
-    use crate::ir::lift_function::lift_function_from_image;
+
+    let analysis_budget = AnalysisBudget {
+        discovery: pipeline::DiscoveryBudget {
+            max_functions: max_functions.max(1),
+            total_timeout_ms: 0,
+        },
+        cfg: pipeline::CfgBudget {
+            max_blocks,
+            max_instructions,
+            timeout_ms,
+        },
+        callee: pipeline::CalleeBudget::default(),
+        types: pipeline::TypeBudget::default(),
+        size: pipeline::SizeBudget::from_instruction_and_output_limits(max_instructions, limit),
+    };
+    let render_options = RenderOptions {
+        types: style == "decbench",
+        style,
+        shadow_v2: false,
+        pdb_cache,
+        analyst_names: analyst_names.as_ref(),
+        analyst_locals: None,
+        analyst_prototype: None,
+    };
 
     let image = load_program_image(&path)?;
     let session = crate::program::session::ProgramSession::from_image(image);
     let image = session.image().clone();
-    let data = image.bytes();
     let exception_sites = image.exception_call_sites();
-    let (dwarf_outputs, pdb_contract_vas, pdb_types) = if style == "decbench" {
-        let (contracts, pdb_addresses, pdb_types) =
-            debug_output_contracts(&image, &path, pdb_cache);
-        (Some(contracts), pdb_addresses, pdb_types)
-    } else {
-        (None, std::collections::HashSet::new(), Vec::new())
-    };
-    let dwarf_types = (style == "decbench").then(|| {
-        let mut types = session.debug_types().to_vec();
-        types.extend(pdb_types);
-        types
-    });
+    let ProgramDebugContext {
+        output_contracts: dwarf_outputs,
+        pdb_contract_vas,
+        types: dwarf_types,
+    } = prepare_program_debug_context(&session, &image, &path, pdb_cache, style == "decbench");
     let dwarf_type_env = dwarf_types
         .as_deref()
         .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
-    let budgets = Budgets {
-        max_functions: limit.max(1),
-        max_blocks,
-        max_instructions,
-        timeout_ms,
-        total_timeout_ms: 0,
-    };
-    // Whole-binary function discovery: seconds to minutes on a large image, and
-    // the reason `Ctrl-C` used to do nothing until it finished. `data` is an
-    // owned `Vec<u8>` and `Budgets` is `Copy`; no `Bound`/`Py` reference crosses
-    // the closure boundary. See `python_bindings::analysis`.
-    let funcs = py.detach(|| session.discover_functions(&budgets, &[]));
+    let ProgramDiscovery {
+        budgets,
+        functions: funcs,
+    } = discover_program(py, &session, analysis_budget, &[]);
     let cc = target_calling_convention(&image)?;
-    let arch = image.target().architecture();
     let arm_vfp_args = image.arm_hard_float();
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
-    // ONE parse of the image yields both the call-target names and the
-    // named static storage. Two parses tripped the object-parse ceiling.
-    let (mut addr_map, data_symbols) =
-        crate::ir::name_resolve::collect_address_map_with_pdb_cache_and_data_symbols(
-            &data, &path, pdb_cache,
-        );
-    crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
-    crate::ir::name_resolve::add_flirt_referenced_function_names(&image, &mut addr_map, &funcs);
-    crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
+    let ProgramNameContext {
+        address_names: mut addr_map,
+        data_symbols,
+    } = prepare_program_name_context(&image, &path, pdb_cache, &funcs);
     // The analyst overlay is DELIBERATELY not applied here. Everything between
     // this point and `recover_direct_callee_layouts` resolves callees BY NAME
     // against what the binary calls them -- `session.environment`,
@@ -1291,26 +977,22 @@ fn decompile_all_py(
     // `int validate(char *, int)` to `long f(void)` at every call site. The
     // rename is a presentation decision, so it is applied after the analysis
     // that depends on binary truth -- see below.
+    let ProgramRenderContext {
+        data_symbols,
+        string_pool: str_pool,
+        readonly_data,
+        function_tables,
+        got_targets,
+    } = prepare_program_render_context(&session, &image, data_symbols);
     let environment_targets = funcs
         .iter()
-        .take(limit)
+        .take(analysis_budget.size.max_output_functions)
         .map(|function| function.entry_point.value)
         .collect::<Vec<_>>();
     let program_environment = (style == "decbench")
         .then(|| session.environment(&budgets, cc, &addr_map, &environment_targets));
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
-    let mut str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
-    data_symbols.remove_truncated_character_arrays(&mut str_pool);
-    let readonly_data = readonly_data_for(&session, &image, &str_pool);
-    let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
-    // Slot -> the in-image address the loader stores there, so a `-fPIC` read
-    // of a locally-defined global folds to that global instead of dereferencing
-    // an unrelocated linkage word. See `ir::got_fold`.
-    let got_targets: std::collections::HashMap<u64, u64> =
-        crate::analysis::elf_got::elf_got_target_map(&data)
-            .into_iter()
-            .collect();
     // Identity-keyed call structure for this exact discovery. `call_graph_for`
     // builds from `funcs` (already fetched above) instead of re-querying
     // `discover_functions`, so this one logical query registers exactly one
@@ -1319,217 +1001,98 @@ fn decompile_all_py(
     let callee_call_graph = py.detach(|| session.call_graph_for(&budgets, &[], &funcs));
     let mut callee_layout_cache = std::collections::HashMap::new();
     let list = PyList::empty(py);
-    for func in funcs.iter().take(limit) {
+    for func in funcs.iter().take(analysis_budget.size.max_output_functions) {
         // The GIL is held across the per-function lifting work (the loop builds
         // a `PyList` as it goes), so CPython never re-enters its eval loop and
         // never notices a signal. This is the supported way to stay
         // interruptible without releasing: it raises `KeyboardInterrupt` here.
         py.check_signals()?;
-        let Ok(lf_raw) = lift_function_from_image(&image, func) else {
-            continue;
+        let request = DecompileRequest {
+            va: func.entry_point.value,
+            analysis_budget,
+            render_options,
         };
-        // See `ir::abi`: the ABI's call effects go on the calls before SSA.
-        let mut lf_raw = lf_raw;
-        inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
-        annotate_calls_in(&mut lf_raw, cc, &addr_map);
-        let mut callee_facts = recover_direct_callee_layouts(
-            &image,
-            &funcs,
-            &lf_raw,
-            cc,
-            arm_vfp_args,
-            &budgets,
-            dwarf_outputs.as_ref(),
-            dwarf_type_env.as_ref(),
-            &mut addr_map,
-            &function_tables,
-            Some(callee_call_graph.as_ref()),
-            &mut callee_layout_cache,
-        );
-        apply_recovered_direct_callee_effects(&mut lf_raw, cc, &callee_facts);
-        // The analyst overlay, applied now that every name-keyed analysis above has
-        // run against what the binary calls things. It rewrites the address map --
-        // which `resolve_names` turns into `Expr::Named` -- so one overlay renames
-        // the definition AND every call site, and it rekeys the recovered symbol
-        // environment so the callee keeps the prototype recovered under its old
-        // name. See `apply_analyst_names` and `SymbolEnv::rename_display`.
-        if let Some(names) = analyst_names.as_ref() {
-            {
-                let renames = crate::ir::name_resolve::apply_analyst_names(&mut addr_map, names);
-                if !renames.is_empty() {
-                    {
-                        callee_facts.env.rename_display(&renames);
-                    }
-                }
-            }
-        }
-        // Recover types on the pre-canonicalisation LLIR (sub-register widths
-        // intact); see the note in `decompile_at`.
-        let prepared_llir = prepare_llir_for_lowering(
-            &mut lf_raw,
-            &image,
-            &exception_sites,
-            cc,
-            style == "decbench",
-            arm_vfp_args,
-            dwarf_outputs
-                .as_ref()
-                .and_then(|outputs| outputs.get(&func.entry_point.value)),
-            program_environment
+        let pipeline_fingerprint = request.fingerprint();
+        let Ok(output) = decompile_function(FunctionPipelineContext {
+            image: &image,
+            functions: &funcs,
+            discovered: func,
+            budgets: &budgets,
+            callee_budget: analysis_budget.callee,
+            type_budget: analysis_budget.types,
+            pipeline_fingerprint: pipeline_fingerprint.clone(),
+            render_options,
+            debug_outputs: dwarf_outputs.as_ref(),
+            debug_types: dwarf_types.as_deref().unwrap_or(&[]),
+            debug_type_env: dwarf_type_env.as_ref(),
+            debug_source: if pdb_contract_vas.contains(&func.entry_point.value) {
+                crate::program::environment::DeclarationSource::Pdb
+            } else {
+                crate::program::environment::DeclarationSource::Dwarf
+            },
+            exception_sites: &exception_sites,
+            program_fact: program_environment
                 .as_deref()
                 .and_then(|environment| environment.prototype_for(func.entry_point.value)),
-            dwarf_type_env.as_ref(),
-        );
-        let PreparedLlir {
-            region,
-            cfg_health,
-            numbered: lf,
-            definition_widths,
-            parameter_slots: mut param_slots,
-            inferred_prototype,
-            mut prototype,
-            ..
-        } = prepared_llir;
-        if let Some(prototype) = prototype.as_mut() {
-            let exact_ssa = crate::ir::ssa::compute_ssa(&lf_raw);
-            refine_passthrough_parameter_hints(prototype, &lf_raw, &exact_ssa, &callee_facts);
-        }
-        let outer_name = resolve_outer_function_name_with_analyst(
-            &func.name,
-            func.entry_point.value,
-            &addr_map,
-            analyst_names.as_ref(),
-        );
-        let mut profiler = crate::decompile::profile::FunctionProfiler::from_env(
-            &outer_name,
-            func.entry_point.value,
-        );
-        let mut f = profiler.measure("lower", || lower(&lf, &region, outer_name.clone()));
-        crate::ir::exception_recover::mark_landing_pads(&mut f, &exception_sites);
-        // One pass list, shared with every other entry point — see `run_ast_passes`.
-        // This site used to run dead-flag pruning before constant folding and never
-        // pruned unreferenced labels, so `--all` produced different output from `--vas`
-        // for the same function, and the fixture gate's structural lane measured a
-        // different pipeline from its execution lane. It cannot drift again.
-        let stack_object_hints = dwarf_stack_object_hints(
-            dwarf_outputs
-                .as_ref()
-                .and_then(|outputs| outputs.get(&func.entry_point.value)),
-            cc,
-        );
-        let (mut stack_facts, role_names) = run_ast_passes(
-            &mut f,
-            &mut profiler,
-            cfg_health,
-            cc,
-            false,
-            prototype.as_ref(),
-            &mut param_slots,
-            locked_parameter_count(prototype.as_ref()),
-            &callee_facts,
-            &addr_map,
-            &str_pool,
-            &function_tables,
-            &stack_object_hints,
-            &got_targets,
-        );
-        merge_dwarf_register_local_facts(
-            &mut stack_facts,
-            dwarf_outputs
-                .as_ref()
-                .and_then(|outputs| outputs.get(&func.entry_point.value)),
-            &lf,
-            &role_names,
-            arch,
-            cc,
-            dwarf_type_env.as_ref(),
-        );
-        if style == "decbench" {
-            crate::ir::exception_recover::recover_typed_handlers(&mut f, &exception_sites);
-            crate::ir::exception_recover::mark_int_throws_with_address_map(&mut f, &addr_map);
-            crate::ir::exception_recover::recover_throws(&mut f);
-        }
-        recognise_machine_frame(&mut f, cc);
-        if let Some(field_map) = &field_map {
-            crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
-        }
-        let text = if style == "decbench" {
-            let (decl, width, exact_value_widths) = decbench_type_maps(
-                &f,
-                &lf_raw,
-                &lf,
-                prototype.as_ref().expect("DecBench prototype"),
-                cc,
-                &param_slots,
-                &stack_facts.sizes,
-                &stack_facts.source_types,
-                &stack_facts.source_names,
-                dwarf_type_env.as_ref(),
-                &role_names,
-                &definition_widths,
-            );
-            let dwarf_render_contract = dwarf_outputs
-                .as_ref()
-                .and_then(|outputs| outputs.get(&func.entry_point.value));
-            let declared_render = dwarf_render_contract.and_then(dwarf_render_prototype);
-            record_recovered_prototype_conflict(
-                &f.name,
-                func.entry_point.value,
-                if pdb_contract_vas.contains(&func.entry_point.value) {
-                    crate::program::environment::DeclarationSource::Pdb.label()
-                } else {
-                    crate::program::environment::DeclarationSource::Dwarf.label()
-                },
-                declared_render.as_ref(),
-                inferred_prototype.as_ref(),
-                cc,
-            );
-            decbench_text(
-                &f,
-                &mut profiler,
-                cfg_health,
-                &exception_sites,
-                Some(&decl),
-                Some(&width),
-                Some(&exact_value_widths),
-                &readonly_data,
-                &str_pool,
-                prototype.as_ref(),
-                declared_render.as_ref(),
-                dwarf_render_contract.map(|contract| contract.parameter_names.as_slice()),
-                dwarf_types.as_deref().unwrap_or(&[]),
-                &stack_facts.source_types,
-                &stack_facts.source_names,
-                dwarf_render_contract.map_or(&[], |contract| contract.static_locals.as_slice()),
-                cc,
-                &addr_map,
-                &callee_facts.env,
-                &data_symbols,
-            )
-        } else {
-            profiler.measure("render", || render(&f))
+            address_names: &mut addr_map,
+            function_tables: &function_tables,
+            got_targets: &got_targets,
+            string_pool: &str_pool,
+            readonly_data: &readonly_data,
+            data_symbols: &data_symbols,
+            field_map: field_map.as_ref(),
+            call_graph: Some(callee_call_graph.as_ref()),
+            callee_cache: &mut callee_layout_cache,
+            calling_convention: cc,
+            arm_vfp_args,
+            prefer_debug_function_name: false,
+            pdb_outer_name: None,
+        }) else {
+            continue;
         };
-        let variables = crate::ir::recovered_variables::recovered_variables_from_llir(
-            &text,
-            prototype.as_ref(),
-            &stack_facts,
-            calling_convention_pointer_width(cc),
-            &lf_raw,
+        let outer_name = output.prepared.function.name.clone();
+        let result = DecompileResult::from_rendered(
+            output.rendered.text,
+            &output.prepared.function,
+            output.prepared.cfg_health,
+            func,
+            output.rendered.provenance,
+            output.rendered.line_mappings,
+            pipeline_fingerprint,
         );
-        list.append((
-            outer_name,
-            func.entry_point.value,
-            text,
-            func.size,
-            variables_to_py(py, &variables)?,
-        ))?;
+        let variables = crate::ir::recovered_variables::recovered_variables_from_llir(
+            &result.pseudocode,
+            output.prepared.prototype.as_ref(),
+            &output.prepared.stack_facts,
+            calling_convention_pointer_width(cc),
+            &output.raw,
+        );
+        let variables = variables_to_py(py, &variables)?;
+        if include_line_mappings {
+            list.append((
+                outer_name,
+                func.entry_point.value,
+                result.pseudocode,
+                func.size,
+                variables,
+                line_mappings_to_py(py, &result.line_mappings)?,
+            ))?;
+        } else {
+            list.append((
+                outer_name,
+                func.entry_point.value,
+                result.pseudocode,
+                func.size,
+                variables,
+            ))?;
+        }
     }
     Ok(list.into())
 }
 
 #[pyfunction]
 #[pyo3(name = "decompile_many")]
-#[pyo3(signature = (path, func_vas, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=5000u64, types=true, style="", shadow_v2=false, pdb_cache="", max_functions=0usize, analyst_names=None))]
+#[pyo3(signature = (path, func_vas, max_blocks=4096usize, max_instructions=200_000usize, timeout_ms=5000u64, types=true, style="", shadow_v2=false, pdb_cache="", max_functions=0usize, analyst_names=None, include_line_mappings=false))]
 #[allow(clippy::too_many_arguments)]
 fn decompile_many_py(
     py: Python<'_>,
@@ -1544,6 +1107,7 @@ fn decompile_many_py(
     pdb_cache: &str,
     max_functions: usize,
     analyst_names: Option<std::collections::HashMap<u64, String>>,
+    include_line_mappings: bool,
 ) -> PyResult<PyObject> {
     let _run_profile = crate::decompile::profile::RunProfiler::from_env("decompile_many");
     if shadow_v2 && style != "decbench" {
@@ -1560,34 +1124,22 @@ fn decompile_many_py(
     // analyse once, then run the same per-function pipeline as `decompile_at`
     // for each requested VA. Returns a list of (name, va, c_or_ir_text) for
     // every requested VA that resolves to a known function.
-    use crate::analysis::cfg::Budgets;
-    use crate::ir::ast::{lower, render, render_with_types};
-    use crate::ir::lift_function::lift_function_from_image;
-    use crate::ir::types_recover::recover_types_for;
     use std::collections::HashSet;
 
     let image = load_program_image(&path)?;
     let session = crate::program::session::ProgramSession::from_image(image);
     let image = session.image().clone();
-    let data = image.bytes();
     // See `decompile_at`: an ARM32 Thumb `.symtab` value carries the Thumb bit.
     let func_vas: Vec<u64> = func_vas
         .into_iter()
         .map(|va| image.normalize_function_entry(va))
         .collect();
     let exception_sites = image.exception_call_sites();
-    let (dwarf_outputs, pdb_contract_vas, pdb_types) = if style == "decbench" {
-        let (contracts, pdb_addresses, pdb_types) =
-            debug_output_contracts(&image, &path, pdb_cache);
-        (Some(contracts), pdb_addresses, pdb_types)
-    } else {
-        (None, std::collections::HashSet::new(), Vec::new())
-    };
-    let dwarf_types = (style == "decbench").then(|| {
-        let mut types = session.debug_types().to_vec();
-        types.extend(pdb_types);
-        types
-    });
+    let ProgramDebugContext {
+        output_contracts: dwarf_outputs,
+        pdb_contract_vas,
+        types: dwarf_types,
+    } = prepare_program_debug_context(&session, &image, &path, pdb_cache, style == "decbench");
     let dwarf_type_env = dwarf_types
         .as_deref()
         .map(crate::ir::dwarf_type_env::DwarfTypeEnv::new);
@@ -1596,32 +1148,44 @@ fn decompile_many_py(
     // by `recover_direct_callee_layouts`, so unrelated automatic seeds never
     // need to consume this worklist merely to render one call accurately.
     let requested_function_limit = pipeline::requested_function_limit(&func_vas, max_functions);
-    let budgets = Budgets {
-        max_functions: requested_function_limit,
-        max_blocks,
-        max_instructions,
-        timeout_ms,
-        total_timeout_ms: 0,
+    let analysis_budget = AnalysisBudget {
+        discovery: pipeline::DiscoveryBudget {
+            max_functions: requested_function_limit,
+            total_timeout_ms: 0,
+        },
+        cfg: pipeline::CfgBudget {
+            max_blocks,
+            max_instructions,
+            timeout_ms,
+        },
+        callee: pipeline::CalleeBudget::default(),
+        types: pipeline::TypeBudget::default(),
+        size: pipeline::SizeBudget::from_instruction_and_output_limits(
+            max_instructions,
+            requested_function_limit,
+        ),
+    };
+    let render_options = RenderOptions {
+        types,
+        style,
+        shadow_v2,
+        pdb_cache,
+        analyst_names: analyst_names.as_ref(),
+        analyst_locals: None,
+        analyst_prototype: None,
     };
     // --- one-time analysis + name/field/string maps -----------------------
-    // Whole-binary function discovery: seconds to minutes on a large image, and
-    // the reason `Ctrl-C` used to do nothing until it finished. `data` is an
-    // owned `Vec<u8>` and `Budgets` is `Copy`; no `Bound`/`Py` reference crosses
-    // the closure boundary. See `python_bindings::analysis`.
-    let funcs = py.detach(|| session.discover_functions(&budgets, &func_vas));
+    let ProgramDiscovery {
+        budgets,
+        functions: funcs,
+    } = discover_program(py, &session, analysis_budget, &func_vas);
     let cc = target_calling_convention(&image)?;
-    let arch = image.target().architecture();
     let arm_vfp_args = image.arm_hard_float();
     let pdb_cache = (!pdb_cache.is_empty()).then(|| std::path::Path::new(pdb_cache));
-    // ONE parse of the image yields both the call-target names and the
-    // named static storage. Two parses tripped the object-parse ceiling.
-    let (mut addr_map, data_symbols) =
-        crate::ir::name_resolve::collect_address_map_with_pdb_cache_and_data_symbols(
-            &data, &path, pdb_cache,
-        );
-    crate::ir::name_resolve::add_discovered_function_names(&mut addr_map, &funcs);
-    crate::ir::name_resolve::add_flirt_referenced_function_names(&image, &mut addr_map, &funcs);
-    crate::ir::name_resolve::add_referenced_function_names(&mut addr_map, &funcs);
+    let ProgramNameContext {
+        address_names: mut addr_map,
+        data_symbols,
+    } = prepare_program_name_context(&image, &path, pdb_cache, &funcs);
     // The analyst overlay is DELIBERATELY not applied here. Everything between
     // this point and `recover_direct_callee_layouts` resolves callees BY NAME
     // against what the binary calls them -- `session.environment`,
@@ -1631,21 +1195,17 @@ fn decompile_many_py(
     // `int validate(char *, int)` to `long f(void)` at every call site. The
     // rename is a presentation decision, so it is applied after the analysis
     // that depends on binary truth -- see below.
+    let ProgramRenderContext {
+        data_symbols,
+        string_pool: str_pool,
+        readonly_data,
+        function_tables,
+        got_targets,
+    } = prepare_program_render_context(&session, &image, data_symbols);
     let program_environment = (style == "decbench" && types)
         .then(|| session.environment(&budgets, cc, &addr_map, &func_vas));
     let field_map =
         pdb_cache.map(|cache_dir| crate::ir::pdb_fields::collect_pdb_field_map(&path, cache_dir));
-    let mut str_pool = crate::ir::strings_fold::collect_string_pool_from_image(&image);
-    data_symbols.remove_truncated_character_arrays(&mut str_pool);
-    let readonly_data = readonly_data_for(&session, &image, &str_pool);
-    let function_tables = crate::ir::function_tables::collect_function_pointer_tables(&data);
-    // Slot -> the in-image address the loader stores there, so a `-fPIC` read
-    // of a locally-defined global folds to that global instead of dereferencing
-    // an unrelocated linkage word. See `ir::got_fold`.
-    let got_targets: std::collections::HashMap<u64, u64> =
-        crate::analysis::elf_got::elf_got_target_map(&data)
-            .into_iter()
-            .collect();
     // Identity-keyed call structure for this exact discovery. `call_graph_for`
     // builds from `funcs` (already fetched above) instead of re-querying
     // `discover_functions`, so this one logical query registers exactly one
@@ -1680,6 +1240,7 @@ fn decompile_many_py(
     // not something a clock between passes could have caught anyway — the spin
     // that motivated this was inside `refine_float_copy_types`, where no
     // between-pass check could reach it. See its fixed-point proof.
+    let mut output_count = 0usize;
     for func in funcs.iter() {
         // See `decompile_all_py`: keeps a long multi-function decompile
         // interruptible while the GIL is held for the `PyList` it is building.
@@ -1688,258 +1249,117 @@ fn decompile_many_py(
         if !wanted.contains(&func_va) {
             continue;
         }
-        let Ok(lf_raw) = lift_function_from_image(&image, func) else {
-            continue;
+        if output_count >= analysis_budget.size.max_output_functions {
+            break;
+        }
+        let request = DecompileRequest {
+            va: func_va,
+            analysis_budget,
+            render_options,
         };
-        // See `ir::abi`: the ABI's call effects go on the calls before SSA.
-        let mut lf_raw = lf_raw;
-        inline_soft_helper_calls_in(&mut lf_raw, &addr_map);
-        annotate_calls_in(&mut lf_raw, cc, &addr_map);
-        let mut callee_facts = recover_direct_callee_layouts(
-            &image,
-            &funcs,
-            &lf_raw,
-            cc,
-            arm_vfp_args,
-            &budgets,
-            dwarf_outputs.as_ref(),
-            dwarf_type_env.as_ref(),
-            &mut addr_map,
-            &function_tables,
-            Some(callee_call_graph.as_ref()),
-            &mut callee_layout_cache,
-        );
-        apply_recovered_direct_callee_effects(&mut lf_raw, cc, &callee_facts);
-        // The analyst overlay, applied now that every name-keyed analysis above has
-        // run against what the binary calls things. It rewrites the address map --
-        // which `resolve_names` turns into `Expr::Named` -- so one overlay renames
-        // the definition AND every call site, and it rekeys the recovered symbol
-        // environment so the callee keeps the prototype recovered under its old
-        // name. See `apply_analyst_names` and `SymbolEnv::rename_display`.
-        if let Some(names) = analyst_names.as_ref() {
-            {
-                let renames = crate::ir::name_resolve::apply_analyst_names(&mut addr_map, names);
-                if !renames.is_empty() {
-                    {
-                        callee_facts.env.rename_display(&renames);
-                    }
-                }
-            }
-        }
-        // Recover types on the pre-canonicalisation LLIR (sub-register widths
-        // intact); see the note in `decompile_at`.
-        let mut prepared_llir = pipeline::prepare_llir_for_lowering_with_shadow(
-            &mut lf_raw,
-            &image,
-            &exception_sites,
-            cc,
-            style == "decbench",
-            arm_vfp_args,
-            dwarf_outputs
-                .as_ref()
-                .and_then(|outputs| outputs.get(&func_va)),
-            program_environment
-                .as_deref()
-                .and_then(|environment| environment.prototype_for(func_va)),
-            dwarf_type_env.as_ref(),
-            shadow_v2,
-        );
-        if prepared_llir
-            .select_shadow_v2(shadow_v2, style == "decbench")
-            .is_err()
-        {
-            // Shadow-v2 is an explicitly requested, verified subset. A typed
-            // refusal for one function must not abort the rest of a batch:
-            // omit this row so the caller can compare requested VAs with
-            // returned VAs and account for the decline independently. The
-            // style contract is checked once above, so unavailability is the
-            // only possible error here. Default production selection never
-            // enters this branch.
-            continue;
-        }
-        let PreparedLlir {
-            region,
-            cfg_health,
-            numbered: lf,
-            definition_widths,
-            parameter_slots: mut param_slots,
-            inferred_prototype,
-            mut prototype,
-            ..
-        } = prepared_llir;
-        if let Some(prototype) = prototype.as_mut() {
-            let exact_ssa = crate::ir::ssa::compute_ssa(&lf_raw);
-            refine_passthrough_parameter_hints(prototype, &lf_raw, &exact_ssa, &callee_facts);
-        }
-        let outer_name = resolve_outer_function_name_with_analyst(
-            &func.name,
-            func_va,
-            &addr_map,
-            analyst_names.as_ref(),
-        );
-        let mut profiler =
-            crate::decompile::profile::FunctionProfiler::from_env(&outer_name, func_va);
-        let mut f = profiler.measure("lower", || lower(&lf, &region, outer_name));
-        crate::ir::exception_recover::mark_landing_pads(&mut f, &exception_sites);
-        // One pass list, shared with every other entry point — see `run_ast_passes`.
-        // This site used to run dead-flag pruning before constant folding and never
-        // pruned unreferenced labels, so `--all` produced different output from `--vas`
-        // for the same function, and the fixture gate's structural lane measured a
-        // different pipeline from its execution lane. It cannot drift again.
-        // Type recovery runs on the pre-canonicalisation LLIR and does not touch `f`,
-        // so it is hoisted above the shared pipeline rather than braided into it.
-        let tm = if types {
-            Some(recover_types_for(&lf_raw, cc))
-        } else {
-            None
-        };
-        let stack_object_hints = dwarf_stack_object_hints(
-            dwarf_outputs
-                .as_ref()
-                .and_then(|outputs| outputs.get(&func_va)),
-            cc,
-        );
-        let (mut stack_facts, role_names) = run_ast_passes(
-            &mut f,
-            &mut profiler,
-            cfg_health,
-            cc,
-            shadow_v2,
-            prototype.as_ref(),
-            &mut param_slots,
-            locked_parameter_count(prototype.as_ref()),
-            &callee_facts,
-            &addr_map,
-            &str_pool,
-            &function_tables,
-            &stack_object_hints,
-            &got_targets,
-        );
-        merge_dwarf_register_local_facts(
-            &mut stack_facts,
-            dwarf_outputs
-                .as_ref()
-                .and_then(|outputs| outputs.get(&func_va)),
-            &lf,
-            &role_names,
-            arch,
-            cc,
-            dwarf_type_env.as_ref(),
-        );
-        if style == "decbench" {
-            crate::ir::exception_recover::recover_typed_handlers(&mut f, &exception_sites);
-            crate::ir::exception_recover::mark_int_throws_with_address_map(&mut f, &addr_map);
-            crate::ir::exception_recover::recover_throws(&mut f);
-        }
-        recognise_machine_frame(&mut f, cc);
-        if let Some(field_map) = &field_map {
-            crate::ir::pdb_fields::annotate_function_fields(&mut f, field_map);
-        }
+        let pipeline_fingerprint = request.fingerprint();
         let pdb_outer_name = pdb_public_map
             .get(&func_va)
             .filter(|name| !name.is_empty() && !name.starts_with("sub_"))
             .cloned();
-        let text = if style == "decbench" {
-            let (decl, width, exact_value_widths) = decbench_type_maps(
-                &f,
-                &lf_raw,
-                &lf,
-                prototype.as_ref().expect("DecBench prototype"),
-                cc,
-                &param_slots,
-                &stack_facts.sizes,
-                &stack_facts.source_types,
-                &stack_facts.source_names,
-                dwarf_type_env.as_ref(),
-                &role_names,
-                &definition_widths,
-            );
-            let dwarf_render_contract = dwarf_outputs
-                .as_ref()
-                .and_then(|outputs| outputs.get(&func_va));
-            let declared_render = dwarf_render_contract.and_then(dwarf_render_prototype);
-            record_recovered_prototype_conflict(
-                &f.name,
-                func_va,
-                if pdb_contract_vas.contains(&func_va) {
-                    crate::program::environment::DeclarationSource::Pdb.label()
-                } else {
-                    crate::program::environment::DeclarationSource::Dwarf.label()
-                },
-                declared_render.as_ref(),
-                inferred_prototype.as_ref(),
-                cc,
-            );
-            decbench_text(
-                &f,
-                &mut profiler,
-                cfg_health,
-                &exception_sites,
-                Some(&decl),
-                Some(&width),
-                Some(&exact_value_widths),
-                &readonly_data,
-                &str_pool,
-                prototype.as_ref(),
-                declared_render.as_ref(),
-                dwarf_render_contract.map(|contract| contract.parameter_names.as_slice()),
-                dwarf_types.as_deref().unwrap_or(&[]),
-                &stack_facts.source_types,
-                &stack_facts.source_names,
-                dwarf_render_contract.map_or(&[], |contract| contract.static_locals.as_slice()),
-                cc,
-                &addr_map,
-                &callee_facts.env,
-                &data_symbols,
-            )
-        } else if style == "c" {
-            let body = profiler.measure("render_c", || crate::ir::ast::render_c(&f));
-            match pdb_outer_name {
-                Some(name) => format!("// PDB: {}\n{}", name, body),
-                None => body,
-            }
-        } else {
-            match tm {
-                Some(tm) => {
-                    let renamed = remap_type_map(&tm, &f, cc, &param_slots);
-                    profiler.measure("render_with_types", || render_with_types(&f, &renamed))
-                }
-                None => profiler.measure("render", || render(&f)),
-            }
+        let Ok(output) = decompile_function(FunctionPipelineContext {
+            image: &image,
+            functions: &funcs,
+            discovered: func,
+            budgets: &budgets,
+            callee_budget: analysis_budget.callee,
+            type_budget: analysis_budget.types,
+            pipeline_fingerprint: pipeline_fingerprint.clone(),
+            render_options: RenderOptions {
+                types,
+                style,
+                shadow_v2,
+                pdb_cache: pdb_cache.and_then(|path| path.to_str()).unwrap_or(""),
+                analyst_names: analyst_names.as_ref(),
+                analyst_locals: None,
+                analyst_prototype: None,
+            },
+            debug_outputs: dwarf_outputs.as_ref(),
+            debug_types: dwarf_types.as_deref().unwrap_or(&[]),
+            debug_type_env: dwarf_type_env.as_ref(),
+            debug_source: if pdb_contract_vas.contains(&func_va) {
+                crate::program::environment::DeclarationSource::Pdb
+            } else {
+                crate::program::environment::DeclarationSource::Dwarf
+            },
+            exception_sites: &exception_sites,
+            program_fact: program_environment
+                .as_deref()
+                .and_then(|environment| environment.prototype_for(func_va)),
+            address_names: &mut addr_map,
+            function_tables: &function_tables,
+            got_targets: &got_targets,
+            string_pool: &str_pool,
+            readonly_data: &readonly_data,
+            data_symbols: &data_symbols,
+            field_map: field_map.as_ref(),
+            call_graph: Some(callee_call_graph.as_ref()),
+            callee_cache: &mut callee_layout_cache,
+            calling_convention: cc,
+            arm_vfp_args,
+            prefer_debug_function_name: false,
+            pdb_outer_name: pdb_outer_name.as_deref(),
+        }) else {
+            continue;
         };
-        // Per function, from that function's own walk: in a set where one entry
-        // hit a budget and the next did not, only the first is marked. See
-        // `analysis::completeness`.
-        let text = match crate::analysis::completeness::cfg_incompleteness_note(func, &budgets) {
-            Some(note) => format!("{note}\n{text}"),
-            None => text,
-        };
-        let name = resolve_outer_function_name_with_analyst(
-            &func.name,
-            func_va,
-            &addr_map,
-            analyst_names.as_ref(),
-        );
+        let name = output.prepared.function.name.clone();
         // The structured inventory a consumer needs to match our locals without
         // re-parsing the C. Computed from the prototype and the stack-promotion
         // facts already in scope, and filtered to names the render actually
         // emitted -- see `ir::recovered_variables`.
-        let variables = crate::ir::recovered_variables::recovered_variables_from_llir(
-            &text,
-            prototype.as_ref(),
-            &stack_facts,
-            calling_convention_pointer_width(cc),
-            &lf_raw,
+        let result = DecompileResult::from_rendered(
+            output.rendered.text,
+            &output.prepared.function,
+            output.prepared.cfg_health,
+            func,
+            output.rendered.provenance,
+            output.rendered.line_mappings,
+            pipeline_fingerprint,
         );
-        list.append((
-            name,
-            func_va,
-            text,
-            func.size,
-            variables_to_py(py, &variables)?,
-        ))?;
+        let variables = crate::ir::recovered_variables::recovered_variables_from_llir(
+            &result.pseudocode,
+            output.prepared.prototype.as_ref(),
+            &output.prepared.stack_facts,
+            calling_convention_pointer_width(cc),
+            &output.raw,
+        );
+        let variables = variables_to_py(py, &variables)?;
+        if include_line_mappings {
+            list.append((
+                name,
+                func_va,
+                result.pseudocode,
+                func.size,
+                variables,
+                line_mappings_to_py(py, &result.line_mappings)?,
+            ))?;
+        } else {
+            list.append((name, func_va, result.pseudocode, func.size, variables))?;
+        }
+        output_count += 1;
     }
     Ok(list.into())
+}
+
+fn line_mappings_to_py(
+    py: Python<'_>,
+    mappings: &[(usize, crate::ir::ast::OriginSet)],
+) -> PyResult<PyObject> {
+    use pyo3::types::{PyDict, PyList};
+
+    let rows = PyList::empty(py);
+    for (line_number, origins) in mappings {
+        let row = PyDict::new(py);
+        row.set_item("line_number", line_number)?;
+        row.set_item("addresses", origins.addresses())?;
+        rows.append(row)?;
+    }
+    Ok(rows.into())
 }
 
 /// One `RecoveredVariable` per dict, in the shape a consumer reads.
@@ -1970,8 +1390,6 @@ fn variables_to_py(
     }
     Ok(list.into())
 }
-
-use crate::ir::name_resolve::resolve_outer_function_name_with_analyst;
 
 /// Drain and return the definition-before-use verdicts recorded since the last call.
 ///
@@ -2121,7 +1539,7 @@ mod tests {
             .expect("the fixture function is discovered");
         let mut function = crate::ir::lift_function::lift_function_from_image(image, target)
             .expect("the fixture function lifts");
-        let prepared = super::prepare_llir_for_lowering(
+        let prepared = super::pipeline::prepare_llir_for_lowering_with_shadow(
             &mut function,
             image,
             &[],
@@ -2131,6 +1549,7 @@ mod tests {
             None,
             None,
             None,
+            false,
         );
 
         let mir = prepared
@@ -2201,9 +1620,9 @@ mod tests {
         assert!(!text.contains("unrecovered indirect jump"), "{text}");
     }
 
+    use super::dwarf_contracts::{dwarf_stack_object_hints, merge_dwarf_register_local_facts};
     use super::{
-        dwarf_return_hint, dwarf_return_hint_with_env, dwarf_stack_object_hints,
-        merge_dwarf_register_local_facts, select_renderable_dwarf_local_facts,
+        dwarf_return_hint, dwarf_return_hint_with_env, select_renderable_dwarf_local_facts,
         DwarfPrototypeContract,
     };
     use crate::debug::dwarf::{DwarfReturnType, DwarfStackBase, DwarfStackObject};
@@ -2211,6 +1630,38 @@ mod tests {
     use crate::ir::types::VReg;
     use crate::ir::types_recover::{TypeHint, TypeMap};
     use std::collections::HashMap;
+
+    /// Build opaque identities for hand-written numbered LLIR test inputs.
+    ///
+    /// Product code must never reconstruct this fact from a display name; the
+    /// parser is confined to tests whose fixtures predate the identity sidecar.
+    fn test_value_identities(
+        numbered: &crate::ir::types::LlirFunction,
+    ) -> crate::ir::value_number::ValueIdentities {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for instruction in numbered.blocks.iter().flat_map(|block| &block.instrs) {
+            let (definition, uses) = crate::ir::use_def::def_uses(&instruction.op);
+            for register in definition.into_iter().chain(uses) {
+                let VReg::Phys(name) = &register else {
+                    continue;
+                };
+                let Some((base, version)) = name.rsplit_once('#') else {
+                    continue;
+                };
+                let Ok(version) = version.parse() else {
+                    continue;
+                };
+                identities.record(
+                    register.clone(),
+                    crate::ir::ssa::SsaValue {
+                        base: VReg::phys(base),
+                        version,
+                    },
+                );
+            }
+        }
+        identities
+    }
 
     #[test]
     fn rust_style_hidden_result_requires_the_full_machine_contradiction() {
@@ -2610,6 +2061,8 @@ mod tests {
             Some(&contract),
             &numbered,
             &std::collections::HashMap::from([("r4#1".to_string(), "var1".to_string())]),
+            &test_value_identities(&numbered),
+            &std::collections::HashSet::new(),
             Arch::ARM,
             crate::ir::call_args::CallConv::Arm,
             None,
@@ -2692,6 +2145,8 @@ mod tests {
             Some(&contract),
             &numbered,
             &roles,
+            &test_value_identities(&numbered),
+            &std::collections::HashSet::new(),
             Arch::X86_64,
             crate::ir::call_args::CallConv::SysVAmd64,
             None,
@@ -2758,6 +2213,8 @@ mod tests {
             Some(&contract),
             &numbered,
             &roles,
+            &test_value_identities(&numbered),
+            &std::collections::HashSet::new(),
             Arch::X86_64,
             crate::ir::call_args::CallConv::SysVAmd64,
             None,
@@ -2824,6 +2281,8 @@ mod tests {
             Some(&contract),
             &numbered,
             &roles,
+            &test_value_identities(&numbered),
+            &std::collections::HashSet::new(),
             Arch::X86_64,
             crate::ir::call_args::CallConv::SysVAmd64,
             None,
@@ -2911,6 +2370,8 @@ mod tests {
             Some(&contract),
             &numbered,
             &roles,
+            &test_value_identities(&numbered),
+            &std::collections::HashSet::new(),
             Arch::X86_64,
             crate::ir::call_args::CallConv::SysVAmd64,
             None,
@@ -2982,6 +2443,8 @@ mod tests {
             Some(&contract),
             &numbered,
             &std::collections::HashMap::from([("r4#1".to_string(), "var1".to_string())]),
+            &test_value_identities(&numbered),
+            &std::collections::HashSet::new(),
             Arch::ARM,
             crate::ir::call_args::CallConv::Arm,
             None,
@@ -3038,6 +2501,8 @@ mod tests {
             Some(&contract),
             &numbered,
             &std::collections::HashMap::from([("r4#1".to_string(), "var1".to_string())]),
+            &test_value_identities(&numbered),
+            &std::collections::HashSet::new(),
             Arch::ARM,
             crate::ir::call_args::CallConv::Arm,
             None,

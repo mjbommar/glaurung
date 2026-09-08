@@ -54,6 +54,62 @@ Both have since landed, so they are links again.
 | [x] CI reads real binaries (Git LFS) | estate 1.5 | `40ebe2cc` |
 | [x] Host-compiler test scoped to validated majors | (found by CI) | `09f4d511` |
 | [x] Canary set: default suite exercises the decompiler | estate 2 | `b4d23221` |
+| [x] ARM32 definition identity and stack-coordinate phase repairs | review WP3/WP9 | `4fa0b12f`, `a8ba1b87`, `dcdc99cc` |
+| [x] Pipeline-owned request model for module/session `decompile_at` | review WP2 | `d6a65779`, closed `e7b7de67` |
+| [x] Exact-range CFG/callee convergence across all four entry points | review WP2 | `5a2d6c86`, closed `e7b7de67` |
+| [x] One ordered callee-preparation boundary used by all four entry points | review WP2 | `e19bd73b` |
+| [x] One LLIR-to-AST stage used by all four entry points | review WP2 | `41bd90a6`, closed `e7b7de67` |
+| [x] Combined symbol/data/GOT context reuses one parsed object (21 -> 20 parses) | review WP2 | `73a79d61` |
+| [x] Structured single-function result with health/completeness/provenance/fingerprint | review WP2 | `5ea45dca`, closed `e7b7de67` |
+| [x] All four adapters construct typed requests/results before legacy projection | review WP2 | `15d044eb` |
+| [x] Pipeline-owned image-wide render context used once per adapter/batch | review WP2 | `e0588083`, closed `e7b7de67` |
+| [x] Pipeline-owned DWARF/PDB context used once per adapter/batch | review WP2 | `21f8b29a`, closed `e7b7de67` |
+| [x] Pipeline-owned binary-truth name/data context used once per adapter/batch | review WP2 | `2ef9c4eb`, closed `e7b7de67` |
+| [x] Pipeline-owned discovery pairs exact budgets with function facts | review WP2 | `d900cf1b`, closed `e7b7de67` |
+| [x] One post-lowering AST-finalization boundary used by all four adapters | review WP2 | `1e1ac0a8`, closed `e7b7de67` |
+| [x] One declaration/type/style renderer used by all four adapters | review WP2 | `2f7a6149`, closed `e7b7de67` |
+| [x] One lift-to-render per-function transaction used by all four adapters | review WP2 | `2ee8fa15` |
+| [x] Checked coarse pipeline stages reject invalid ordering | review WP2 | `74853fcc`, closed `e7b7de67` |
+| [x] Canonical 20-pass AST order rejects unknown, repeated, and backward passes | review WP2 | `4ea067df` |
+| [x] Bounded AST fixpoints report rounds, firings, and termination | review WP2 | `5f7df194` |
+| [x] Tracked post-SSA LLIR lifecycle: classified-only mutation gateway, reconstruction, and zero-legacy-All ratchet | review WP3 | `925dc002`, `09522773`, `bac6cef8`, `e8bec18c`, `2fe827df`, census `4bfee20c` |
+| [x] Opaque SSA identity sidecar through AST lowering and role-projected loop/pointer/ABI-width/declaration/typed-view/typed-comparison/widening/consumed-extension/unsigned-literal consumers | review WP3 | `f05c9a5d`, `af65c260`, `ef444751`, `697d6358`, `ee65638e`, `48cf15a0`, `6a7ec0b5`, `05a524e8`, `49a78f31`, `17dff536`, `403296e0`, `2ccd8ce1`, `f889e200` |
+| [x] Multi-output intrinsic definitions retain positional SSA identities and widths through value numbering/coalescing | review WP3 | `8bc75c71`, `ad81c123` |
+| [x] First AST-native identity mutation: loop-entry coalescing returns and applies exact renames | review WP3 | `3afd711a` |
+| [x] Second AST-native identity mutation: source-loop update coalescing returns and applies exact renames | review WP3 | `d8da5f13` |
+| [x] Final presentation-name maps move opaque identity candidates and preserve collision ambiguity | review WP3 | `97f65ae6` |
+| [x] Loop-entry coalescing requires exact identity when the authoritative sidecar is installed | review WP3 | `633df9f7` |
+| [x] High-value pointer/signedness refinement requires exact identity when the sidecar is installed | review WP3 | `db6c4756` |
+| [x] DWARF aggregate fields identify parameter pointers from the authoritative prototype, not `argN` spelling | review WP3 | `3e302824` |
+| [x] AST value identities carry pipeline-owned parameter slots independently of display spelling | review WP3 | `7eeb84ca` |
+| [x] Callee-contract pointer back-propagation resolves parameters from typed roles | review WP3 | `53eb97ec` |
+| [x] Recursive pointer classification and copy-origin proofs require exact value or typed parameter roles | review WP3 | `14f6d24a` |
+| [x] Exact integer/float role projection protects parameters from pipeline-owned slots, not `argN` spelling | review WP3 | `11ae7601` |
+| [x] Exact-definition-width merging protects parameters from pipeline-owned slots; `type_maps.rs` has no `argN` parsing | review WP3 | `5c88a5bd` |
+| [x] High-half ABI-width refinement widens only typed parameter roles when identities are installed | review WP3 | `f6c9d0ce` |
+| [x] Source-loop update coalescing distinguishes parameters through typed roles, not `argN` spelling | review WP3 | `f3781342` |
+| [x] Optimized DWARF register-local merging protects parameters from pipeline-owned slots, not `argN` spelling | review WP3 | `4219eee0` |
+| [x] Opaque library-call type refinement observes only identity-owned parameter slots | review WP3 | `0c1d0819` |
+| [x] Full-width parameter-address load folding uses owned slots early and projected identities after promotion | review WP3 | `40cb2904` |
+| [x] Named and frame-array parameter-spill coalescing follows identity-owned slots through casts and scratch aliases | review WP3 | `d5b69f98` |
+| [x] Shared declared-integer typing narrows only identity-owned parameters when a sidecar is installed | review WP3 | `964b66d6` |
+| [x] Promoted stack storage retains ABI-proved parameter slots; home writes and slot composition do not parse `argN` | review WP3 | `b0197ec9` |
+| [x] Declaration pointer/integer/width facts recognize parameters from typed roles, not `argN` spelling | review WP3 | `bc8c7755` |
+| [x] Production identifier census and signature arity derive parameters from typed roles | review WP3 | `973d1931` |
+| [x] Immutable declaration plan owns parameter-role rendering; `dec_render.rs` has no `argN` parser | review WP3 | `5cbb36bd` |
+| [x] Pre-naming prototype output trusts ABI result storage, not an unowned `ret` spelling | review WP3 | `e79bb7b5` |
+| [x] Production post-naming output carries a typed result role instead of trusting `ret` spelling | review WP3 | `e30c727f` |
+| [x] Production late return cleanup deletes only typed result-role assignments | review WP3 | `e27ab2cc` |
+| [x] Final structured/goto-aware verifier grants implicit call results only to a typed `ret` role | review WP3 | `aab2921d` |
+| [x] Production direct/exhaustive return folding recognizes canonical `ret` through typed authority | review WP3 | `c599ac49` |
+| [x] Production dead-store call clobbers recognize canonical `ret` through typed authority | review WP3 | `fbb7f596` |
+| [x] Production canonical naming preserves only stack-promotion-owned `argN` roles | review WP3 | `b3210392` |
+| [x] Plain typed rendering projects numbered values through exact role and identity facts | review WP3 | `32698e2e` |
+| [x] Ordinary typed rendering retains raw-occurrence type facts through exact SSA identities and declines ambiguous projections | review WP3 | `23a8ef7e` |
+| [x] Call argument motion detects intervening rewrites by SSA identity candidates, not `#version` spelling | review WP3 | `e0c5fc11` |
+| [x] Captured call scratch state distinguishes numbered definitions from live-ins by SSA identity version | review WP3 | `45c12f56` |
+| [x] ARM stack-address alias expansion admits bounded affine components by SSA identity version | review WP3 | `6ac46be4` |
+| [x] First production expression-origin attachments with exact fixture A/B | review WP3 | `9b10f06e`, `3c5c74b9`, `f30167f7`, `b269a3f2`, `86ac95a6`, `fb878925`, `5f8dec01`, `76753c05`, `bb98a3a9`, `e68ff86f`, `a756a6d5`, `f2e69784`, `4c19cb2e`, `97aef0c3`, `65162531`, `6c737361`, `5e04d66a`, `02791f18`, `3b1f34ca`, `22cb5827`, `66e533d7`, `1647953d`, `14eef6d2`, `e2df3e60`, `ff0ced1c`, `3627ca65`, `c79f57db`, `64781964`, `997ec48c`, `072412ce`, `2fccded5`, `dfa2fa22`, `5289e459`, `251ae25e`, `8c84c4ed`, `c0e296e7`, `321d205b`, `8f499b04`, `af0c014b`, `93de6232`, `320cb2e5`, `57f6c625`, `0a8ba2bb`, `7ff9bdc2`, `af10e4e7`, `5a7e76d6`, `bfeb4974`, `fca387da`, `9523e980`, `fa8b0656`, `c4e3f4b3`, `ca3ff99a`, `a4326607`, `82deec7a`, `2fac94e2`, `f7a3afe9`, `eb414739`, `1bc1f57f`, `ab046385`, `e8dab427`, `2644823c`, `c6795d65`, `5b8909b3`, `de7c13d1`, `767664db`, `08f0f858`, `ce55594e`, `be69b02b`, `82d7f3db`, `de1cd148`, `13b1143a`, `b5cde5e3`, `7c60441e`, `0e7aa4bb`, `e3b29fe3`, `129a5277` |
 | [x] Determinism: same bytes in-process and cross-process | estate 2.3 | `b4d23221` |
 | [x] Nightly fuzz runner + "is it run" invariant | estate 3.4 | `665fe25d` |
 | [x] 74 unreachable entries classified into 5 buckets | — | `1f819d63` |
@@ -370,6 +426,66 @@ make, not a thing to silently delete.
 **Skips are now visible: 41 of them**, 21 waiting on the gitignored
 `tests/fixtures/msvc-pdb/` binaries that nothing fetches (estate 1.7), 7 on
 `GLAURUNG_IOCTL_FIXTURES`, 4 on live-LLM opt-in.
+
+## Early typed ABI parameter identities
+
+Commit `079e26d5` makes value numbering record a live ABI parameter slot on
+the exact version-zero SSA value itself. A later definition of that register
+and an unused ABI argument register remain unowned. Commit `86a3b39a` projects
+owned stack-parameter slots into the same sidecar, switches the production
+early constant fold to identity authority, and deletes its slot parser.
+
+Focused evidence:
+
+```text
+cargo test --lib --features python-ext \
+  abi_parameter_slots_attach_only_to_live_version_zero_values
+1 passed; 4,458 filtered out
+
+cargo test --lib --features python-ext \
+  stack_parameter_projection_records_only_owned_slots
+1 passed; 4,460 filtered out
+
+cargo test --lib --features python-ext \
+  early_constant_fold_uses_typed_stack_parameter_roles
+1 passed; 4,460 filtered out
+
+cargo test --lib --features python-ext \
+  parameter_address_load_requires_a_typed_parameter_role
+1 passed; 4,460 filtered out
+
+uv run maturin develop
+success
+
+uv run pytest \
+  python/tests/test_pe32_cdecl_roundtrip.py::test_i386_optimized_cdecl_stack_arguments_round_trip \
+  -q
+1 passed
+```
+
+The two other cdecl tests remain red, but a one-line A/B rebuild with the old
+caller reproduced both failures unchanged. They are the existing PE32 `_main`
+signature and redundant unoptimized call-cast regressions, not regressions from
+this migration.
+
+No broad Rust or Python suite, fixture matrix, DecBench, or Joern lane ran.
+
+## Function-table reaching-definition identities
+
+Commit `33371b23` moves nested-call clobber decisions in function-table
+recovery from `#version` display spelling to the pipeline-owned SSA identity
+sidecar. The production path preserves only explicit non-entry values across a
+nested call; missing, entry, or mixed identities fail closed.
+
+Focused evidence: all 12 `ir::function_tables::tests` passed with 4,495 library
+tests filtered out, followed by a fresh native rebuild and build guard. The
+single real fixture probe
+`95_function_pointer_table:gcc:O0:dispatch_operation` is red at this branch
+tip, but restoring the old production caller and rebuilding reproduced the
+same unresolved table and verdict. It remains separately tracked debt rather
+than a claimed green result for this increment. No broad suite ran. Full
+commands and limits are in
+`docs/history/decompiler-review-2026-09-02/results/wp3-function-table-definition-identities.md`.
 
 ## Ground rules
 

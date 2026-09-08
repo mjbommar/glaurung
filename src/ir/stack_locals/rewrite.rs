@@ -14,14 +14,19 @@ use super::slot_views::{compose_little_endian_slots, extract_little_endian_subva
 use super::{
     alloc_name, body_falls_through, bounded_overlap, bounded_scalar_slot, escaped_stack_address,
     is_active_stack_base, is_arm_frame_pointer, is_stack_pointer_reg, merge_stack_deltas,
-    normalized_stack_slot, resolve_stack_address, resolved_memory_address, resolved_memory_slot,
-    stack_arg_layout, stack_assignment_object_address, stack_delta_after_assignment,
-    stack_object_address, stack_object_constant_address, stack_word_size, SlotKey, SlotNames,
-    SlotVal, StackContext,
+    normalized_stack_slot, parameter_slot_for_coordinate, resolve_stack_address,
+    resolved_memory_address, resolved_memory_slot, stack_arg_layout,
+    stack_assignment_object_address, stack_delta_after_assignment, stack_object_address,
+    stack_object_constant_address, stack_word_size, SlotKey, SlotNames, SlotVal, StackContext,
 };
 use crate::ir::ast::{Expr, Stmt};
 use crate::ir::call_args::CallConv;
 use crate::ir::types::VReg;
+
+pub(super) struct RewriteEvidence<'a> {
+    pub identities: Option<&'a crate::ir::value_number::ValueIdentities>,
+    pub machine_saved_slots: &'a mut HashSet<String>,
+}
 
 pub(super) fn rewrite_body(
     body: &mut [Stmt],
@@ -32,9 +37,11 @@ pub(super) fn rewrite_body(
     address_defs: &HashMap<VReg, (String, i64)>,
     label_deltas: &HashMap<u64, Option<i64>>,
     read_slots: &HashSet<SlotKey>,
+    evidence: &mut RewriteEvidence<'_>,
 ) {
     for s in body.iter_mut() {
-        match s {
+        match s.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::IndirectGoto { target } => {
                 rewrite_expr(target, map, names, ctx, *sp_delta, address_defs);
                 *sp_delta = None;
@@ -72,6 +79,14 @@ pub(super) fn rewrite_body(
                 }
             }
             Stmt::Store { addr, src, size } => {
+                let saves_machine_entry = ctx.cc.is_some_and(|cc| {
+                    let Expr::Reg(source) = src.semantic() else {
+                        return false;
+                    };
+                    evidence.identities.is_some_and(|identities| {
+                        crate::ir::dead_stores::is_entry_callee_saved_value(source, cc, identities)
+                    })
+                });
                 // Whether this store addressed MEMORY before promotion. A store
                 // whose address is already a bare register is a pointer write
                 // (`*p = v`) and must never be mistaken for a slot assignment —
@@ -80,6 +95,11 @@ pub(super) fn rewrite_body(
                 // Store's addr is an Lea — we need to rewrite the Lea itself
                 // into a Reg reference when the lea points to a stack slot.
                 try_promote_lea_to_local(addr, *size, map, names, ctx, *sp_delta, address_defs);
+                if saves_machine_entry {
+                    if let Expr::Reg(VReg::Phys(slot)) = addr.semantic() {
+                        evidence.machine_saved_slots.insert(slot.clone());
+                    }
+                }
                 rewrite_expr(src, map, names, ctx, *sp_delta, address_defs);
                 // A by-reference closure capture stores a frame address into a
                 // field before the closure is called. This escape is every bit
@@ -96,7 +116,7 @@ pub(super) fn rewrite_body(
                     read_slots,
                 );
                 if addressed_memory {
-                    if let Some(parameter) = argument_slot_assignment(addr, *size, ctx) {
+                    if let Some(parameter) = argument_slot_assignment(addr, *size, ctx, map) {
                         *s = Stmt::Assign {
                             dst: parameter,
                             src: src.clone(),
@@ -142,6 +162,7 @@ pub(super) fn rewrite_body(
                     address_defs,
                     label_deltas,
                     read_slots,
+                    evidence,
                 );
                 let mut else_delta = incoming;
                 if let Some(eb) = else_body {
@@ -154,6 +175,7 @@ pub(super) fn rewrite_body(
                         address_defs,
                         label_deltas,
                         read_slots,
+                        evidence,
                     );
                 }
                 let then_falls_through = body_falls_through(then_body);
@@ -178,6 +200,7 @@ pub(super) fn rewrite_body(
                     address_defs,
                     label_deltas,
                     read_slots,
+                    evidence,
                 );
                 *sp_delta = merge_stack_deltas(incoming, body_delta);
             }
@@ -196,6 +219,7 @@ pub(super) fn rewrite_body(
                     address_defs,
                     label_deltas,
                     read_slots,
+                    evidence,
                 );
                 rewrite_expr(cond, map, names, ctx, *sp_delta, address_defs);
                 let loop_entry = *sp_delta;
@@ -209,6 +233,7 @@ pub(super) fn rewrite_body(
                     address_defs,
                     label_deltas,
                     read_slots,
+                    evidence,
                 );
                 rewrite_body(
                     std::slice::from_mut(step.as_mut()),
@@ -219,6 +244,7 @@ pub(super) fn rewrite_body(
                     address_defs,
                     label_deltas,
                     read_slots,
+                    evidence,
                 );
                 *sp_delta = merge_stack_deltas(loop_entry, body_delta);
             }
@@ -234,6 +260,7 @@ pub(super) fn rewrite_body(
                     address_defs,
                     label_deltas,
                     read_slots,
+                    evidence,
                 );
                 rewrite_expr(cond, map, names, ctx, body_delta, address_defs);
                 *sp_delta = merge_stack_deltas(incoming, body_delta);
@@ -261,6 +288,7 @@ pub(super) fn rewrite_body(
                         address_defs,
                         label_deltas,
                         read_slots,
+                        evidence,
                     );
                     merged = Some(match merged {
                         Some(prior) => merge_stack_deltas(prior, case_delta),
@@ -278,6 +306,7 @@ pub(super) fn rewrite_body(
                         address_defs,
                         label_deltas,
                         read_slots,
+                        evidence,
                     );
                     merged = Some(match merged {
                         Some(prior) => merge_stack_deltas(prior, default_delta),
@@ -323,6 +352,7 @@ fn rewrite_expr(
     address_defs: &HashMap<VReg, (String, i64)>,
 ) {
     match e {
+        Expr::Origin { expr, .. } => rewrite_expr(expr, map, names, ctx, sp_delta, address_defs),
         Expr::Deref { addr, size } => {
             let size_val = *size;
             rewrite_expr(addr, map, names, ctx, sp_delta, address_defs);
@@ -430,6 +460,7 @@ fn rewrite_expr(
                     key,
                     SlotVal {
                         name: alias.clone(),
+                        parameter_slot: parameter_slot_for_coordinate(&key_base, key_disp, ctx),
                         declared_size: size_val,
                         span_size: size_val,
                         observed_read: true,
@@ -575,6 +606,7 @@ pub(super) fn reconcile_late_address_taken_objects(
             return;
         }
         match expr {
+            Expr::Origin { expr, .. } => rewrite_value(expr, objects),
             Expr::Deref { addr, .. } => {
                 if let Expr::Reg(reg) = addr.as_ref() {
                     if let Some(address) = object_address(reg, objects) {
@@ -629,7 +661,10 @@ pub(super) fn reconcile_late_address_taken_objects(
 
     fn walk(body: &mut [Stmt], objects: &HashMap<VReg, ObjectView>) {
         for statement in body {
-            match statement {
+            match statement.semantic_mut() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::Assign { src, .. } => rewrite_value(src, objects),
                 Stmt::Store { addr, src, .. } => {
                     if let Expr::Reg(reg) = addr {
@@ -848,6 +883,7 @@ fn promote_address_taken_stack_object(
     };
     let entry = map.entry(key).or_insert_with(|| SlotVal {
         name: alloc_name(&key_base, key_disp, names, ctx),
+        parameter_slot: parameter_slot_for_coordinate(&key_base, key_disp, ctx),
         declared_size: pointer_size,
         span_size: pointer_size,
         observed_read: false,
@@ -909,13 +945,60 @@ fn promote_address_taken_stack_object(
 /// * the write must cover the WHOLE slot. A narrower write is a byte-level
 ///   effect on the argument's memory that a scalar assignment cannot express,
 ///   and keeps its store form.
-fn argument_slot_assignment(addr: &Expr, size: u8, ctx: StackContext) -> Option<VReg> {
+fn argument_slot_assignment(
+    addr: &Expr,
+    size: u8,
+    ctx: StackContext,
+    map: &HashMap<SlotKey, SlotVal>,
+) -> Option<VReg> {
     let Expr::Reg(register @ VReg::Phys(name)) = addr else {
         return None;
     };
-    crate::ir::ast::parse_arg_index(name)?;
+    map.values()
+        .find(|slot| slot.name == *name)?
+        .parameter_slot?;
     let (_reg_args, _first, stride) = ctx.cc.and_then(stack_arg_layout)?;
     (i64::from(size) == stride).then(|| register.clone())
+}
+
+#[cfg(test)]
+mod parameter_slot_tests {
+    use super::*;
+
+    #[test]
+    fn argument_assignment_does_not_trust_an_unowned_arg_spelling() {
+        let ctx = StackContext {
+            cc: Some(CallConv::Cdecl32),
+            rbp_repurposed: false,
+            frame_pointer_established: true,
+            arm_frame_register: None,
+            parameter_count: Some(1),
+        };
+        let fake = SlotVal {
+            name: "arg0".into(),
+            parameter_slot: None,
+            declared_size: 4,
+            span_size: 4,
+            observed_read: false,
+            object_size: None,
+            bounded_object: false,
+            source_type: None,
+            source_name: None,
+            debug_proven: false,
+        };
+        let map = HashMap::from([(
+            SlotKey {
+                base: "rbp".into(),
+                disp: -4,
+            },
+            fake,
+        )]);
+
+        assert_eq!(
+            argument_slot_assignment(&Expr::Reg(VReg::phys("arg0")), 4, ctx, &map),
+            None
+        );
+    }
 }
 
 /// Store-address Lea: turn the full `&[base+disp]` into a `Reg(local)`.
@@ -946,6 +1029,7 @@ fn try_promote_lea_to_local(
         .unwrap_or(ordinary_key);
     let entry = map.entry(key).or_insert_with(|| SlotVal {
         name: alloc_name(&key_base, key_disp, names, ctx),
+        parameter_slot: parameter_slot_for_coordinate(&key_base, key_disp, ctx),
         declared_size: size,
         span_size: size,
         observed_read: false,

@@ -1,5 +1,5 @@
 use super::*;
-use crate::ir::ast::{Expr, Stmt};
+use crate::ir::ast::{Expr, OriginSet, Stmt};
 use crate::ir::types::{BinOp, CmpOp, VReg};
 
 fn reg(name: &str) -> VReg {
@@ -8,6 +8,44 @@ fn reg(name: &str) -> VReg {
 
 fn read(name: &str) -> Expr {
     Expr::Reg(reg(name))
+}
+
+fn opaque_carrier_candidate() -> (Function, VReg, VReg) {
+    let seed = reg("opaque-seed");
+    let carrier = reg("opaque-carrier");
+    let function = Function {
+        name: "opaque_carrier".to_string(),
+        entry_va: 0x1100,
+        body: vec![
+            Stmt::Assign {
+                dst: seed.clone(),
+                src: Expr::Const(0),
+            },
+            Stmt::Assign {
+                dst: carrier.clone(),
+                src: Expr::Reg(seed.clone()),
+            },
+            Stmt::DoWhile {
+                body: vec![Stmt::Assign {
+                    dst: carrier.clone(),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(carrier.clone())),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                }],
+                cond: Expr::Cmp {
+                    op: CmpOp::Ult,
+                    lhs: Box::new(Expr::Reg(carrier.clone())),
+                    rhs: Box::new(read("limit")),
+                },
+            },
+            Stmt::Return {
+                value: Some(Expr::Reg(carrier.clone())),
+            },
+        ],
+    };
+    (function, seed, carrier)
 }
 
 fn candidate(extra: Vec<Stmt>) -> Function {
@@ -53,10 +91,30 @@ fn candidate(extra: Vec<Stmt>) -> Function {
 #[test]
 fn folds_predicate_across_final_carried_value_assignment() {
     let mut function = candidate(vec![]);
+    let Stmt::DoWhile { body, cond } = &mut function.body[0] else {
+        unreachable!()
+    };
+    let Stmt::Assign { src: snapshot, .. } = &mut body[0] else {
+        unreachable!()
+    };
+    *snapshot = std::mem::replace(snapshot, Expr::Const(0)).with_origins(OriginSet::one(0x1014));
+    let Stmt::Assign {
+        src: predicate_expression,
+        ..
+    } = &mut body[2]
+    else {
+        unreachable!()
+    };
+    *predicate_expression = std::mem::replace(predicate_expression, Expr::Const(0))
+        .with_origins(OriginSet::one(0x1018));
+    *cond = std::mem::replace(cond, Expr::Const(0)).with_origins(OriginSet::one(0x101c));
+    body[2] = std::mem::replace(&mut body[2], Stmt::Nop).with_origins(OriginSet::one(0x1010));
+    function.body[0] =
+        std::mem::replace(&mut function.body[0], Stmt::Nop).with_origins(OriginSet::one(0x1000));
 
     fold_latched_predicates(&mut function);
 
-    let Stmt::DoWhile { body, cond } = &function.body[0] else {
+    let Stmt::DoWhile { body, cond } = function.body[0].semantic() else {
         panic!("expected do-while");
     };
     assert_eq!(body.len(), 3, "predicate assignment should be removed");
@@ -67,6 +125,16 @@ fn folds_predicate_across_final_carried_value_assignment() {
             lhs: Box::new(read("next")),
             rhs: Box::new(read("old")),
         }
+        .with_origins(OriginSet::from_addresses([0x1018, 0x101c]))
+    );
+    let Stmt::Assign { src: snapshot, .. } = &body[0] else {
+        panic!("expected saved-value copy")
+    };
+    assert_eq!(snapshot.semantic(), &read("current"));
+    assert_eq!(snapshot.origins(), Some(&OriginSet::one(0x1014)));
+    assert_eq!(
+        function.body[0].origins(),
+        Some(&OriginSet::from_addresses([0x1000, 0x1010]))
     );
 }
 
@@ -76,6 +144,23 @@ fn keeps_predicate_when_saved_value_is_overwritten() {
         dst: reg("old"),
         src: Expr::Const(0),
     }]);
+    let before = function.clone();
+
+    fold_latched_predicates(&mut function);
+
+    assert_eq!(function, before);
+}
+
+#[test]
+fn keeps_predicate_when_attributed_next_value_is_the_saved_snapshot() {
+    let mut function = candidate(vec![]);
+    let Stmt::DoWhile { body, .. } = &mut function.body[0] else {
+        unreachable!()
+    };
+    let Stmt::Assign { src, .. } = body.last_mut().expect("candidate tail") else {
+        unreachable!()
+    };
+    *src = read("old").with_origins(OriginSet::one(0x1020));
     let before = function.clone();
 
     fold_latched_predicates(&mut function);
@@ -112,8 +197,9 @@ fn coalesces_dead_source_identity_with_immediately_entered_loop_carrier() {
             },
             Stmt::Assign {
                 dst: reg("var5"),
-                src: read("var3"),
-            },
+                src: read("var3").with_origins(OriginSet::one(0x1024)),
+            }
+            .with_origins(OriginSet::one(0x1020)),
             Stmt::DoWhile {
                 body: vec![Stmt::Assign {
                     dst: reg("var5"),
@@ -128,7 +214,8 @@ fn coalesces_dead_source_identity_with_immediately_entered_loop_carrier() {
                     lhs: Box::new(read("var5")),
                     rhs: Box::new(read("limit")),
                 },
-            },
+            }
+            .with_origins(OriginSet::one(0x1030)),
             Stmt::Return {
                 value: Some(read("var5")),
             },
@@ -153,6 +240,119 @@ fn coalesces_dead_source_identity_with_immediately_entered_loop_carrier() {
     assert!(text.contains("%var5 = (%var5 + 1)"), "{text}");
     assert!(text.contains("return %var5"), "{text}");
     assert!(types.get(&reg("var5")).is_some());
+    assert_eq!(
+        function.body[1].origins(),
+        Some(&OriginSet::from_addresses([0x1020, 0x1024, 0x1030]))
+    );
+}
+
+#[test]
+fn opaque_exact_identities_authorize_loop_entry_coalescing() {
+    let (mut function, seed, carrier) = opaque_carrier_candidate();
+    let mut types = crate::ir::types_recover::TypeMap::default();
+    types.upsert_public(
+        seed.clone(),
+        crate::ir::types_recover::TypeHint::Int {
+            width: 8,
+            signed: true,
+        },
+    );
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
+    identities.record(
+        seed.clone(),
+        crate::ir::ssa::SsaValue {
+            base: reg("rax"),
+            version: 1,
+        },
+    );
+    identities.record(
+        carrier.clone(),
+        crate::ir::ssa::SsaValue {
+            base: reg("rbx"),
+            version: 2,
+        },
+    );
+
+    let renames = coalesce_loop_entry_copies_with_identities(
+        &mut function,
+        &std::collections::HashSet::new(),
+        &mut types,
+        Some(&identities),
+    );
+    identities.apply_renames(&renames);
+
+    assert_eq!(
+        function.body.len(),
+        3,
+        "exact opaque values should coalesce"
+    );
+    assert_eq!(renames.get(&seed), Some(&carrier));
+    assert!(identities.candidates(&seed).is_none());
+    assert_eq!(
+        identities
+            .candidates(&carrier)
+            .map(std::collections::BTreeSet::len),
+        Some(2)
+    );
+    assert!(identities.exact(&carrier).is_none());
+    assert!(types.get(&carrier).is_some());
+}
+
+#[test]
+fn ambiguous_opaque_identity_keeps_loop_entry_copy() {
+    let (mut function, seed, carrier) = opaque_carrier_candidate();
+    let before = function.clone();
+    let mut types = crate::ir::types_recover::TypeMap::default();
+    types.upsert_public(
+        seed.clone(),
+        crate::ir::types_recover::TypeHint::Int {
+            width: 8,
+            signed: true,
+        },
+    );
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
+    identities.record(
+        seed,
+        crate::ir::ssa::SsaValue {
+            base: reg("rax"),
+            version: 1,
+        },
+    );
+    identities.record(
+        carrier.clone(),
+        crate::ir::ssa::SsaValue {
+            base: reg("rbx"),
+            version: 2,
+        },
+    );
+    identities.record(
+        carrier,
+        crate::ir::ssa::SsaValue {
+            base: reg("rcx"),
+            version: 3,
+        },
+    );
+
+    let renames = coalesce_loop_entry_copies_with_identities(
+        &mut function,
+        &std::collections::HashSet::new(),
+        &mut types,
+        Some(&identities),
+    );
+
+    assert_eq!(function, before, "ambiguous values must fail closed");
+    assert!(
+        renames.is_empty(),
+        "a refused rewrite must not move identities"
+    );
+}
+
+#[test]
+fn installed_identity_authority_does_not_fall_back_to_var_spelling() {
+    let identities = crate::ir::value_number::ValueIdentities::default();
+
+    assert!(!coalescible_value_role(&reg("var3"), Some(&identities)));
+    assert!(coalescible_value_role(&reg("var3"), None));
 }
 
 #[test]
@@ -356,7 +556,7 @@ fn coalesces_a_typed_loop_update_scratch_into_its_source_carrier() {
             Stmt::DoWhile {
                 body: vec![
                     Stmt::Assign {
-                        dst: reg("ret"),
+                        dst: reg("arg99"),
                         src: Expr::Bin {
                             op: BinOp::Add,
                             lhs: Box::new(read("var4")),
@@ -367,17 +567,19 @@ fn coalesces_a_typed_loop_update_scratch_into_its_source_carrier() {
                         dst: reg("predicate"),
                         src: Expr::Cmp {
                             op: CmpOp::Ult,
-                            lhs: Box::new(read("ret")),
+                            lhs: Box::new(read("arg99")),
                             rhs: Box::new(read("limit")),
                         },
                     },
                     Stmt::Assign {
                         dst: reg("var4"),
-                        src: read("ret"),
-                    },
+                        src: read("arg99").with_origins(OriginSet::one(0x1044)),
+                    }
+                    .with_origins(OriginSet::one(0x1040)),
                 ],
                 cond: read("predicate"),
-            },
+            }
+            .with_origins(OriginSet::one(0x1030)),
             Stmt::Return { value: None },
         ],
     };
@@ -390,21 +592,69 @@ fn coalesces_a_typed_loop_update_scratch_into_its_source_carrier() {
         },
     );
     types.upsert_public(
-        reg("ret"),
+        reg("arg99"),
         crate::ir::types_recover::TypeHint::Int {
             width: 8,
             signed: true,
         },
     );
-    let exact_widths = std::collections::HashMap::from([("ret".to_string(), 4)]);
+    let exact_widths = std::collections::HashMap::from([("arg99".to_string(), 4)]);
     let protected = std::collections::HashSet::from(["var4".to_string()]);
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
+    identities.record(
+        reg("var4"),
+        crate::ir::ssa::SsaValue {
+            base: reg("rax"),
+            version: 1,
+        },
+    );
+    identities.record(
+        reg("arg99"),
+        crate::ir::ssa::SsaValue {
+            base: reg("rax"),
+            version: 2,
+        },
+    );
+    let mut parameter_scratch = function.clone();
+    let parameter_identities = identities.with_role_aliases_and_parameter_slots(
+        &std::collections::HashMap::new(),
+        &std::collections::HashSet::from([99]),
+    );
+    let refused = coalesce_source_loop_updates(
+        &mut parameter_scratch,
+        &protected,
+        &types,
+        Some(&exact_widths),
+        Some(&parameter_identities),
+    );
+    assert_eq!(parameter_scratch, function);
+    assert!(refused.is_empty());
 
-    coalesce_source_loop_updates(&mut function, &protected, &types, Some(&exact_widths));
+    let renames = coalesce_source_loop_updates(
+        &mut function,
+        &protected,
+        &types,
+        Some(&exact_widths),
+        Some(&identities),
+    );
+    identities.apply_renames(&renames);
 
     let text = crate::ir::ast::render(&function);
-    assert!(!text.contains("%ret"), "{text}");
+    assert!(!text.contains("%arg99"), "{text}");
     assert!(text.contains("%var4 = (%var4 + 1)"), "{text}");
     assert!(text.contains("(%var4 u< %limit)"), "{text}");
+    assert_eq!(renames.get(&reg("arg99")), Some(&reg("var4")));
+    assert!(identities.candidates(&reg("arg99")).is_none());
+    assert_eq!(
+        identities
+            .candidates(&reg("var4"))
+            .map(std::collections::BTreeSet::len),
+        Some(2)
+    );
+    assert_eq!(
+        function.body[1].origins(),
+        Some(&OriginSet::from_addresses([0x1030, 0x1040, 0x1044]))
+    );
 }
 
 #[test]
@@ -451,7 +701,7 @@ fn keeps_a_loop_update_scratch_when_the_old_carrier_is_still_needed() {
     }
     let protected = std::collections::HashSet::from(["source".to_string()]);
 
-    coalesce_source_loop_updates(&mut function, &protected, &types, None);
+    coalesce_source_loop_updates(&mut function, &protected, &types, None, None);
 
     assert_eq!(function, before);
 }
@@ -497,7 +747,7 @@ fn keeps_a_loop_update_scratch_with_a_different_semantic_width() {
     );
     let protected = std::collections::HashSet::from(["source".to_string()]);
 
-    coalesce_source_loop_updates(&mut function, &protected, &types, None);
+    coalesce_source_loop_updates(&mut function, &protected, &types, None, None);
 
     assert_eq!(function, before);
 }

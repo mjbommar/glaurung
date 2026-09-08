@@ -23,7 +23,17 @@ use crate::ir::types_recover::{RecoveredOutputKind, RecoveredPrototype};
 
 /// Project a body-written return register onto every remaining bare return.
 pub(crate) fn materialize_direct_output(function: &mut Function) {
-    materialize_direct_output_with_live_in(function, None);
+    materialize_direct_output_with_live_in(function, None, &|_| true);
+}
+
+/// Project body-written output using pipeline-owned role authority.
+pub(crate) fn materialize_direct_output_with_identities(
+    function: &mut Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    materialize_direct_output_with_live_in(function, None, &|value| {
+        identities.is_result_role(value)
+    });
 }
 
 /// Project a prototype-proven direct output, including identity functions whose
@@ -54,11 +64,14 @@ pub(crate) fn materialize_prototype_output(
     });
     let live_in_result =
         live_in_result.filter(|_| !body_writes_abi_return_storage(&function.body, cc));
-    materialize_direct_output_with_live_in(function, live_in_result);
+    // This pass runs before role naming. A literal `ret` here may be a source
+    // or debug spelling and is not evidence of machine result storage.
+    materialize_direct_output_with_live_in(function, live_in_result, &|_| false);
 }
 
 fn body_writes_abi_return_storage(body: &[Stmt], cc: CallConv) -> bool {
-    body.iter().any(|statement| match statement {
+    body.iter().any(|statement| match statement.semantic() {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign {
             dst: VReg::Phys(name),
             ..
@@ -66,7 +79,7 @@ fn body_writes_abi_return_storage(body: &[Stmt], cc: CallConv) -> bool {
         | Stmt::Call {
             dst: Some(VReg::Phys(name)),
             ..
-        } => crate::ir::abi::is_return_register(cc, name) || name == "ret",
+        } => crate::ir::abi::is_return_register(cc, name),
         Stmt::If {
             then_body,
             else_body,
@@ -105,8 +118,12 @@ fn body_writes_abi_return_storage(body: &[Stmt], cc: CallConv) -> bool {
     })
 }
 
-fn materialize_direct_output_with_live_in(function: &mut Function, live_in_result: Option<&VReg>) {
-    let written = find_written_return_reg(&function.body)
+fn materialize_direct_output_with_live_in(
+    function: &mut Function,
+    live_in_result: Option<&VReg>,
+    canonical_role_is_result: &impl Fn(&VReg) -> bool,
+) {
+    let written = find_written_return_reg(&function.body, canonical_role_is_result)
         .or_else(|| find_written_float_result_reg(&function.body));
     if let Some(return_register) = written {
         apply_default_return(&mut function.body, &return_register);
@@ -129,7 +146,11 @@ pub(crate) fn clear_return_values(function: &mut Function) {
 /// distinction.  Only the outermost terminal statement is removed: returns in
 /// branches and loops still control execution and must remain explicit.
 pub(crate) fn prune_void_fallthrough_return(function: &mut Function) {
-    if matches!(function.body.last(), Some(Stmt::Return { value: None })) {
+    if function
+        .body
+        .last()
+        .is_some_and(|statement| matches!(statement.semantic(), Stmt::Return { value: None }))
+    {
         function.body.pop();
     }
 }
@@ -148,6 +169,7 @@ pub(crate) fn prune_unread_promoted_locals(
 ) {
     fn pure(expression: &Expr) -> bool {
         match expression {
+            Expr::Origin { expr, .. } => pure(expr),
             Expr::Reg(_)
             | Expr::Const(_)
             | Expr::FloatConst { .. }
@@ -180,7 +202,10 @@ pub(crate) fn prune_unread_promoted_locals(
     fn prune(body: &mut Vec<Stmt>, unread: &std::collections::HashSet<VReg>) -> usize {
         let mut removed = 0;
         for statement in body.iter_mut() {
-            match statement {
+            match statement.semantic_mut() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::If {
                     then_body,
                     else_body,
@@ -214,15 +239,16 @@ pub(crate) fn prune_unread_promoted_locals(
         }
         let before = body.len();
         body.retain(|statement| {
-            !matches!(statement, Stmt::Assign { dst, src } if unread.contains(dst) && pure(src))
-                && !matches!(statement, Stmt::Store { addr: Expr::Reg(dst), src, .. }
+            !matches!(statement.semantic(), Stmt::Assign { dst, src } if unread.contains(dst) && pure(src))
+                && !matches!(statement.semantic(), Stmt::Store { addr: Expr::Reg(dst), src, .. }
                     if unread.contains(dst) && pure(src))
         });
         removed + before - body.len()
     }
 
     fn observes(statement: &Stmt, target: &VReg) -> bool {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { src, .. } => src.contains_reg(target),
             Stmt::Store { addr, src, .. } => {
                 (!matches!(addr, Expr::Reg(register) if register == target)
@@ -309,7 +335,10 @@ pub(crate) fn prune_unread_promoted_locals(
             .iter()
             .flat_map(|statement| {
                 fn collect(statement: &Stmt, out: &mut Vec<VReg>) {
-                    match statement {
+                    match statement.semantic() {
+                        Stmt::Origin { .. } => {
+                            unreachable!("semantic statement cannot be an origin wrapper")
+                        }
                         Stmt::Assign {
                             dst: VReg::Phys(name),
                             ..
@@ -390,6 +419,7 @@ pub(crate) fn prune_unread_promoted_locals(
 pub(crate) fn prune_void_entry_result_restores(function: &mut Function) {
     fn reads(expr: &Expr, target: &VReg) -> bool {
         match expr {
+            Expr::Origin { expr, .. } => reads(expr, target),
             Expr::Reg(register)
             | Expr::StackAddr {
                 object: register, ..
@@ -430,7 +460,8 @@ pub(crate) fn prune_void_entry_result_restores(function: &mut Function) {
     }
 
     fn direct_reads(statement: &Stmt, target: &VReg) -> bool {
-        match statement {
+        match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { src, .. } => reads(src, target),
             Stmt::Store { addr, src, .. } => {
                 (!matches!(addr, Expr::Reg(register) if register == target) && reads(addr, target))
@@ -463,7 +494,10 @@ pub(crate) fn prune_void_entry_result_restores(function: &mut Function) {
 
     fn prune(body: &mut Vec<Stmt>) {
         for statement in body.iter_mut() {
-            match statement {
+            match statement.semantic_mut() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::If {
                     then_body,
                     else_body,
@@ -500,7 +534,7 @@ pub(crate) fn prune_void_entry_result_restores(function: &mut Function) {
                 addr: Expr::Reg(slot),
                 src: Expr::Reg(saved),
                 ..
-            } = statement
+            } = statement.semantic()
             else {
                 continue;
             };
@@ -514,7 +548,7 @@ pub(crate) fn prune_void_entry_result_restores(function: &mut Function) {
                 .enumerate()
                 .filter(|(index, candidate)| {
                     *index > store_index
-                        && matches!(candidate, Stmt::Assign { dst, src: Expr::Reg(source) }
+                        && matches!(candidate.semantic(), Stmt::Assign { dst, src: Expr::Reg(source) }
                             if dst == saved && source == slot)
                 })
                 .map(|(index, _)| index)
@@ -554,7 +588,8 @@ pub(crate) fn prune_void_entry_result_restores(function: &mut Function) {
 
 fn clear_body_return_values(body: &mut [Stmt]) {
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Return { value } => *value = None,
             Stmt::If {
                 then_body,
@@ -593,23 +628,41 @@ fn clear_body_return_values(body: &mut [Stmt]) {
 /// the first-tier names, so [`is_return_reg`] already covers it. It was also
 /// restated as a second disjunct on both arms below until 2026-08-18, which was
 /// dead in a way that read as load-bearing.
-fn find_written_return_reg(body: &[Stmt]) -> Option<VReg> {
+fn find_written_return_reg(
+    body: &[Stmt],
+    canonical_role_is_result: &impl Fn(&VReg) -> bool,
+) -> Option<VReg> {
+    let is_result = |value: &VReg| {
+        is_return_reg(value)
+            && (!matches!(value, VReg::Phys(name) if name == "ret")
+                || canonical_role_is_result(value))
+    };
     for statement in body {
-        let found = match statement {
-            Stmt::Assign { dst, .. } if is_return_reg(dst) => Some(dst.clone()),
-            Stmt::Call { dst: Some(dst), .. } if is_return_reg(dst) => Some(dst.clone()),
+        let found = match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
+            Stmt::Assign { dst, .. } if is_result(dst) => Some(dst.clone()),
+            Stmt::Call { dst: Some(dst), .. } if is_result(dst) => Some(dst.clone()),
             Stmt::If {
                 then_body,
                 else_body,
                 ..
-            } => find_written_return_reg(then_body)
-                .or_else(|| else_body.as_deref().and_then(find_written_return_reg)),
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => find_written_return_reg(body),
-            Stmt::For { body, .. } => find_written_return_reg(body),
+            } => find_written_return_reg(then_body, canonical_role_is_result).or_else(|| {
+                else_body
+                    .as_deref()
+                    .and_then(|body| find_written_return_reg(body, canonical_role_is_result))
+            }),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                find_written_return_reg(body, canonical_role_is_result)
+            }
+            Stmt::For { body, .. } => find_written_return_reg(body, canonical_role_is_result),
             Stmt::Switch { cases, default, .. } => cases
                 .iter()
-                .find_map(|(_, body)| find_written_return_reg(body))
-                .or_else(|| default.as_deref().and_then(find_written_return_reg)),
+                .find_map(|(_, body)| find_written_return_reg(body, canonical_role_is_result))
+                .or_else(|| {
+                    default
+                        .as_deref()
+                        .and_then(|body| find_written_return_reg(body, canonical_role_is_result))
+                }),
             _ => None,
         };
         if found.is_some() {
@@ -621,7 +674,8 @@ fn find_written_return_reg(body: &[Stmt]) -> Option<VReg> {
 
 fn apply_default_return(body: &mut [Stmt], return_register: &VReg) {
     for statement in body {
-        match statement {
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Return { value } if value.is_none() => {
                 *value = Some(Expr::Reg(return_register.clone()));
             }
@@ -663,7 +717,8 @@ fn find_written_float_result_reg(body: &[Stmt]) -> Option<VReg> {
         matches!(value, VReg::Phys(name) if is_fallback_result_register(name))
     }
     for statement in body {
-        let found = match statement {
+        let found = match statement.semantic() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, .. } if is_float_result_reg(dst) => Some(dst.clone()),
             Stmt::Call { dst: Some(dst), .. } if is_float_result_reg(dst) => Some(dst.clone()),
             Stmt::If {
@@ -710,7 +765,9 @@ pub(crate) fn is_exact_return_storage(value: &VReg) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ssa::SsaValue;
     use crate::ir::types_recover::TypeHint;
+    use std::collections::HashMap;
 
     fn bare_return_function() -> Function {
         Function {
@@ -776,6 +833,30 @@ mod tests {
                 value: Some(Expr::Reg(VReg::phys("xmm0"))),
             })
         );
+    }
+
+    #[test]
+    fn origin_wrapped_sse_result_materializes_into_origin_wrapped_return() {
+        let mut function = Function {
+            name: "negate_binary32".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("xmm0"),
+                    src: Expr::Const(1),
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(0x1000)),
+                Stmt::Return { value: None }.with_origins(crate::ir::ast::OriginSet::one(0x1004)),
+            ],
+        };
+
+        materialize_direct_output(&mut function);
+
+        assert!(matches!(
+            function.body[1].semantic(),
+            Stmt::Return { value: Some(Expr::Reg(returned)) }
+                if returned == &VReg::phys("xmm0")
+        ));
     }
 
     /// ...and it is a FALLBACK, not a peer. `xmm0` is also the first float
@@ -849,6 +930,90 @@ mod tests {
     }
 
     #[test]
+    fn prototype_output_does_not_trust_an_unowned_ret_spelling() {
+        let mut prototype = RecoveredPrototype::default();
+        prototype.apply_locked_parameters(CallConv::Aarch64, &[Some(int32())]);
+        prototype.apply_locked_output(RecoveredOutputKind::Direct, Some(int32()));
+        let mut function = Function {
+            name: "identity_with_ret_local".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("ret"),
+                    src: Expr::Const(7),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        materialize_prototype_output(&mut function, CallConv::Aarch64, Some(&prototype));
+
+        assert_eq!(
+            function.body.last(),
+            Some(&Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("x0"))),
+            }),
+            "a source spelling is not proof that the body overwrote ABI result storage"
+        );
+    }
+
+    #[test]
+    fn attributed_output_does_not_trust_an_unowned_ret_spelling() {
+        let mut function = Function {
+            name: "unowned_ret".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("ret"),
+                    src: Expr::Const(7),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        materialize_direct_output_with_identities(
+            &mut function,
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
+
+        assert_eq!(function.body.last(), Some(&Stmt::Return { value: None }));
+    }
+
+    #[test]
+    fn attributed_output_accepts_a_pipeline_owned_ret_role() {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            VReg::phys("rax"),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 1,
+            },
+        );
+        identities =
+            identities.with_role_aliases(&HashMap::from([("rax".to_string(), "ret".to_string())]));
+        let mut function = Function {
+            name: "owned_ret".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("ret"),
+                    src: Expr::Const(7),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        materialize_direct_output_with_identities(&mut function, &identities);
+
+        assert_eq!(
+            function.body.last(),
+            Some(&Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("ret"))),
+            })
+        );
+    }
+
+    #[test]
     fn unread_promoted_return_slot_is_removed() {
         let mut function = Function {
             name: "main".into(),
@@ -873,6 +1038,90 @@ mod tests {
                 value: Some(Expr::Const(0)),
             }]
         );
+    }
+
+    #[test]
+    fn attributed_unread_promoted_return_slot_is_removed() {
+        let mut function = Function {
+            name: "main".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("local_4")),
+                    src: Expr::Const(0),
+                    size: 4,
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(0x1000)),
+                Stmt::Return {
+                    value: Some(Expr::Const(0)),
+                },
+            ],
+        };
+
+        prune_unread_promoted_locals(&mut function, &std::collections::HashSet::new());
+
+        assert_eq!(
+            function.body,
+            vec![Stmt::Return {
+                value: Some(Expr::Const(0)),
+            }]
+        );
+    }
+
+    #[test]
+    fn attributed_void_result_save_restore_is_removed() {
+        let mut function = Function {
+            name: "print_message".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("local_8")),
+                    src: Expr::Reg(VReg::phys("rax")),
+                    size: 8,
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(0x1000)),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "puts".into(),
+                    },
+                    args: Vec::new(),
+                    dst: None,
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("rax"),
+                    src: Expr::Reg(VReg::phys("local_8")),
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(0x1008)),
+            ],
+        };
+
+        prune_void_entry_result_restores(&mut function);
+
+        assert_eq!(function.body.len(), 1);
+        assert!(matches!(function.body[0], Stmt::Call { .. }));
+    }
+
+    #[test]
+    fn attributed_return_value_is_cleared_without_losing_its_owner() {
+        let owner = crate::ir::ast::OriginSet::one(0x1004);
+        let mut function = Function {
+            name: "print_message".into(),
+            entry_va: 0,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("rax"))),
+            }
+            .with_origins(owner.clone())],
+        };
+
+        clear_return_values(&mut function);
+
+        assert_eq!(function.body[0].origins(), Some(&owner));
+        assert!(matches!(
+            function.body[0].semantic(),
+            Stmt::Return { value: None }
+        ));
     }
 
     #[test]

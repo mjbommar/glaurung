@@ -41,6 +41,21 @@ pub struct SsaValue {
     pub version: u32,
 }
 
+impl SsaValue {
+    /// Canonical physical storage carried by this SSA identity.
+    ///
+    /// ABI lookup helpers also accept value-numbered display spellings. An
+    /// identity consumer must not use that compatibility behavior: a `#` in
+    /// the base means the sidecar is malformed, so semantic classification
+    /// declines instead of silently repairing it.
+    pub(crate) fn canonical_physical_base(&self) -> Option<&str> {
+        let VReg::Phys(name) = &self.base else {
+            return None;
+        };
+        (!name.contains('#')).then_some(name.as_str())
+    }
+}
+
 /// A phi node placed by SSA construction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Phi {
@@ -56,6 +71,12 @@ pub struct Phi {
 /// SSA side-car information about an [`LlirFunction`].
 #[derive(Debug, Default, Clone)]
 pub struct SsaInfo {
+    /// Revision of the LLIR value graph this sidecar describes.
+    ///
+    /// Direct `compute_ssa*` calls produce revision zero. A pipeline-owned
+    /// [`VersionedSsa`] increments this whenever an SSA-relevant mutation
+    /// forces reconstruction.
+    revision: u64,
     /// Immediate dominator of each block, by block index. The entry block
     /// has no idom and maps to `None`.
     pub idom: Vec<Option<usize>>,
@@ -75,6 +96,89 @@ pub struct SsaInfo {
     /// time. This prevents queries from re-canonicalizing under a different
     /// architecture later.
     use_values_all: OperandTable,
+}
+
+/// The semantic class of a mutation after SSA construction.
+///
+/// `Default` is deliberately conservative: an unclassified pass invalidates
+/// everything rather than silently permitting stale value identities.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Invalidate {
+    Cfg,
+    Definitions,
+    Uses,
+    Types,
+    Presentation,
+    #[default]
+    All,
+}
+
+impl Invalidate {
+    fn affects_ssa(self) -> bool {
+        matches!(self, Self::Cfg | Self::Definitions | Self::Uses | Self::All)
+    }
+}
+
+/// Pipeline-owned SSA artifact that cannot be consumed after invalidation.
+#[derive(Debug, Clone)]
+pub struct VersionedSsa {
+    info: SsaInfo,
+    target: TargetSpec,
+    dirty: bool,
+}
+
+impl VersionedSsa {
+    /// Construct revision zero for the current LLIR value graph.
+    pub fn compute(function: &LlirFunction, target: TargetSpec) -> Self {
+        Self {
+            info: compute_ssa_for_target(function, target),
+            target,
+            dirty: false,
+        }
+    }
+
+    /// Declare the effect of a mutation before another SSA consumer runs.
+    fn invalidate(&mut self, change: Invalidate) {
+        self.dirty |= change.affects_ssa();
+    }
+
+    /// Apply one LLIR mutation with an explicit invalidation classification.
+    ///
+    /// The mutation reports whether it changed the function. A no-op leaves the
+    /// current SSA artifact valid; an actual definition/use/CFG change makes it
+    /// impossible to consume the artifact until [`Self::ensure`] rebuilds it.
+    pub fn apply_mutation<R>(
+        &mut self,
+        function: &mut LlirFunction,
+        change: Invalidate,
+        mutation: impl FnOnce(&mut LlirFunction) -> (R, bool),
+    ) -> R {
+        let (result, changed) = mutation(function);
+        if changed {
+            self.invalidate(change);
+        }
+        result
+    }
+
+    /// Return current SSA, rebuilding it first when a mutation made it stale.
+    pub fn ensure(&mut self, function: &LlirFunction) -> &SsaInfo {
+        if self.dirty {
+            let revision = self.info.revision.saturating_add(1);
+            self.info = compute_ssa_for_target(function, self.target);
+            self.info.revision = revision;
+            self.dirty = false;
+        }
+        &self.info
+    }
+
+    /// Consume a current artifact. A dirty state must first use [`Self::ensure`].
+    pub fn into_info(self) -> Result<SsaInfo, &'static str> {
+        if self.dirty {
+            Err("SSA artifact is invalid; call ensure before consuming it")
+        } else {
+            Ok(self.info)
+        }
+    }
 }
 
 /// Per-`(block, instruction, operand)` storage, indexed rather than hashed.
@@ -181,6 +285,11 @@ pub(crate) fn ssa_def_width(op: &Op) -> usize {
 }
 
 impl SsaInfo {
+    /// Revision assigned by the pipeline-owned SSA state.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     /// Return the SSA value defined by the instruction at `addr`.
     pub fn def_value(&self, lf: &LlirFunction, addr: InstrAddr) -> Option<SsaValue> {
         self.def_value_ref(lf, addr).cloned()
@@ -192,8 +301,18 @@ impl SsaInfo {
     /// allocates a `String` per call. The bit-demand fixed point asks this once
     /// per instruction per sweep, which is the only reason this exists.
     pub fn def_value_ref(&self, lf: &LlirFunction, addr: InstrAddr) -> Option<&SsaValue> {
+        self.def_value_ref_at(lf, addr, 0)
+    }
+
+    /// Borrow one output identity from a multi-output definition.
+    pub fn def_value_ref_at(
+        &self,
+        lf: &LlirFunction,
+        addr: InstrAddr,
+        output_index: usize,
+    ) -> Option<&SsaValue> {
         lf.blocks.get(addr.block_idx)?.instrs.get(addr.instr_idx)?;
-        self.def_values_all.get(addr, 0)
+        self.def_values_all.get(addr, output_index)
     }
 
     /// Borrow the SSA value read at source-order use `use_index`. See
@@ -840,6 +959,7 @@ fn rename(
     }
 
     let info = SsaInfo {
+        revision: 0,
         idom: idom.to_vec(),
         frontier: Vec::new(), // filled in by caller
         phis,
@@ -914,6 +1034,138 @@ mod tests {
             dst: VReg::phys(reg),
             src: Value::Const(c),
         }
+    }
+
+    #[test]
+    fn ssa_identity_exposes_only_a_canonical_physical_base() {
+        let canonical = SsaValue {
+            base: VReg::phys("rdi"),
+            version: 3,
+        };
+        let malformed = SsaValue {
+            base: VReg::phys("rdi#3"),
+            version: 3,
+        };
+        let temporary = SsaValue {
+            base: VReg::Temp(4),
+            version: 3,
+        };
+
+        assert_eq!(canonical.canonical_physical_base(), Some("rdi"));
+        assert_eq!(malformed.canonical_physical_base(), None);
+        assert_eq!(temporary.canonical_physical_base(), None);
+    }
+
+    #[test]
+    fn unclassified_mutation_defaults_to_invalidate_everything() {
+        assert_eq!(Invalidate::default(), Invalidate::All);
+    }
+
+    #[test]
+    fn versioned_ssa_rebuilds_before_consumption_after_value_graph_changes() {
+        let mut function = mk_cfg(vec![(0x1000, vec![assign("rax", 1)], vec![])]);
+        let target = TargetSpec::from_image_metadata(
+            crate::core::binary::Arch::X86_64,
+            crate::core::binary::Endianness::Little,
+            crate::core::binary::Format::ELF,
+            false,
+        );
+        let mut state = VersionedSsa::compute(&function, target);
+
+        assert_eq!(state.ensure(&function).revision(), 0);
+        state.invalidate(Invalidate::Definitions);
+        assert!(state.clone().into_info().is_err());
+
+        function.blocks[0].instrs.push(LlirInstr {
+            va: 0x1004,
+            op: assign("rax", 2),
+        });
+        let rebuilt = state.ensure(&function);
+        assert_eq!(rebuilt.revision(), 1);
+        assert_eq!(
+            rebuilt.def_version(
+                &function,
+                InstrAddr {
+                    block_idx: 0,
+                    instr_idx: 1,
+                }
+            ),
+            2
+        );
+
+        state.invalidate(Invalidate::Uses);
+        assert_eq!(state.ensure(&function).revision(), 2);
+        assert!(state.into_info().is_ok());
+    }
+
+    #[test]
+    fn type_and_presentation_changes_do_not_rebuild_value_identity() {
+        let function = mk_cfg(vec![(0x1000, vec![assign("rax", 1)], vec![])]);
+        let target = TargetSpec::from_image_metadata(
+            crate::core::binary::Arch::X86_64,
+            crate::core::binary::Endianness::Little,
+            crate::core::binary::Format::ELF,
+            false,
+        );
+        let mut state = VersionedSsa::compute(&function, target);
+
+        state.invalidate(Invalidate::Types);
+        state.invalidate(Invalidate::Presentation);
+        assert_eq!(state.ensure(&function).revision(), 0);
+    }
+
+    #[test]
+    fn declared_mutation_invalidates_only_when_it_changes_the_function() {
+        let mut function = mk_cfg(vec![(0x1000, vec![assign("rax", 1)], vec![])]);
+        let target = TargetSpec::from_image_metadata(
+            crate::core::binary::Arch::X86_64,
+            crate::core::binary::Endianness::Little,
+            crate::core::binary::Format::ELF,
+            false,
+        );
+        let mut state = VersionedSsa::compute(&function, target);
+
+        let unchanged =
+            state.apply_mutation(&mut function, Invalidate::Definitions, |_| (7, false));
+        assert_eq!(unchanged, 7);
+        assert_eq!(state.ensure(&function).revision(), 0);
+
+        let changed = state.apply_mutation(&mut function, Invalidate::Definitions, |function| {
+            function.blocks[0].instrs.push(LlirInstr {
+                va: 0x1004,
+                op: assign("rax", 2),
+            });
+            (11, true)
+        });
+        assert_eq!(changed, 11);
+        assert!(state.clone().into_info().is_err());
+        assert_eq!(state.ensure(&function).revision(), 1);
+    }
+
+    #[test]
+    fn production_pipeline_ratchets_classified_mutations_and_legacy_all() {
+        let pipeline = include_str!("../python_bindings/ir/pipeline.rs");
+
+        assert_eq!(
+            pipeline.matches("tracked.apply_mutation(").count(),
+            2,
+            "adding or removing a post-SSA LLIR mutation requires an explicit audit"
+        );
+        assert_eq!(
+            pipeline.matches("self.ssa.apply_mutation(").count(),
+            1,
+            "the tracked LLIR transaction must have one mutation gateway"
+        );
+        assert_eq!(
+            pipeline.matches("Invalidate::All").count(),
+            0,
+            "production mutations must use the narrowest proved invalidation class"
+        );
+        assert_eq!(
+            pipeline.matches(".invalidate(").count(),
+            0,
+            "production callers must use apply_mutation so no-op changes stay valid"
+        );
     }
 
     #[test]

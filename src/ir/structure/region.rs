@@ -11,6 +11,20 @@
 //! from the tree alone, with no CFG in hand; every predicate that needs a
 //! [`super::cfg::Cfg`] lives with the pass that asks it.
 
+use super::cfg::SwitchEvidence;
+
+/// A bounded private subgraph rendered directly inside one raw-switch arm.
+///
+/// `entry` is the case/default target. `blocks` is a deterministic topological
+/// order beginning at `entry`; every later block has all of its predecessors
+/// inside this region. That makes labels and transfers local to the arm while
+/// shared joins remain owned by the enclosing raw loop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawSwitchInlineRegion {
+    pub entry: usize,
+    pub blocks: Vec<usize>,
+}
+
 /// One structured region in the recovered tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Region {
@@ -76,6 +90,19 @@ pub enum Region {
         /// dispatch loops can terminate through more than one case, so a
         /// single distinguished exit would lose executable control flow.
         exits: Vec<usize>,
+        /// Canonical typed case/default facts for the one resolved dispatch in
+        /// this loop. `None` distinguishes an ordinary multi-latch raw loop.
+        /// Keeping this on the owning region prevents AST lowering from
+        /// reconstructing switch meaning from successor order and labels.
+        switch: Option<SwitchEvidence>,
+        /// Range guard proven safe to absorb into `switch` by the same typed
+        /// unsigned-comparison contract as an ordinary guarded switch.
+        switch_guard: Option<usize>,
+        /// Bounded acyclic case/default subgraphs with no incoming owner except
+        /// the typed dispatch/folded guard at entry. Every later block is
+        /// predecessor-closed within one arm. Shared joins remain labelled and
+        /// are emitted once by the enclosing raw loop.
+        switch_inline_regions: Vec<RawSwitchInlineRegion>,
     },
     /// `switch (discriminant) { case 0: <arm>; case 1: <arm>; ... }`
     /// (#193). The dispatch block has N>=3 successors (typical jump-

@@ -107,6 +107,7 @@ pub mod variable_addresses;
 pub mod vector_copy;
 pub mod verify;
 pub mod verify_defs;
+pub(crate) mod wide_parameters;
 pub mod widen;
 pub mod winapi_prototypes;
 pub mod x86_prologue;

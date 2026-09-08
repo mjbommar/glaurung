@@ -85,6 +85,107 @@ three places. The detailed file now records the reconciled decisions:
 | [05-planning-docs-audit.md](05-planning-docs-audit.md) | What the planning documents decided, tried, abandoned, or left contradictory. |
 | [06-recommendations.md](06-recommendations.md) | Ten recommendations, ordered by leverage, each with the evidence it rests on, what the docs already said, and how it would be judged. |
 | [PLAN.md](PLAN.md) | Dependency-ordered implementation work packages with exact production/test paths, TDD sequence, gates, measurements, stop conditions, and milestones. |
+| [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
+
+The latest WP3 record is
+[`results/wp3-inline-scalar-origins.md`](results/wp3-inline-scalar-origins.md):
+attributed first scalar definitions now participate in safe inline declaration
+planning, restoring `int local = value` output; the observed-red test, three
+adjacent controls, and two exact O0 local-loop cells pass. The preceding
+[`results/wp3-unreachable-tail-origins.md`](results/wp3-unreachable-tail-origins.md):
+attributed labels and terminal transfers now delimit lexical unreachable-tail
+cleanup; its observed-red test, all 20 module tests, and two exact O0 review
+cells pass. The preceding
+[`results/wp3-exhaustive-return-origins.md`](results/wp3-exhaustive-return-origins.md):
+attributed exhaustive if/switch joins now preserve disjoint control/arm owners
+and duplicate only shared-tail owners into materialized returns; both tests
+were observed red, all six module tests and four exact O0 review cells pass.
+The preceding
+[`results/wp3-constant-return-origins.md`](results/wp3-constant-return-origins.md):
+late attributed `ret = C; return C` pairs now collapse to one return carrying
+the exact union; its observed-red test, all four module tests, and two exact O0
+review cells pass. The preceding
+[`results/wp3-aarch64-frame-origins.md`](results/wp3-aarch64-frame-origins.md):
+AArch64 canonical/promoted prologues and paired restore epilogues now preserve
+exact replacement owners through attribution; its observed-red test, both
+focused ownership tests, all 12 module tests, and one exact AArch64 O0 review
+cell pass. The preceding
+[`results/wp3-x86-epilogue-origins.md`](results/wp3-x86-epilogue-origins.md):
+ordinary `leave`, pop, promoted-stack, and second-round x86 epilogues now see
+attributed statements and preserve exact replacement owners; its observed-red
+test, all 39 x86 frame tests, and two exact O0 review cells pass. The preceding
+[`results/wp3-x87-scrub-origins.md`](results/wp3-x87-scrub-origins.md): the
+exact hardened-return x87 scrub now sees attributed operations and unions all
+consumed machine owners onto its replacement comment; its observed-red test
+and all 35 x86 frame tests pass, while no checked-in real fixture currently
+exercises the compiler option. The preceding
+[`results/wp3-mingw-runtime-origins.md`](results/wp3-mingw-runtime-origins.md):
+implicit MinGW `___main` cleanup now sees attributed calls, deletes only the
+runtime mapping, and leaves unrelated owners unchanged; its observed-red test,
+all 34 x86 frame tests, and the exact PE32 `main` integration test pass. The
+preceding
+[`results/wp3-cdecl-entry-frame-origins.md`](results/wp3-cdecl-entry-frame-origins.md):
+the cdecl32 aligned-entry-frame recognizer now sees attributed setup/teardown
+and keeps their replacement-comment owners separate; its observed-red test,
+all 33 x86 frame tests, and the exact PE32 `main` integration test pass. The
+preceding
+[`results/wp3-cdecl-alignment-origins.md`](results/wp3-cdecl-alignment-origins.md)
+records that balanced cdecl32 call padding remains recognizable through
+attribution and its exact owners join the surviving call; its observed-red
+test, all 32 x86 frame tests, and two exact i386 call functions pass. The
+preceding
+[`results/wp3-x86-frame-origins.md`](results/wp3-x86-frame-origins.md) records
+that the canonical x86 frame recognizer sees attributed prologue statements
+and assigns their exact union to its replacement comment; its observed-red
+test, all 31 module tests, and two exact O0 cells pass. The preceding
+[`results/wp3-arm32-frame-origins.md`](results/wp3-arm32-frame-origins.md)
+records that the transactional ARM32 frame recognizer sees attributed machine
+bookkeeping and assigns exact consumed-owner unions to its synthesized
+comments; its observed-red test, all nine module tests, and one exact A32 cell
+pass. The preceding
+[`results/wp3-canonical-loop-naming-origins.md`](results/wp3-canonical-loop-naming-origins.md)
+records that fallback canonical loop naming sees attributed loop clauses and
+accumulator updates without changing any owner; its observed-red test, all 18
+naming tests, and four exact loop-fixture lanes pass. The preceding
+[`results/wp3-verification-pointer-origins.md`](results/wp3-verification-pointer-origins.md)
+records that goto-aware final-source verification and authoritative pointer
+refinement see attributed statements; both observed-red tests, all 66
+touched-module tests, and all eight declaration/use invariant cells pass. The
+preceding
+[`results/wp3-call-result-loop-origins.md`](results/wp3-call-result-loop-origins.md)
+records how
+attributed loop breaks and boxed-clause calls now preserve call-result
+dataflow safety; both observed-red tests, all 15 module tests, and eight exact
+real-binary cases pass. The preceding
+[`results/wp3-banked-return-origins.md`](results/wp3-banked-return-origins.md)
+records how
+the first complex result-composition consumer now preserves exact owners across
+stack-return rewrites and one-to-many register-bank materialization. Both new
+tests were observed red first; all 20 module tests and eight exact aggregate
+return lanes pass. The preceding
+[`results/wp3-output-value-origins.md`](results/wp3-output-value-origins.md)
+records seven output-value readers and in-place rewrites now seeing attributed
+statements. The earlier
+[`results/wp3-final-cleanup-origins.md`](results/wp3-final-cleanup-origins.md)
+records that
+final preparation and dead-store analysis now see through statement origins,
+preserving widening, comparison fusion, DWARF invalidation, nested-exit
+safety, and effect-only call cleanup. Seven tests were observed red first; all
+touched module suites and all 52 fixture-11 functions are green, with fake
+call-result temporaries removed. The preceding
+[`results/wp3-lazy-call-select-origins.md`](results/wp3-lazy-call-select-origins.md)
+records that
+the two production lazy-call entry points now recognize attributed adjacent
+calls and every supported diamond shape, recurse through attributed structured
+nodes, and union every consumed owner onto the replacement. Five tests were
+observed red first; 18 module tests, 58 origin tests, the compiled/stripped
+real-binary check, all 20 fixture-189 functions, and the complete Rust gate are
+green. The whole-Python gate has zero attributable failure-set change; a newly
+exercised i386 invariant reproduces at the parent. The preceding
+[`results/wp3-call-analysis-origins.md`](results/wp3-call-analysis-origins.md)
+records six related call-analysis consumers and two A/B-proven restored tests;
+[`results/wp3-callee-pair-return-origins.md`](results/wp3-callee-pair-return-origins.md)
+records the origin-transparent, bank-safe integer-pair return slice.
 
 ## Headline findings
 

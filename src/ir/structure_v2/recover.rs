@@ -182,7 +182,6 @@ impl TreeBuilder<'_> {
             || self
                 .candidate
                 .switch_defaults()
-                .iter()
                 .any(|default| default.guard == block && default.dispatch.is_some())
         {
             let result = self.build_switch(block, stop, leaf);
@@ -240,7 +239,6 @@ impl TreeBuilder<'_> {
         let default_evidence = self
             .candidate
             .switch_defaults()
-            .iter()
             .find(|default| default.guard == block && default.dispatch.is_some());
         let dispatch = default_evidence
             .and_then(|default| default.dispatch)
@@ -251,6 +249,12 @@ impl TreeBuilder<'_> {
             .iter()
             .find(|switch| switch.dispatch == dispatch)?
             .clone();
+        // Incomplete evidence is a typed refusal, never a partially rendered
+        // switch. Candidate verification normally rejects it first, but tree
+        // recovery is independently fail-closed when called directly.
+        if !evidence.complete {
+            return None;
+        }
         if dispatch != block {
             if self.owned[dispatch] || self.active[dispatch] {
                 return None;

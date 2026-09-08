@@ -14,7 +14,7 @@
 //! structure, and `collect_goto_targets`/`deduplicate_labels` repair the labels
 //! that survive.
 
-use super::float_gate::scalar_float_semantics_are_closed;
+use super::float_gate::scalar_float_semantics_are_closed_with_identities;
 use super::fold_returns;
 use super::lower_conds::{
     exit_is_taken_branch, extract_cond_and_strip, hoisting_the_header_is_safe, lower_block,
@@ -22,14 +22,16 @@ use super::lower_conds::{
 };
 use super::lower_ops::{lower_value, switch_index_of};
 use super::{Expr, Function, Stmt};
-use crate::ir::structure::Region;
+use crate::ir::structure::{Region, SwitchEvidence};
 use crate::ir::types::{LlirFunction, Op, VReg};
 
 /// Drop a trailing `goto <target_va>` from a lowered arm — control already
 /// falls through to that block, so the jump is redundant (and, if it targets a
 /// join emitted after the `if`, actively harmful: it skips the join's body).
 fn strip_trailing_goto(stmts: &mut Vec<Stmt>, target_va: u64) {
-    if matches!(stmts.last(), Some(Stmt::Goto { target }) if *target == target_va) {
+    if stmts.last().is_some_and(
+        |statement| matches!(statement.semantic(), Stmt::Goto { target } if *target == target_va),
+    ) {
         stmts.pop();
     }
 }
@@ -39,8 +41,12 @@ fn strip_trailing_goto(stmts: &mut Vec<Stmt>, target_va: u64) {
 /// a C `break` would target that inner construct rather than this loop.
 fn recover_direct_loop_breaks(stmts: &mut [Stmt], exit_va: u64) {
     for statement in stmts {
-        match statement {
-            Stmt::Goto { target } if *target == exit_va => *statement = Stmt::Break,
+        match statement.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
+            Stmt::Goto { target } if *target == exit_va => {
+                let origins = statement.origins().cloned();
+                *statement = Stmt::Break.with_optional_origins(origins);
+            }
             Stmt::If {
                 then_body,
                 else_body,
@@ -98,6 +104,7 @@ fn materialize_multi_exit_transfers_inner(
     let mut out = Vec::new();
     let statement_count = statements.len();
     for (index, statement) in statements.into_iter().enumerate() {
+        let (statement, origins) = statement.into_semantic_with_origins();
         match statement {
             // Falling off the loop body is C's implicit continue. Only erase a
             // header transfer when it is terminal in its current structured
@@ -109,7 +116,9 @@ fn materialize_multi_exit_transfers_inner(
             // deliberately not through nested loops. A retained edge to this
             // loop's own header is therefore exactly a source-level continue;
             // unlike break, that spelling remains correct inside a switch.
-            Stmt::Goto { target } if target == header_va => out.push(Stmt::Continue),
+            Stmt::Goto { target } if target == header_va => {
+                out.push(Stmt::Continue.with_optional_origins(origins))
+            }
             Stmt::Goto { target } if exits.contains_key(&target) => {
                 let mut materialized = exits[&target].clone();
                 // A C `break` inside a switch exits that switch, not the
@@ -119,10 +128,15 @@ fn materialize_multi_exit_transfers_inner(
                 // that continuation here and replacing its break with a goto
                 // would put the destination label before the goto and create
                 // a self-loop.
-                if inside_switch && matches!(materialized.last(), Some(Stmt::Break)) {
+                if inside_switch
+                    && matches!(materialized.last().map(Stmt::semantic), Some(Stmt::Break))
+                {
                     deferred_switch_exits.insert(target);
-                    out.push(Stmt::Goto { target });
+                    out.push(Stmt::Goto { target }.with_optional_origins(origins));
                 } else {
+                    if let (Some(origins), Some(first)) = (origins, materialized.first_mut()) {
+                        first.merge_origins(&origins);
+                    }
                     out.append(&mut materialized);
                 }
             }
@@ -130,61 +144,67 @@ fn materialize_multi_exit_transfers_inner(
                 cond,
                 then_body,
                 else_body,
-            } => out.push(Stmt::If {
-                cond,
-                then_body: materialize_multi_exit_transfers_inner(
-                    then_body,
-                    header_va,
-                    exits,
-                    false,
-                    inside_switch,
-                    deferred_switch_exits,
-                ),
-                else_body: else_body.map(|body| {
-                    materialize_multi_exit_transfers_inner(
-                        body,
+            } => out.push(
+                Stmt::If {
+                    cond,
+                    then_body: materialize_multi_exit_transfers_inner(
+                        then_body,
                         header_va,
                         exits,
                         false,
                         inside_switch,
                         deferred_switch_exits,
-                    )
-                }),
-            }),
+                    ),
+                    else_body: else_body.map(|body| {
+                        materialize_multi_exit_transfers_inner(
+                            body,
+                            header_va,
+                            exits,
+                            false,
+                            inside_switch,
+                            deferred_switch_exits,
+                        )
+                    }),
+                }
+                .with_optional_origins(origins),
+            ),
             Stmt::Switch {
                 discriminant,
                 cases,
                 default,
-            } => out.push(Stmt::Switch {
-                discriminant,
-                cases: cases
-                    .into_iter()
-                    .map(|(value, body)| {
-                        (
-                            value,
-                            materialize_multi_exit_transfers_inner(
-                                body,
-                                header_va,
-                                exits,
-                                false,
-                                true,
-                                deferred_switch_exits,
-                            ),
+            } => out.push(
+                Stmt::Switch {
+                    discriminant,
+                    cases: cases
+                        .into_iter()
+                        .map(|(value, body)| {
+                            (
+                                value,
+                                materialize_multi_exit_transfers_inner(
+                                    body,
+                                    header_va,
+                                    exits,
+                                    false,
+                                    true,
+                                    deferred_switch_exits,
+                                ),
+                            )
+                        })
+                        .collect(),
+                    default: default.map(|body| {
+                        materialize_multi_exit_transfers_inner(
+                            body,
+                            header_va,
+                            exits,
+                            false,
+                            true,
+                            deferred_switch_exits,
                         )
-                    })
-                    .collect(),
-                default: default.map(|body| {
-                    materialize_multi_exit_transfers_inner(
-                        body,
-                        header_va,
-                        exits,
-                        false,
-                        true,
-                        deferred_switch_exits,
-                    )
-                }),
-            }),
-            other => out.push(other),
+                    }),
+                }
+                .with_optional_origins(origins),
+            ),
+            other => out.push(other.with_optional_origins(origins)),
         }
     }
     out
@@ -279,7 +299,7 @@ mod multi_exit_transfer_tests {
 }
 
 fn statements_terminate(statements: &[Stmt]) -> bool {
-    match statements.last() {
+    match statements.last().map(Stmt::semantic) {
         Some(Stmt::Return { .. } | Stmt::Break | Stmt::Continue | Stmt::Goto { .. }) => true,
         Some(Stmt::If {
             then_body,
@@ -317,8 +337,14 @@ fn implicit_successor(block: &crate::ir::types::LlirBlock) -> Option<u64> {
 /// bodies jump to the original block labels.
 fn lower_raw_loop_block(
     block: &crate::ir::types::LlirBlock,
+    block_index: usize,
+    lf: &LlirFunction,
+    switch: Option<&SwitchEvidence>,
+    fold_switch_guard: bool,
+    inline_regions: &[crate::ir::structure::RawSwitchInlineRegion],
     default_target: Option<u64>,
     lower_scalar_float: bool,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Vec<Stmt> {
     let explicit_index = block
         .instrs
@@ -330,7 +356,36 @@ fn lower_raw_loop_block(
             } => Some(lower_value(index)),
             _ => None,
         });
-    let mut statements = lower_block(block, lower_scalar_float);
+    let mut statements = lower_block(block, lower_scalar_float, identities);
+    if fold_switch_guard {
+        let guard_is_exact = switch
+            .filter(|evidence| evidence.complete)
+            .and_then(|evidence| evidence.default.as_ref().map(|default| (evidence, default)))
+            .is_some_and(|(evidence, default)| {
+                default.guard == block_index
+                    && default.dispatch == Some(evidence.dispatch)
+                    && matches!(
+                        block.instrs.last().map(|instr| &instr.op),
+                        Some(Op::CondJump { .. })
+                    )
+                    && block.succs.len() == 2
+                    && lf
+                        .blocks
+                        .get(evidence.dispatch)
+                        .is_some_and(|dispatch| block.succs.contains(&dispatch.start_va))
+                    && lf
+                        .blocks
+                        .get(default.target)
+                        .is_some_and(|target| block.succs.contains(&target.start_va))
+            });
+        if guard_is_exact
+            && statements
+                .last()
+                .is_some_and(|statement| matches!(statement.semantic(), Stmt::If { .. }))
+        {
+            statements.pop();
+        }
+    }
     let Some(discriminant) = explicit_index else {
         return statements;
     };
@@ -339,23 +394,99 @@ fn lower_raw_loop_block(
     }
     let Some(indirect_position) = statements
         .iter()
-        .rposition(|statement| matches!(statement, Stmt::IndirectGoto { .. }))
+        .rposition(|statement| matches!(statement.semantic(), Stmt::IndirectGoto { .. }))
     else {
         return statements;
     };
-    statements.remove(indirect_position);
-    let cases = block
-        .succs
-        .iter()
-        .enumerate()
-        .filter(|(_, target)| default_target != Some(**target))
-        .map(|(case, target)| (Some(case as i64), vec![Stmt::Goto { target: *target }]))
-        .collect();
-    statements.push(Stmt::Switch {
-        discriminant,
-        cases,
-        default: default_target.map(|target| vec![Stmt::Goto { target }]),
-    });
+    let indirect_origins = statements
+        .remove(indirect_position)
+        .into_semantic_with_origins()
+        .1;
+    let typed_switch = switch
+        .filter(|evidence| evidence.complete)
+        .filter(|evidence| evidence.dispatch == block_index);
+    let lower_inline_region = |target: usize| {
+        let region = inline_regions
+            .iter()
+            .find(|region| region.entry == target)?;
+        let mut body = Vec::new();
+        for (position, block_index) in region.blocks.iter().copied().enumerate() {
+            let block = lf.blocks.get(block_index)?;
+            if position > 0 {
+                body.push(Stmt::Label(block.start_va));
+            }
+            let mut statements = lower_block(block, lower_scalar_float, identities);
+            let lexical_next = region
+                .blocks
+                .get(position + 1)
+                .and_then(|next| lf.blocks.get(*next))
+                .map(|next| next.start_va);
+            if let Some(next) = lexical_next {
+                strip_trailing_goto(&mut statements, next);
+            }
+            body.extend(statements);
+            if let Some(successor) = implicit_successor(block) {
+                if Some(successor) != lexical_next {
+                    body.push(Stmt::Goto { target: successor });
+                }
+            }
+        }
+        Some(body)
+    };
+    let cases = if let Some(evidence) = typed_switch {
+        evidence
+            .cases
+            .iter()
+            .flat_map(|case| {
+                let target = lf.blocks.get(case.target).map(|block| block.start_va);
+                let inline_body = lower_inline_region(case.target);
+                let last_value = case.values.len().saturating_sub(1);
+                case.values
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .filter_map(move |(position, value)| {
+                        target.map(|target| {
+                            let body = if position == last_value {
+                                inline_body
+                                    .clone()
+                                    .unwrap_or_else(|| vec![Stmt::Goto { target }])
+                            } else {
+                                Vec::new()
+                            };
+                            (Some(value), body)
+                        })
+                    })
+            })
+            .collect()
+    } else {
+        block
+            .succs
+            .iter()
+            .enumerate()
+            .filter(|(_, target)| default_target != Some(**target))
+            .map(|(case, target)| (Some(case as i64), vec![Stmt::Goto { target: *target }]))
+            .collect()
+    };
+    let typed_default = typed_switch
+        .and_then(|evidence| evidence.default.as_ref())
+        .and_then(|default| lf.blocks.get(default.target))
+        .map(|block| block.start_va);
+    let default_body = typed_switch
+        .and_then(|evidence| evidence.default.as_ref())
+        .and_then(|default| lower_inline_region(default.target));
+    statements.push(
+        Stmt::Switch {
+            discriminant,
+            cases,
+            default: default_body.or_else(|| {
+                typed_default
+                    .or(default_target)
+                    .map(|target| vec![Stmt::Goto { target }])
+            }),
+        }
+        .with_optional_origins(indirect_origins),
+    );
     statements
 }
 
@@ -402,8 +533,9 @@ fn lower_region(
     lf: &LlirFunction,
     targets: &std::collections::HashSet<u64>,
     lower_scalar_float: bool,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Vec<Stmt> {
-    let mut out = lower_region_inner(r, lf, targets, lower_scalar_float);
+    let mut out = lower_region_inner(r, lf, targets, lower_scalar_float, identities);
     // A region that *emits* a goto-target block (any shape — a plain block or a
     // structured `if`/`while` that begins at the target) gets a label at the
     // start of its statements so the jump resolves. The block's statements render
@@ -425,10 +557,11 @@ fn lower_region_inner(
     lf: &LlirFunction,
     targets: &std::collections::HashSet<u64>,
     lower_scalar_float: bool,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Vec<Stmt> {
     match r {
-        Region::Block(bi) => lower_block(&lf.blocks[*bi], lower_scalar_float),
-        Region::Borrowed(inner) => lower_region(inner, lf, targets, lower_scalar_float),
+        Region::Block(bi) => lower_block(&lf.blocks[*bi], lower_scalar_float, identities),
+        Region::Borrowed(inner) => lower_region(inner, lf, targets, lower_scalar_float, identities),
         Region::Goto(bi) => vec![Stmt::Goto {
             target: lf.blocks[*bi].start_va,
         }],
@@ -441,7 +574,7 @@ fn lower_region_inner(
             // list either way.
             let mut out: Vec<Stmt> = Vec::new();
             for (idx, p) in parts.iter().enumerate() {
-                let mut lowered = lower_region(p, lf, targets, lower_scalar_float);
+                let mut lowered = lower_region(p, lf, targets, lower_scalar_float, identities);
                 // A sequence emits its next region immediately after this one,
                 // so an unconditional jump to that region is ordinary
                 // fallthrough and must disappear. This includes entry jumps to
@@ -453,7 +586,9 @@ fn lower_region_inner(
                     .and_then(crate::ir::structure::entry_block);
                 if let Some(entry) = next_entry {
                     let next_va = lf.blocks[entry].start_va;
-                    if matches!(lowered.last(), Some(Stmt::Goto { target }) if *target == next_va) {
+                    if lowered.last().is_some_and(
+                        |statement| matches!(statement.semantic(), Stmt::Goto { target } if *target == next_va),
+                    ) {
                         lowered.pop();
                     }
                 }
@@ -471,8 +606,9 @@ fn lower_region_inner(
             join,
             invert,
         } => {
-            let cond_stmts = lower_block(&lf.blocks[*cond], lower_scalar_float);
-            let (cond_expr, mut pre) = extract_cond_and_strip(&lf.blocks[*cond], cond_stmts);
+            let cond_stmts = lower_block(&lf.blocks[*cond], lower_scalar_float, identities);
+            let (cond_expr, mut pre, condition_origins) =
+                extract_cond_and_strip(&lf.blocks[*cond], cond_stmts);
             // The raw condition is true when the branch is taken; if `then_r` is
             // the fall-through arm the structurer flagged `invert`, so negate.
             let cond_expr = if *invert {
@@ -480,7 +616,7 @@ fn lower_region_inner(
             } else {
                 cond_expr
             };
-            let mut then_stmts = lower_region(then_r, lf, targets, lower_scalar_float);
+            let mut then_stmts = lower_region(then_r, lf, targets, lower_scalar_float, identities);
             // The arm's trailing `goto <join>` is redundant — control falls
             // through to the join right after the `if`. Leaving it makes the arm
             // jump *past* the join's body (e.g. the epilogue's `return`) to a
@@ -488,11 +624,14 @@ fn lower_region_inner(
             if let Some(j) = join {
                 strip_trailing_goto(&mut then_stmts, lf.blocks[*j].start_va);
             }
-            pre.push(Stmt::If {
-                cond: cond_expr,
-                then_body: then_stmts,
-                else_body: None,
-            });
+            pre.push(
+                Stmt::If {
+                    cond: cond_expr,
+                    then_body: then_stmts,
+                    else_body: None,
+                }
+                .with_optional_origins(condition_origins),
+            );
             pre
         }
         Region::IfThenElse {
@@ -502,30 +641,35 @@ fn lower_region_inner(
             join,
             invert,
         } => {
-            let cond_stmts = lower_block(&lf.blocks[*cond], lower_scalar_float);
-            let (cond_expr, mut pre) = extract_cond_and_strip(&lf.blocks[*cond], cond_stmts);
+            let cond_stmts = lower_block(&lf.blocks[*cond], lower_scalar_float, identities);
+            let (cond_expr, mut pre, condition_origins) =
+                extract_cond_and_strip(&lf.blocks[*cond], cond_stmts);
             let cond_expr = if *invert {
                 negate_cmp_expr(cond_expr)
             } else {
                 cond_expr
             };
-            let mut then_stmts = lower_region(then_r, lf, targets, lower_scalar_float);
-            let mut else_stmts = lower_region(else_r, lf, targets, lower_scalar_float);
+            let mut then_stmts = lower_region(then_r, lf, targets, lower_scalar_float, identities);
+            let mut else_stmts = lower_region(else_r, lf, targets, lower_scalar_float, identities);
             if let Some(j) = join {
                 let jva = lf.blocks[*j].start_va;
                 strip_trailing_goto(&mut then_stmts, jva);
                 strip_trailing_goto(&mut else_stmts, jva);
             }
-            pre.push(Stmt::If {
-                cond: cond_expr,
-                then_body: then_stmts,
-                else_body: Some(else_stmts),
-            });
+            pre.push(
+                Stmt::If {
+                    cond: cond_expr,
+                    then_body: then_stmts,
+                    else_body: Some(else_stmts),
+                }
+                .with_optional_origins(condition_origins),
+            );
             pre
         }
         Region::While { header, body, exit } => {
-            let cond_stmts = lower_block(&lf.blocks[*header], lower_scalar_float);
-            let (cond_expr, pre) = extract_cond_and_strip(&lf.blocks[*header], cond_stmts);
+            let cond_stmts = lower_block(&lf.blocks[*header], lower_scalar_float, identities);
+            let (cond_expr, pre, condition_origins) =
+                extract_cond_and_strip(&lf.blocks[*header], cond_stmts);
             // `cond_expr` is the branch-TAKEN condition. Whether that is the
             // loop's CONTINUE condition depends on where the taken edge goes, and
             // the two mainstream layouts disagree:
@@ -543,7 +687,7 @@ fn lower_region_inner(
                 cond_expr
             };
             let cond_expr = continue_cond;
-            let mut body_stmts = lower_region(body, lf, targets, lower_scalar_float);
+            let mut body_stmts = lower_region(body, lf, targets, lower_scalar_float, identities);
             if let Some(exit) = exit {
                 recover_direct_loop_breaks(&mut body_stmts, lf.blocks[*exit].start_va);
             }
@@ -561,11 +705,14 @@ fn lower_region_inner(
                 //     while (1) { body; if (!cond) break; }
                 // so the body runs each iteration and the post-test exits.
                 let mut loop_body = pre;
-                loop_body.push(Stmt::If {
-                    cond: negate_cmp_expr(cond_expr),
-                    then_body: vec![Stmt::Break],
-                    else_body: None,
-                });
+                loop_body.push(
+                    Stmt::If {
+                        cond: negate_cmp_expr(cond_expr),
+                        then_body: vec![Stmt::Break],
+                        else_body: None,
+                    }
+                    .with_optional_origins(condition_origins),
+                );
                 vec![Stmt::While {
                     cond: Expr::Const(1),
                     body: loop_body,
@@ -574,16 +721,20 @@ fn lower_region_inner(
                 vec![Stmt::While {
                     cond: cond_expr,
                     body: body_stmts,
-                }]
+                }
+                .with_optional_origins(condition_origins)]
             } else if hoisting_the_header_is_safe(&pre, &body_stmts) {
                 // The header's leftover work is a plain copy chain — no memory read,
                 // no register updating itself — so `copy_prop` folds it into the
                 // condition downstream and hoisting it once is equivalent.
                 let mut out = pre;
-                out.push(Stmt::While {
-                    cond: cond_expr,
-                    body: body_stmts,
-                });
+                out.push(
+                    Stmt::While {
+                        cond: cond_expr,
+                        body: body_stmts,
+                    }
+                    .with_optional_origins(condition_origins),
+                );
                 out
             } else {
                 // The header does PER-ITERATION work that cannot be folded into the
@@ -600,11 +751,14 @@ fn lower_region_inner(
                 // on inputs the original returned on. Keep the work where it runs:
                 //     while (1) { <header work>; if (!cond) break; <body> }
                 let mut loop_body = pre;
-                loop_body.push(Stmt::If {
-                    cond: negate_cmp_expr(cond_expr),
-                    then_body: vec![Stmt::Break],
-                    else_body: None,
-                });
+                loop_body.push(
+                    Stmt::If {
+                        cond: negate_cmp_expr(cond_expr),
+                        then_body: vec![Stmt::Break],
+                        else_body: None,
+                    }
+                    .with_optional_origins(condition_origins),
+                );
                 loop_body.extend(body_stmts);
                 vec![Stmt::While {
                     cond: Expr::Const(1),
@@ -613,12 +767,12 @@ fn lower_region_inner(
             }
         }
         Region::DoWhile { body, cond, exit } => {
-            let mut body_stmts = lower_region(body, lf, targets, lower_scalar_float);
+            let mut body_stmts = lower_region(body, lf, targets, lower_scalar_float, identities);
             if let Some(exit) = exit {
                 recover_direct_loop_breaks(&mut body_stmts, lf.blocks[*exit].start_va);
             }
-            let cond_stmts = lower_block(&lf.blocks[*cond], lower_scalar_float);
-            let (cond_expr, mut latch_stmts) =
+            let cond_stmts = lower_block(&lf.blocks[*cond], lower_scalar_float, identities);
+            let (cond_expr, mut latch_stmts, condition_origins) =
                 extract_cond_and_strip(&lf.blocks[*cond], cond_stmts);
             // A shared arm can explicitly jump to the bottom test (source-level
             // `continue`). The condition block is otherwise absorbed into the
@@ -640,7 +794,8 @@ fn lower_region_inner(
             vec![Stmt::DoWhile {
                 body: body_stmts,
                 cond: continue_cond,
-            }]
+            }
+            .with_optional_origins(condition_origins)]
         }
         Region::MultiExitLoop {
             header,
@@ -651,7 +806,8 @@ fn lower_region_inner(
             let continuation_va = continuation.map(|block| lf.blocks[block].start_va);
             let mut lowered_exits = std::collections::HashMap::new();
             for (target, exit) in exits {
-                let mut statements = lower_region(exit, lf, targets, lower_scalar_float);
+                let mut statements =
+                    lower_region(exit, lf, targets, lower_scalar_float, identities);
                 if let Some(continuation_va) = continuation_va {
                     strip_trailing_goto(&mut statements, continuation_va);
                 }
@@ -660,7 +816,7 @@ fn lower_region_inner(
                 }
                 lowered_exits.insert(lf.blocks[*target].start_va, statements);
             }
-            let body = lower_region(body, lf, targets, lower_scalar_float);
+            let body = lower_region(body, lf, targets, lower_scalar_float, identities);
             vec![Stmt::While {
                 cond: Expr::Const(1),
                 body: materialize_multi_exit_transfers(
@@ -675,24 +831,43 @@ fn lower_region_inner(
             header,
             blocks,
             exits: _,
+            switch,
+            switch_guard,
+            switch_inline_regions,
         } => {
             let header_va = lf.blocks[*header].start_va;
             let mut loop_body = Vec::new();
-            for (position, block_index) in blocks.iter().copied().enumerate() {
+            let inlined_blocks = switch_inline_regions
+                .iter()
+                .flat_map(|region| region.blocks.iter())
+                .copied()
+                .collect::<std::collections::HashSet<_>>();
+            let rendered_blocks = blocks
+                .iter()
+                .copied()
+                .filter(|block| !inlined_blocks.contains(block))
+                .collect::<Vec<_>>();
+            for (position, block_index) in rendered_blocks.iter().copied().enumerate() {
                 let block = &lf.blocks[block_index];
                 let default_target = raw_dispatch_default_target(lf, blocks, block_index);
                 loop_body.push(Stmt::Label(block.start_va));
                 loop_body.extend(lower_raw_loop_block(
                     block,
+                    block_index,
+                    lf,
+                    switch.as_ref(),
+                    *switch_guard == Some(block_index),
+                    switch_inline_regions,
                     default_target,
                     lower_scalar_float,
+                    identities,
                 ));
 
                 // Raw blocks normally rely on source order for fallthrough. The
                 // loop owns a non-contiguous subset and starts at its header, so
                 // make every displaced fallthrough explicit. Falling off the
                 // final block naturally starts the next `while (1)` iteration.
-                let lexical_next = blocks
+                let lexical_next = rendered_blocks
                     .get(position + 1)
                     .map(|next| lf.blocks[*next].start_va)
                     .unwrap_or(header_va);
@@ -702,6 +877,18 @@ fn lower_region_inner(
                     }
                 }
             }
+            // Every transfer from an owned raw-loop block back to this exact
+            // header is a source-level continue. Apply the same recursive,
+            // nested-loop-safe conversion used by MultiExitLoop: this reaches
+            // conditional latches and switch arms without crossing a nested
+            // loop boundary. Exit transfers and case-to-handler gotos remain
+            // explicit.
+            let loop_body = materialize_multi_exit_transfers(
+                loop_body,
+                header_va,
+                &std::collections::HashMap::new(),
+                true,
+            );
             vec![Stmt::While {
                 cond: Expr::Const(1),
                 body: loop_body,
@@ -721,18 +908,22 @@ fn lower_region_inner(
             // arm with its case index (positional) and an implicit
             // break at the end.
             let mut prefix = guard
-                .map(|guard| lower_block(&lf.blocks[guard], lower_scalar_float))
+                .map(|guard| lower_block(&lf.blocks[guard], lower_scalar_float, identities))
                 .unwrap_or_default();
             // The range branch is now represented by the switch's formal
             // default. Keep normalization/dataflow statements from the guard,
             // but remove its compiler-level conditional transfer.
             while matches!(
-                prefix.last(),
+                prefix.last().map(Stmt::semantic),
                 Some(Stmt::Goto { .. }) | Some(Stmt::If { .. })
             ) {
                 prefix.pop();
             }
-            prefix.extend(lower_block(&lf.blocks[*dispatch], lower_scalar_float));
+            prefix.extend(lower_block(
+                &lf.blocks[*dispatch],
+                lower_scalar_float,
+                identities,
+            ));
             let explicit_index = lf.blocks[*dispatch]
                 .instrs
                 .iter()
@@ -751,18 +942,18 @@ fn lower_region_inner(
             let mut discriminant = None;
             if let Some(position) = prefix
                 .iter()
-                .rposition(|stmt| matches!(stmt, Stmt::IndirectGoto { .. }))
+                .rposition(|stmt| matches!(stmt.semantic(), Stmt::IndirectGoto { .. }))
             {
-                if let Stmt::IndirectGoto { target } = &prefix[position] {
+                if let Stmt::IndirectGoto { target } = prefix[position].semantic() {
                     discriminant = switch_index_of(target);
                 }
                 prefix.remove(position);
             }
             while matches!(
-                prefix.last(),
+                prefix.last().map(Stmt::semantic),
                 Some(Stmt::Goto { .. }) | Some(Stmt::If { .. }) | Some(Stmt::IndirectGoto { .. })
             ) {
-                if let Some(Stmt::IndirectGoto { target }) = prefix.last() {
+                if let Some(Stmt::IndirectGoto { target }) = prefix.last().map(Stmt::semantic) {
                     discriminant = switch_index_of(target);
                 }
                 let _ = &discriminant;
@@ -770,7 +961,7 @@ fn lower_region_inner(
             }
             let mut cases: Vec<(Option<i64>, Vec<Stmt>)> = Vec::new();
             for (arm_index, arm) in arms.iter().enumerate() {
-                let mut body = lower_region(arm, lf, targets, lower_scalar_float);
+                let mut body = lower_region(arm, lf, targets, lower_scalar_float, identities);
                 if let Some(join) = join {
                     // The renderer supplies the case `break`; a jump to the
                     // block emitted immediately after this switch is plain
@@ -787,7 +978,7 @@ fn lower_region_inner(
                 }
             }
             let default = formal_default.as_deref().map(|region| {
-                let mut body = lower_region(region, lf, targets, lower_scalar_float);
+                let mut body = lower_region(region, lf, targets, lower_scalar_float, identities);
                 if let Some(join) = join {
                     strip_trailing_goto(&mut body, lf.blocks[*join].start_va);
                 }
@@ -823,7 +1014,7 @@ fn lower_region_inner(
             for (position, &bi) in blocks.iter().enumerate() {
                 out.push(Stmt::Label(lf.blocks[bi].start_va));
                 let block = &lf.blocks[bi];
-                out.extend(lower_block(block, lower_scalar_float));
+                out.extend(lower_block(block, lower_scalar_float, identities));
                 // A partial labelled-CFG fallback need not own every block
                 // between two addresses. Preserve a displaced machine
                 // fallthrough explicitly instead of relying on vector order.
@@ -908,7 +1099,10 @@ pub(super) fn deduplicate_labels(body: &mut Vec<Stmt>) {
         minimum: &mut std::collections::HashMap<u64, usize>,
     ) {
         for stmt in body {
-            match stmt {
+            match stmt.semantic() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
                 Stmt::Label(va) => {
                     minimum
                         .entry(*va)
@@ -947,7 +1141,8 @@ pub(super) fn deduplicate_labels(body: &mut Vec<Stmt>) {
         minimum: &std::collections::HashMap<u64, usize>,
         kept: &mut std::collections::HashSet<u64>,
     ) {
-        body.retain_mut(|stmt| match stmt {
+        body.retain_mut(|stmt| match stmt.semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Label(va) => minimum.get(va) == Some(&depth) && kept.insert(*va),
             Stmt::If {
                 then_body,
@@ -1132,12 +1327,23 @@ mod lowering_stack_tests {
 /// `collect_goto_targets` and `deduplicate_labels` — so the whole body needs the
 /// headroom, not just the first pass.
 pub fn lower(lf: &LlirFunction, region: &Region, name: impl Into<String>) -> Function {
+    lower_with_identities(lf, region, name, None)
+}
+
+pub fn lower_with_identities(
+    lf: &LlirFunction,
+    region: &Region,
+    name: impl Into<String>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Function {
     let name = name.into();
     std::thread::scope(|scope| {
         std::thread::Builder::new()
             .name("glaurung-lower".to_string())
             .stack_size(lowering_stack_bytes())
-            .spawn_scoped(scope, move || lower_on_this_stack(lf, region, name))
+            .spawn_scoped(scope, move || {
+                lower_on_this_stack(lf, region, name, identities)
+            })
             .expect("spawn the lowering thread")
             .join()
             // Preserve panic behavior exactly: a panic inside lowering must
@@ -1146,8 +1352,13 @@ pub fn lower(lf: &LlirFunction, region: &Region, name: impl Into<String>) -> Fun
     })
 }
 
-fn lower_on_this_stack(lf: &LlirFunction, region: &Region, name: String) -> Function {
-    let lower_scalar_float = scalar_float_semantics_are_closed(lf);
+fn lower_on_this_stack(
+    lf: &LlirFunction,
+    region: &Region,
+    name: String,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Function {
+    let lower_scalar_float = scalar_float_semantics_are_closed_with_identities(lf, identities);
     let mut targets = std::collections::HashSet::new();
     collect_goto_targets(region, lf, &mut targets);
     // Region::Goto is not the only source of an explicit edge. A raw direct
@@ -1157,11 +1368,11 @@ fn lower_on_this_stack(lf: &LlirFunction, region: &Region, name: String) -> Func
     // emitted destination block receives its real label. Without this pass the
     // renderer can only append an empty label at function end, changing where
     // the case actually transfers control.
-    let mut body = lower_region(region, lf, &targets, lower_scalar_float);
+    let mut body = lower_region(region, lf, &targets, lower_scalar_float, identities);
     let known_target_count = targets.len();
     crate::ir::label_prune::collect_goto_targets(&body, &mut targets);
     if targets.len() != known_target_count {
-        body = lower_region(region, lf, &targets, lower_scalar_float);
+        body = lower_region(region, lf, &targets, lower_scalar_float, identities);
     }
     deduplicate_labels(&mut body);
     let mut f = Function {

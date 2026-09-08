@@ -1,5 +1,5 @@
 use super::*;
-use crate::ir::ast::{Expr, Stmt};
+use crate::ir::ast::{Expr, OriginSet, Stmt};
 use crate::ir::types::{BinOp, VReg};
 
 fn reg(name: &str) -> VReg {
@@ -101,6 +101,7 @@ fn selected_expression(function: &Function) -> &Expr {
 
 fn count_calls(expression: &Expr) -> usize {
     match expression {
+        Expr::Origin { expr, .. } => count_calls(expr),
         Expr::Call { target, args, .. } => {
             1 + count_calls(target) + args.iter().map(count_calls).sum::<usize>()
         }
@@ -588,4 +589,182 @@ fn inert_nops_do_not_block_call_result_return_folding() {
             value: Some(Expr::Call { .. })
         }]
     ));
+}
+
+#[test]
+fn attributed_adjacent_call_and_return_fold_with_all_consumed_origins() {
+    let result = "call_result#call_lifetime_0";
+    let mut function = Function {
+        name: "attributed_forward_result".into(),
+        entry_va: 0x1000,
+        body: vec![
+            call(result).with_origins(OriginSet::one(0x1010)),
+            Stmt::Nop.with_origins(OriginSet::one(0x1014)),
+            Stmt::Return {
+                value: Some(Expr::Reg(reg(result))),
+            }
+            .with_origins(OriginSet::one(0x1018)),
+        ],
+    };
+
+    fold_adjacent_single_use_call_results(&mut function, 8);
+
+    assert_eq!(function.body.len(), 1, "{function:#?}");
+    assert!(matches!(
+        function.body[0].semantic(),
+        Stmt::Return {
+            value: Some(Expr::Call { .. })
+        }
+    ));
+    assert_eq!(
+        function.body[0]
+            .origins()
+            .expect("folded return owner")
+            .addresses(),
+        &[0x1010, 0x1014, 0x1018]
+    );
+}
+
+#[test]
+fn attributed_structured_call_diamond_folds_with_all_consumed_origins() {
+    let mut function = function(saturation_diamond(true).with_origins(OriginSet::one(0x1100)));
+    let Stmt::If {
+        then_body,
+        else_body: Some(else_body),
+        ..
+    } = function.body[0].semantic_mut()
+    else {
+        unreachable!()
+    };
+    then_body[0] = then_body[0].clone().with_origins(OriginSet::one(0x1110));
+    then_body[1] = then_body[1].clone().with_origins(OriginSet::one(0x1114));
+    else_body[0] = else_body[0].clone().with_origins(OriginSet::one(0x1120));
+
+    collapse_lazy_call_diamonds_with_pointer_width(&mut function, 8);
+
+    assert!(matches!(function.body[0].semantic(), Stmt::Assign { .. }));
+    assert_eq!(
+        function.body[0]
+            .origins()
+            .expect("folded select owner")
+            .addresses(),
+        &[0x1100, 0x1110, 0x1114, 0x1120]
+    );
+}
+
+#[test]
+fn attributed_conditional_jump_diamond_folds_with_drained_origins() {
+    let constant_label = 0x1210;
+    let join_label = 0x1220;
+    let mut function = Function {
+        name: "attributed_jump_lazy_select".into(),
+        entry_va: 0x1000,
+        body: vec![
+            Stmt::If {
+                cond: negative_condition(),
+                then_body: vec![Stmt::Goto {
+                    target: constant_label,
+                }
+                .with_origins(OriginSet::one(0x1204))],
+                else_body: None,
+            }
+            .with_origins(OriginSet::one(0x1200)),
+            call("call_result").with_origins(OriginSet::one(0x1208)),
+            assign(
+                "result",
+                Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Reg(reg("call_result"))),
+                    rhs: Box::new(Expr::Reg(reg("call_result"))),
+                },
+            )
+            .with_origins(OriginSet::one(0x120c)),
+            Stmt::Goto { target: join_label }.with_origins(OriginSet::one(0x1210)),
+            Stmt::Label(constant_label).with_origins(OriginSet::one(0x1214)),
+            assign("result", Expr::Const(-1)).with_origins(OriginSet::one(0x1218)),
+            Stmt::Label(join_label).with_origins(OriginSet::one(0x121c)),
+        ],
+    };
+
+    collapse_lazy_call_diamonds_with_pointer_width(&mut function, 8);
+
+    assert_eq!(function.body.len(), 1, "{function:#?}");
+    assert!(matches!(function.body[0].semantic(), Stmt::Assign { .. }));
+    assert_eq!(
+        function.body[0]
+            .origins()
+            .expect("folded jump owner")
+            .addresses(),
+        &[0x1200, 0x1204, 0x1208, 0x120c, 0x1210, 0x1214, 0x1218, 0x121c]
+    );
+}
+
+#[test]
+fn attributed_linearized_diamond_folds_with_all_consumed_origins() {
+    let join = 0x1310;
+    let mut function = Function {
+        name: "attributed_linear_lazy_select".into(),
+        entry_va: 0x1000,
+        body: vec![
+            Stmt::If {
+                cond: nonnegative_condition(),
+                then_body: vec![
+                    call("call_result").with_origins(OriginSet::one(0x1304)),
+                    assign(
+                        "result",
+                        Expr::Bin {
+                            op: BinOp::Add,
+                            lhs: Box::new(Expr::Reg(reg("call_result"))),
+                            rhs: Box::new(Expr::Reg(reg("call_result"))),
+                        },
+                    )
+                    .with_origins(OriginSet::one(0x1308)),
+                    Stmt::Goto { target: join }.with_origins(OriginSet::one(0x130c)),
+                ],
+                else_body: None,
+            }
+            .with_origins(OriginSet::one(0x1300)),
+            assign("result", Expr::Const(-1)).with_origins(OriginSet::one(0x1310)),
+            Stmt::Label(join).with_origins(OriginSet::one(0x1314)),
+        ],
+    };
+
+    collapse_lazy_call_diamonds_with_pointer_width(&mut function, 8);
+
+    assert_eq!(function.body.len(), 1, "{function:#?}");
+    assert!(matches!(function.body[0].semantic(), Stmt::Assign { .. }));
+    assert_eq!(
+        function.body[0]
+            .origins()
+            .expect("folded linear owner")
+            .addresses(),
+        &[0x1300, 0x1304, 0x1308, 0x130c, 0x1310, 0x1314]
+    );
+}
+
+#[test]
+fn attributed_outer_statement_does_not_hide_nested_call_diamond() {
+    let nested = saturation_diamond(true).with_origins(OriginSet::one(0x1410));
+    let mut function = function(
+        Stmt::While {
+            cond: Expr::Reg(reg("keep_going")),
+            body: vec![nested],
+        }
+        .with_origins(OriginSet::one(0x1400)),
+    );
+
+    collapse_lazy_call_diamonds_with_pointer_width(&mut function, 8);
+
+    let Stmt::While { body, .. } = function.body[0].semantic() else {
+        panic!("outer loop changed shape: {function:#?}");
+    };
+    assert!(matches!(body[0].semantic(), Stmt::Assign { .. }));
+    assert_eq!(
+        body[0].origins().expect("nested select owner").addresses(),
+        &[0x1410]
+    );
+    assert_eq!(
+        function.body[0].origins().expect("outer owner").addresses(),
+        &[0x1400]
+    );
 }

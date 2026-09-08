@@ -28,7 +28,7 @@
 //! (which produces the `%stack_top` alias) and after
 //! [`super::naming::apply_role_names`] (which preserves `stack_*` names).
 
-use crate::ir::ast::{Expr, Function, Stmt};
+use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 use crate::ir::types::{BinOp, VReg};
 
 /// Run the pass in place over `f`'s body and every nested arm.
@@ -44,7 +44,7 @@ pub fn rematerialise_stack_ops(f: &mut Function) {
 fn drop_epilogue_rsp_adjust(body: &mut Vec<Stmt>) {
     // Recurse first so inner arms are simplified independently.
     for s in body.iter_mut() {
-        match s {
+        match s.semantic_mut() {
             Stmt::If {
                 then_body,
                 else_body,
@@ -65,7 +65,7 @@ fn drop_epilogue_rsp_adjust(body: &mut Vec<Stmt>) {
     let mut i = body.len();
     while i > 0 {
         i -= 1;
-        if matches!(&body[i], Stmt::Return { .. }) {
+        if matches!(body[i].semantic(), Stmt::Return { .. }) {
             while i > 0 && is_rsp_add_width(&body[i - 1]) {
                 body.remove(i - 1);
                 i -= 1;
@@ -76,7 +76,7 @@ fn drop_epilogue_rsp_adjust(body: &mut Vec<Stmt>) {
 
 fn rematerialise_body(body: &mut Vec<Stmt>) {
     for s in body.iter_mut() {
-        match s {
+        match s.semantic_mut() {
             Stmt::If {
                 then_body,
                 else_body,
@@ -101,12 +101,17 @@ fn rematerialise_body(body: &mut Vec<Stmt>) {
                 addr: Expr::Reg(slot),
                 src,
                 ..
-            } = &body[i + 1]
+            } = body[i + 1].semantic()
             {
                 if is_stack_top(slot) {
-                    let value = src.clone();
+                    let mut value = src.clone();
+                    if let Some(origins) = body[i + 1].origins() {
+                        value.merge_origins(origins);
+                    }
+                    let origins = origins_of(&body[i..=i + 1]);
                     body.remove(i + 1);
-                    body[i] = Stmt::Push { value };
+                    body[i] = Stmt::Push { value }
+                        .with_optional_origins((!origins.is_empty()).then_some(origins));
                     i += 1;
                     continue;
                 }
@@ -116,13 +121,15 @@ fn rematerialise_body(body: &mut Vec<Stmt>) {
         if let Stmt::Assign {
             dst,
             src: Expr::Reg(slot),
-        } = &body[i]
+        } = body[i].semantic()
         {
             if is_stack_top(slot) && is_phys_reg(dst) {
                 if is_rsp_add_width(&body[i + 1]) {
                     let target = dst.clone();
+                    let origins = origins_of(&body[i..=i + 1]);
                     body.remove(i + 1);
-                    body[i] = Stmt::Pop { target };
+                    body[i] = Stmt::Pop { target }
+                        .with_optional_origins((!origins.is_empty()).then_some(origins));
                     i += 1;
                     continue;
                 }
@@ -147,7 +154,7 @@ fn is_stack_ptr(v: &VReg) -> bool {
 /// `Stmt::Assign { dst: rsp, src: Bin { Sub, Reg(rsp), Const(N) } }` with N>0.
 fn is_rsp_sub_width(s: &Stmt) -> bool {
     matches!(
-        s,
+        s.semantic(),
         Stmt::Assign {
             dst,
             src: Expr::Bin {
@@ -164,7 +171,7 @@ fn is_rsp_sub_width(s: &Stmt) -> bool {
 /// `Stmt::Assign { dst: rsp, src: Bin { Add, Reg(rsp), Const(N) } }` with N>0.
 fn is_rsp_add_width(s: &Stmt) -> bool {
     matches!(
-        s,
+        s.semantic(),
         Stmt::Assign {
             dst,
             src: Expr::Bin {
@@ -176,6 +183,13 @@ fn is_rsp_add_width(s: &Stmt) -> bool {
             && matches!(lhs.as_ref(), Expr::Reg(r) if r == dst)
             && matches!(rhs.as_ref(), Expr::Const(n) if *n > 0)
     )
+}
+
+fn origins_of(statements: &[Stmt]) -> OriginSet {
+    statements
+        .iter()
+        .filter_map(Stmt::origins)
+        .fold(OriginSet::empty(), |origins, next| origins.union(next))
 }
 
 #[cfg(test)]
@@ -227,6 +241,38 @@ mod tests {
             Stmt::Push { value } => assert_eq!(*value, Expr::Reg(reg("rbp"))),
             other => panic!("expected Push, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn attributed_push_pair_unions_instruction_origins() {
+        let source_owner = OriginSet::one(0x0ffc);
+        let store_owner = OriginSet::one(0x1004);
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                rsp_sub(8).with_origins(OriginSet::one(0x1000)),
+                Stmt::Store {
+                    addr: Expr::Reg(reg("stack_top")),
+                    src: Expr::Reg(reg("rbp")).with_origins(source_owner.clone()),
+                    size: 8,
+                }
+                .with_origins(store_owner.clone()),
+            ],
+        };
+
+        rematerialise_stack_ops(&mut f);
+
+        assert_eq!(f.body.len(), 1);
+        let Stmt::Push { value } = f.body[0].semantic() else {
+            panic!("expected attributed push: {:#?}", f.body)
+        };
+        assert!(matches!(value.semantic(), Expr::Reg(register) if register == &reg("rbp")));
+        assert_eq!(value.origins(), Some(&source_owner.union(&store_owner)));
+        assert_eq!(
+            f.body[0].origins().expect("push origins").addresses(),
+            &[0x1000, 0x1004]
+        );
     }
 
     #[test]

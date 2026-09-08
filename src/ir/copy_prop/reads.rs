@@ -35,6 +35,7 @@ use crate::ir::types::{is_promoted_local_reg, VReg};
 /// the rest of the expression.
 pub(super) fn visit_expr_reads<F: FnMut(&VReg) -> bool>(e: &Expr, visit: &mut F) -> bool {
     match e {
+        Expr::Origin { expr, .. } => visit_expr_reads(expr, visit),
         Expr::Reg(r) => visit(r),
         Expr::StackAddr { object, .. } => visit(object),
         Expr::Const(_)
@@ -100,13 +101,14 @@ pub(super) fn visit_expr_reads<F: FnMut(&VReg) -> bool>(e: &Expr, visit: &mut F)
 /// [`visit_expr_reads`] over one statement, including any nested body.
 pub(super) fn visit_stmt_reads<F: FnMut(&VReg) -> bool>(s: &Stmt, visit: &mut F) -> bool {
     match s {
+        Stmt::Origin { stmt, .. } => visit_stmt_reads(stmt, visit),
         Stmt::IndirectGoto { target } => visit_expr_reads(target, visit),
         // The destination of an Assign is a WRITE, not a read.
         Stmt::Assign { src, .. } => visit_expr_reads(src, visit),
         Stmt::Store { addr, src, .. } => {
             // `Store local_x = value` is how promoted scalar assignment is
             // encoded. Its bare local is a destination, not a pointer read.
-            if !matches!(addr, Expr::Reg(dst) if is_promoted_local_reg(dst))
+            if !matches!(addr.semantic(), Expr::Reg(dst) if is_promoted_local_reg(dst))
                 && !visit_expr_reads(addr, visit)
             {
                 return false;
