@@ -1377,6 +1377,12 @@ provenance through lowering.
   exact-break, and no-motion proofs remain mandatory. Its strengthened
   observed-red test and all 30 loop-form tests pass; see
   `results/wp3-head-tested-loop-origins.md`.
+  Commit `1bc1f57f` then makes counted-loop target recognition transparent to
+  attributed stack-local address expressions. Both initializer and step stores
+  survive unchanged; exact local/stack identity, same-induction-variable,
+  unit-step, and iterator-bypass proofs remain mandatory. Its strengthened
+  observed-red test and all 30 loop-form tests pass; see
+  `results/wp3-loop-store-target-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
