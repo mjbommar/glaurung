@@ -1660,6 +1660,13 @@ provenance through lowering.
   scratch liveness. Both exact read/write regressions, all 74 copy-propagation
   tests, and the compiled ARM32 frame-spill fixture pass; see
   `results/wp3-copy-read-count-identities.md`.
+  Commit `7ea07705` next makes late switch-entry propagation one identity-aware
+  pass transaction: the sidecar reaches recursive switch-arm substitution and
+  the dead-copy cleanup that follows it. A scratch alias of an opaque promoted
+  object can no longer collapse an indirect case-arm store into a bare stack
+  assignment. Its exact lvalue regression, all four switch-entry tests, all 75
+  copy-propagation tests, and the compiled GCC-O0 state-dispatch switch round
+  trip pass; see `results/wp3-switch-entry-copy-identities.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
