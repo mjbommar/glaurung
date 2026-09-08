@@ -423,6 +423,22 @@ fn unsigned_max_spelling_is_scoped_to_the_saturation_select() {
         ],
     };
     collapse_lazy_call_diamonds_with_pointer_width(&mut saturation, 8);
+    let [Stmt::Assign {
+        src: Expr::Select {
+            if_true, if_false, ..
+        },
+        ..
+    }] = saturation.body.as_mut_slice()
+    else {
+        panic!(
+            "saturation diamond was not collapsed: {:#?}",
+            saturation.body
+        );
+    };
+    for (arm, origin) in [(if_true, 0x1014), (if_false, 0x1018)] {
+        let expression = std::mem::replace(arm, Box::new(Expr::Const(0)));
+        *arm = Box::new((*expression).with_origins(OriginSet::one(origin)));
+    }
     let saturation_text = crate::ir::ast::render_decbench(&saturation);
     assert!(
         saturation_text.contains("0xffffffffffffffffULL"),

@@ -1272,27 +1272,27 @@ fn write_unsigned_subtract_range_dec(op: CmpOp, lhs: &Expr, rhs: &Expr, out: &mu
 }
 
 fn unsigned_all_ones_width(expression: &Expr) -> Option<u8> {
-    match expression {
+    match expression.semantic() {
         Expr::Cast {
             signed: false,
             width,
             expr,
-        } if matches!(expr.as_ref(), Expr::Const(-1)) => Some(*width),
+        } if matches!(expr.semantic(), Expr::Const(-1)) => Some(*width),
         _ => None,
     }
 }
 
 fn is_one_lazy_call_times_two(expression: &Expr) -> bool {
     matches!(
-        expression,
+        expression.semantic(),
         Expr::Bin {
             op: BinOp::Mul,
             lhs,
             rhs,
-        } if (matches!(lhs.as_ref(), Expr::Call { .. })
-            && matches!(rhs.as_ref(), Expr::Const(2)))
-            || (matches!(rhs.as_ref(), Expr::Call { .. })
-                && matches!(lhs.as_ref(), Expr::Const(2)))
+        } if (matches!(lhs.semantic(), Expr::Call { .. })
+            && matches!(rhs.semantic(), Expr::Const(2)))
+            || (matches!(rhs.semantic(), Expr::Call { .. })
+                && matches!(lhs.semantic(), Expr::Const(2)))
     )
 }
 
