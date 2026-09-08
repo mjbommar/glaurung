@@ -1782,6 +1782,14 @@ provenance through lowering.
   regressions; its one improvement persists with the owned lines reversed and
   is recorded as unrelated. See
   `results/wp3-array-index-expression-origin-rendering.md`.
+  Commit `6e867230` closes the next pointer-render consumer. Attributed null
+  constants and direct pointer values now retain the declared pointer spelling
+  in equality and inequality comparisons, in either operand order, instead of
+  falling back to integer-address spelling such as `(long)arg0`. A narrowing
+  pointer cast remains explicit. Both exact contracts pass with 4,669 unrelated
+  tests filtered out, and a 16-lane 110/192/199/207 release canary reports no
+  regression. See
+  `results/wp3-pointer-null-expression-origin-rendering.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
