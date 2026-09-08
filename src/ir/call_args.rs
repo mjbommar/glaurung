@@ -55,7 +55,8 @@ use enclosing_slots::EnclosingSlots;
 use fold_one_call::fold_one_call;
 use return_attribution::{attribute_call_results, attribute_call_results_with_identities};
 use slot_marking::{
-    mark_arg_reads_in_expr, mark_arg_reads_in_stmt, mark_arg_writes_in_stmt, mark_slot_write,
+    mark_arg_reads_in_expr_with_identities, mark_arg_reads_in_stmt_with_identities,
+    mark_arg_writes_in_stmt_with_identities, mark_slot_write_with_identities,
 };
 pub use tail_calls::{
     recover_proven_vtable_tail_calls, recover_resolved_direct_tail_calls,
@@ -585,14 +586,18 @@ fn return_reg(arch: CallConv) -> &'static str {
 /// This is deliberately NOT the general answer. Reaching definitions across
 /// arbitrary joins belong to the verified MIR query surface; this proof only
 /// removes the cases where there is provably nothing to reason about.
-fn entry_constant_slots(body: &[Stmt], arch: CallConv) -> Vec<bool> {
+fn entry_constant_slots(
+    body: &[Stmt],
+    arch: CallConv,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Vec<bool> {
     let slots = arg_slots(arch).len();
     if !every_call_returns_immediately(body) {
         return vec![false; slots];
     }
     let mut written = vec![false; slots];
     for statement in body {
-        mark_slot_writes_everywhere(statement, arch, &mut written);
+        mark_slot_writes_everywhere(statement, arch, &mut written, identities);
     }
     written.into_iter().map(|write| !write).collect()
 }
@@ -670,32 +675,41 @@ fn every_call_returns_immediately(body: &[Stmt]) -> bool {
 /// Unlike `mark_arg_writes_in_stmt` this deliberately ignores control flow: the
 /// question is whether the slot is written ANYWHERE, so branch arms that cannot
 /// fall through still count.
-fn mark_slot_writes_everywhere(statement: &Stmt, arch: CallConv, written: &mut [bool]) {
+fn mark_slot_writes_everywhere(
+    statement: &Stmt,
+    arch: CallConv,
+    written: &mut [bool],
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     match statement.semantic() {
         Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
-        Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => mark_slot_write(dst, arch, written),
-        Stmt::Call { dst: Some(dst), .. } => mark_slot_write(dst, arch, written),
+        Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => {
+            mark_slot_write_with_identities(dst, arch, written, identities)
+        }
+        Stmt::Call { dst: Some(dst), .. } => {
+            mark_slot_write_with_identities(dst, arch, written, identities)
+        }
         Stmt::If {
             then_body,
             else_body,
             ..
         } => {
             for nested in then_body.iter().chain(else_body.iter().flatten()) {
-                mark_slot_writes_everywhere(nested, arch, written);
+                mark_slot_writes_everywhere(nested, arch, written, identities);
             }
         }
         Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
             for nested in body {
-                mark_slot_writes_everywhere(nested, arch, written);
+                mark_slot_writes_everywhere(nested, arch, written, identities);
             }
         }
         Stmt::For {
             init, step, body, ..
         } => {
-            mark_slot_writes_everywhere(init, arch, written);
-            mark_slot_writes_everywhere(step, arch, written);
+            mark_slot_writes_everywhere(init, arch, written, identities);
+            mark_slot_writes_everywhere(step, arch, written, identities);
             for nested in body {
-                mark_slot_writes_everywhere(nested, arch, written);
+                mark_slot_writes_everywhere(nested, arch, written, identities);
             }
         }
         Stmt::Switch { cases, default, .. } => {
@@ -704,7 +718,7 @@ fn mark_slot_writes_everywhere(statement: &Stmt, arch: CallConv, written: &mut [
                 .flat_map(|(_, case)| case)
                 .chain(default.iter().flatten())
             {
-                mark_slot_writes_everywhere(nested, arch, written);
+                mark_slot_writes_everywhere(nested, arch, written, identities);
             }
         }
         Stmt::TryCatch { try_body, catches } => {
@@ -712,7 +726,7 @@ fn mark_slot_writes_everywhere(statement: &Stmt, arch: CallConv, written: &mut [
                 .iter()
                 .chain(catches.iter().flat_map(|catch| &catch.body))
             {
-                mark_slot_writes_everywhere(nested, arch, written);
+                mark_slot_writes_everywhere(nested, arch, written, identities);
             }
         }
         _ => {}
@@ -743,7 +757,7 @@ fn fold_body(
     string_pool: &std::collections::HashMap<u64, String>,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
-    let entry_constant = entry_constant_slots(body, arch);
+    let entry_constant = entry_constant_slots(body, arch, identities);
     let entry = EnclosingSlots::entry(arch, function_live_ins, entry_constant);
     fold_body_with_context(
         body,
@@ -811,7 +825,10 @@ fn fold_body_with_context(
                 // business; only the path INTO the loop is inherited here.
                 let loop_inputs = loop_carried_arg_inputs(prefix, body, arch, &enclosing.overrides);
                 let nested = enclosing
-                    .with_blocked(running.clone(), loop_body_reaching(&reaching, body, arch))
+                    .with_blocked(
+                        running.clone(),
+                        loop_body_reaching(&reaching, body, arch, identities),
+                    )
                     .with_overrides(loop_inputs);
                 fold_body_with_context(
                     body,
@@ -824,8 +841,10 @@ fn fold_body_with_context(
                 )
             }
             Stmt::For { body, .. } => {
-                let nested = enclosing
-                    .with_blocked(running.clone(), loop_body_reaching(&reaching, body, arch));
+                let nested = enclosing.with_blocked(
+                    running.clone(),
+                    loop_body_reaching(&reaching, body, arch, identities),
+                );
                 fold_body_with_context(
                     body,
                     arch,
@@ -862,8 +881,8 @@ fn fold_body_with_context(
             }
             _ => {}
         }
-        EnclosingSlots::advance(&mut running, &suffix[0], arch);
-        EnclosingSlots::advance_reaching(&mut reaching, &suffix[0], arch);
+        EnclosingSlots::advance(&mut running, &suffix[0], arch, identities);
+        EnclosingSlots::advance_reaching(&mut reaching, &suffix[0], arch, identities);
     }
 
     // Find calls and walk backward from each to collect args.
@@ -907,10 +926,11 @@ fn loop_body_reaching(
     incoming: &[Option<Expr>],
     loop_body: &[Stmt],
     arch: CallConv,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Vec<Option<Expr>> {
     let mut written = vec![false; incoming.len()];
     for statement in loop_body {
-        mark_slot_writes_everywhere(statement, arch, &mut written);
+        mark_slot_writes_everywhere(statement, arch, &mut written, identities);
     }
     incoming
         .iter()
@@ -1068,13 +1088,14 @@ fn fold_one_table_call(
     layout: &[VReg],
     param_slots: &std::collections::HashSet<usize>,
     enclosing: &EnclosingSlots,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> bool {
     if fold_one_recovered_layout_call(body, call_idx, layout) {
         return true;
     }
     let mut blocked_here = vec![false; arg_slots(arch).len()];
     for statement in &body[..call_idx] {
-        mark_arg_writes_in_stmt(statement, arch, &mut blocked_here);
+        mark_arg_writes_in_stmt_with_identities(statement, arch, &mut blocked_here, identities);
     }
     let Some(arguments) = layout
         .iter()
@@ -1261,6 +1282,7 @@ fn fold_one_recovered_layout_call_with_live_ins(
     layout: &[VReg],
     param_slots: &std::collections::HashSet<usize>,
     enclosing: &EnclosingSlots,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> bool {
     if layout.is_empty() {
         return false;
@@ -1300,14 +1322,25 @@ fn fold_one_recovered_layout_call_with_live_ins(
     let storage_slots = arg_slots(arch).len() + crate::ir::abi::sse_argument_registers(arch).len();
     let mut blocked_storage = vec![false; storage_slots];
     for statement in &body[..call_idx] {
-        mark_arg_writes_in_stmt(statement, arch, &mut blocked_storage);
+        mark_arg_writes_in_stmt_with_identities(statement, arch, &mut blocked_storage, identities);
         match statement.semantic() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
-            Stmt::Assign {
-                dst: VReg::Phys(name),
-                ..
-            } => {
-                if let Some(slot) = crate::ir::abi::sse_argument_slot_of(arch, name) {
+            Stmt::Assign { dst, .. } => {
+                let sse_slot = match identities {
+                    Some(identities) => identities.exact(dst).and_then(|identity| {
+                        let VReg::Phys(name) = &identity.base else {
+                            return None;
+                        };
+                        crate::ir::abi::sse_argument_slot_of(arch, name)
+                    }),
+                    None => {
+                        let VReg::Phys(name) = dst else {
+                            continue;
+                        };
+                        crate::ir::abi::sse_argument_slot_of(arch, name)
+                    }
+                };
+                if let Some(slot) = sse_slot {
                     blocked_storage[arg_slots(arch).len() + slot] = true;
                 }
             }
@@ -4431,6 +4464,109 @@ mod tests {
     }
 
     #[test]
+    fn argument_slot_liveness_uses_exact_identity_not_display_spelling() {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            reg("opaque_arg"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rsi"),
+                version: 2,
+            },
+        );
+        identities.record(
+            reg("rdi#2"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 2,
+            },
+        );
+        identities.record(
+            reg("ambiguous_arg"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi"),
+                version: 1,
+            },
+        );
+        identities.record(
+            reg("multi_non_arg"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rsp"),
+                version: 1,
+            },
+        );
+        identities.record(
+            reg("multi_non_arg"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rsp"),
+                version: 2,
+            },
+        );
+        identities.record(
+            reg("ambiguous_arg"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rsi"),
+                version: 1,
+            },
+        );
+
+        let mut reads = vec![false; 6];
+        mark_arg_reads_in_expr_with_identities(
+            &Expr::Reg(reg("opaque_arg")),
+            CallConv::SysVAmd64,
+            &mut reads,
+            Some(&identities),
+        );
+        mark_arg_reads_in_expr_with_identities(
+            &Expr::Reg(reg("rdi#2")),
+            CallConv::SysVAmd64,
+            &mut reads,
+            Some(&identities),
+        );
+        assert_eq!(reads, vec![false, true, false, false, false, false]);
+
+        let mut writes = vec![false; 6];
+        mark_slot_write_with_identities(
+            &reg("opaque_arg"),
+            CallConv::SysVAmd64,
+            &mut writes,
+            Some(&identities),
+        );
+        mark_slot_write_with_identities(
+            &reg("rdi#2"),
+            CallConv::SysVAmd64,
+            &mut writes,
+            Some(&identities),
+        );
+        assert_eq!(writes, vec![false, true, false, false, false, false]);
+
+        let mut ambiguous = vec![false; 6];
+        mark_slot_write_with_identities(
+            &reg("ambiguous_arg"),
+            CallConv::SysVAmd64,
+            &mut ambiguous,
+            Some(&identities),
+        );
+        assert!(ambiguous.into_iter().all(|blocked| blocked));
+
+        let mut synthesized_local = vec![false; 6];
+        mark_slot_write_with_identities(
+            &reg("source_local"),
+            CallConv::SysVAmd64,
+            &mut synthesized_local,
+            Some(&identities),
+        );
+        assert!(synthesized_local.into_iter().all(|blocked| !blocked));
+        let mut multi_non_arg = vec![false; 6];
+        mark_slot_write_with_identities(
+            &reg("multi_non_arg"),
+            CallConv::SysVAmd64,
+            &mut multi_non_arg,
+            Some(&identities),
+        );
+        assert!(multi_non_arg.into_iter().all(|blocked| !blocked));
+    }
+
+    #[test]
     fn aarch64_folds_x0_argument() {
         let mut f = Function {
             name: "f".into(),
@@ -5203,6 +5339,7 @@ mod tests {
             &[reg("rdi"), reg("rsi")],
             &[0, 1].into_iter().collect(),
             &enclosing,
+            None,
         ));
 
         assert_eq!(body.len(), 1);
@@ -5766,7 +5903,7 @@ mod tests {
         }
         .with_origins(OriginSet::one(0x1000));
 
-        EnclosingSlots::advance_reaching(&mut reaching, &definition, CallConv::SysVAmd64);
+        EnclosingSlots::advance_reaching(&mut reaching, &definition, CallConv::SysVAmd64, None);
 
         let value = reaching[0].as_ref().expect("reaching definition");
         assert!(matches!(value.semantic(), Expr::Reg(reg) if reg == &VReg::phys("rdi#1")));

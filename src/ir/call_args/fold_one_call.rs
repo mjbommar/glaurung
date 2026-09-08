@@ -28,12 +28,13 @@ use super::{
     fold_one_recovered_layout_call_with_live_ins, fold_one_table_call, is_frame_coordinate_storage,
     is_pure_arg_normalisation, is_stable_frame_arg_definition_with_identities,
     known_arm_core_register_arity, known_arm_hard_float_layout,
-    layout_matches_abi_allocation_order, mark_arg_reads_in_expr, mark_arg_reads_in_stmt,
-    mark_arg_writes_in_stmt, outgoing_aapcs_stack_area, outgoing_stack_cleanup,
-    outgoing_sysv_stack_area, outgoing_sysv_stack_push, reads_reg_in_expr,
-    resolve_captured_definition, resolve_captured_definition_in, return_reg, slot_of, ssa_base,
-    stack_pointer_sub_width, substitute_exact_reg, table_call_may_use_layout,
-    versioned_operand_is_reassigned, CallConv, CalleeLayouts, EnclosingSlots, KEEP_ARG_SETUP,
+    layout_matches_abi_allocation_order, mark_arg_reads_in_expr_with_identities,
+    mark_arg_reads_in_stmt_with_identities, mark_arg_writes_in_stmt_with_identities,
+    outgoing_aapcs_stack_area, outgoing_stack_cleanup, outgoing_sysv_stack_area,
+    outgoing_sysv_stack_push, reads_reg_in_expr, resolve_captured_definition,
+    resolve_captured_definition_in, return_reg, slot_of, ssa_base, stack_pointer_sub_width,
+    substitute_exact_reg, table_call_may_use_layout, versioned_operand_is_reassigned, CallConv,
+    CalleeLayouts, EnclosingSlots, KEEP_ARG_SETUP,
 };
 
 pub(super) fn fold_one_call(
@@ -61,7 +62,15 @@ pub(super) fn fold_one_call(
     if let Some(layout) =
         table_call_may_use_layout(&body[call_idx], arch, callee_layouts.table_entry)
     {
-        if fold_one_table_call(body, call_idx, arch, &layout, param_slots, enclosing) {
+        if fold_one_table_call(
+            body,
+            call_idx,
+            arch,
+            &layout,
+            param_slots,
+            enclosing,
+            identities,
+        ) {
             return;
         }
     }
@@ -99,6 +108,7 @@ pub(super) fn fold_one_call(
             layout,
             param_slots,
             enclosing,
+            identities,
         ) {
             return;
         }
@@ -119,7 +129,12 @@ pub(super) fn fold_one_call(
         // after any intervening write or call.
         let mut blocked_live_ins = vec![false; arg_slots(arch).len()];
         for statement in &body[..call_idx] {
-            mark_arg_writes_in_stmt(statement, arch, &mut blocked_live_ins);
+            mark_arg_writes_in_stmt_with_identities(
+                statement,
+                arch,
+                &mut blocked_live_ins,
+                identities,
+            );
         }
         let reaching_inputs = layout
             .iter()
@@ -241,7 +256,7 @@ pub(super) fn fold_one_call(
                 stack_args.push(argument);
                 stack_arg_bytes += width;
                 stack_setup_indices.extend([i, i - 1]);
-                mark_arg_reads_in_expr(value, arch, &mut read_between);
+                mark_arg_reads_in_expr_with_identities(value, arch, &mut read_between, identities);
                 i -= 1;
                 continue;
             }
@@ -282,7 +297,12 @@ pub(super) fn fold_one_call(
                     if known_arm_core_arity.is_some_and(|arity| slot >= arity) {
                         // The fixed declaration proves this is caller-local
                         // scratch state, not an additional call argument.
-                        mark_arg_reads_in_expr(src, arch, &mut read_between);
+                        mark_arg_reads_in_expr_with_identities(
+                            src,
+                            arch,
+                            &mut read_between,
+                            identities,
+                        );
                         continue;
                     }
                     if found[slot].is_none() {
@@ -338,7 +358,12 @@ pub(super) fn fold_one_call(
                             // lets an older shadowed r2/r3 definition masquerade
                             // as the call argument.
                             found[slot] = Some((KEEP_ARG_SETUP, Expr::Reg(dst.clone())));
-                            mark_arg_reads_in_expr(src, arch, &mut read_between);
+                            mark_arg_reads_in_expr_with_identities(
+                                src,
+                                arch,
+                                &mut read_between,
+                                identities,
+                            );
                             continue;
                         }
                         if !would_dangle && (!read_between[slot] || feeds_balanced_stack_argument) {
@@ -361,7 +386,12 @@ pub(super) fn fold_one_call(
                         } else {
                             blocked_incoming[slot] = true;
                         }
-                        mark_arg_reads_in_expr(src, arch, &mut read_between);
+                        mark_arg_reads_in_expr_with_identities(
+                            src,
+                            arch,
+                            &mut read_between,
+                            identities,
+                        );
                         continue;
                     }
                     // An older SSA definition may feed the captured value for
@@ -390,7 +420,12 @@ pub(super) fn fold_one_call(
                         if !substitutable {
                             opaque_reaching_defs.insert(dst.clone());
                         }
-                        mark_arg_reads_in_expr(src, arch, &mut read_between);
+                        mark_arg_reads_in_expr_with_identities(
+                            src,
+                            arch,
+                            &mut read_between,
+                            identities,
+                        );
                         continue;
                     }
                     if found[slot]
@@ -403,7 +438,12 @@ pub(super) fn fold_one_call(
                         // that argument and need not block the search for a
                         // still-missing lower slot (notably x0's preceding-call
                         // result behind x1#1 -> x1#2 normalisation).
-                        mark_arg_reads_in_expr(src, arch, &mut read_between);
+                        mark_arg_reads_in_expr_with_identities(
+                            src,
+                            arch,
+                            &mut read_between,
+                            identities,
+                        );
                         continue;
                     }
                     if proven_aapcs_stack || known_arm_core_arity.is_some() {
@@ -415,7 +455,12 @@ pub(super) fn fold_one_call(
                         // the still-missing leading slots; calls, control-flow
                         // boundaries, unproved stores, and stack gaps were
                         // already rejected by the area proof above.
-                        mark_arg_reads_in_expr(src, arch, &mut read_between);
+                        mark_arg_reads_in_expr_with_identities(
+                            src,
+                            arch,
+                            &mut read_between,
+                            identities,
+                        );
                         continue;
                     }
                     // An unrelated second assignment to the same ABI slot is a
@@ -475,15 +520,25 @@ pub(super) fn fold_one_call(
                         if !substitutable {
                             opaque_reaching_defs.insert(dst.clone());
                         }
-                        mark_arg_reads_in_expr(src, arch, &mut read_between);
+                        mark_arg_reads_in_expr_with_identities(
+                            src,
+                            arch,
+                            &mut read_between,
+                            identities,
+                        );
                         continue;
                     }
                 }
             }
-            mark_arg_reads_in_expr(src, arch, &mut read_between);
+            mark_arg_reads_in_expr_with_identities(src, arch, &mut read_between, identities);
         } else {
-            mark_arg_reads_in_stmt(&body[i], arch, &mut read_between);
-            mark_arg_writes_in_stmt(&body[i], arch, &mut blocked_incoming);
+            mark_arg_reads_in_stmt_with_identities(&body[i], arch, &mut read_between, identities);
+            mark_arg_writes_in_stmt_with_identities(
+                &body[i],
+                arch,
+                &mut blocked_incoming,
+                identities,
+            );
         }
         if stop {
             // A preceding call defines the ABI return register. Captured
