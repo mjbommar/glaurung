@@ -1900,23 +1900,28 @@ fn dec_int_type(name: &str) -> Option<(bool, u8)> {
 }
 
 fn signed_shift_operand<'a>(lhs: &'a Expr, rhs: &Expr) -> (&'static str, &'a Expr) {
-    if let Expr::Const(count) = rhs {
+    if let Expr::Const(count) = rhs.semantic() {
         if *count >= 0 {
             let mut current = lhs;
             let mut selected: Option<(u8, &Expr)> = None;
-            while let Expr::Cast {
-                signed,
-                width,
-                expr,
-            } = current
-            {
-                if *signed
-                    && (*count as u64) < u64::from(*width) * 8
-                    && selected.is_none_or(|(selected_width, _)| *width < selected_width)
-                {
-                    selected = Some((*width, expr.as_ref()));
+            loop {
+                current = current.semantic();
+                match current {
+                    Expr::Cast {
+                        signed,
+                        width,
+                        expr,
+                    } => {
+                        if *signed
+                            && (*count as u64) < u64::from(*width) * 8
+                            && selected.is_none_or(|(selected_width, _)| *width < selected_width)
+                        {
+                            selected = Some((*width, expr.as_ref()));
+                        }
+                        current = expr;
+                    }
+                    _ => break,
                 }
-                current = expr;
             }
             if let Some((width, operand)) = selected {
                 return (int_ctype(true, width), operand);
@@ -1949,6 +1954,7 @@ fn signed_shift_operand<'a>(lhs: &'a Expr, rhs: &Expr) -> (&'static str, &'a Exp
 /// because the shift renderers turn this number straight into a cast.
 fn expr_machine_width(e: &Expr) -> Option<u8> {
     match e {
+        Expr::Origin { expr, .. } => expr_machine_width(expr),
         Expr::Named { name, .. } => dec_int_width(name),
         Expr::Reg(VReg::Phys(n)) => dec_int_width(n),
         Expr::Deref { size, .. } => Some(*size),
@@ -1961,7 +1967,8 @@ fn expr_machine_width(e: &Expr) -> Option<u8> {
             let rw = expr_machine_width(rhs);
             // A `None` is acceptable only when it comes from a bare constant;
             // any other unknown-width operand could be 64-bit, so bail out.
-            let ok = |w: Option<u8>, e: &Expr| w.is_some() || matches!(e, Expr::Const(_));
+            let ok =
+                |w: Option<u8>, e: &Expr| w.is_some() || matches!(e.semantic(), Expr::Const(_));
             if !ok(lw, lhs) || !ok(rw, rhs) {
                 return None;
             }
@@ -9385,15 +9392,20 @@ function f @ 0x1000 {
         let nested = Expr::Cast {
             signed: true,
             width: 8,
-            expr: Box::new(Expr::Cast {
-                signed: true,
-                width: 4,
-                expr: Box::new(Expr::Reg(VReg::phys("var0"))),
-            }),
-        };
-        let (ctype32, operand32) = signed_shift_operand(&nested, &Expr::Const(31));
+            expr: Box::new(
+                Expr::Cast {
+                    signed: true,
+                    width: 4,
+                    expr: Box::new(Expr::Reg(VReg::phys("var0"))),
+                }
+                .with_origins(OriginSet::one(0x4014)),
+            ),
+        }
+        .with_origins(OriginSet::one(0x4010));
+        let count = Expr::Const(31).with_origins(OriginSet::one(0x4018));
+        let (ctype32, operand32) = signed_shift_operand(&nested, &count);
         assert_eq!(ctype32, "int");
-        assert_eq!(operand32, &Expr::Reg(VReg::phys("var0")));
+        assert_eq!(operand32.semantic(), &Expr::Reg(VReg::phys("var0")));
         let (ctype64, _) = signed_shift_operand(&nested, &Expr::Const(63));
         assert_eq!(ctype64, "long");
     }
@@ -9419,6 +9431,11 @@ function f @ 0x1000 {
             }),
         };
         assert_eq!(expr_machine_width(&byte_in_a_word), Some(4));
+        assert_eq!(
+            expr_machine_width(&byte_in_a_word.clone().with_origins(OriginSet::one(0x4010))),
+            Some(4),
+            "instruction ownership cannot hide the explicit machine width"
+        );
 
         // The nearest cast wins, not the widest one anywhere in the chain.
         assert_eq!(
@@ -9435,8 +9452,8 @@ function f @ 0x1000 {
         assert_eq!(
             expr_machine_width(&Expr::Bin {
                 op: BinOp::Add,
-                lhs: Box::new(byte_in_a_word),
-                rhs: Box::new(Expr::Const(1)),
+                lhs: Box::new(byte_in_a_word.with_origins(OriginSet::one(0x4014))),
+                rhs: Box::new(Expr::Const(1).with_origins(OriginSet::one(0x4018))),
             }),
             Some(4)
         );
