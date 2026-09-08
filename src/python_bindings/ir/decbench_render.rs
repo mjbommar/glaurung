@@ -341,7 +341,11 @@ fn decbench_text_with_installed_environment(
         );
         pass!(
             "fold_typed_comparison_extensions",
-            crate::ir::const_fold::fold_typed_comparison_extensions(&mut prepared, tm)
+            crate::ir::const_fold::fold_typed_comparison_extensions_with_identities(
+                &mut prepared,
+                tm,
+                Some(value_identities),
+            )
         );
         // After the typed comparison folds, so both halves of a two-comparison
         // guard have already had their extensions normalised -- the fusion

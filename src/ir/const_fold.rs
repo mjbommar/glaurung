@@ -72,44 +72,69 @@ pub fn fold_constants(f: &mut Function) -> bool {
 /// a zero-extended 32-bit load may live in a default-`long` scratch, and dropping
 /// its signed cast changes a negative machine value into a positive C value.
 pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
-    fn declared_source_type(expr: &Expr, signed: bool, width: u8, tm: &TypeMap) -> bool {
+    fold_typed_comparison_extensions_with_identities(f, tm, None);
+}
+
+/// Remove matching comparison extensions using exact opaque SSA identities.
+pub fn fold_typed_comparison_extensions_with_identities(
+    f: &mut Function,
+    tm: &TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
+    fn declared_source_type(
+        expr: &Expr,
+        signed: bool,
+        width: u8,
+        tm: &TypeMap,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) -> bool {
         matches!(
             expr.semantic(),
             Expr::Reg(crate::ir::types::VReg::Phys(name))
-                if crate::ir::ast::declared_int_type(name, Some(tm)) == Some((signed, width))
+                if crate::ir::ast::declared_int_type_with_identities(
+                    name,
+                    Some(tm),
+                    identities,
+                ) == Some((signed, width))
         )
     }
 
-    fn expression(expr: &mut Expr, tm: &TypeMap) {
+    fn expression(
+        expr: &mut Expr,
+        tm: &TypeMap,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) {
         match expr {
-            Expr::Origin { expr, .. } => expression(expr, tm),
-            Expr::Deref { addr, .. } => expression(addr, tm),
+            Expr::Origin { expr, .. } => expression(expr, tm, identities),
+            Expr::Deref { addr, .. } => expression(addr, tm, identities),
             Expr::Call { target, args, .. } => {
-                expression(target, tm);
+                expression(target, tm, identities);
                 for argument in args {
-                    expression(argument, tm);
+                    expression(argument, tm, identities);
                 }
             }
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-                expression(lhs, tm);
-                expression(rhs, tm);
+                expression(lhs, tm, identities);
+                expression(rhs, tm, identities);
             }
-            Expr::Un { src, .. } => expression(src, tm),
+            Expr::Un { src, .. } => expression(src, tm, identities),
             Expr::Select {
                 cond,
                 if_true,
                 if_false,
                 ..
             } => {
-                expression(cond, tm);
-                expression(if_true, tm);
-                expression(if_false, tm);
+                expression(cond, tm, identities);
+                expression(if_true, tm, identities);
+                expression(if_false, tm, identities);
             }
-            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => expression(expr, tm),
-            Expr::FunctionTableEntry { index, .. } => expression(index, tm),
+            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+                expression(expr, tm, identities)
+            }
+            Expr::FunctionTableEntry { index, .. } => expression(index, tm, identities),
             Expr::WideArithmetic { args, .. } => {
                 for argument in args {
-                    expression(argument, tm);
+                    expression(argument, tm, identities);
                 }
             }
             Expr::Reg(_)
@@ -153,8 +178,8 @@ pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
                     expr: Box::new(right.3.clone()),
                 }
                 .with_optional_origins((!right.4.is_empty()).then_some(right.4));
-            } else if declared_source_type(left.3, left.0, left.2, tm)
-                && declared_source_type(right.3, right.0, right.2, tm)
+            } else if declared_source_type(left.3, left.0, left.2, tm, identities)
+                && declared_source_type(right.3, right.0, right.2, tm, identities)
             {
                 **lhs = left
                     .3
@@ -168,35 +193,41 @@ pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
         }
     }
 
-    fn body(statements: &mut [Stmt], tm: &TypeMap) {
+    fn body(
+        statements: &mut [Stmt],
+        tm: &TypeMap,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) {
         for statement in statements {
             match statement {
-                Stmt::Origin { stmt, .. } => body(std::slice::from_mut(stmt.as_mut()), tm),
+                Stmt::Origin { stmt, .. } => {
+                    body(std::slice::from_mut(stmt.as_mut()), tm, identities)
+                }
                 Stmt::Assign { src, .. } | Stmt::Return { value: Some(src) } => {
-                    expression(src, tm);
+                    expression(src, tm, identities);
                 }
                 Stmt::Store { addr, src, .. } => {
-                    expression(addr, tm);
-                    expression(src, tm);
+                    expression(addr, tm, identities);
+                    expression(src, tm, identities);
                 }
                 Stmt::Call { target, args, .. } => {
-                    expression(target, tm);
+                    expression(target, tm, identities);
                     for arg in args {
-                        expression(arg, tm);
+                        expression(arg, tm, identities);
                     }
                 }
                 Stmt::IndirectGoto { target } | Stmt::Push { value: target } => {
-                    expression(target, tm);
+                    expression(target, tm, identities);
                 }
                 Stmt::If {
                     cond,
                     then_body,
                     else_body,
                 } => {
-                    expression(cond, tm);
-                    body(then_body, tm);
+                    expression(cond, tm, identities);
+                    body(then_body, tm, identities);
                     if let Some(else_body) = else_body {
-                        body(else_body, tm);
+                        body(else_body, tm, identities);
                     }
                 }
                 Stmt::While {
@@ -207,8 +238,8 @@ pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
                     cond,
                     body: loop_body,
                 } => {
-                    expression(cond, tm);
-                    body(loop_body, tm);
+                    expression(cond, tm, identities);
+                    body(loop_body, tm, identities);
                 }
                 Stmt::For {
                     init,
@@ -216,22 +247,22 @@ pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
                     step,
                     body: loop_body,
                 } => {
-                    body(std::slice::from_mut(init.as_mut()), tm);
-                    expression(cond, tm);
-                    body(std::slice::from_mut(step.as_mut()), tm);
-                    body(loop_body, tm);
+                    body(std::slice::from_mut(init.as_mut()), tm, identities);
+                    expression(cond, tm, identities);
+                    body(std::slice::from_mut(step.as_mut()), tm, identities);
+                    body(loop_body, tm, identities);
                 }
                 Stmt::Switch {
                     discriminant,
                     cases,
                     default,
                 } => {
-                    expression(discriminant, tm);
+                    expression(discriminant, tm, identities);
                     for (_, case_body) in cases {
-                        body(case_body, tm);
+                        body(case_body, tm, identities);
                     }
                     if let Some(default) = default {
-                        body(default, tm);
+                        body(default, tm, identities);
                     }
                 }
                 Stmt::Return { value: None }
@@ -249,7 +280,7 @@ pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
         }
     }
 
-    body(&mut f.body, tm);
+    body(&mut f.body, tm, identities);
 }
 
 /// Remove a matching *zero-extension* view around a register whose recovered C
@@ -3642,6 +3673,113 @@ mod tests {
                 ..
             } if matches!(lhs.as_ref(), Expr::Reg(r) if r == &reg("arg0"))
                     && matches!(rhs.as_ref(), Expr::Reg(r) if r == &reg("arg1"))
+        ));
+    }
+
+    #[test]
+    fn exact_opaque_identities_remove_matching_comparison_extensions() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let extended = |name| Expr::Cast {
+            signed: true,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: true,
+                width: 4,
+                expr: Box::new(Expr::Reg(reg(name))),
+            }),
+        };
+        let mut function = one_stmt(Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: Box::new(extended("opaque_left")),
+            rhs: Box::new(extended("opaque_right")),
+        });
+        let mut types = TypeMap::default();
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for (name, base) in [("opaque_left", "eax"), ("opaque_right", "ebx")] {
+            types.upsert_public(
+                reg(name),
+                TypeHint::Int {
+                    signed: true,
+                    width: 4,
+                },
+            );
+            identities.record(
+                reg(name),
+                crate::ir::ssa::SsaValue {
+                    base: reg(base),
+                    version: 1,
+                },
+            );
+        }
+
+        fold_typed_comparison_extensions_with_identities(&mut function, &types, Some(&identities));
+
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Assign {
+                src: Expr::Cmp { lhs, rhs, .. },
+                ..
+            } if matches!(lhs.as_ref(), Expr::Reg(value) if value == &reg("opaque_left"))
+                && matches!(rhs.as_ref(), Expr::Reg(value) if value == &reg("opaque_right"))
+        ));
+    }
+
+    #[test]
+    fn ambiguous_opaque_identity_keeps_comparison_extensions() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let extended = |name| Expr::Cast {
+            signed: true,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: true,
+                width: 4,
+                expr: Box::new(Expr::Reg(reg(name))),
+            }),
+        };
+        let mut function = one_stmt(Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: Box::new(extended("opaque_left")),
+            rhs: Box::new(extended("opaque_right")),
+        });
+        let mut types = TypeMap::default();
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for name in ["opaque_left", "opaque_right"] {
+            types.upsert_public(
+                reg(name),
+                TypeHint::Int {
+                    signed: true,
+                    width: 4,
+                },
+            );
+        }
+        identities.record(
+            reg("opaque_left"),
+            crate::ir::ssa::SsaValue {
+                base: reg("eax"),
+                version: 1,
+            },
+        );
+        for (base, version) in [("ebx", 1), ("ecx", 2)] {
+            identities.record(
+                reg("opaque_right"),
+                crate::ir::ssa::SsaValue {
+                    base: reg(base),
+                    version,
+                },
+            );
+        }
+
+        fold_typed_comparison_extensions_with_identities(&mut function, &types, Some(&identities));
+
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Assign {
+                src: Expr::Cmp { lhs, rhs, .. },
+                ..
+            } if matches!(lhs.as_ref(), Expr::Cast { width: 8, .. })
+                && matches!(rhs.as_ref(), Expr::Cast { width: 8, .. })
         ));
     }
 
