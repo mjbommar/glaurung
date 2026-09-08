@@ -28,3 +28,18 @@ Each case used `cargo test --features python-ext --lib
 ir::value_number::tests::<name> -- --exact`. No broad Rust, Python, fixture,
 DecBench, or Joern suite was run. Multi-output width propagation and the wider
 AST-native identity consumer audit remain separate WP3 work.
+
+## Follow-up: positional output widths
+
+Commit `ad81c123` closes the adjacent width gap. Definition-site widths are now
+keyed by `(instruction, output index)` rather than by instruction alone, and
+value numbering records each intrinsic output's machine width beside its
+numbered value and exact SSA identity. Coalescing visits every definition and
+consumes the corresponding positional width, so mixed 32/64-bit outputs do not
+inherit one another's declaration constraint.
+
+The strengthened multi-output test was observed red with output one incorrectly
+reported as eight bytes and output two absent. It now proves four and eight
+bytes respectively. That test, the single-output control, and three directly
+adjacent coalescing-width contracts pass individually with 4,418 unrelated
+tests filtered out. No broad suite or external benchmark ran.
