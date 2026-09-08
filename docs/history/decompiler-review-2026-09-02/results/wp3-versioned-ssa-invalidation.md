@@ -128,3 +128,12 @@ individually with 4,416 unrelated tests filtered out. No broad suite or external
 benchmark ran. This closes migration of the currently active pipeline mutation
 sites, but compile-time enforcement for future mutating passes and a durable
 legacy-`All` count ratchet remain open.
+
+Commit `e8bec18c` adds that first durable ratchet. Raw
+`VersionedSsa::invalidate` is now private, and the focused source contract pins
+the production pipeline to two classified `apply_mutation` sites, zero direct
+invalidation calls, and zero `Invalidate::All` sites. Adding or removing a
+registered post-SSA mutation therefore requires an explicit test update. The
+ratchet and the adjacent changed/no-op mutation contract pass individually with
+4,417 unrelated tests filtered out. Detecting a wholly unregistered raw LLIR
+mutation remains the open enforcement edge.

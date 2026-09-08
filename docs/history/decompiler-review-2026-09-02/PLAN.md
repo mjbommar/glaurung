@@ -941,8 +941,11 @@ provenance through lowering.
   `bac6cef8` adds an explicit `VersionedSsa::apply_mutation` boundary and moves
   both current post-SSA LLIR mutations onto it with `Invalidate::Uses`. A no-op
   preserves the current artifact and an actual mutation forces reconstruction.
-  Compile-time enforcement for future passes and the durable count ratchet
-  remain open; see `results/wp3-versioned-ssa-invalidation.md`.
+  Commit `e8bec18c` makes direct invalidation private and pins the production
+  pipeline to two classified mutation sites, zero direct invalidations, and
+  zero legacy `Invalidate::All` sites. Detection of a wholly unregistered raw
+  LLIR mutation remains open; see
+  `results/wp3-versioned-ssa-invalidation.md`.
 - [~] Recompute or repair SSA before the next consumer when invalidated. The
   definedness-normalization and return-materialization mutations declare
   `Uses` through the shared `apply_mutation` boundary and reconstruct before
