@@ -966,8 +966,11 @@ provenance through lowering.
   loop-entry coalescing returns its exact rename map and the renderer applies it
   to its local identity snapshot in the same pass transaction. Successful
   coalescing unions seed and carrier candidates under the survivor; refusal
-  changes neither AST nor identity state. Other renaming/coalescing passes and
-  remaining consumers are still open. See
+  changes neither AST nor identity state. Commit `d8da5f13` extends the same
+  transaction to source-loop update coalescing: a successful `scratch ->
+  carrier` rewrite updates the identity snapshot, while old-value-live and
+  width-mismatch refusals preserve both states. Other renaming/coalescing passes
+  and remaining consumers are still open. See
   `results/wp3-multi-output-identities.md` and
   `results/wp3-ast-identity-renames.md`.
 - [~] Add a compositional instruction-origin set to expressions/statements;
