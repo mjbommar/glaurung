@@ -1218,6 +1218,11 @@ provenance through lowering.
   with the cast/value owners flattened into one canonical set. Its observed-red
   test and all 75 constant-fold tests pass; see
   `results/wp3-stored-value-expression-origins.md`.
+  Commit `5289e459` then makes the typed-declaration view pass transparent to
+  outer-cast, inner-cast, and source carriers. Its exact width/signedness proof
+  and return-promotion refusal remain unchanged while the surviving source
+  receives the canonical three-owner union. Its observed-red test and all 76
+  constant-fold tests pass; see `results/wp3-typed-view-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
