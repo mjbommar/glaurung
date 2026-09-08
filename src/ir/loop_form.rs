@@ -1295,10 +1295,10 @@ fn is_unit_increment(stmt: &Stmt, target: &VReg) -> bool {
     // intact in the `for` step. They should not hide the exact underlying
     // `i + 1` identity from shape recognition.
     fn without_casts(mut expr: &Expr) -> &Expr {
-        while let Expr::Cast { expr: inner, .. } = expr {
-            expr = inner;
+        while let Expr::Cast { expr: inner, .. } = expr.semantic() {
+            expr = inner.semantic();
         }
-        expr
+        expr.semantic()
     }
     let src = without_casts(src);
     matches!(
@@ -1308,7 +1308,7 @@ fn is_unit_increment(stmt: &Stmt, target: &VReg) -> bool {
             lhs,
             rhs,
         } if matches!(without_casts(lhs), Expr::Reg(read) if read == target)
-            && matches!(rhs.as_ref(), Expr::Const(1))
+            && matches!(rhs.semantic(), Expr::Const(1))
     )
 }
 
@@ -2486,9 +2486,12 @@ mod tests {
             dst: induction.clone(),
             src: Expr::Bin {
                 op: BinOp::Add,
-                lhs: Box::new(Expr::Reg(induction.clone())),
-                rhs: Box::new(Expr::Const(1)),
-            },
+                lhs: Box::new(
+                    Expr::Reg(induction.clone()).with_origins(OriginSet::one(0x1008)),
+                ),
+                rhs: Box::new(Expr::Const(1).with_origins(OriginSet::one(0x100c))),
+            }
+            .with_origins(OriginSet::one(0x1010)),
         };
         let work = Stmt::Assign {
             dst: reg("sum"),
