@@ -382,6 +382,32 @@ cargo test --features python-ext --lib ir::verify_defs::tests -- --nocapture
 
 No broad Rust/Python suite, fixture matrix, DecBench, or Joern lane ran.
 
+## Typed dead-store call clobbers
+
+Commit `fbb7f596` migrates the production post-naming dead-store pass from the
+literal `ret` spelling to typed result-role authority. A call no longer makes a
+preceding assignment to an unrelated local named `ret` appear dead. When role
+projection proves that canonical `ret` is the ABI result role, the established
+call-clobber cleanup remains active.
+
+Focused evidence:
+
+```text
+cargo test --features python-ext --lib \
+  call_does_not_kill_an_unowned_ret_spelling -- --nocapture
+1 passed; 4,454 filtered out
+
+cargo test --features python-ext --lib \
+  call_kills_a_pipeline_owned_ret_role -- --nocapture
+1 passed; 4,454 filtered out
+
+cargo test --features python-ext --lib ir::dead_stores::tests -- --nocapture
+42 passed; 4,413 filtered out
+```
+
+The three cached commands completed in 0.38 seconds total. No broad
+Rust/Python suite, fixture matrix, DecBench, or Joern lane ran.
+
 ## Typed direct and exhaustive return folding
 
 Commit `c599ac49` migrates the production `result = value; return result;`

@@ -1703,7 +1703,10 @@ provenance through lowering.
   exhaustive return folding in both production preparation stages. An unowned
   `ret = value; return ret;` remains intact, while a pipeline-owned result role
   still folds to `return value;`; exact versioned ABI storage continues to fold
-  independently of presentation spelling.
+  independently of presentation spelling. Commit `fbb7f596` migrates the
+  post-naming dead-store pass to the same typed result-role authority. A call
+  no longer kills an unrelated local merely spelled `ret`, while a
+  pipeline-owned result role retains the ABI-clobber behavior.
   See
   `results/wp3-parameter-role-metadata.md`. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
@@ -3709,7 +3712,12 @@ relevant ratchet's accepted-regression record.
    policy, and `876bddf6` closes the adjacent raw loop-exit and boxed-call
    omissions in `call_result_split.rs`. Commit `c6a42332` next closes the
    final-source verifier and authoritative pointer reader surfaces. Continue
-   with canonical local naming and architecture-specific prologue readers;
+   with canonical local naming and architecture-specific prologue readers.
+   Commit `fbb7f596` removes the next presentation-spelling dependency from
+   production dead-store elimination: calls clobber canonical `ret` only when
+   the identity sidecar owns the result role. Both exact regressions and all 42
+   dead-store module tests pass; no broad suite or corpus ran for this bounded
+   increment. Continue the remaining semantic-reader audit;
    keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
