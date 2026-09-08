@@ -1212,7 +1212,7 @@ def test_real_transitive_callee_contract_recovers_untouched_leading_argument():
     signature = decompiled.splitlines()[0]
     assert "forward_put_bytes(" in signature, decompiled
     assert signature.count("arg") == 3, decompiled
-    assert "* arg0" in signature, decompiled
+    assert re.search(r"\*\s*arg0\b", signature), decompiled
     assert "put_bytes(arg0, arg1, arg2)" in decompiled, decompiled
 
 
