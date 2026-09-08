@@ -970,7 +970,10 @@ provenance through lowering.
   transaction to source-loop update coalescing: a successful `scratch ->
   carrier` rewrite updates the identity snapshot, while old-value-live and
   width-mismatch refusals preserve both states. Other renaming/coalescing passes
-  and remaining consumers are still open. See
+  and remaining consumers are still open. Commit `97f65ae6` moves identity
+  candidates through both final presentation-name maps before typed rendering;
+  name collisions union candidates and remain explicitly ambiguous rather than
+  selecting one. See
   `results/wp3-multi-output-identities.md` and
   `results/wp3-ast-identity-renames.md`.
 - [~] Add a compositional instruction-origin set to expressions/statements;
