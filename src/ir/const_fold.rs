@@ -868,7 +868,7 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
         expr,
     } = e
     {
-        let replacement = match expr.as_ref() {
+        let replacement = match expr.semantic() {
             // Ordered before the two collapses below so a literal on a shift's
             // left operand cannot reach either of them — `is_exact_boolean`
             // accepts the constants 0 and 1, so guarding only the arm that
@@ -884,7 +884,8 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
             // only a single comparison leaf.
             boolean if *width > 0 && is_exact_boolean(boolean) => Some(boolean.clone()),
             _ => None,
-        };
+        }
+        .map(|replacement| replacement.with_optional_origins(expr.origins().cloned()));
         if let Some(replacement) = replacement {
             rewrite(e, replacement, changed);
             return;
@@ -3767,6 +3768,28 @@ mod tests {
                 "{expression:?} kept a cast that restates its literal: {rendered}"
             );
         }
+    }
+
+    #[test]
+    fn attributed_redundant_literal_cast_unions_cast_and_value_origins() {
+        let cast_owner = crate::ir::ast::OriginSet::one(0x1050);
+        let value_owner = crate::ir::ast::OriginSet::one(0x1054);
+        let mut function = one_stmt(
+            Expr::Cast {
+                signed: false,
+                width: 8,
+                expr: Box::new(Expr::Const(7).with_origins(value_owner.clone())),
+            }
+            .with_origins(cast_owner.clone()),
+        );
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        assert_eq!(src.semantic(), &Expr::Const(7));
+        assert_eq!(src.origins(), Some(&cast_owner.union(&value_owner)));
     }
 
     #[test]
