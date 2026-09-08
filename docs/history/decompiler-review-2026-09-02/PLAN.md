@@ -1850,6 +1850,14 @@ provenance through lowering.
   to `rax` refuses. The exact regression, all 142 owning call-argument tests,
   and only the directly related Clang O0 `call_into_spill` fixture pass. See
   `results/wp3-recovered-layout-storage-identities.md`.
+  Commit `fba2ee95` then migrates recognition of an explicit preceding-call
+  destination as ABI result storage. Complete identity candidates must all be
+  valid result registers; an opaque exact `rax` result is preserved and a
+  misleading `rax#version` mapped to `rdi` is rejected. The exact regression,
+  all 143 owning call-argument tests, and the Clang O0 `call_into_spill` canary
+  pass. The selected GCC O2 canary's `const_fold` change-report crash reproduces
+  unchanged with the patch removed and remains baseline infrastructure debt.
+  See `results/wp3-preceding-call-result-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
