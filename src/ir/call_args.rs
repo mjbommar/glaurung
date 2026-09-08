@@ -145,8 +145,28 @@ fn layout_matches_abi_allocation_order(arch: CallConv, layout: &[VReg]) -> bool 
 /// pointer changes meaning after any later allocation. Keeping these
 /// definitions statement-rooted is conservative and preserves the coordinate
 /// oracle's ownership of frame rebasing.
-fn is_frame_coordinate_storage(arch: CallConv, name: &str) -> bool {
-    let name = ssa_base(name);
+fn is_frame_coordinate_storage(
+    arch: CallConv,
+    register: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    let name = match identities {
+        Some(identities) => {
+            let Some(identity) = identities.exact(register) else {
+                return false;
+            };
+            let VReg::Phys(base) = &identity.base else {
+                return false;
+            };
+            base.as_str()
+        }
+        None => {
+            let VReg::Phys(name) = register else {
+                return false;
+            };
+            ssa_base(name)
+        }
+    };
     match arch {
         CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Cdecl32 => {
             matches!(name, "rsp" | "esp" | "rbp" | "ebp")
@@ -5939,6 +5959,36 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn frame_coordinate_uses_exact_identity_not_display_spelling() {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            VReg::phys("opaque_stack"),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rsp"),
+                version: 4,
+            },
+        );
+        identities.record(
+            VReg::phys("rsp#4"),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rax"),
+                version: 4,
+            },
+        );
+
+        assert!(is_frame_coordinate_storage(
+            CallConv::SysVAmd64,
+            &VReg::phys("opaque_stack"),
+            Some(&identities),
+        ));
+        assert!(!is_frame_coordinate_storage(
+            CallConv::SysVAmd64,
+            &VReg::phys("rsp#4"),
+            Some(&identities),
+        ));
     }
 
     /// End to end over the pass: a value-numbered argument write folds into the

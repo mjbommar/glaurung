@@ -449,7 +449,7 @@ pub(super) fn fold_one_call(
                 let versioned_stack_capture =
                     name.contains('#') && matches!(arch, CallConv::SysVAmd64 | CallConv::Win64);
                 if (!name.contains('#') || versioned_stack_capture)
-                    && !is_frame_coordinate_storage(arch, name)
+                    && !is_frame_coordinate_storage(arch, dst, identities)
                 {
                     if opaque_reaching_defs.contains(dst) {
                         continue;
