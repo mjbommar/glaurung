@@ -1267,6 +1267,13 @@ provenance through lowering.
   signed-range, reachability, and control-flow refusals remain unchanged. Its
   strengthened observed-red test and all 28 switch-ladder tests pass; see
   `results/wp3-switch-condition-expression-origins.md`.
+  Commit `320cb2e5` completes the adjacent operand boundary: attributed direct
+  discriminants and bounds remain recognizable, and the synthesized switch
+  receives the deterministic union from every consumed condition expression
+  tree. The origin walk is exhaustive over the expression enum; existing
+  single-discriminant, signed-range, reachability, and control-flow refusals
+  remain unchanged. Its strengthened observed-red test and all 28 switch-
+  ladder tests pass; see `results/wp3-switch-operand-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
