@@ -9624,11 +9624,14 @@ function f @ 0x1000 {
             body: vec![Stmt::Return {
                 value: Some(Expr::Bin {
                     op: BinOp::Shr,
-                    lhs: Box::new(Expr::Deref {
-                        addr: Box::new(Expr::Reg(VReg::phys("arg0"))),
-                        size: 4,
-                    }),
-                    rhs: Box::new(Expr::Const(8)),
+                    lhs: Box::new(
+                        Expr::Deref {
+                            addr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                            size: 4,
+                        }
+                        .with_origins(OriginSet::one(0x74)),
+                    ),
+                    rhs: Box::new(Expr::Const(8).with_origins(OriginSet::one(0x78))),
                 }),
             }],
         };
@@ -9638,6 +9641,39 @@ function f @ 0x1000 {
         assert!(
             text.contains("(unsigned int)(*(int *)(arg0)) >> 8"),
             "a four-byte load must not be sign-extended to host unsigned long:\n{text}"
+        );
+    }
+
+    #[test]
+    fn decbench_wide_left_shift_keeps_declared_narrow_operand_through_origins() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let argument = VReg::phys("arg0");
+        let function = Function {
+            name: "compose_high_word".to_string(),
+            entry_va: 0x80,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Bin {
+                    op: BinOp::Shl,
+                    lhs: Box::new(Expr::Reg(argument.clone()).with_origins(OriginSet::one(0x80))),
+                    rhs: Box::new(Expr::Const(33).with_origins(OriginSet::one(0x84))),
+                }),
+            }],
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            argument,
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        let text = render_decbench_typed(&function, Some(&types), Some(&types));
+
+        assert!(
+            text.contains("(unsigned long)((unsigned int)(arg0)) << 33"),
+            "the 64-bit machine shift lost the source's 32-bit zero extension:\n{text}"
         );
     }
 

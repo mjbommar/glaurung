@@ -159,7 +159,7 @@ fn dec_is_stack_object(name: &str) -> bool {
 /// is stronger evidence than its canonical SSA parent: on ILP32, `long` is
 /// only four bytes while a proven `long long` destination remains eight.
 fn shift_operand_ctype(lhs: &Expr, rhs: &Expr) -> &'static str {
-    if let Expr::Reg(register) = lhs {
+    if let Expr::Reg(register) = lhs.semantic() {
         let pointer_width = DEC_POINTER_WIDTH.with(std::cell::Cell::get);
         if let Some(width) = crate::ir::call_contracts::integer_c_type_width(
             &declared_reg_ctype(register),
@@ -179,7 +179,7 @@ fn shift_operand_ctype(lhs: &Expr, rhs: &Expr) -> &'static str {
             return target_int_ctype(false, width);
         }
     }
-    if let (Some(w), Expr::Const(k)) = (expr_machine_width(lhs), rhs) {
+    if let (Some(w), Expr::Const(k)) = (expr_machine_width(lhs), rhs.semantic()) {
         if *k >= 0 && (*k as u64) < (w as u64) * 8 {
             // Target-parametric, not `int_ctype`: the two agree for one, two
             // and four bytes, and disagree for eight, where ILP32's `unsigned
@@ -211,10 +211,10 @@ fn shift_operand_ctype(lhs: &Expr, rhs: &Expr) -> &'static str {
 /// a width this can contradict, and a shift whose count already fits the
 /// operand is left exactly as it was.
 fn wide_left_shift_operand_ctypes(lhs: &Expr, rhs: &Expr) -> Option<(&'static str, &'static str)> {
-    let Expr::Const(count) = rhs else {
+    let Expr::Const(count) = rhs.semantic() else {
         return None;
     };
-    let Expr::Reg(register) = lhs else {
+    let Expr::Reg(register) = lhs.semantic() else {
         return None;
     };
     let count = u64::try_from(*count).ok()?;
