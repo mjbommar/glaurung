@@ -962,8 +962,14 @@ provenance through lowering.
   exact identity; a later read of the second output is joined to that producer.
   Follow-up `ad81c123` keys definition width by instruction plus output index,
   preserving mixed-width output facts through numbering and coalescing.
-  AST pass-native identities and the remaining consumers are still open. See
-  `results/wp3-multi-output-identities.md`.
+  Commit `3afd711a` establishes the first AST pass-native mutation contract:
+  loop-entry coalescing returns its exact rename map and the renderer applies it
+  to its local identity snapshot in the same pass transaction. Successful
+  coalescing unions seed and carrier candidates under the survivor; refusal
+  changes neither AST nor identity state. Other renaming/coalescing passes and
+  remaining consumers are still open. See
+  `results/wp3-multi-output-identities.md` and
+  `results/wp3-ast-identity-renames.md`.
 - [~] Add a compositional instruction-origin set to expressions/statements;
   unions must be deterministic and deduplicated. `7bea3314` defines the
   canonical set and `59840017` adds transparent statement ownership with
