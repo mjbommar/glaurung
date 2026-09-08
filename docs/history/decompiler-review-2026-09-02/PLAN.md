@@ -494,6 +494,15 @@ registers, and statement origins, with more than 4,400 unrelated tests filtered
 out. Typed consumed-extension cleanup remains the next name-based consumer. See
 `results/wp3-widen-identities.md`.
 
+Commit `403296e0` closes the adjacent typed consumed-extension consumer. Exact
+opaque destination identity now proves when narrow modular arithmetic can
+discard an unobservable machine-parent extension; ambiguous identities preserve
+it. Three exact tests cover the positive, ambiguity, and promoted-stack-local
+contracts, with 4,412 unrelated tests filtered out. This completes the immediate
+render-time identity cluster, while the wider WP3 semantic-consumer audit and
+origin-determinism exit criteria remain open. See
+`results/wp3-consumed-extension-identities.md`.
+
 ## Authority and relationship to the roadmaps
 
 `docs/development/roadmap/README.md` remains the canonical roadmap index, and
