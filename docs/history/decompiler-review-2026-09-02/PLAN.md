@@ -448,6 +448,14 @@ incrementally. Both exact contracts and all 29 directly related module tests
 pass, with 4,368 unrelated tests filtered out. See
 `results/wp3-pointer-refinement-identities.md`.
 
+Commit `ee65638e` makes prepared-AST ABI definition-width refinement the third
+role-projected consumer in this sequence. Exact opaque identity plus exact
+per-value width evidence can now widen a scalar declaration independently of
+its displayed name; ambiguous roles decline and retain their prior type. Both
+identity contracts, seven adjacent ABI tests, and the two legacy wide/narrow
+boundaries pass. The validation executed 11 relevant tests and filtered out
+the rest. See `results/wp3-abi-width-identities.md`.
+
 ## Authority and relationship to the roadmaps
 
 `docs/development/roadmap/README.md` remains the canonical roadmap index, and
