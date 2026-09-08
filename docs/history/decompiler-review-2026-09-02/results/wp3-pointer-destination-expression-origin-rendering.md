@@ -50,6 +50,8 @@ this bounded renderer change.
 
 ## Next action
 
-Continue within `write_representation_value_dec`: make the select and outer-
-cast shape readers transparent only after their mixed pointer/integer arm
-contracts carry origins and preserve the existing per-arm conversion rules.
+Commit `d9cbaca6` completes the pointer/null select portion of this follow-up;
+see `wp3-pointer-null-select-expression-origin-rendering.md`. The attributed
+outer-cast/mixed-arm contract already follows the general expression path and
+remains green without another production change. Continue with a different
+observed-red destination consumer rather than duplicating that working path.

@@ -1,6 +1,6 @@
 # WP3 logical-shift expression-origin rendering
 
-> **Kind:** record · **Date:** 2026-09-07
+> **Kind:** record · **Date:** 2026-09-08
 
 ## Outcome
 

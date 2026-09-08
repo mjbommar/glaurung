@@ -1920,6 +1920,14 @@ provenance through lowering.
   the same O0 baseline improvement with this repair reverted, so no fixture
   status change is attributed to this increment. See
   `results/wp3-logical-shift-expression-origin-rendering.md`.
+  Commit `d9cbaca6` completes the previously queued pointer/null select
+  boundary. Attributed zero arms are recognized semantically in either order,
+  and the proven direct-pointer arm now stays a native C pointer instead of
+  crossing through `long`. Non-null pointer/integer selects and narrowing
+  pointer casts retain their explicit representation conversions. The exact
+  positive and both adjacent refusal contracts pass with 4,674 unrelated tests
+  filtered out; the single nullable-locale release round trip also passes. See
+  `results/wp3-pointer-null-select-expression-origin-rendering.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
