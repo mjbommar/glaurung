@@ -566,7 +566,17 @@ fn fold_expr(e: &mut Expr, changed: &mut bool) {
 fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
     // Recurse first — bottom-up folding composes naturally.
     match e {
-        Expr::Origin { expr, .. } => fold_expr_at(expr, shift_left_operand, changed),
+        Expr::Origin { origins, expr } => {
+            fold_expr_at(expr, shift_left_operand, changed);
+            if matches!(expr.as_ref(), Expr::Origin { .. }) {
+                let nested = std::mem::replace(expr.as_mut(), Expr::Unknown(String::new()));
+                let (semantic, nested_origins) = nested.into_semantic_with_origins();
+                if let Some(nested_origins) = nested_origins {
+                    origins.merge(&nested_origins);
+                }
+                **expr = semantic;
+            }
+        }
         Expr::Bin { op, lhs, rhs } => {
             let shift = matches!(op, BinOp::Shl | BinOp::Shr | BinOp::Sar);
             fold_expr_at(lhs, shift, changed);
@@ -1564,20 +1574,22 @@ fn invert_mixed_view_equal_or_signed_less(expr: &Expr) -> Option<Expr> {
         op: BinOp::Or,
         lhs,
         rhs,
-    } = expr
+    } = expr.semantic()
     else {
         return None;
     };
-    let (equality, less) = match (lhs.as_ref(), rhs.as_ref()) {
-        (equality @ Expr::Cmp { op: CmpOp::Eq, .. }, less) => (equality, less),
-        (less, equality @ Expr::Cmp { op: CmpOp::Eq, .. }) => (equality, less),
-        _ => return None,
+    let (equality, less) = if matches!(lhs.semantic(), Expr::Cmp { op: CmpOp::Eq, .. }) {
+        (lhs.as_ref(), rhs.as_ref())
+    } else if matches!(rhs.semantic(), Expr::Cmp { op: CmpOp::Eq, .. }) {
+        (rhs.as_ref(), lhs.as_ref())
+    } else {
+        return None;
     };
     let Expr::Cmp {
         lhs: equality_lhs,
         rhs: equality_rhs,
         ..
-    } = equality
+    } = equality.semantic()
     else {
         return None;
     };
@@ -1585,7 +1597,7 @@ fn invert_mixed_view_equal_or_signed_less(expr: &Expr) -> Option<Expr> {
         op: CmpOp::Slt,
         lhs: less_lhs,
         rhs: less_rhs,
-    } = less
+    } = less.semantic()
     else {
         return None;
     };
@@ -1612,11 +1624,22 @@ fn invert_mixed_view_equal_or_signed_less(expr: &Expr) -> Option<Expr> {
     {
         return None;
     }
-    Some(Expr::Cmp {
-        op: CmpOp::Slt,
-        lhs: less_rhs.clone(),
-        rhs: less_lhs.clone(),
-    })
+    let origins = expr
+        .origins()
+        .into_iter()
+        .chain(equality.origins())
+        .chain(less.origins())
+        .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+            owners.union(next)
+        });
+    Some(
+        Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs: less_rhs.clone(),
+            rhs: less_lhs.clone(),
+        }
+        .with_optional_origins((!origins.is_empty()).then_some(origins)),
+    )
 }
 
 fn invert_comparison(op: CmpOp, lhs: &Expr, rhs: &Expr) -> Expr {
@@ -2218,6 +2241,68 @@ mod tests {
                 rhs: Box::new(signed_value),
             }
         );
+    }
+
+    #[test]
+    fn attributed_terminal_mixed_view_relation_unions_consumed_origins() {
+        let value = Expr::Reg(reg("arg0"));
+        let view = |signed: bool, value: Expr| Expr::Cast {
+            signed,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed,
+                width: 4,
+                expr: Box::new(value),
+            }),
+        };
+        let terminal_owner = crate::ir::ast::OriginSet::one(0x1000);
+        let relation_owner = crate::ir::ast::OriginSet::one(0x1004);
+        let equality_owner = crate::ir::ast::OriginSet::one(0x1008);
+        let less_owner = crate::ir::ast::OriginSet::one(0x100c);
+        let signed_value = view(true, value.clone());
+        let relation = bin(
+            BinOp::Or,
+            Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(view(false, value)),
+                rhs: Box::new(Expr::Const(100)),
+            }
+            .with_origins(equality_owner.clone()),
+            Expr::Cmp {
+                op: CmpOp::Slt,
+                lhs: Box::new(signed_value.clone()),
+                rhs: Box::new(Expr::Const(100)),
+            }
+            .with_origins(less_owner.clone()),
+        )
+        .with_origins(relation_owner.clone());
+        let mut function = one_stmt(
+            Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(relation),
+                rhs: Box::new(Expr::Const(0)),
+            }
+            .with_origins(terminal_owner.clone()),
+        );
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        assert_eq!(
+            src.semantic(),
+            &Expr::Cmp {
+                op: CmpOp::Slt,
+                lhs: Box::new(Expr::Const(100)),
+                rhs: Box::new(signed_value),
+            }
+        );
+        let expected = terminal_owner
+            .union(&relation_owner)
+            .union(&equality_owner)
+            .union(&less_owner);
+        assert_eq!(src.origins(), Some(&expected));
     }
 
     #[test]
