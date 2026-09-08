@@ -1497,6 +1497,15 @@ fn fold_observed_mask(value: &Expr, observed_mask: i64) -> Option<Expr> {
         });
     }
 
+    if let Expr::Origin { origins, expr } = value {
+        let replacement = fold_observed_mask(expr, observed_mask)?;
+        return Some(if matches!(replacement.semantic(), Expr::Const(0)) {
+            replacement
+        } else {
+            replacement.with_origins(origins.clone())
+        });
+    }
+
     // `(X & A) & B == X & (A & B)`; combining the constants exposes both
     // zero masks and boolean low-bit reads.
     if let Some((inner, inner_mask)) = and_with_constant(value) {
@@ -2713,6 +2722,48 @@ mod tests {
             panic!("expected assignment")
         };
         assert_eq!(*src, predicate);
+    }
+
+    #[test]
+    fn attributed_observed_mask_keeps_surviving_low_bit_origins() {
+        let observed_owner = crate::ir::ast::OriginSet::one(0x1000);
+        let merge_owner = crate::ir::ast::OriginSet::one(0x1004);
+        let predicate_owner = crate::ir::ast::OriginSet::one(0x1008);
+        let discarded_owner = crate::ir::ast::OriginSet::one(0x100c);
+        let old = Expr::Reg(reg("old_parent")).with_origins(discarded_owner.clone());
+        let predicate = Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs: Box::new(Expr::Reg(reg("state"))),
+            rhs: Box::new(Expr::Const(3)),
+        }
+        .with_origins(predicate_owner.clone());
+        let merged = bin(
+            BinOp::Or,
+            bin(BinOp::And, old, Expr::Const(-256)),
+            bin(
+                BinOp::And,
+                bin(BinOp::And, predicate, Expr::Const(255)),
+                Expr::Const(1),
+            ),
+        )
+        .with_origins(merge_owner.clone());
+        let mut function = one_stmt(
+            bin(BinOp::And, merged, Expr::Const(255)).with_origins(observed_owner.clone()),
+        );
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        assert!(matches!(src.semantic(), Expr::Cmp { op: CmpOp::Eq, .. }));
+        let expected = observed_owner.union(&merge_owner).union(&predicate_owner);
+        assert_eq!(src.origins(), Some(&expected));
+        assert!(!src
+            .origins()
+            .expect("observed predicate must remain attributed")
+            .addresses()
+            .contains(&discarded_owner.addresses()[0]));
     }
 
     #[test]
