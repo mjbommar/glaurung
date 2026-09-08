@@ -1254,6 +1254,12 @@ provenance through lowering.
   contributing owners without weakening equality, representability, or width
   proofs. Its strengthened observed-red test and all 76 constant-fold tests
   pass; see `results/wp3-relation-bound-expression-origins.md`.
+  Commit `af0c014b` then makes the same terminal mixed-view fold compare
+  attributed unsigned and signed source views by semantic value. Both source
+  instruction owners survive on the recovered relation while width,
+  signedness, bound, and representability proofs remain mandatory. Its
+  strengthened observed-red test and all 76 constant-fold tests pass; see
+  `results/wp3-relation-source-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
