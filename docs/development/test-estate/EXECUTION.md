@@ -737,6 +737,20 @@ shows this increment repairs the PE signature from `main(void)` to two
 arguments; it does not claim the unrelated assertions green. The recent Hello
 checkpoint was not repeated. No broad suite or corpus ran.
 
+## ARM32 frame-storage identities
+
+Commit `00aba798` moves production ARM32 frame storage recognition from
+`stack_`/`stack_top` spelling to producer-owned promoted-stack identity across
+saves, anchors, deallocation, and restores. Both exact boundary tests and all
+12 owning tests pass, with 4,623 unrelated library tests filtered out. A fresh
+serial extension build passes the guard and the single compiled ARM frame-spill
+test passes.
+
+An isolated archive of the pushed commit reproduces 5,168 declared Rust tests
+with zero outside a gate and passes all six census checks. The active native-
+decoder lane is excluded. The recent Hello checkpoint was not repeated. No
+broad suite or corpus ran.
+
 ## Ground rules
 
 Verified before any claim of done: `cargo test --features python-ext`,

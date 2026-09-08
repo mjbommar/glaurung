@@ -88,6 +88,11 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
+[`results/wp3-arm32-frame-storage-identities.md`](results/wp3-arm32-frame-storage-identities.md):
+production ARM32 frame save, anchor, deallocation, and restore matching now
+uses producer-owned storage identity rather than `stack_` spelling. Its two
+exact boundaries, all 12 owning tests, one compiled ARM frame-spill test, and
+isolated census gate pass. The preceding
 [`results/wp3-cdecl32-frame-role-identities.md`](results/wp3-cdecl32-frame-role-identities.md):
 cdecl32 entry-frame recognition now consumes promotion-owned storage and
 parameter-slot facts rather than parsing `stack_top` and `arg0`. Its two exact

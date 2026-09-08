@@ -2145,6 +2145,14 @@ provenance through lowering.
   PE32 raw-string-address and i386 redundant-cast failures pre-exist this
   change; the PE signature improves from `main(void)` to two arguments. No
   broad suite or corpus ran. See `results/wp3-cdecl32-frame-role-identities.md`.
+  Commit `00aba798` then completes the corresponding ARM32 frame-storage
+  migration. Prologue saves, aliased fp stores, frame anchors, deallocation,
+  nested restores, and address recursion consume producer-owned stack identity
+  in production. An opaque owned slot is accepted and unowned `stack_0` fails
+  closed; typed `StackAddr` and the explicit compatibility API remain separate.
+  Both exact boundaries, all 12 module tests, the single compiled ARM frame-
+  spill test, and the isolated 5,168-test census pass. No broad suite or corpus
+  ran. See `results/wp3-arm32-frame-storage-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
