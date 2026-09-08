@@ -1928,6 +1928,16 @@ provenance through lowering.
   positive and both adjacent refusal contracts pass with 4,674 unrelated tests
   filtered out; the single nullable-locale release round trip also passes. See
   `results/wp3-pointer-null-select-expression-origin-rendering.md`.
+  Commit `5e49845e` closes the named variadic-format call boundary. Origin
+  carriers around a named `printf` target and its literal format no longer
+  degrade the call to a raw function pointer or hide the `%d` tail contract;
+  the declared integer argument again renders without redundant machine-width
+  views. The observed-red end-to-end renderer contract, the attributed pointer-
+  call guard, and all three named-call prototype tests pass. The selected real
+  stripped-format test reaches the correct recovered `char *arg0` type but is
+  red on the concurrent snapshot because its assertion requires the older
+  whitespace spelling `char * arg0`; it is not claimed green. See
+  `results/wp3-named-format-call-expression-origin-rendering.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
