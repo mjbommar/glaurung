@@ -1637,6 +1637,13 @@ provenance through lowering.
   compatibility. Both exact role tests, all 70 copy-propagation tests, and the
   compiled lazy-call-select fixture pass; see
   `results/wp3-copy-effectful-value-identities.md`.
+  Commit `2b29137a` then migrates the adjacent eager-guard value mover to the
+  identity-aware production path. A physical-looking opaque stack object is no
+  longer deleted and substituted into a guard merely because it lacks a
+  `local_*` prefix; exact promoted ownership refuses that scratch rewrite
+  through every nested structured body. Its exact role regression, all 71
+  copy-propagation tests, and the compiled effectful-loop fixture pass; see
+  `results/wp3-copy-guard-value-identities.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
