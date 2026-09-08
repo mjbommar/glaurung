@@ -676,6 +676,20 @@ reporting no scoped regression. The untyped pre-sidecar mover remains a
 compatibility boundary. The recent four-cell Hello checkpoint was not
 repeated. No broad suite or corpus ran.
 
+## Canary-storage identities
+
+Commit `2d53096b` makes production stack-canary save collapse consume
+producer-owned promoted-stack identity instead of granting storage semantics to
+the `stack_` prefix. An opaque owned `frame_canary` collapses, while an unowned
+`stack_4` remains untouched. Both exact boundary tests and all 24 canary tests
+pass, with 4,597 unrelated library tests filtered out. The census records 5,158
+declared Rust tests and zero outside every gate; all six census checks pass.
+
+A fresh serial native rebuild passes the build guard, and only the exact
+committed GCC O2 packet-parser canary ran through the production decompiler.
+The recent four-cell Hello checkpoint was not repeated for this metadata seam.
+No broad suite or corpus ran.
+
 ## Ground rules
 
 Verified before any claim of done: `cargo test --features python-ext`,

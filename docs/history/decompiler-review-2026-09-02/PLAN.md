@@ -2110,6 +2110,14 @@ provenance through lowering.
   pass after a fresh serial extension rebuild. The untyped pre-sidecar mover
   retains compatibility behavior, so the package remains open. No broad suite
   or corpus ran. See `results/wp3-typed-promoted-value-identities.md`.
+  Commit `2d53096b` then migrates post-promotion stack-canary save collapse.
+  Production now accepts opaque producer-owned canary storage and rejects an
+  unowned value merely spelled `stack_4`; the explicit no-sidecar wrapper keeps
+  compatibility behavior. Both exact boundary tests, all 24 canary tests, the
+  census gate, and only one compiled GCC O2 packet-parser canary pass after a
+  fresh serial extension rebuild. The recent four-cell Hello checkpoint was
+  not repeated for this metadata seam. No broad suite or corpus ran. See
+  `results/wp3-canary-storage-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and

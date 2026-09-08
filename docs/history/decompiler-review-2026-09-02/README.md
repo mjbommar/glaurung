@@ -88,6 +88,11 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
+[`results/wp3-canary-storage-identities.md`](results/wp3-canary-storage-identities.md):
+production stack-canary save collapse now accepts only producer-owned promoted
+storage, rather than trusting `stack_` spelling. Its two exact boundary tests,
+all 24 canary tests, census gate, and one compiled GCC O2 packet-parser canary
+pass. The preceding
 [`results/wp3-typed-promoted-value-identities.md`](results/wp3-typed-promoted-value-identities.md):
 late typed adjacent promoted-value folding now requires producer-owned stack
 identity in addition to scalar type evidence. Its two exact boundary tests,
