@@ -69,6 +69,7 @@ use temp_remap::build_temp_remap;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ValueIdentities {
     by_numbered_value: HashMap<VReg, BTreeSet<SsaValue>>,
+    parameter_slots_by_value: HashMap<VReg, BTreeSet<usize>>,
 }
 
 impl ValueIdentities {
@@ -83,6 +84,12 @@ impl ValueIdentities {
     /// Return every SSA identity represented by a coalesced numbered value.
     pub fn candidates(&self, value: &VReg) -> Option<&BTreeSet<SsaValue>> {
         self.by_numbered_value.get(value)
+    }
+
+    /// Return the authoritative source-parameter slot represented by `value`.
+    pub(crate) fn parameter_slot(&self, value: &VReg) -> Option<usize> {
+        let slots = self.parameter_slots_by_value.get(value)?;
+        (slots.len() == 1).then(|| slots.first().copied()).flatten()
     }
 
     pub(crate) fn record(&mut self, numbered: VReg, identity: SsaValue) {
@@ -113,6 +120,36 @@ impl ValueIdentities {
                 .or_default()
                 .extend(identities.iter().cloned());
         }
+        for (value, slots) in &self.parameter_slots_by_value {
+            let VReg::Phys(storage) = value else {
+                continue;
+            };
+            let Some(role) = aliases.get(storage) else {
+                continue;
+            };
+            projected
+                .parameter_slots_by_value
+                .entry(VReg::Phys(role.clone()))
+                .or_default()
+                .extend(slots.iter().copied());
+        }
+        projected
+    }
+
+    /// Project identities and attach pipeline-owned source-parameter slots.
+    pub(crate) fn with_role_aliases_and_parameter_slots(
+        &self,
+        aliases: &HashMap<String, String>,
+        parameter_slots: &HashSet<usize>,
+    ) -> Self {
+        let mut projected = self.with_role_aliases(aliases);
+        for slot in parameter_slots {
+            projected
+                .parameter_slots_by_value
+                .entry(VReg::Phys(format!("arg{slot}")))
+                .or_default()
+                .insert(*slot);
+        }
         projected
     }
 
@@ -127,6 +164,14 @@ impl ValueIdentities {
                 .entry(numbered)
                 .or_default()
                 .extend(identities);
+        }
+        let previous = std::mem::take(&mut self.parameter_slots_by_value);
+        for (value, slots) in previous {
+            let numbered = renames.get(&value).cloned().unwrap_or(value);
+            self.parameter_slots_by_value
+                .entry(numbered)
+                .or_default()
+                .extend(slots);
         }
     }
 
@@ -705,6 +750,18 @@ mod tests {
             Some(2)
         );
         assert_eq!(projected.exact(&VReg::phys("var0")), None);
+    }
+
+    #[test]
+    fn role_projection_records_parameter_slots_without_parsing_alias_spelling() {
+        let identities = ValueIdentities::default();
+        let aliases = HashMap::from([("stale".to_string(), "arg99".to_string())]);
+        let slots = std::collections::HashSet::from([0]);
+
+        let projected = identities.with_role_aliases_and_parameter_slots(&aliases, &slots);
+
+        assert_eq!(projected.parameter_slot(&VReg::phys("arg0")), Some(0));
+        assert_eq!(projected.parameter_slot(&VReg::phys("arg99")), None);
     }
 
     #[test]

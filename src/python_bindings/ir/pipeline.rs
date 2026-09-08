@@ -1551,7 +1551,8 @@ pub(super) fn lower_and_run_ast_passes(
         stack_object_hints,
         got_targets,
     )?;
-    let ast_value_identities = value_identities.with_role_aliases(&role_names);
+    let ast_value_identities =
+        value_identities.with_role_aliases_and_parameter_slots(&role_names, &param_slots);
 
     Ok(PreparedAst {
         function,
