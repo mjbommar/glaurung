@@ -103,7 +103,7 @@ fn collapse_body(body: &mut Vec<Stmt>, types: Option<&TypeMap>) {
             index += 1;
             continue;
         };
-        if *discriminant != Expr::Reg(temporary.clone())
+        if discriminant.semantic() != &Expr::Reg(temporary.clone())
             || !is_unsigned_extension_of(&value, &guarded_value, types)
             || count_reads_in_body(&body[index..], &temporary) != 1
         {
@@ -111,7 +111,7 @@ fn collapse_body(body: &mut Vec<Stmt>, types: Option<&TypeMap>) {
             continue;
         }
 
-        *discriminant = value;
+        *discriminant = value.with_optional_origins(discriminant.origins().cloned());
         merge_statement_origin(&mut switch, &body[index - 1]);
         install_candidate(body, index, consumed, hoisted, switch);
         body.remove(index - 1);
@@ -702,7 +702,7 @@ mod tests {
                     }
                     .with_origins(OriginSet::one(0x100c)),
                     then_body: vec![Stmt::Switch {
-                        discriminant: Expr::Reg(temporary),
+                        discriminant: Expr::Reg(temporary).with_origins(OriginSet::one(0x1018)),
                         cases: (0..=3).map(|case| (Some(case), vec![Stmt::Nop])).collect(),
                         default: None,
                     }
@@ -724,6 +724,10 @@ mod tests {
                 .addresses(),
             &[0x1000, 0x1004, 0x1008, 0x100c, 0x1010, 0x1014]
         );
+        let Stmt::Switch { discriminant, .. } = function.body[0].semantic() else {
+            unreachable!()
+        };
+        assert_eq!(discriminant.origins(), Some(&OriginSet::one(0x1018)));
     }
 
     #[test]
