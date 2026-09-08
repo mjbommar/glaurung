@@ -1781,6 +1781,12 @@ provenance through lowering.
   fixture-11 lane's unrelated `const_fold` invariant reproduces with the patch
   removed and is not evidence. See
   `results/wp3-call-frame-coordinate-identities.md`.
+  Commit `d2518e37` then migrates stable captured frame loads, alias checks,
+  and intervening frame-base writes to the same exact identity boundary. A
+  misleading `rbp#version` scratch is rejected while an opaque value with a
+  proved `rbp` identity is accepted. All 132 owning tests and the exact
+  `11_call_shapes:clang:O0:call_into_spill` lane pass; no broad suite or corpus
+  ran. See `results/wp3-captured-frame-definition-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
@@ -3834,10 +3840,13 @@ relevant ratchet's accepted-regression record.
    `results/wp3-return-width-identities.md`. Commit `42f9c5e0` then closes the
    call-fold frame-coordinate guard using exact stack/frame identities; its 131
    owning tests and exact ARM end-to-end check pass. See
-   `results/wp3-call-frame-coordinate-identities.md`. Continue through
-   stack-area recovery, slot marking, captured-definition aliasing, and the
-   AAPCS/cdecl readers. Keep pre-sidecar tagging internals and explicit
-   no-sidecar compatibility parsers classified separately.
+   `results/wp3-call-frame-coordinate-identities.md`. Commit `d2518e37` closes
+   captured-definition frame aliasing with exact identities; its 132 owning
+   tests and exact Clang O0 `call_into_spill` fixture pass. See
+   `results/wp3-captured-frame-definition-identities.md`. Continue through
+   stack-area recovery, slot marking, and the AAPCS/cdecl readers. Keep
+   pre-sidecar tagging internals and explicit no-sidecar compatibility parsers
+   classified separately.
    Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
