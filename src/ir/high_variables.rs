@@ -45,7 +45,7 @@ pub(crate) fn refine_pointer_high_variables_with_identities(
 ) {
     let mut definitions: HashMap<String, Vec<Definition>> = HashMap::new();
     collect_definitions(&function.body, &mut definitions);
-    refine_exact_unsigned_constants(&function.body, &definitions, types);
+    refine_exact_unsigned_constants(&function.body, &definitions, types, identities);
     let object_model = infer_from_ast(function);
     if std::env::var_os("GLAURUNG_DUMP_PASSES").is_some() {
         eprintln!("\n===== inferred memory objects =====\n{object_model:#?}");
@@ -123,6 +123,7 @@ fn refine_exact_unsigned_constants(
     body: &[Stmt],
     definitions: &HashMap<String, Vec<Definition>>,
     types: &mut TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
     let mut candidates: Vec<_> = types
         .iter()
@@ -133,7 +134,7 @@ fn refine_exact_unsigned_constants(
                     signed: true,
                     width,
                 },
-            ) if is_high_variable(name) && *width < 8 => Some((name.clone(), *width)),
+            ) if exact_value_role(name, identities) && *width < 8 => Some((name.clone(), *width)),
             _ => None,
         })
         .collect();
@@ -155,6 +156,14 @@ fn refine_exact_unsigned_constants(
             types.force_int_signedness(VReg::phys(&name), false);
         }
     }
+}
+
+fn exact_value_role(
+    name: &str,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    is_high_variable(name)
+        || identities.is_some_and(|identities| identities.exact(&VReg::phys(name)).is_some())
 }
 
 fn refine_pointer_facts(

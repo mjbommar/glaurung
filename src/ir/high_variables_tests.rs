@@ -150,6 +150,114 @@ fn origin_wrapped_high_bit_constant_used_by_unsigned_widening_is_unsigned() {
 }
 
 #[test]
+fn exact_opaque_high_bit_constant_used_unsigned_is_retyped() {
+    let value = VReg::phys("opaque_constant");
+    let function = Function {
+        name: "divide_by_ten".into(),
+        entry_va: 0,
+        body: vec![
+            Stmt::Assign {
+                dst: value.clone(),
+                src: Expr::Const(0xcccc_cccd),
+            },
+            Stmt::Assign {
+                dst: VReg::phys("result"),
+                src: Expr::Bin {
+                    op: BinOp::Mul,
+                    lhs: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 8,
+                        expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                    }),
+                    rhs: Box::new(Expr::Reg(value.clone())),
+                },
+            },
+        ],
+    };
+    let mut types = TypeMap::default();
+    types.upsert_public(
+        value.clone(),
+        TypeHint::Int {
+            signed: true,
+            width: 4,
+        },
+    );
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
+    identities.record(
+        value.clone(),
+        crate::ir::ssa::SsaValue {
+            base: VReg::phys("eax"),
+            version: 1,
+        },
+    );
+
+    refine_pointer_high_variables_with_identities(&function, &mut types, Some(&identities));
+
+    assert_eq!(
+        types.get(&value),
+        Some(TypeHint::Int {
+            signed: false,
+            width: 4,
+        })
+    );
+}
+
+#[test]
+fn ambiguous_opaque_high_bit_constant_stays_signed() {
+    let value = VReg::phys("opaque_constant");
+    let function = Function {
+        name: "ambiguous_constant".into(),
+        entry_va: 0,
+        body: vec![
+            Stmt::Assign {
+                dst: value.clone(),
+                src: Expr::Const(0xcccc_cccd),
+            },
+            Stmt::Assign {
+                dst: VReg::phys("result"),
+                src: Expr::Bin {
+                    op: BinOp::Mul,
+                    lhs: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 8,
+                        expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                    }),
+                    rhs: Box::new(Expr::Reg(value.clone())),
+                },
+            },
+        ],
+    };
+    let mut types = TypeMap::default();
+    types.upsert_public(
+        value.clone(),
+        TypeHint::Int {
+            signed: true,
+            width: 4,
+        },
+    );
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
+    for (base, version) in [("eax", 1), ("ebx", 2)] {
+        identities.record(
+            value.clone(),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys(base),
+                version,
+            },
+        );
+    }
+
+    refine_pointer_high_variables_with_identities(&function, &mut types, Some(&identities));
+
+    assert_eq!(
+        types.get(&value),
+        Some(TypeHint::Int {
+            signed: true,
+            width: 4,
+        })
+    );
+}
+
+#[test]
 fn high_bit_constant_with_a_signed_use_stays_signed() {
     let function = Function {
         name: "signed_sentinel".into(),
