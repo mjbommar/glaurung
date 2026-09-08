@@ -129,6 +129,19 @@ impl ValueIdentities {
                 .extend(identities);
         }
     }
+
+    /// Move identity candidates through an AST presentation-name rewrite.
+    ///
+    /// Naming owns physical role spellings only. Converting the exact map here
+    /// keeps that string boundary out of semantic consumers while preserving
+    /// [`Self::apply_renames`]'s explicit collision/ambiguity behavior.
+    pub(crate) fn apply_role_renames(&mut self, renames: &HashMap<String, String>) {
+        let renames = renames
+            .iter()
+            .map(|(from, to)| (VReg::Phys(from.clone()), VReg::Phys(to.clone())))
+            .collect();
+        self.apply_renames(&renames);
+    }
 }
 
 #[cfg(test)]
@@ -692,6 +705,51 @@ mod tests {
             Some(2)
         );
         assert_eq!(projected.exact(&VReg::phys("var0")), None);
+    }
+
+    #[test]
+    fn presentation_renames_move_identity_candidates_to_the_rendered_name() {
+        let identity = SsaValue {
+            base: VReg::phys("rax"),
+            version: 1,
+        };
+        let mut identities = ValueIdentities::default();
+        identities.record(VReg::phys("local_8"), identity.clone());
+
+        identities.apply_role_renames(&HashMap::from([("local_8".to_string(), "sum".to_string())]));
+
+        assert!(identities.candidates(&VReg::phys("local_8")).is_none());
+        assert_eq!(identities.exact(&VReg::phys("sum")), Some(&identity));
+    }
+
+    #[test]
+    fn colliding_presentation_renames_preserve_explicit_identity_ambiguity() {
+        let mut identities = ValueIdentities::default();
+        identities.record(
+            VReg::phys("local_8"),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 1,
+            },
+        );
+        identities.record(
+            VReg::phys("local_c"),
+            SsaValue {
+                base: VReg::phys("rbx"),
+                version: 2,
+            },
+        );
+
+        identities.apply_role_renames(&HashMap::from([
+            ("local_8".to_string(), "sum".to_string()),
+            ("local_c".to_string(), "sum".to_string()),
+        ]));
+
+        assert_eq!(
+            identities.candidates(&VReg::phys("sum")).map(BTreeSet::len),
+            Some(2)
+        );
+        assert!(identities.exact(&VReg::phys("sum")).is_none());
     }
 
     #[test]

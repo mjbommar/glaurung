@@ -470,14 +470,15 @@ fn decbench_text_with_installed_environment(
             calling_convention_pointer_width(cc),
         )
     });
-    pass!(
-        "apply_authoritative_local_names",
-        crate::ir::naming::apply_authoritative_local_names(&mut prepared, &dwarf_local_names)
-    );
+    pass!("apply_authoritative_local_names", {
+        crate::ir::naming::apply_authoritative_local_names(&mut prepared, &dwarf_local_names);
+        value_identities.apply_role_renames(&dwarf_local_names);
+    });
     let canonical_loop_names = pass!(
         "apply_canonical_loop_local_names",
         crate::ir::naming::apply_canonical_loop_local_names(&mut prepared)
     );
+    value_identities.apply_role_renames(&canonical_loop_names);
     // The AST identity, declaration facts, and width facts are one contract.
     // A presentation rename that updates only the AST turns an `int local_8`
     // into an untyped `long sum`; keep the recovered facts reachable under the
