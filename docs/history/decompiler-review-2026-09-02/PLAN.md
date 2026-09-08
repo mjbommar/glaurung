@@ -1445,6 +1445,11 @@ provenance through lowering.
   silently replaced by its source's post-write value. Its end-to-end AST test
   was observed red and all 55 copy-propagation tests pass; see
   `results/wp3-copy-linear-store-invalidation.md`.
+  Commit `de1cd148` next makes counted propagation's 128-bit-load and unknown-
+  value refusals origin-transparent. An attributed wide load keeps its
+  materialized identity instead of being scalarized at its single use. Its
+  public-pass test was observed red and all 56 copy-propagation tests pass; see
+  `results/wp3-copy-wide-load-refusal.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
