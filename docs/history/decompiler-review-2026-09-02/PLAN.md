@@ -1703,6 +1703,15 @@ provenance through lowering.
   AST-object tests, all 35 high-variable tests, and the stripped aggregate-
   cursor compile/runtime check pass; see
   `results/wp3-memory-object-storage-identities.md`.
+  Commit `a4853187` then moves production out-of-SSA phi-copy coalescing onto
+  the identity sidecar it already owns. Candidate eligibility, source-lifetime
+  matching, and representative-version choice no longer split a
+  `register#version` display spelling. Opaque owned values coalesce, while
+  unowned lookalike spellings fail closed; the parser remains only in test-only
+  compatibility helpers. Both exact boundaries, all 58 value-numbering tests,
+  one GCC-O2 `nested_carry` round-trip lane, and the isolated 5,188-test census
+  pass after a fresh extension rebuild. No broad suite or corpus ran. See
+  `results/wp3-phi-coalescing-identities.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
@@ -2236,6 +2245,11 @@ provenance through lowering.
   Both exact boundaries, all 12 module tests, the single compiled ARM frame-
   spill test, and the isolated 5,168-test census pass. No broad suite or corpus
   ran. See `results/wp3-arm32-frame-storage-identities.md`.
+  Commit `a4853187` removes `#version` parsing from production phi-copy
+  coalescing. The exact SSA sidecar now owns eligibility, physical-base
+  lifetime matching, and representative ordering; spelling parsing survives
+  only in test-only compatibility helpers. See
+  `results/wp3-phi-coalescing-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
