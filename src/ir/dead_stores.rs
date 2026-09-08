@@ -593,7 +593,7 @@ fn prune_callee_saved_spills_with_scope(
             Stmt::Assign {
                 dst,
                 src: Expr::Reg(source),
-            } if is_saved_frame_slot(dst)
+            } if is_saved_frame_slot(dst, source, cc, identities)
                 || is_arm_saved_register_local(dst, source, cc, identities)
                 || is_x86_saved_register_local(dst, source, cc, identities) =>
             {
@@ -603,7 +603,7 @@ fn prune_callee_saved_spills_with_scope(
                 addr: Expr::Reg(slot),
                 src: Expr::Reg(source),
                 ..
-            } if is_saved_frame_slot(slot)
+            } if is_saved_frame_slot(slot, source, cc, identities)
                 || is_arm_saved_register_local(slot, source, cc, identities)
                 || is_x86_saved_register_local(slot, source, cc, identities) =>
             {
@@ -930,8 +930,19 @@ fn is_stack_pointer(v: &VReg) -> bool {
 /// A promoted stack slot, which is where a register spill lands after
 /// `stack_locals` promotion. `stack_top` is excluded: it names the frame
 /// boundary rather than a storage location.
-fn is_saved_frame_slot(v: &VReg) -> bool {
-    matches!(v, VReg::Phys(name) if name.starts_with("stack_") && name != "stack_top")
+fn is_saved_frame_slot(
+    value: &VReg,
+    source: &VReg,
+    cc: CallConv,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    identities.map_or_else(
+        || matches!(value, VReg::Phys(name) if name.starts_with("stack_") && name != "stack_top"),
+        |identities| {
+            identities.is_machine_saved_slot(value)
+                && is_entry_callee_saved_value(source, cc, identities)
+        },
+    )
 }
 
 /// Reads owned by this statement node, excluding reads in nested bodies.
@@ -988,14 +999,15 @@ fn is_arm_saved_register_local(
     if !matches!(cc, CallConv::Arm | CallConv::ArmHardFloat) {
         return false;
     }
+    if let Some(identities) = identities {
+        return identities.is_machine_saved_slot(slot)
+            && is_entry_callee_saved_value(source, cc, identities);
+    }
     let VReg::Phys(slot_name) = slot else {
         return false;
     };
     if !slot_name.starts_with("local_") {
         return false;
-    }
-    if identities.is_some_and(|identities| identities.is_machine_saved_slot(slot)) {
-        return true;
     }
     let Some(base) = entry_value_base(source, identities) else {
         return false;
@@ -1028,14 +1040,15 @@ fn is_x86_saved_register_local(
     ) {
         return false;
     }
+    if let Some(identities) = identities {
+        return identities.is_machine_saved_slot(slot)
+            && is_entry_callee_saved_value(source, cc, identities);
+    }
     let VReg::Phys(slot_name) = slot else {
         return false;
     };
     if !slot_name.starts_with("local_") {
         return false;
-    }
-    if identities.is_some_and(|identities| identities.is_machine_saved_slot(slot)) {
-        return true;
     }
     entry_value_base(source, identities)
         .is_some_and(|base| matches!(base, "rbx" | "rbp" | "r12" | "r13" | "r14" | "r15"))
@@ -2133,6 +2146,7 @@ mod tests {
                 version: 0,
             },
         );
+        entry_identities.attach_machine_saved_slots(&HashSet::from(["local_8".to_string()]));
         let mut entry = candidate();
         prune_callee_saved_spills_with_identities(
             &mut entry,
@@ -2156,6 +2170,61 @@ mod tests {
             &later_identities,
         );
         assert_eq!(later.body.len(), 2, "later SSA value was deleted");
+    }
+
+    #[test]
+    fn typed_callee_save_cleanup_rejects_unowned_stack_spelling() {
+        let mut function = Function {
+            name: "typed_frame".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("stack_2"),
+                    src: Expr::Reg(reg("opaque")),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            reg("opaque"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rbp"),
+                version: 0,
+            },
+        );
+
+        prune_callee_saved_spills_with_identities(&mut function, CallConv::SysVAmd64, &identities);
+
+        assert_eq!(function.body.len(), 2, "unowned spelling was deleted");
+    }
+
+    #[test]
+    fn typed_callee_save_cleanup_accepts_opaque_owned_machine_slot() {
+        let mut function = Function {
+            name: "typed_frame".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("frame_save"),
+                    src: Expr::Reg(reg("opaque")),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            reg("opaque"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rbp"),
+                version: 0,
+            },
+        );
+        identities.attach_machine_saved_slots(&HashSet::from(["frame_save".to_string()]));
+
+        prune_callee_saved_spills_with_identities(&mut function, CallConv::SysVAmd64, &identities);
+
+        assert_eq!(function.body, vec![Stmt::Return { value: None }]);
     }
 
     #[test]
