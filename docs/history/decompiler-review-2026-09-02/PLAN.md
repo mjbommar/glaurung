@@ -1371,6 +1371,12 @@ provenance through lowering.
   dependency-write, and control-bypass proofs remain mandatory. Its
   strengthened observed-red test and all 30 loop-form tests pass; see
   `results/wp3-loop-exit-copy-origins.md`.
+  Commit `eb414739` then makes exact head-test recovery recognize an attributed
+  semantic `while (1)` and composes that consumed condition owner with the
+  attributed exit-predicate owner on the reconstructed condition. First-guard,
+  exact-break, and no-motion proofs remain mandatory. Its strengthened
+  observed-red test and all 30 loop-form tests pass; see
+  `results/wp3-head-tested-loop-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
