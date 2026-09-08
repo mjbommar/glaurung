@@ -1102,6 +1102,16 @@ provenance through lowering.
   the two A32 complex-float canaries remain identically known-failing. See
   `results/wp3-hard-float-argument-expression-origins.md`. The table-call
   reaching-value fallback remains the final identified call-argument producer.
+  Commit `f2e69784` closes it by preserving each attributed versioned enclosing
+  definition inside `EnclosingSlots`; nested table calls now receive the exact
+  owners on their argument expressions while unversioned or clobbered values
+  still decline. Its observed-red test and all 111 call-argument tests pass,
+  and the exact eight-function fixture-95 release A/B is neutral at three
+  passes and the same five pre-existing failures. See
+  `results/wp3-enclosing-call-argument-expression-origins.md`. The currently
+  identified call-argument expression producer family is complete; universal
+  expression attribution and the remaining SSA/invalidation migrations remain
+  open.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
