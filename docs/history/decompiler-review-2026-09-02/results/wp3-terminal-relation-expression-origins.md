@@ -15,6 +15,10 @@ contributors. Constant range, shared-value, width, extension-provenance, and
 signedness refusal rules are unchanged. Folding inside an existing attributed
 node also flattens any synthesized nested carrier into the canonical union.
 
+Follow-on commit `2fccded5` closes the comparison-to-zero entry boundary. An
+attributed zero no longer blocks terminal mixed-view, eager-boolean, or exact-
+boolean recovery, and its owner joins the replacement's canonical set.
+
 This is one bounded constant-fold migration, not completion of WP3.
 
 ## Focused verification
@@ -26,15 +30,16 @@ proving that folding had created a nested carrier. The final repair recognizes
 the attributed children and canonicalizes that nested ownership:
 
 ```text
-cargo test --features python-ext \
+cargo test --features python-ext --lib \
   ir::const_fold::tests::attributed_terminal_mixed_view_relation_unions_consumed_origins \
   -- --exact
-1 passed; 0 failed; 4,361 filtered out
+1 passed; 0 failed; 4,375 filtered out
 
-cargo test --features python-ext 'ir::const_fold::tests::'
-60 passed; 0 failed; 4,302 filtered out
+cargo test --features python-ext --lib 'ir::const_fold::tests::'
+74 passed; 0 failed; 4,302 filtered out; 0.01 s
 ```
 
+Filtered tests were not executed.
 The touched-module run includes its existing checked-in real-binary
 end-to-end test. No full Rust, Python, fixture, architecture, DecBench, or
 Joern suite was run.

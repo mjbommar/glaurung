@@ -1128,8 +1128,10 @@ provenance through lowering.
   mixed-view relation. Attributed terminal test, relation, equality, and
   signed-less nodes now recover the same readable `K < signed(x)` expression,
   and nested carriers created by an inner fold flatten into their canonical
-  four-owner union. Its two observed-red states, focused test, and all 60
-  constant-fold tests pass; see
+  four-owner union. Follow-on `2fccded5` closes the shared comparison-to-zero
+  boundary for this fold, eager boolean recovery, and exact-boolean inversion:
+  attributed zero operands no longer block recognition and retain their owner.
+  Its strengthened observed-red test and all 74 constant-fold tests pass; see
   `results/wp3-terminal-relation-expression-origins.md`.
   Commit `6c737361` next makes subtraction zero-test recovery transparent:
   attributed `(x - y) == 0` and `!= 0` forms recover their direct readable
