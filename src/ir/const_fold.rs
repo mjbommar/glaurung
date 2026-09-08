@@ -256,8 +256,20 @@ pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
 /// width is left untouched as well.
 pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
     fn expression(expr: &mut Expr, tm: &TypeMap) {
+        if let Expr::Origin { origins, expr } = expr {
+            expression(expr, tm);
+            if matches!(expr.as_ref(), Expr::Origin { .. }) {
+                let nested = std::mem::replace(expr.as_mut(), Expr::Unknown(String::new()));
+                let (semantic, nested_origins) = nested.into_semantic_with_origins();
+                if let Some(nested_origins) = nested_origins {
+                    origins.merge(&nested_origins);
+                }
+                **expr = semantic;
+            }
+            return;
+        }
         match expr {
-            Expr::Origin { expr, .. } => expression(expr, tm),
+            Expr::Origin { .. } => unreachable!("origin carrier returned above"),
             Expr::Deref { addr, .. } => expression(addr, tm),
             Expr::Call { target, args, .. } => {
                 expression(target, tm);
@@ -304,18 +316,33 @@ pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
                 signed: outer_signed,
                 width: outer_width,
                 expr: inner,
-            } => match inner.as_ref() {
+            } => match inner.semantic() {
                 Expr::Cast {
                     signed: inner_signed,
                     width: inner_width,
                     expr: source,
                 } if inner_width < outer_width && !*outer_signed && !*inner_signed => {
-                    match source.as_ref() {
+                    match source.semantic() {
                         Expr::Reg(crate::ir::types::VReg::Phys(name))
                             if crate::ir::ast::declared_int_type(name, Some(tm))
                                 == Some((*inner_signed, *inner_width)) =>
                         {
-                            Some(source.as_ref().clone())
+                            let origins = inner
+                                .origins()
+                                .into_iter()
+                                .chain(source.origins())
+                                .fold(
+                                    crate::ir::ast::OriginSet::empty(),
+                                    |owners, next| owners.union(next),
+                                );
+                            Some(
+                                source
+                                    .semantic()
+                                    .clone()
+                                    .with_optional_origins(
+                                        (!origins.is_empty()).then_some(origins),
+                                    ),
+                            )
                         }
                         _ => None,
                     }
@@ -3189,6 +3216,51 @@ mod tests {
                 ..
             } if source == &reg("arg0")
         ));
+    }
+
+    #[test]
+    fn attributed_typed_register_view_unions_both_cast_and_source_origins() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let outer_owner = crate::ir::ast::OriginSet::one(0x10a0);
+        let inner_owner = crate::ir::ast::OriginSet::one(0x10a4);
+        let source_owner = crate::ir::ast::OriginSet::one(0x10a8);
+        let mut function = one_stmt(
+            Expr::Cast {
+                signed: false,
+                width: 8,
+                expr: Box::new(
+                    Expr::Cast {
+                        signed: false,
+                        width: 4,
+                        expr: Box::new(
+                            Expr::Reg(reg("arg0")).with_origins(source_owner.clone()),
+                        ),
+                    }
+                    .with_origins(inner_owner.clone()),
+                ),
+            }
+            .with_origins(outer_owner.clone()),
+        );
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            reg("arg0"),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+
+        fold_typed_declared_views(&mut function, &types);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        assert_eq!(src.semantic(), &Expr::Reg(reg("arg0")));
+        assert_eq!(
+            src.origins(),
+            Some(&outer_owner.union(&inner_owner).union(&source_owner))
+        );
     }
 
     #[test]
