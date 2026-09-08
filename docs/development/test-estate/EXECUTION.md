@@ -525,6 +525,17 @@ census is 5,133 declared Rust tests with zero outside every gate. After a fresh
 serial extension rebuild, only `09_memory_effects:clang:O0:tick_n` was run and
 reported no regression. No broad suite or corpus ran.
 
+## Condition-hoist stack identities
+
+Commit `003e4fc1` makes the safety barrier for moving comparisons across stores
+consume producer-owned promoted-stack identities. An opaque owned object
+blocks unsafe motion; an unowned value named `local_8` does not receive stack
+semantics from spelling alone. All 17 hoisting-related Rust tests pass with
+4,581 unrelated tests filtered out. The census records 5,135 declared Rust
+tests and zero outside every gate. A fresh serial extension rebuild passes the
+build guard, and only `03_loop_shapes:gcc:O0:for_sum` was exercised; it reports
+no scoped regression. No broad suite or corpus ran.
+
 ## Ground rules
 
 Verified before any claim of done: `cargo test --features python-ext`,

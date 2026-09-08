@@ -10,7 +10,8 @@ Review basis: `README.md` and `01` through `06` in this directory
 
 Scope: local Glaurung implementation, tests, measurements, and documentation
 
-Current-state snapshot: reconciled 2026-09-06 through homogeneous-float
+Current-state snapshot: reconciled 2026-09-08 through the condition-hoist
+identity migration at `003e4fc1`, following homogeneous-float
 behavioral commits `db750dbc`, `197e6383`, and `64181d02`, baseline commit
 `1bee3fb1`, and census commit `a0915220`. WP0 and
 WP2 and WP7A are complete; the bounded WP1 production trial is complete and rejected,
@@ -2025,6 +2026,13 @@ provenance through lowering.
   adversarial tests, all 21 direct-output tests, the census gate, and only the
   Clang O0 `tick_n` fixture pass after a fresh serial extension rebuild. See
   `results/wp3-void-result-bridge-identities.md`.
+  Commit `003e4fc1` then migrates the condition-hoisting store barrier. Both
+  block-local flag inlining and structured-region condition extraction consume
+  producer-owned promoted-stack identities instead of treating `local_` or
+  `stack_` spelling as storage proof. The 17-test hoisting slice and exact GCC
+  O0 `for_sum` fixture pass after a fresh native rebuild; 4,581 unrelated Rust
+  tests were filtered out. See
+  `results/wp3-condition-hoist-stack-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and

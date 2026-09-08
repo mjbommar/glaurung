@@ -88,6 +88,10 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
+[`results/wp3-condition-hoist-stack-identities.md`](results/wp3-condition-hoist-stack-identities.md):
+condition motion now treats producer-owned promoted-stack identity, rather
+than `local_`/`stack_` spelling, as the store barrier. Its 17 focused Rust tests
+and one exact GCC O0 loop fixture pass. The preceding
 [`results/wp3-inline-scalar-origins.md`](results/wp3-inline-scalar-origins.md):
 attributed first scalar definitions now participate in safe inline declaration
 planning, restoring `int local = value` output; the observed-red test, three
