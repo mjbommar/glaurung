@@ -758,16 +758,19 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
             signed,
             width,
             expr: inner,
-        } => match inner.as_ref() {
+        } => match inner.semantic() {
             Expr::Cast {
                 width: inner_width,
                 expr: source,
                 ..
-            } if inner_width >= width => Some(Expr::Cast {
-                signed: *signed,
-                width: *width,
-                expr: Box::new(source.as_ref().clone()),
-            }),
+            } if inner_width >= width => Some(
+                Expr::Cast {
+                    signed: *signed,
+                    width: *width,
+                    expr: Box::new(source.as_ref().clone()),
+                }
+                .with_optional_origins(inner.origins().cloned()),
+            ),
             _ => None,
         },
         _ => None,
@@ -3493,6 +3496,45 @@ mod tests {
                 "{expression:?} kept a cast that restates its literal: {rendered}"
             );
         }
+    }
+
+    #[test]
+    fn attributed_equal_or_wider_inner_cast_is_subsumed_with_origins() {
+        let outer_owner = crate::ir::ast::OriginSet::one(0x1000);
+        let inner_owner = crate::ir::ast::OriginSet::one(0x1004);
+        let source_owner = crate::ir::ast::OriginSet::one(0x1008);
+        let mut function = one_stmt(
+            Expr::Cast {
+                signed: false,
+                width: 4,
+                expr: Box::new(
+                    Expr::Cast {
+                        signed: true,
+                        width: 8,
+                        expr: Box::new(Expr::Reg(reg("rax")).with_origins(source_owner.clone())),
+                    }
+                    .with_origins(inner_owner.clone()),
+                ),
+            }
+            .with_origins(outer_owner.clone()),
+        );
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        let Expr::Cast {
+            signed: false,
+            width: 4,
+            expr,
+        } = src.semantic()
+        else {
+            panic!("expected one surviving outer cast: {src:#?}")
+        };
+        assert_eq!(expr.semantic(), &Expr::Reg(reg("rax")));
+        assert_eq!(expr.origins(), Some(&source_owner));
+        assert_eq!(src.origins(), Some(&outer_owner.union(&inner_owner)));
     }
 
     #[test]
