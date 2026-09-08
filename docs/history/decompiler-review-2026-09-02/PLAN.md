@@ -1901,6 +1901,16 @@ provenance through lowering.
   aggregate-argument cells retain their prior structural-only verdict, with no
   scoped regression. See
   `results/wp3-aggregate-boundary-expression-origin-rendering.md`.
+  Commit `d6e13a8e` closes the adjacent saturation-select spelling boundary.
+  Provenance carriers around the exact one-call-times-two arm and its unsigned
+  cast-of-all-ones sentinel no longer hide the already-proved canonical form;
+  ordinary unsigned casts remain unchanged, and pointer width still chooses
+  the literal width. The strengthened contract was observed red, all 18
+  lazy-call-select tests pass, and all 20 fixture-189 functions pass across
+  GCC/Clang at O0/O2 after a release rebuild. The fixture measurement used the
+  concurrent shared Rust snapshot and is therefore regression evidence, not a
+  clean-tip performance measurement. See
+  `results/wp3-saturation-select-expression-origin-rendering.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
