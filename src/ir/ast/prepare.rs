@@ -465,7 +465,12 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
             fold_exhaustive_switch_returns(&mut owned);
         }
     }
-    crate::ir::loop_form::promote_for_loops(&mut owned);
+    match identities {
+        Some(identities) => {
+            crate::ir::loop_form::promote_for_loops_with_identities(&mut owned, identities)
+        }
+        None => crate::ir::loop_form::promote_for_loops(&mut owned),
+    }
     // Loop promotion can expose sequential terminal guards that were nested in
     // the recovered CFG during the earlier pass. Fuse that final exact shape
     // as well; the transformation is adjacency-checked and idempotent.

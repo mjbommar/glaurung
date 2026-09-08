@@ -526,14 +526,15 @@ fn guarded_do_while_candidate(
         return None;
     };
     let pre_loop = &body[start + 1..cursor];
-    let (current_seed_index, current_seed) = pre_loop
-        .iter()
-        .enumerate()
-        .rev()
-        .find_map(|(index, statement)| match statement.semantic() {
-            Stmt::Assign { dst, src } if dst == current => Some((start + 1 + index, src)),
-            _ => None,
-        })?;
+    let (current_seed_index, current_seed) =
+        pre_loop
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, statement)| match statement.semantic() {
+                Stmt::Assign { dst, src } if dst == current => Some((start + 1 + index, src)),
+                _ => None,
+            })?;
     let mut result_inputs = Vec::new();
     if let Some(result) = guard_result {
         collect_expr_regs(result, &mut result_inputs);
@@ -738,52 +739,52 @@ fn sentinel_search_candidate(body: &[Stmt], start: usize) -> Option<SentinelSear
     let semantic_loop_body = loop_body.iter().map(Stmt::semantic).collect::<Vec<_>>();
     let (result, current, advance, exit_body, exit_guard_sentinel) =
         match semantic_loop_body.as_slice() {
-        [Stmt::Assign {
-            dst: current,
-            src: advance,
-        }, Stmt::If {
-            cond: exit_guard,
-            then_body: exit_body,
-            else_body: None,
-        }] if seeds.len() == 1 => {
-            let (exit_value, exit_guard_sentinel) = equality_other_side(exit_guard, sentinel)?;
-            if seeds[0].0 != current
-                || reg_through_casts(exit_value) != Some(current)
-                || !match_continue.contains_reg(current)
-                || !advance.contains_reg(current)
-            {
-                return None;
+            [Stmt::Assign {
+                dst: current,
+                src: advance,
+            }, Stmt::If {
+                cond: exit_guard,
+                then_body: exit_body,
+                else_body: None,
+            }] if seeds.len() == 1 => {
+                let (exit_value, exit_guard_sentinel) = equality_other_side(exit_guard, sentinel)?;
+                if seeds[0].0 != current
+                    || reg_through_casts(exit_value) != Some(current)
+                    || !match_continue.contains_reg(current)
+                    || !advance.contains_reg(current)
+                {
+                    return None;
+                }
+                (current, current, advance, exit_body, exit_guard_sentinel)
             }
-            (current, current, advance, exit_body, exit_guard_sentinel)
-        }
-        [Stmt::Assign {
-            dst: result,
-            src: advance,
-        }, Stmt::Assign {
-            dst: current,
-            src: carried_result,
-        }, Stmt::If {
-            cond: exit_guard,
-            then_body: exit_body,
-            else_body: None,
-        }] if seeds.len() == 2 => {
-            let (exit_value, exit_guard_sentinel) = equality_other_side(exit_guard, sentinel)?;
-            if result == current
-                || reg_through_casts(carried_result) != Some(result)
-                || reg_through_casts(exit_value) != Some(result)
-                || !seeds.iter().any(|(seed, _)| *seed == result)
-                || !seeds.iter().any(|(seed, _)| *seed == current)
-                || !match_continue.contains_reg(current)
-                || match_continue.contains_reg(result)
-                || !advance.contains_reg(current)
-                || advance.contains_reg(result)
-            {
-                return None;
+            [Stmt::Assign {
+                dst: result,
+                src: advance,
+            }, Stmt::Assign {
+                dst: current,
+                src: carried_result,
+            }, Stmt::If {
+                cond: exit_guard,
+                then_body: exit_body,
+                else_body: None,
+            }] if seeds.len() == 2 => {
+                let (exit_value, exit_guard_sentinel) = equality_other_side(exit_guard, sentinel)?;
+                if result == current
+                    || reg_through_casts(carried_result) != Some(result)
+                    || reg_through_casts(exit_value) != Some(result)
+                    || !seeds.iter().any(|(seed, _)| *seed == result)
+                    || !seeds.iter().any(|(seed, _)| *seed == current)
+                    || !match_continue.contains_reg(current)
+                    || match_continue.contains_reg(result)
+                    || !advance.contains_reg(current)
+                    || advance.contains_reg(result)
+                {
+                    return None;
+                }
+                (result, current, advance, exit_body, exit_guard_sentinel)
             }
-            (result, current, advance, exit_body, exit_guard_sentinel)
-        }
-        _ => return None,
-    };
+            _ => return None,
+        };
     let [exit_statement] = exit_body.as_slice() else {
         return None;
     };
@@ -917,8 +918,7 @@ fn seed_exit_value_copies(stmts: &mut Vec<Stmt>) {
 }
 
 fn exit_value_seed_candidate(stmt: &Stmt) -> Option<Vec<Stmt>> {
-    let Stmt::While { cond, body } = stmt.semantic()
-    else {
+    let Stmt::While { cond, body } = stmt.semantic() else {
         return None;
     };
     if !matches!(cond.semantic(), Expr::Const(1)) {
@@ -1186,10 +1186,21 @@ fn writes_reg(stmt: &Stmt, target: &VReg) -> bool {
 /// `continue` is represented explicitly, such control can bypass the tail
 /// iterator and cannot safely become C `continue` semantics.
 pub fn promote_for_loops(f: &mut Function) {
-    promote_for_body(&mut f.body);
+    promote_for_body(&mut f.body, None);
 }
 
-fn promote_for_body(stmts: &mut Vec<Stmt>) {
+/// Promote exact counted loops using producer-owned promoted-stack identity.
+pub fn promote_for_loops_with_identities(
+    f: &mut Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    promote_for_body(&mut f.body, Some(identities));
+}
+
+fn promote_for_body(
+    stmts: &mut Vec<Stmt>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     for stmt in stmts.iter_mut() {
         match stmt.semantic_mut() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
@@ -1198,19 +1209,21 @@ fn promote_for_body(stmts: &mut Vec<Stmt>) {
                 else_body,
                 ..
             } => {
-                promote_for_body(then_body);
+                promote_for_body(then_body, identities);
                 if let Some(body) = else_body {
-                    promote_for_body(body);
+                    promote_for_body(body, identities);
                 }
             }
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => promote_for_body(body),
-            Stmt::For { body, .. } => promote_for_body(body),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                promote_for_body(body, identities)
+            }
+            Stmt::For { body, .. } => promote_for_body(body, identities),
             Stmt::Switch { cases, default, .. } => {
                 for (_, body) in cases {
-                    promote_for_body(body);
+                    promote_for_body(body, identities);
                 }
                 if let Some(body) = default {
-                    promote_for_body(body);
+                    promote_for_body(body, identities);
                 }
             }
             _ => {}
@@ -1219,7 +1232,7 @@ fn promote_for_body(stmts: &mut Vec<Stmt>) {
 
     let mut index = 1;
     while index < stmts.len() {
-        let Some(promoted) = for_candidate(&stmts[index - 1], &stmts[index]) else {
+        let Some(promoted) = for_candidate(&stmts[index - 1], &stmts[index], identities) else {
             index += 1;
             continue;
         };
@@ -1227,8 +1240,12 @@ fn promote_for_body(stmts: &mut Vec<Stmt>) {
     }
 }
 
-fn for_candidate(init: &Stmt, loop_stmt: &Stmt) -> Option<Stmt> {
-    let init_target = assigned_target(init)?;
+fn for_candidate(
+    init: &Stmt,
+    loop_stmt: &Stmt,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<Stmt> {
+    let init_target = assigned_target(init, identities)?;
     let Stmt::While { cond, body } = loop_stmt.semantic() else {
         return None;
     };
@@ -1258,7 +1275,7 @@ fn for_candidate(init: &Stmt, loop_stmt: &Stmt) -> Option<Stmt> {
     };
 
     let (step, core_body) = loop_body.split_last()?;
-    let step_target = assigned_target(step)?;
+    let step_target = assigned_target(step, identities)?;
     if step_target != init_target
         || !is_unit_increment(step, step_target)
         || !loop_cond.contains_reg(init_target)
@@ -1315,12 +1332,18 @@ fn is_unit_increment(stmt: &Stmt, target: &VReg) -> bool {
     )
 }
 
-fn assigned_target(stmt: &Stmt) -> Option<&VReg> {
+fn assigned_target<'a>(
+    stmt: &'a Stmt,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<&'a VReg> {
     match stmt.semantic() {
         Stmt::Assign { dst, .. } => Some(dst),
         Stmt::Store { addr, .. } => match addr.semantic() {
-            Expr::Reg(dst @ VReg::Phys(name))
-                if name.starts_with("local_") || name.starts_with("stack_") =>
+            Expr::Reg(dst)
+                if identities.map_or_else(
+                    || crate::ir::types::is_promoted_local_reg(dst),
+                    |identities| identities.is_promoted_stack_object(dst),
+                ) =>
             {
                 Some(dst)
             }
@@ -1799,9 +1822,9 @@ mod tests {
         assert_eq!(final_sentinel.semantic(), &Expr::Const(0));
         assert_eq!(
             final_sentinel.origins(),
-            Some(&OriginSet::from_addresses([
-                0x1000, 0x1004, 0x1008, 0x100c,
-            ]))
+            Some(&OriginSet::from_addresses(
+                [0x1000, 0x1004, 0x1008, 0x100c,]
+            ))
         );
     }
 
@@ -1850,15 +1873,11 @@ mod tests {
                 Stmt::If {
                     cond: Expr::Cmp {
                         op: CmpOp::Eq,
-                        lhs: Box::new(
-                            Expr::Reg(reg("arg0")).with_origins(OriginSet::one(0x1010)),
-                        ),
+                        lhs: Box::new(Expr::Reg(reg("arg0")).with_origins(OriginSet::one(0x1010))),
                         rhs: Box::new(entry_sentinel),
                     },
                     then_body: vec![Stmt::Return {
-                        value: Some(
-                            Expr::Reg(reg("result")).with_origins(OriginSet::one(0x1008)),
-                        ),
+                        value: Some(Expr::Reg(reg("result")).with_origins(OriginSet::one(0x1008))),
                     }],
                     else_body: None,
                 },
@@ -1896,9 +1915,7 @@ mod tests {
                     },
                 },
                 Stmt::Return {
-                    value: Some(
-                        Expr::Reg(reg("result")).with_origins(OriginSet::one(0x100c)),
-                    ),
+                    value: Some(Expr::Reg(reg("result")).with_origins(OriginSet::one(0x100c))),
                 },
             ],
         }
@@ -2174,14 +2191,9 @@ mod tests {
             width: 4,
             expr: Box::new(Expr::Reg(next.clone())),
         };
-        let carried_tail_value = tail_value
-            .clone()
-            .with_origins(OriginSet::one(0x1004));
-        let exit_tail_value = tail_value
-            .clone()
-            .with_origins(OriginSet::one(0x1008));
-        let seed_value =
-            Expr::Reg(carried.clone()).with_origins(OriginSet::one(0x1000));
+        let carried_tail_value = tail_value.clone().with_origins(OriginSet::one(0x1004));
+        let exit_tail_value = tail_value.clone().with_origins(OriginSet::one(0x1008));
+        let seed_value = Expr::Reg(carried.clone()).with_origins(OriginSet::one(0x1000));
         let mut f = Function {
             name: "seeded_head_test".into(),
             entry_va: 0,
@@ -2508,9 +2520,7 @@ mod tests {
             dst: induction.clone(),
             src: Expr::Bin {
                 op: BinOp::Add,
-                lhs: Box::new(
-                    Expr::Reg(induction.clone()).with_origins(OriginSet::one(0x1008)),
-                ),
+                lhs: Box::new(Expr::Reg(induction.clone()).with_origins(OriginSet::one(0x1008))),
                 rhs: Box::new(Expr::Const(1).with_origins(OriginSet::one(0x100c))),
             }
             .with_origins(OriginSet::one(0x1010)),
@@ -2569,7 +2579,7 @@ mod tests {
 
     #[test]
     fn promotes_counted_loop_with_switch_and_early_return() {
-        let induction = reg("local_i");
+        let induction = reg("opaque_i");
         let init = Stmt::Store {
             addr: Expr::Reg(induction.clone()).with_origins(OriginSet::one(0x1000)),
             src: Expr::Const(0),
@@ -2614,7 +2624,10 @@ mod tests {
             ],
         };
 
-        promote_for_loops(&mut function);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        let object = "opaque_i".to_string();
+        identities.attach_promoted_stack_objects([&object]);
+        promote_for_loops_with_identities(&mut function, &identities);
 
         assert_eq!(
             function.body,
@@ -2625,6 +2638,46 @@ mod tests {
                 body: vec![switch],
             }]
         );
+    }
+
+    #[test]
+    fn unowned_local_spelling_does_not_authorize_for_loop_promotion() {
+        let induction = reg("local_i");
+        let init = Stmt::Store {
+            addr: Expr::Reg(induction.clone()),
+            src: Expr::Const(0),
+            size: 4,
+        };
+        let step = Stmt::Store {
+            addr: Expr::Reg(induction.clone()),
+            src: Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Reg(induction.clone())),
+                rhs: Box::new(Expr::Const(1)),
+            },
+            size: 4,
+        };
+        let original = vec![
+            init,
+            Stmt::While {
+                cond: Expr::Cmp {
+                    op: CmpOp::Slt,
+                    lhs: Box::new(Expr::Reg(induction)),
+                    rhs: Box::new(Expr::Reg(reg("n"))),
+                },
+                body: vec![step],
+            },
+        ];
+        let mut function = Function {
+            name: "misleading_local".to_string(),
+            entry_va: 0,
+            body: original.clone(),
+        };
+        let identities = crate::ir::value_number::ValueIdentities::default();
+
+        promote_for_loops_with_identities(&mut function, &identities);
+
+        assert_eq!(function.body, original);
     }
 
     #[test]
