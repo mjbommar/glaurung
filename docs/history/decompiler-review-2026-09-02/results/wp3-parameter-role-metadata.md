@@ -82,6 +82,14 @@ source-parameter slot 0 preserves the established coalescing and origin
 behavior. Compatibility-only preparation still supplies no sidecar and keeps
 the legacy spelling path.
 
+Commit `964b66d6` migrates declared integer classification, shared by return
+typing and typed expression cleanup. When the identity sidecar is installed,
+parameter narrowing now requires `parameter_slot` ownership; an unowned role
+called `arg0` remains the conservative machine-word integer instead of taking a
+parameter-only 32-bit type. Exact non-parameter SSA values continue through
+their value-specific type path, promoted locals remain storage-typed, and the
+no-sidecar compatibility entry point retains legacy parsing.
+
 Focused validation used exact Rust tests only:
 
 ```text
@@ -174,6 +182,9 @@ partial_load_of_parameter_address_is_not_widened
 
 ir::ast::param_spills::tests::
 4 passed; 4,431 filtered out
+
+ir::ast::return_ctype::tests::
+5 passed; 4,431 filtered out
 ```
 
 Each command was `cargo test --features python-ext --lib

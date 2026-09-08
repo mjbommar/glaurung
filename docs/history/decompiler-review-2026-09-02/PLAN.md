@@ -1661,6 +1661,11 @@ provenance through lowering.
   scratch aliases, and repeated stores. The pass can delete a spill and rename
   its storage only when the source value carries an authoritative parameter
   slot; an unrelated `arg0` spelling leaves both storage and reload intact.
+  Commit `964b66d6` migrates declared-integer classification at the shared
+  return/declaration typing boundary. With identities installed, only an owned
+  parameter slot receives parameter narrowing; an unowned `arg0` remains a
+  conservative machine-word integer, while exact non-parameter SSA values
+  retain their value-specific type path.
   See
   `results/wp3-parameter-role-metadata.md`. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
