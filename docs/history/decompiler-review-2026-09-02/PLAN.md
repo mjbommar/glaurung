@@ -1455,6 +1455,12 @@ provenance through lowering.
   counts no longer retain artificial temporaries solely because provenance is
   present. Its count test was observed red and all 57 copy-propagation tests
   pass; see `results/wp3-copy-store-read-counts.md`.
+  Commit `b5cde5e3` then makes the existing fail-closed alias proofs transparent
+  to attributed address expressions and constant operands. Proven-disjoint
+  frame slots can still fold a pending load without discarding provenance;
+  indexed, overlapping, and otherwise unproved addresses remain refusals. Its
+  observed-red test and all 58 copy-propagation tests pass; see
+  `results/wp3-copy-alias-proof-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
