@@ -88,6 +88,10 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
+[`results/wp3-exception-stack-identities.md`](results/wp3-exception-stack-identities.md):
+integer exception recovery now follows producer-owned promoted copies, and its
+RTTI proof sees attributed expressions. All 10 owning tests and the exact
+Clang O2 `cpp_exception` cell pass. The preceding
 [`results/wp3-wp5-guarded-switch-stack-identities.md`](results/wp3-wp5-guarded-switch-stack-identities.md):
 guarded-switch discriminator copies now require producer-owned promoted-stack
 identity in production. Its 20 owning tests and one exact Clang O2 switch

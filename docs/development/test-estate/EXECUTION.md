@@ -546,6 +546,18 @@ tests and zero outside every gate. After a fresh serial native rebuild, only
 `204_adjacent_dispatch_tables:clang:O2:adt204_guarded_control` ran and reported
 no scoped regression. No broad suite or corpus ran.
 
+## Exception stack identities
+
+Commit `54e67cb5` moves promoted-copy tracking for integer exception recovery
+from display spelling to producer-owned stack identity in both production
+paths. The first exact fixture run found a real adjacent regression: attributed
+`_ZTIi` was invisible to direct RTTI recognition. Expression-origin and
+numeric-conversion transparency repaired it before commit. All 10 exception
+tests pass with 4,592 unrelated tests filtered out; the census records 5,139
+Rust tests and zero outside every gate. After a fresh serial rebuild, only
+`10_cpp_runtime_shapes:clang:O2:cpp_exception` ran and reported no scoped
+regression. No broad suite or corpus ran.
+
 ## Ground rules
 
 Verified before any claim of done: `cargo test --features python-ext`,

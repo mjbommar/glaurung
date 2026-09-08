@@ -2040,6 +2040,14 @@ provenance through lowering.
   exact Clang O2 `adt204_guarded_control` fixture pass, with 4,580 unrelated
   Rust tests filtered out. See
   `results/wp3-wp5-guarded-switch-stack-identities.md`.
+  Commit `54e67cb5` then migrates all promoted-copy decisions in integer
+  exception recovery: address propagation, relocation-backed RTTI proof, and
+  throw-value resolution consume producer-owned stack identity in both
+  production paths. The first exact fixture run exposed attributed `_ZTIi`
+  being hidden from the direct recognizer; expression-origin and numeric-
+  conversion transparency repaired it before commit. All 10 owning tests and
+  the exact Clang O2 `cpp_exception` fixture pass, with 4,592 unrelated Rust
+  tests filtered out. See `results/wp3-exception-stack-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
