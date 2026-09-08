@@ -485,6 +485,15 @@ origin unions, and equality behavior, with 4,407 unrelated tests filtered out.
 Contextual widening and typed consumed-extension cleanup remain open. See
 `results/wp3-typed-comparison-identities.md`.
 
+Commit `17dff536` migrates contextual widening across both sides of an
+assignment. Exact opaque source identities now receive required machine-width
+extensions, while exact opaque destinations keep genuinely narrow arithmetic
+narrow. Ambiguous identities retain the conservative machine-word behavior.
+Seven exact tests cover source, destination, ambiguity, signedness, legacy raw
+registers, and statement origins, with more than 4,400 unrelated tests filtered
+out. Typed consumed-extension cleanup remains the next name-based consumer. See
+`results/wp3-widen-identities.md`.
+
 ## Authority and relationship to the roadmaps
 
 `docs/development/roadmap/README.md` remains the canonical roadmap index, and
