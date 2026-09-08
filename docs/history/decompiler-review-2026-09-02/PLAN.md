@@ -1229,6 +1229,12 @@ provenance through lowering.
   cast owners into its readable replacement. Its strengthened observed-red
   test and all 76 constant-fold tests pass; see
   `results/wp3-typed-comparison-expression-origins.md`.
+  Commit `8c84c4ed` then makes the safe eager-Boolean recognizer transparent to
+  an attributed byte-mask constant. The recovered short-circuit tree retains
+  the mask owner alongside its mask-tree, cast, predicate-tree, and terminal-
+  test owners without weakening the side-effect, leaf-count, or byte-view
+  gates. Its strengthened observed-red test and all 76 constant-fold tests
+  pass; see `results/wp3-boolean-mask-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
