@@ -1678,7 +1678,11 @@ provenance through lowering.
   type-map arity fallback. Signature arity, local declarations, stack/wide
   objects, and typed call-result declarations now share one identity-aware
   parameter decision; health and compatibility callers explicitly retain the
-  no-sidecar spelling path.
+  no-sidecar spelling path. Commit `5cbb36bd` carries the census's exact role-
+  to-slot map into the immutable declaration plan. Lvalue naming and both
+  `StackAddr` rendering decisions now query that plan, leaving
+  `dec_render.rs` with no `argN` parser and preventing a local array called
+  `arg0` from rendering as a parameter-valued `void *`.
   See
   `results/wp3-parameter-role-metadata.md`. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name

@@ -117,6 +117,15 @@ function; attaching slot 0 restores the parameter signature. The health-only
 and public compatibility paths explicitly pass no sidecar and retain legacy
 behavior.
 
+Commit `5cbb36bd` makes that census result the renderer's sole parameter-role
+authority. `DecIdents` records each displayed role with its proven slot, and
+`DeclarationPlan` carries the map immutably beside parameter names and types.
+Lvalue spelling, frame-object address rendering, and call-argument pointer
+classification now query the plan; `dec_render.rs` contains no `argN` parser.
+The observed defect declared `unsigned char arg0[4]` but returned
+`(void *)(arg0)`. It now consistently returns the local object's address,
+while an identity-owned slot still uses the parameter-value representation.
+
 Focused validation used exact Rust tests only:
 
 ```text
@@ -243,6 +252,16 @@ RED: rendered long census_identity(long arg0); 1 failed, 4,439 filtered out
 
 ir::ast::decbench_render::identity_census_tests::
 3 passed; 4,439 filtered out
+
+stack_address_rendering_does_not_trust_an_unowned_arg_spelling
+RED: declared unsigned char arg0[4] but returned (void *)(arg0)
+1 failed; 4,442 filtered out
+
+ir::ast::decbench_render::identity_census_tests::
+5 passed; 4,439 filtered out
+
+ir::ast::declaration_plan::identity_tests::
+6 passed; 4,438 filtered out
 ```
 
 Each command was `cargo test --features python-ext --lib
