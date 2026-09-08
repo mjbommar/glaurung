@@ -585,7 +585,7 @@ fn decbench_text_with_installed_environment(
     // means the emitted C reads a value the machine never produced, and a proof
     // that fails into a dropped `Vec` is a wrong-code bug nobody can count.
     let verification = profiler.measure("verify_before_render", || {
-        crate::ir::verify_defs::verify_before_render(&prepared)
+        crate::ir::verify_defs::verify_before_render_with_identities(&prepared, &value_identities)
     });
     crate::ir::health::record_render_verification(&verification);
     let violations = verification.violations;
