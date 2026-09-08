@@ -1946,6 +1946,13 @@ provenance through lowering.
   repair. The release extension rebuilds, but the committed fixture corpus has
   no matching address-taken callback case, so no real-fixture claim is made.
   See `results/wp3-address-taken-symbol-expression-origins.md`.
+  Commit `65de3b46` closes the upstream call-contract counterpart. Catalog
+  lookup now recognizes an attributed direct target, and recovered argument
+  typing classifies attributed registers, literals, stack addresses, casts,
+  comparisons, arithmetic, and selects through their semantic view. The exact
+  `printf`/format/stack-address contract was observed red; it and all 25 owning
+  call-contract tests pass after the repair, followed by a successful release
+  rebuild. See `results/wp3-call-contract-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
