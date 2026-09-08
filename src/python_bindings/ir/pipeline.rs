@@ -688,6 +688,7 @@ pub(super) fn run_ast_passes(
         )
     );
     value_identities.attach_promoted_stack_objects(stack_facts.sizes.keys());
+    value_identities.attach_promoted_stack_parameter_slots(&stack_facts.parameter_slots);
     value_identities.attach_machine_saved_slots(&stack_facts.machine_saved_slots);
     // Now that the buffer is a named object, make it the destination of the
     // call that fills it. Before promotion its address is still `sp + k`
@@ -830,7 +831,10 @@ pub(super) fn recognise_machine_frame(
             crate::ir::x86_prologue::recognise_x86_prologue_with_identities(f, value_identities);
         }
         crate::ir::call_args::CallConv::Cdecl32 => {
-            crate::ir::x86_prologue::recognise_cdecl32_call_alignment(f);
+            crate::ir::x86_prologue::recognise_cdecl32_call_alignment_with_identities(
+                f,
+                value_identities,
+            );
         }
         crate::ir::call_args::CallConv::Arm | crate::ir::call_args::CallConv::ArmHardFloat => {
             crate::ir::arm32_prologue::recognise_arm32_frame_with_identities(f, value_identities);

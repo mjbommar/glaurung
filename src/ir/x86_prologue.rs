@@ -77,11 +77,29 @@ pub fn drop_implicit_main_runtime_call(f: &mut Function) {
 /// an adjacent, arity-exact pair is removed; dynamic stack use and mismatched
 /// cleanup remain visible.
 pub fn recognise_cdecl32_call_alignment(f: &mut Function) {
-    collapse_cdecl32_call_alignment_body(&mut f.body);
-    collapse_cdecl32_realign_frame(&mut f.body);
+    recognise_cdecl32_call_alignment_impl(f, None);
 }
 
-fn collapse_cdecl32_realign_frame(body: &mut Vec<Stmt>) {
+/// Run cdecl32 frame recognition with producer-owned storage and parameter facts.
+pub fn recognise_cdecl32_call_alignment_with_identities(
+    f: &mut Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    recognise_cdecl32_call_alignment_impl(f, Some(identities));
+}
+
+fn recognise_cdecl32_call_alignment_impl(
+    f: &mut Function,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
+    collapse_cdecl32_call_alignment_body(&mut f.body);
+    collapse_cdecl32_realign_frame(&mut f.body, identities);
+}
+
+fn collapse_cdecl32_realign_frame(
+    body: &mut Vec<Stmt>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     let mut start = 0usize;
     while start < body.len() && is_leading_frame_metadata(&body[start]) {
         start += 1;
@@ -111,7 +129,7 @@ fn collapse_cdecl32_realign_frame(body: &mut Vec<Stmt>) {
     {
         (start + 3, None, rsp_sub_width(&body[start + 2]))
     } else if body.len().saturating_sub(start) >= 7
-        && matches!(body[start + 1].semantic(), Stmt::Push { value: Expr::Reg(saved) } if is_promoted_stack_slot(saved, None))
+        && matches!(body[start + 1].semantic(), Stmt::Push { value: Expr::Reg(saved) } if is_promoted_stack_slot(saved, identities))
         && matches!(body[start + 2].semantic(), Stmt::Push { value: Expr::Reg(saved) } if is_rbp(saved))
         && matches!(body[start + 3].semantic(), Stmt::Assign { dst, src: Expr::Reg(source) } if is_rbp(dst) && is_rsp(source))
     {
@@ -125,7 +143,7 @@ fn collapse_cdecl32_realign_frame(body: &mut Vec<Stmt>) {
         }
         let push_count = cursor - pushes_start;
         if push_count == 0
-            || !matches!(body[cursor - 1].semantic(), Stmt::Push { value: Expr::StackAddr { object, .. } } if base_name_of_vreg(object) == Some("arg0"))
+            || !matches!(body[cursor - 1].semantic(), Stmt::Push { value: Expr::StackAddr { object, .. } } if is_parameter_slot(object, 0, identities))
         {
             return;
         }
@@ -170,7 +188,7 @@ fn collapse_cdecl32_realign_frame(body: &mut Vec<Stmt>) {
         Stmt::Assign {
             dst,
             src: Expr::Reg(saved),
-        } if is_rbp(dst) && is_promoted_stack_slot(saved, None) => saved.clone(),
+        } if is_rbp(dst) && is_promoted_stack_slot(saved, identities) => saved.clone(),
         _ => return,
     };
     let entry_stack = match body[restore_stack_index].semantic() {
@@ -895,6 +913,22 @@ fn is_promoted_stack_slot(
     )
 }
 
+fn is_parameter_slot(
+    value: &VReg,
+    slot: usize,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    identities.map_or_else(
+        || {
+            base_name_of_vreg(value)
+                .and_then(|name| name.strip_prefix("arg"))
+                .and_then(|index| index.parse::<usize>().ok())
+                == Some(slot)
+        },
+        |identities| identities.parameter_slot(value) == Some(slot),
+    )
+}
+
 fn rsp_sub_width(stmt: &Stmt) -> Option<i64> {
     let Stmt::Assign {
         dst,
@@ -1395,6 +1429,60 @@ mod tests {
         }
     }
 
+    fn cdecl32_single_saved_entry_frame(saved: &str, parameter: &str) -> Function {
+        Function {
+            name: "main".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::And,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(-16)),
+                    },
+                },
+                Stmt::Push {
+                    value: Expr::Reg(reg(saved)),
+                },
+                push_rbp(),
+                mov_rbp_rsp(),
+                Stmt::Push {
+                    value: Expr::StackAddr {
+                        object: reg(parameter),
+                        size: 4,
+                    },
+                },
+                sub_rsp(16),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 1,
+                        name: "work".into(),
+                    },
+                    args: vec![],
+                    dst: None,
+                    call_spec: None,
+                },
+                add_rsp(16),
+                Stmt::Assign {
+                    dst: reg("rbp"),
+                    src: Expr::Reg(reg(saved)),
+                },
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("local_4"))),
+                        rhs: Box::new(Expr::Const(4)),
+                    },
+                },
+                Stmt::Return {
+                    value: Some(Expr::Const(0)),
+                },
+            ],
+        }
+    }
+
     #[test]
     fn cdecl32_balanced_call_padding_collapses_at_top_level_and_in_loop() {
         let call = || Stmt::Call {
@@ -1798,6 +1886,54 @@ mod tests {
         };
         recognise_cdecl32_call_alignment(&mut f);
         assert!(!crate::ir::ast::render(&f).contains("%rsp"));
+    }
+
+    #[test]
+    fn identity_aware_cdecl32_frame_accepts_owned_opaque_roles() {
+        let saved_name = "entry_stack_home".to_string();
+        let parameter_name = "first_parameter_home".to_string();
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&saved_name]);
+        identities.attach_promoted_stack_parameter_slots(&std::collections::HashMap::from([(
+            parameter_name.clone(),
+            0,
+        )]));
+        let mut f = cdecl32_single_saved_entry_frame(&saved_name, &parameter_name);
+
+        recognise_cdecl32_call_alignment_with_identities(&mut f, &identities);
+
+        assert!(
+            !crate::ir::ast::render(&f).contains("%rsp"),
+            "owned cdecl32 frame leaked: {:#?}",
+            f.body
+        );
+    }
+
+    #[test]
+    fn identity_aware_cdecl32_frame_rejects_misleading_role_spellings() {
+        let mut f = cdecl32_single_saved_entry_frame("stack_top", "arg0");
+
+        recognise_cdecl32_call_alignment_with_identities(
+            &mut f,
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
+
+        assert!(f.body.iter().all(
+            |statement| !matches!(statement, Stmt::Comment(text) if text.starts_with("cdecl32"))
+        ));
+        assert!(f.body.iter().any(|statement| matches!(
+            statement,
+            Stmt::Push {
+                value: Expr::Reg(saved)
+            } if saved == &reg("stack_top")
+        )));
+        assert!(f.body.iter().any(|statement| matches!(
+            statement,
+            Stmt::Assign {
+                dst,
+                src: Expr::Reg(saved)
+            } if is_rbp(dst) && saved == &reg("stack_top")
+        )));
     }
 
     #[test]

@@ -125,6 +125,19 @@ impl ValueIdentities {
             .extend(objects.into_iter().cloned().map(VReg::phys));
     }
 
+    /// Publish source-parameter roles proved by stack-coordinate promotion.
+    pub(crate) fn attach_promoted_stack_parameter_slots(
+        &mut self,
+        parameter_slots: &HashMap<String, usize>,
+    ) {
+        for (object, slot) in parameter_slots {
+            self.parameter_slots_by_value
+                .entry(VReg::phys(object))
+                .or_default()
+                .insert(*slot);
+        }
+    }
+
     pub(crate) fn record(&mut self, numbered: VReg, identity: SsaValue) {
         self.by_numbered_value
             .entry(numbered)
