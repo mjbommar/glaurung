@@ -1299,6 +1299,13 @@ provenance through lowering.
   extension proof, and one-use requirements remain mandatory. Its strengthened
   observed-red test and all 18 guarded-switch tests pass; see
   `results/wp3-switch-discriminator-expression-origins.md`.
+  Commit `5a7e76d6` then makes the typed promoted-stack discriminator copy
+  transparent to attributed address and value expressions. The replacement
+  switch receives the consumed store/address/value owners and its discriminant
+  retains the value owner, while promoted-object identity, recovered-width,
+  and one-use proofs remain mandatory. Its strengthened observed-red test and
+  all 18 guarded-switch tests pass; see
+  `results/wp3-promoted-discriminator-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
