@@ -1080,7 +1080,14 @@ provenance through lowering.
   pre-existing failure on parent and tip. See
   `results/wp3-aapcs-stack-argument-expression-origins.md`. Specialized
   recovered-layout, cdecl32, hard-float, and table-call expression producers
-  remain open.
+  remain open. Commit `bb98a3a9` next attributes convention-generic recovered-
+  layout arguments from their adjacent setup definitions and composes promoted-
+  spill definitions through exact substitution; proven untouched live-ins stay
+  independent. Both ownership cases were observed red, all 111 call-argument
+  tests pass, and the 12-cell cross-ABI `call_into_spill` release A/B is exactly
+  neutral, including the same pre-existing legacy `armv7:O0` failure. See
+  `results/wp3-recovered-layout-expression-origins.md`. Specialized cdecl32,
+  hard-float, and table-call fallback expression producers remain open.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
