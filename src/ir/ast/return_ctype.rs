@@ -50,7 +50,11 @@ pub(crate) fn declared_int_type_with_identities(
             _ => Some((true, 8)),
         };
     }
-    if parse_arg_index(ident).is_none() && !is_promoted_local(ident) {
+    let is_parameter = match identities {
+        Some(identities) => identities.parameter_slot(&value).is_some(),
+        None => parse_arg_index(ident).is_some(),
+    };
+    if !is_parameter && !is_promoted_local(ident) {
         // Declared `long`: already machine-wide, never narrowed.
         return Some((true, 8));
     }
@@ -381,6 +385,32 @@ mod tests {
             },
             Stmt::Return { value: Some(late) },
         ]
+    }
+
+    #[test]
+    fn declared_integer_parameters_require_typed_parameter_roles() {
+        let tm = type_map(&[(
+            "arg0",
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        )]);
+        let identities = crate::ir::value_number::ValueIdentities::default();
+
+        assert_eq!(
+            declared_int_type_with_identities("arg0", Some(&tm), Some(&identities)),
+            Some((true, 8))
+        );
+
+        let parameter = identities.with_role_aliases_and_parameter_slots(
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::from([0]),
+        );
+        assert_eq!(
+            declared_int_type_with_identities("arg0", Some(&tm), Some(&parameter)),
+            Some((false, 4))
+        );
     }
 
     /// `if (!buf) return 0;` is a null POINTER constant as readily as it is an
