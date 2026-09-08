@@ -183,9 +183,9 @@ the canonical order of all 20 production AST passes, including safe optional
 omissions and typed rejection of unknown, repeated, or backward passes.
 `5f7df194` replaces both hand-written AST settle loops with one bounded
 fixpoint driver and emits their rounds, firing counts, and quiescent/bound-
-reached termination through the pipeline profile. Remaining budget classes and
-their closure tests remain open, so WP2 is
-substantially underway rather than complete. See
+reached termination through the pipeline profile. Commit `e7b7de67` closes the
+remaining exact-range budget contract and its focused closure tests, completing
+WP2. See
 `results/wp2-pipeline-request-model.md`.
 The bounded WP6/WP9 AAPCS32 follow-on is landed at `62a4ab72`. An
 authoritatively declared eight-byte integer parameter now carries both aligned
@@ -1665,7 +1665,11 @@ provenance through lowering.
   return/declaration typing boundary. With identities installed, only an owned
   parameter slot receives parameter narrowing; an unowned `arg0` remains a
   conservative machine-word integer, while exact non-parameter SSA values
-  retain their value-specific type path.
+  retain their value-specific type path. Commit `b0197ec9` then retains the
+  ABI-proved source-parameter slot directly on promoted stack storage. Home-
+  slot assignment and adjacent-slot composition consume that typed fact rather
+  than reparsing the generated `argN` name; an unowned local merely spelled
+  `arg0` can no longer impersonate parameter storage.
   See
   `results/wp3-parameter-role-metadata.md`. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name

@@ -90,6 +90,15 @@ parameter-only 32-bit type. Exact non-parameter SSA values continue through
 their value-specific type path, promoted locals remain storage-typed, and the
 no-sidecar compatibility entry point retains legacy parsing.
 
+Commit `b0197ec9` carries source-parameter ownership into promoted stack
+storage. `SlotVal::parameter_slot` is derived once from the normalized frame
+coordinate, calling convention, and authoritative parameter bound. A
+full-width store becomes a parameter assignment only when that stored fact is
+present, and little-endian adjacent-slot composition refuses actual parameter
+storage rather than every local whose display name happens to match `argN`.
+The same coordinate function now owns both name allocation and typed ownership,
+so their ABI interpretations cannot drift independently.
+
 Focused validation used exact Rust tests only:
 
 ```text
@@ -185,6 +194,24 @@ ir::ast::param_spills::tests::
 
 ir::ast::return_ctype::tests::
 5 passed; 4,431 filtered out
+
+argument_assignment_does_not_trust_an_unowned_arg_spelling
+1 passed; 4,436 filtered out
+
+composition_does_not_trust_an_unowned_arg_spelling
+1 passed; 4,437 filtered out
+
+a_full_width_write_to_a_
+2 passed; 4,435 filtered out
+
+a_narrow_write_to_a_cdecl32_argument_slot_stays_a_store
+1 passed; 4,436 filtered out
+
+a_wide_load_over_an_incoming_parameter_slot_is_not_concatenated
+1 passed; 4,436 filtered out
+
+stack_arguments
+10 passed; 4,428 filtered out
 ```
 
 Each command was `cargo test --features python-ext --lib
