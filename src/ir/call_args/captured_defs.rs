@@ -21,7 +21,7 @@ use crate::ir::ast::{Expr, Stmt};
 use crate::ir::types::VReg;
 use crate::ir::value_number::ValueIdentities;
 
-use super::{outgoing_sysv_stack_push, reads_reg_in_expr, ssa_base};
+use super::{outgoing_sysv_stack_push_with_identities, reads_reg_in_expr, ssa_base};
 
 /// Resolve one reaching register definition in every argument captured so far.
 ///
@@ -123,7 +123,7 @@ pub(super) fn is_stable_frame_arg_definition_with_identities(
                 size: store_size,
                 ..
             } => {
-                if outgoing_sysv_stack_push(body, index).is_some() {
+                if outgoing_sysv_stack_push_with_identities(body, index, identities).is_some() {
                     continue;
                 }
                 let Some((base, store_disp)) = fixed_frame_address(addr, identities) else {

@@ -30,11 +30,11 @@ use super::{
     known_arm_core_register_arity, known_arm_hard_float_layout,
     layout_matches_abi_allocation_order, mark_arg_reads_in_expr_with_identities,
     mark_arg_reads_in_stmt_with_identities, mark_arg_writes_in_stmt_with_identities,
-    outgoing_aapcs_stack_area, outgoing_stack_cleanup, outgoing_sysv_stack_area,
-    outgoing_sysv_stack_push, reads_reg_in_expr, resolve_captured_definition,
-    resolve_captured_definition_in, return_reg, slot_of, ssa_base, stack_pointer_sub_width,
-    substitute_exact_reg, table_call_may_use_layout, versioned_operand_is_reassigned, CallConv,
-    CalleeLayouts, EnclosingSlots, KEEP_ARG_SETUP,
+    outgoing_aapcs_stack_area, outgoing_stack_cleanup_with_identities, outgoing_sysv_stack_area,
+    outgoing_sysv_stack_push_with_identities, reads_reg_in_expr, register_is_storage,
+    resolve_captured_definition, resolve_captured_definition_in, return_reg, slot_of, ssa_base,
+    stack_pointer_sub_width_with_identities, substitute_exact_reg, table_call_may_use_layout,
+    versioned_operand_is_reassigned, CallConv, CalleeLayouts, EnclosingSlots, KEEP_ARG_SETUP,
 };
 
 pub(super) fn fold_one_call(
@@ -195,7 +195,7 @@ pub(super) fn fold_one_call(
     let mut read_between: Vec<bool> = vec![false; arg_slots(arch).len()];
     let mut blocked_incoming: Vec<bool> = vec![false; arg_slots(arch).len()];
     let preallocated_stack = (arch == CallConv::SysVAmd64)
-        .then(|| outgoing_sysv_stack_area(body, call_idx))
+        .then(|| outgoing_sysv_stack_area(body, call_idx, identities))
         .flatten();
     let proven_aapcs_stack = aapcs_stack.is_some();
     let (mut stack_args, mut stack_setup_indices) = aapcs_stack
@@ -248,7 +248,9 @@ pub(super) fn fold_one_call(
             break;
         }
         if arch == CallConv::SysVAmd64 && preallocated_stack.is_none() {
-            if let Some((value, width)) = outgoing_sysv_stack_push(body, i) {
+            if let Some((value, width)) =
+                outgoing_sysv_stack_push_with_identities(body, i, identities)
+            {
                 let mut argument = value.clone();
                 if let Some(origins) = body[i].origins() {
                     argument.merge_origins(origins);
@@ -266,7 +268,7 @@ pub(super) fn fold_one_call(
             // every candidate push untouched.
             if !stack_args.is_empty()
                 && stack_padding.is_none()
-                && stack_pointer_sub_width(&body[i]) == Some(8)
+                && stack_pointer_sub_width_with_identities(&body[i], identities) == Some(8)
             {
                 stack_padding = Some(i);
                 continue;
@@ -279,8 +281,10 @@ pub(super) fn fold_one_call(
                 Stmt::Assign {
                     dst: VReg::Phys(frame),
                     src: Expr::Reg(VReg::Phys(stack)),
-                } if matches!(ssa_base(frame), "ebp" | "rbp")
-                    && matches!(ssa_base(stack), "esp" | "rsp")
+                } if (register_is_storage(&VReg::Phys(frame.clone()), "ebp", identities)
+                    || register_is_storage(&VReg::Phys(frame.clone()), "rbp", identities))
+                    && (register_is_storage(&VReg::Phys(stack.clone()), "esp", identities)
+                        || register_is_storage(&VReg::Phys(stack.clone()), "rsp", identities))
             ) {
                 break;
             }
@@ -323,10 +327,11 @@ pub(super) fn fold_one_call(
                             .any(|argument| reads_reg_in_expr(argument, dst))
                             && substitutable
                             && (proven_aapcs_stack
-                                || outgoing_stack_cleanup(
+                                || outgoing_stack_cleanup_with_identities(
                                     body,
                                     call_idx,
                                     stack_arg_bytes + stack_padding.map_or(0, |_| 8),
+                                    identities,
                                 )
                                 .is_some());
                         // Preserve the existing statement-rooted dependency
@@ -370,14 +375,15 @@ pub(super) fn fold_one_call(
                             // Keep the setup where it stands when moving it to
                             // the call would read a value written after it; the
                             // call then names the argument register instead.
-                            found[slot] =
-                                if phase_sensitive_stack_read(src, body, i, call_idx, arch)
-                                    || versioned_operand_is_reassigned(src, body, i, call_idx)
-                                {
-                                    Some((KEEP_ARG_SETUP, Expr::Reg(dst.clone())))
-                                } else {
-                                    Some((i, attributed_source.clone()))
-                                };
+                            found[slot] = if phase_sensitive_stack_read(
+                                src, body, i, call_idx, arch, identities,
+                            ) || versioned_operand_is_reassigned(
+                                src, body, i, call_idx,
+                            ) {
+                                Some((KEEP_ARG_SETUP, Expr::Reg(dst.clone())))
+                            } else {
+                                Some((i, attributed_source.clone()))
+                            };
                             if feeds_balanced_stack_argument {
                                 for argument in &mut stack_args {
                                     let _ = substitute_exact_reg(argument, dst, &attributed_source);
@@ -781,7 +787,8 @@ pub(super) fn fold_one_call(
         } else {
             let padding_bytes = stack_padding.map_or(0, |_| 8);
             let expected_cleanup = stack_arg_bytes + padding_bytes;
-            if let Some(cleanup_indices) = outgoing_stack_cleanup(body, call_idx, expected_cleanup)
+            if let Some(cleanup_indices) =
+                outgoing_stack_cleanup_with_identities(body, call_idx, expected_cleanup, identities)
             {
                 args_out.extend(stack_args);
                 used_stmt_indices.extend(stack_setup_indices);
@@ -827,6 +834,7 @@ fn phase_sensitive_stack_read(
     definition_index: usize,
     call_index: usize,
     arch: CallConv,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> bool {
     let Expr::Deref { addr, .. } = source else {
         return false;
@@ -838,17 +846,70 @@ fn phase_sensitive_stack_read(
     };
     let reads_stack = stack_names
         .iter()
-        .any(|name| reads_reg_in_expr(addr, &VReg::phys(*name)));
+        .any(|name| expr_reads_storage(addr, name, identities));
     reads_stack
         && body[(definition_index + 1).min(call_index)..call_index]
             .iter()
             .any(|statement| {
                 matches!(
                     statement.semantic(),
-                    Stmt::Assign { dst: VReg::Phys(name), .. }
-                        if stack_names.contains(&ssa_base(name))
+                    Stmt::Assign { dst, .. }
+                        if stack_names
+                            .iter()
+                            .any(|name| register_is_storage(dst, name, identities))
                 )
             })
+}
+
+fn expr_reads_storage(
+    expression: &Expr,
+    storage: &str,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    match expression {
+        Expr::Origin { expr, .. } => expr_reads_storage(expr, storage, identities),
+        Expr::Reg(register) => register_is_storage(register, storage, identities),
+        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => base
+            .iter()
+            .chain(index.iter())
+            .any(|register| register_is_storage(register, storage, identities)),
+        Expr::Deref { addr, .. } => expr_reads_storage(addr, storage, identities),
+        Expr::Call { target, args, .. } => {
+            expr_reads_storage(target, storage, identities)
+                || args
+                    .iter()
+                    .any(|argument| expr_reads_storage(argument, storage, identities))
+        }
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            expr_reads_storage(lhs, storage, identities)
+                || expr_reads_storage(rhs, storage, identities)
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            expr_reads_storage(cond, storage, identities)
+                || expr_reads_storage(if_true, storage, identities)
+                || expr_reads_storage(if_false, storage, identities)
+        }
+        Expr::Un { src, .. } => expr_reads_storage(src, storage, identities),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+            expr_reads_storage(expr, storage, identities)
+        }
+        Expr::FunctionTableEntry { index, .. } => expr_reads_storage(index, storage, identities),
+        Expr::WideArithmetic { args, .. } => args
+            .iter()
+            .any(|argument| expr_reads_storage(argument, storage, identities)),
+        Expr::Const(_)
+        | Expr::FloatConst { .. }
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::StackAddr { .. }
+        | Expr::Unknown(_) => false,
+    }
 }
 
 /// Preserve an immediately reaching `xmm0:xmm1` aggregate result across a

@@ -1460,8 +1460,15 @@ fn is_pure_arg_normalisation(expr: &Expr) -> bool {
 
 /// Width of `esp/rsp = esp/rsp - N`, if this is exactly a stack allocation.
 pub(super) fn stack_pointer_sub_width(stmt: &Stmt) -> Option<i64> {
+    stack_pointer_sub_width_with_identities(stmt, None)
+}
+
+pub(super) fn stack_pointer_sub_width_with_identities(
+    stmt: &Stmt,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<i64> {
     let Stmt::Assign {
-        dst: VReg::Phys(dst),
+        dst,
         src: Expr::Bin {
             op: BinOp::Sub,
             lhs,
@@ -1471,9 +1478,14 @@ pub(super) fn stack_pointer_sub_width(stmt: &Stmt) -> Option<i64> {
     else {
         return None;
     };
-    if !matches!(dst.as_str(), "esp" | "rsp")
-        || !matches!(lhs.as_ref(), Expr::Reg(VReg::Phys(src)) if src == dst)
-    {
+    let stack = if register_is_storage(dst, "rsp", identities) {
+        "rsp"
+    } else if register_is_storage(dst, "esp", identities) {
+        "esp"
+    } else {
+        return None;
+    };
+    if !matches!(lhs.as_ref(), Expr::Reg(src) if register_is_storage(src, stack, identities)) {
         return None;
     }
     match rhs.as_ref() {
@@ -1484,13 +1496,21 @@ pub(super) fn stack_pointer_sub_width(stmt: &Stmt) -> Option<i64> {
 
 /// One exact SysV `push value` after lowering to stack arithmetic.
 pub(super) fn outgoing_sysv_stack_push(body: &[Stmt], store_index: usize) -> Option<(&Expr, i64)> {
+    outgoing_sysv_stack_push_with_identities(body, store_index, None)
+}
+
+pub(super) fn outgoing_sysv_stack_push_with_identities<'body>(
+    body: &'body [Stmt],
+    store_index: usize,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<(&'body Expr, i64)> {
     if store_index == 0 {
         return None;
     }
     let Stmt::Store {
         addr:
             Expr::Lea {
-                base: Some(VReg::Phys(base)),
+                base: Some(base),
                 index: None,
                 disp: 0,
                 ..
@@ -1501,7 +1521,9 @@ pub(super) fn outgoing_sysv_stack_push(body: &[Stmt], store_index: usize) -> Opt
     else {
         return None;
     };
-    if ssa_base(base) != "rsp" || stack_pointer_sub_width(&body[store_index - 1]) != Some(8) {
+    if !register_is_storage(base, "rsp", identities)
+        || stack_pointer_sub_width_with_identities(&body[store_index - 1], identities) != Some(8)
+    {
         return None;
     }
     Some((src, 8))
@@ -1514,7 +1536,11 @@ pub(super) fn outgoing_sysv_stack_push(body: &[Stmt], store_index: usize) -> Opt
 /// four bytes into those eight-byte ABI slots. Requiring an uninterrupted,
 /// zero-based slot layout distinguishes that call area from ordinary frame
 /// locals and preserves ABI argument order independent of store order.
-fn outgoing_sysv_stack_area(body: &[Stmt], call_index: usize) -> Option<(Vec<Expr>, Vec<usize>)> {
+fn outgoing_sysv_stack_area(
+    body: &[Stmt],
+    call_index: usize,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<(Vec<Expr>, Vec<usize>)> {
     let mut by_offset = std::collections::BTreeMap::new();
     let mut cursor = call_index;
     while cursor > 0 {
@@ -1524,14 +1550,14 @@ fn outgoing_sysv_stack_area(body: &[Stmt], call_index: usize) -> Option<(Vec<Exp
             Stmt::Store {
                 addr:
                     Expr::Lea {
-                        base: Some(VReg::Phys(base)),
+                        base: Some(base),
                         index: None,
                         disp,
                         ..
                     },
                 src,
                 size,
-            } if ssa_base(base) == "rsp"
+            } if register_is_storage(base, "rsp", identities)
                 && *disp >= 0
                 && *disp % 8 == 0
                 && matches!(*size, 4 | 8) =>
@@ -1539,7 +1565,7 @@ fn outgoing_sysv_stack_area(body: &[Stmt], call_index: usize) -> Option<(Vec<Exp
                 // A `[rsp]` store paired with the immediately preceding
                 // `rsp -= 8` is the push-form handled by the balanced-cleanup
                 // path, not a preallocated outgoing area.
-                if outgoing_sysv_stack_push(body, index).is_some() {
+                if outgoing_sysv_stack_push_with_identities(body, index, identities).is_some() {
                     return None;
                 }
                 let mut value = src.clone();
@@ -1571,9 +1597,12 @@ fn outgoing_sysv_stack_area(body: &[Stmt], call_index: usize) -> Option<(Vec<Exp
 }
 
 /// Width of `rsp = rsp + N`, if this is exactly caller stack cleanup.
-fn stack_pointer_add_width(stmt: &Stmt) -> Option<i64> {
+fn stack_pointer_add_width(
+    stmt: &Stmt,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<i64> {
     let Stmt::Assign {
-        dst: VReg::Phys(dst),
+        dst,
         src: Expr::Bin {
             op: BinOp::Add,
             lhs,
@@ -1583,8 +1612,8 @@ fn stack_pointer_add_width(stmt: &Stmt) -> Option<i64> {
     else {
         return None;
     };
-    if ssa_base(dst) != "rsp"
-        || !matches!(lhs.as_ref(), Expr::Reg(VReg::Phys(src)) if ssa_base(src) == "rsp")
+    if !register_is_storage(dst, "rsp", identities)
+        || !matches!(lhs.as_ref(), Expr::Reg(src) if register_is_storage(src, "rsp", identities))
     {
         return None;
     }
@@ -1605,6 +1634,15 @@ pub(super) fn outgoing_stack_cleanup(
     call_index: usize,
     expected_bytes: i64,
 ) -> Option<Vec<usize>> {
+    outgoing_stack_cleanup_with_identities(body, call_index, expected_bytes, None)
+}
+
+pub(super) fn outgoing_stack_cleanup_with_identities(
+    body: &[Stmt],
+    call_index: usize,
+    expected_bytes: i64,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<Vec<usize>> {
     if expected_bytes <= 0 {
         return None;
     }
@@ -1615,7 +1653,7 @@ pub(super) fn outgoing_stack_cleanup(
         if cleaned == expected_bytes {
             return Some(used);
         }
-        if let Some(width) = lowered_stack_pop_width(body, cursor) {
+        if let Some(width) = lowered_stack_pop_width(body, cursor, identities) {
             if cleaned.saturating_add(width) > expected_bytes {
                 return None;
             }
@@ -1624,7 +1662,7 @@ pub(super) fn outgoing_stack_cleanup(
             cursor += 2;
             continue;
         }
-        if let Some(width) = stack_pointer_add_width(&body[cursor]) {
+        if let Some(width) = stack_pointer_add_width(&body[cursor], identities) {
             if cleaned.saturating_add(width) != expected_bytes {
                 return None;
             }
@@ -1635,10 +1673,7 @@ pub(super) fn outgoing_stack_cleanup(
         }
         match body[cursor].semantic() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
-            Stmt::Assign {
-                dst: VReg::Phys(name),
-                ..
-            } if ssa_base(name) == "rsp" => return None,
+            Stmt::Assign { dst, .. } if register_is_storage(dst, "rsp", identities) => return None,
             Stmt::Assign { .. } | Stmt::Comment(_) | Stmt::Nop if cleaned == 0 => {
                 cursor += 1;
             }
@@ -1648,16 +1683,20 @@ pub(super) fn outgoing_stack_cleanup(
     (cleaned == expected_bytes).then_some(used)
 }
 
-fn lowered_stack_pop_width(body: &[Stmt], load_index: usize) -> Option<i64> {
+fn lowered_stack_pop_width(
+    body: &[Stmt],
+    load_index: usize,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<i64> {
     let Stmt::Assign {
-        dst: VReg::Phys(dst),
+        dst,
         src: Expr::Deref { addr, size },
     } = body.get(load_index)?.semantic()
     else {
         return None;
     };
     let Expr::Lea {
-        base: Some(VReg::Phys(base)),
+        base: Some(base),
         index: None,
         disp: 0,
         ..
@@ -1666,10 +1705,29 @@ fn lowered_stack_pop_width(body: &[Stmt], load_index: usize) -> Option<i64> {
         return None;
     };
     let width = i64::from(*size);
-    (ssa_base(dst) != "rsp"
-        && ssa_base(base) == "rsp"
-        && stack_pointer_add_width(body.get(load_index + 1)?) == Some(width))
+    (!register_is_storage(dst, "rsp", identities)
+        && register_is_storage(base, "rsp", identities)
+        && stack_pointer_add_width(body.get(load_index + 1)?, identities) == Some(width))
     .then_some(width)
+}
+
+pub(super) fn register_is_storage(
+    register: &VReg,
+    expected: &str,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    match identities {
+        Some(identities) => {
+            let Some(candidates) = identities.candidates(register) else {
+                return false;
+            };
+            !candidates.is_empty()
+                && candidates.iter().all(|identity| {
+                    matches!(&identity.base, VReg::Phys(base) if ssa_base(base) == expected)
+                })
+        }
+        None => matches!(register, VReg::Phys(name) if ssa_base(name) == expected),
+    }
 }
 
 /// A captured argument slot that must keep its defining statement: the value is
@@ -3836,6 +3894,65 @@ mod tests {
             [Stmt::Call { args, .. }]
                 if args == &(0..7).map(Expr::Const).collect::<Vec<_>>()
         ));
+    }
+
+    #[test]
+    fn sysv_stack_area_uses_exact_identity_not_display_spelling() {
+        let stack_sub = |name| Stmt::Assign {
+            dst: reg(name),
+            src: Expr::Bin {
+                op: BinOp::Sub,
+                lhs: Box::new(Expr::Reg(reg(name))),
+                rhs: Box::new(Expr::Const(8)),
+            },
+        };
+        let stack_store = |name| Stmt::Store {
+            addr: Expr::Lea {
+                base: Some(reg(name)),
+                index: None,
+                scale: 1,
+                disp: 0,
+                segment: None,
+            },
+            src: Expr::Const(7),
+            size: 8,
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            reg("opaque_sp"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rsp"),
+                version: 3,
+            },
+        );
+        identities.record(
+            reg("rsp#3"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 3,
+            },
+        );
+
+        assert_eq!(
+            stack_pointer_sub_width_with_identities(&stack_sub("opaque_sp"), Some(&identities),),
+            Some(8)
+        );
+        assert_eq!(
+            stack_pointer_sub_width_with_identities(&stack_sub("rsp#3"), Some(&identities)),
+            None
+        );
+        assert!(outgoing_sysv_stack_push_with_identities(
+            &[stack_sub("opaque_sp"), stack_store("opaque_sp")],
+            1,
+            Some(&identities),
+        )
+        .is_some());
+        assert!(outgoing_sysv_stack_push_with_identities(
+            &[stack_sub("rsp#3"), stack_store("rsp#3")],
+            1,
+            Some(&identities),
+        )
+        .is_none());
     }
 
     #[test]
