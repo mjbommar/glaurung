@@ -144,13 +144,15 @@ pub(crate) fn remove_redundant_return_constant_assignments(body: &mut Vec<Stmt>)
     let mut index = 0;
     while index < body.len() {
         let assigned = match body[index].semantic() {
-            Stmt::Assign {
-                dst,
-                src: Expr::Const(value),
-            } if crate::ir::direct_output::is_return_reg(dst) => Some(*value),
+            Stmt::Assign { dst, src } if crate::ir::direct_output::is_return_reg(dst) => {
+                match src.semantic() {
+                    Expr::Const(value) => Some((*value, src.origins().cloned())),
+                    _ => None,
+                }
+            }
             _ => None,
         };
-        let Some(assigned) = assigned else {
+        let Some((assigned, expression_origins)) = assigned else {
             index += 1;
             continue;
         };
@@ -162,15 +164,18 @@ pub(crate) fn remove_redundant_return_constant_assignments(body: &mut Vec<Stmt>)
             return_index += 1;
         }
         let identical_return = body.get(return_index).is_some_and(|statement| {
-            matches!(
-                statement.semantic(),
-                Stmt::Return {
-                    value: Some(Expr::Const(returned)),
-                } if *returned == assigned
-            )
+            let Stmt::Return { value: Some(value) } = statement.semantic() else {
+                return false;
+            };
+            matches!(value.semantic(), Expr::Const(returned) if *returned == assigned)
         });
         if identical_return {
-            let assignment_origins = body[index].origins().cloned();
+            let assignment_origins = match (body[index].origins(), expression_origins) {
+                (Some(statement), Some(expression)) => Some(statement.union(&expression)),
+                (Some(origins), None) => Some(origins.clone()),
+                (None, Some(origins)) => Some(origins),
+                (None, None) => None,
+            };
             body.remove(index);
             if let Some(origins) = assignment_origins {
                 let returned = &mut body[return_index - 1];
@@ -616,6 +621,40 @@ mod tests {
         assert_eq!(
             value.origins(),
             Some(&crate::ir::ast::OriginSet::one(0x1010))
+        );
+    }
+
+    #[test]
+    fn attributed_late_return_cleanup_recognizes_expression_carriers() {
+        let mut body = vec![
+            Stmt::Assign {
+                dst: VReg::phys("ret"),
+                src: Expr::Const(-1).with_origins(crate::ir::ast::OriginSet::one(0x100c)),
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(0x1010)),
+            Stmt::Return {
+                value: Some(Expr::Const(-1).with_origins(crate::ir::ast::OriginSet::one(0x1012))),
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(0x1014)),
+        ];
+
+        remove_redundant_return_constant_assignments(&mut body);
+
+        assert_eq!(body.len(), 1, "the redundant assignment must be removed");
+        let Stmt::Return { value: Some(value) } = body[0].semantic() else {
+            panic!("expected retained constant return: {body:#?}")
+        };
+        assert!(matches!(value.semantic(), Expr::Const(-1)));
+        let removed_origins = crate::ir::ast::OriginSet::from_addresses([0x100c, 0x1010]);
+        assert_eq!(
+            body[0].origins(),
+            Some(&crate::ir::ast::OriginSet::from_addresses([
+                0x100c, 0x1010, 0x1014,
+            ]))
+        );
+        assert_eq!(
+            value.origins(),
+            Some(&removed_origins.union(&crate::ir::ast::OriginSet::one(0x1012)))
         );
     }
 
