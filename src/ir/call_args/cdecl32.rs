@@ -82,15 +82,21 @@ pub(super) fn fold_one_cdecl32_call(body: &mut Vec<Stmt>, call_idx: usize) {
                     && i > 0
                     && stack_pointer_sub_width(&body[i - 1]) == Some(i64::from(*size))
                 {
-                    pushed_args.push(src.clone());
+                    let mut argument = src.clone();
+                    if let Some(origins) = body[i].origins() {
+                        argument.merge_origins(origins);
+                    }
+                    pushed_args.push(argument);
                     used.extend([i, i - 1]);
                     cursor = i - 1;
                     continue;
                 }
                 if pushed_args.is_empty() {
-                    by_offset
-                        .entry(*disp)
-                        .or_insert_with(|| (i, src.clone(), *size));
+                    let mut argument = src.clone();
+                    if let Some(origins) = body[i].origins() {
+                        argument.merge_origins(origins);
+                    }
+                    by_offset.entry(*disp).or_insert((i, argument, *size));
                 } else {
                     break;
                 }

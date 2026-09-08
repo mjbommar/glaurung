@@ -2952,10 +2952,14 @@ mod tests {
         reconstruct_args(&mut f, CallConv::Cdecl32);
 
         assert_eq!(f.body.len(), 1, "attributed setup was not folded: {f:#?}");
-        assert!(matches!(
-            f.body[0].semantic(),
-            Stmt::Call { args, .. } if args == &[Expr::Const(10), Expr::Const(20)]
-        ));
+        let Stmt::Call { args, .. } = f.body[0].semantic() else {
+            panic!("folded statement is not a call: {f:#?}")
+        };
+        assert_eq!(args.len(), 2);
+        assert!(matches!(args[0].semantic(), Expr::Const(10)));
+        assert!(matches!(args[1].semantic(), Expr::Const(20)));
+        assert_eq!(args[0].origins(), Some(&OriginSet::one(0x1014)));
+        assert_eq!(args[1].origins(), Some(&OriginSet::one(0x1010)));
         assert_eq!(
             f.body[0].origins().expect("folded call owner").addresses(),
             &[0x1010, 0x1014, 0x1018]
@@ -3751,7 +3755,7 @@ mod tests {
 
     #[test]
     fn cdecl32_attributed_pushes_preserve_call_and_adjustment_owners() {
-        let push_pair = |value, va| {
+        let push_pair = |value, adjustment_va, store_va| {
             [
                 Stmt::Assign {
                     dst: reg("rsp"),
@@ -3761,7 +3765,7 @@ mod tests {
                         rhs: Box::new(Expr::Const(4)),
                     },
                 }
-                .with_origins(crate::ir::ast::OriginSet::one(va)),
+                .with_origins(crate::ir::ast::OriginSet::one(adjustment_va)),
                 Stmt::Store {
                     addr: Expr::Lea {
                         base: Some(reg("rsp")),
@@ -3773,12 +3777,12 @@ mod tests {
                     src: Expr::Const(value),
                     size: 4,
                 }
-                .with_origins(crate::ir::ast::OriginSet::one(va)),
+                .with_origins(crate::ir::ast::OriginSet::one(store_va)),
             ]
         };
         let mut body = Vec::new();
-        body.extend(push_pair(20, 0x1020));
-        body.extend(push_pair(10, 0x1024));
+        body.extend(push_pair(20, 0x1020, 0x1022));
+        body.extend(push_pair(10, 0x1024, 0x1026));
         body.push(call_to("callee").with_origins(crate::ir::ast::OriginSet::one(0x1028)));
         let mut f = Function {
             name: "caller".into(),
@@ -3797,13 +3801,17 @@ mod tests {
                 .addresses(),
             &[0x1020, 0x1024]
         );
-        assert!(matches!(
-            f.body[1].semantic(),
-            Stmt::Call { args, .. } if args == &[Expr::Const(10), Expr::Const(20)]
-        ));
+        let Stmt::Call { args, .. } = f.body[1].semantic() else {
+            panic!("folded statement is not a call: {f:#?}")
+        };
+        assert_eq!(args.len(), 2);
+        assert!(matches!(args[0].semantic(), Expr::Const(10)));
+        assert!(matches!(args[1].semantic(), Expr::Const(20)));
+        assert_eq!(args[0].origins(), Some(&OriginSet::one(0x1026)));
+        assert_eq!(args[1].origins(), Some(&OriginSet::one(0x1022)));
         assert_eq!(
             f.body[1].origins().expect("folded call owner").addresses(),
-            &[0x1020, 0x1024, 0x1028]
+            &[0x1020, 0x1022, 0x1024, 0x1026, 0x1028]
         );
     }
 
