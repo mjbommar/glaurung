@@ -957,14 +957,19 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
         // preserved in the architectural parent cannot affect a later low-byte
         // (or low-bit) read.
         if op == BinOp::And {
-            let masked = match (lhs.as_ref(), rhs.as_ref()) {
-                (value, Expr::Const(mask)) | (Expr::Const(mask), value) => {
-                    fold_observed_mask(value, *mask)
-                }
+            let masked = match (lhs.semantic(), rhs.semantic()) {
+                (_, Expr::Const(mask)) => fold_observed_mask(lhs, *mask)
+                    .map(|replacement| (replacement, rhs.origins().cloned())),
+                (Expr::Const(mask), _) => fold_observed_mask(rhs, *mask)
+                    .map(|replacement| (replacement, lhs.origins().cloned())),
                 _ => None,
             };
-            if let Some(replacement) = masked {
-                rewrite(e, replacement, changed);
+            if let Some((replacement, mask_origins)) = masked {
+                rewrite(
+                    e,
+                    replacement.with_optional_origins(mask_origins),
+                    changed,
+                );
                 // The replacement is strictly shallower (one merge or mask
                 // layer disappeared), so finish any newly adjacent identity.
                 fold_expr(e, changed);
@@ -2927,6 +2932,7 @@ mod tests {
         let merge_owner = crate::ir::ast::OriginSet::one(0x1004);
         let predicate_owner = crate::ir::ast::OriginSet::one(0x1008);
         let discarded_owner = crate::ir::ast::OriginSet::one(0x100c);
+        let mask_owner = crate::ir::ast::OriginSet::one(0x1010);
         let old = Expr::Reg(reg("old_parent")).with_origins(discarded_owner.clone());
         let predicate = Expr::Cmp {
             op: CmpOp::Eq,
@@ -2945,7 +2951,12 @@ mod tests {
         )
         .with_origins(merge_owner.clone());
         let mut function = one_stmt(
-            bin(BinOp::And, merged, Expr::Const(255)).with_origins(observed_owner.clone()),
+            bin(
+                BinOp::And,
+                merged,
+                Expr::Const(255).with_origins(mask_owner.clone()),
+            )
+            .with_origins(observed_owner.clone()),
         );
 
         fold_constants(&mut function);
@@ -2954,7 +2965,10 @@ mod tests {
             panic!("expected assignment")
         };
         assert!(matches!(src.semantic(), Expr::Cmp { op: CmpOp::Eq, .. }));
-        let expected = observed_owner.union(&merge_owner).union(&predicate_owner);
+        let expected = observed_owner
+            .union(&merge_owner)
+            .union(&predicate_owner)
+            .union(&mask_owner);
         assert_eq!(src.origins(), Some(&expected));
         assert!(!src
             .origins()
