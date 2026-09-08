@@ -504,6 +504,7 @@ pub(super) fn run_ast_passes(
     function_tables: &[crate::ir::function_tables::FunctionPointerTable],
     stack_object_hints: &[crate::ir::stack_locals::StackObjectHint],
     got_targets: &std::collections::HashMap<u64, u64>,
+    value_identities: &crate::ir::value_number::ValueIdentities,
 ) -> Result<
     (
         crate::ir::stack_locals::StackLocalFacts,
@@ -728,6 +729,8 @@ pub(super) fn run_ast_passes(
             &parameter_roles,
         )
     );
+    let named_value_identities =
+        value_identities.with_role_aliases_and_parameter_slots(&role_names, param_slots);
     // Dead-store elimination runs *after* naming so it sees the aliased return register
     // (`ret` / `arg0`) rather than the raw physical one; that removes the common pre-call
     // `%ret = 0` idiom entirely.
@@ -736,7 +739,11 @@ pub(super) fn run_ast_passes(
         if matches!(cc, crate::ir::call_args::CallConv::Aarch64) {
             crate::ir::arm64_prologue::recognise_arm64_prologue(f);
         }
-        crate::ir::dead_stores::eliminate_dead_stores(f, cc);
+        crate::ir::dead_stores::eliminate_dead_stores_with_identities(
+            f,
+            cc,
+            &named_value_identities,
+        );
     });
     pass!("stack_idiom+label_prune", {
         crate::ir::stack_idiom::rematerialise_stack_ops(f);
@@ -1554,6 +1561,7 @@ pub(super) fn lower_and_run_ast_passes(
         function_tables,
         stack_object_hints,
         got_targets,
+        &value_identities,
     )?;
     let ast_value_identities =
         value_identities.with_role_aliases_and_parameter_slots(&role_names, &param_slots);

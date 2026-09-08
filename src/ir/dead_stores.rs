@@ -35,6 +35,20 @@ pub fn eliminate_dead_stores(f: &mut Function, cc: CallConv) {
     prune_adjacent_overwritten_promoted_stores(f);
 }
 
+/// Run dead-store elimination with pipeline-owned result-role authority.
+pub fn eliminate_dead_stores_with_identities(
+    f: &mut Function,
+    cc: CallConv,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    let mut ret_regs = return_reg_aliases(cc);
+    if !identities.is_result_role(&VReg::phys("ret")) {
+        ret_regs.retain(|name| *name != "ret");
+    }
+    eliminate_body(&mut f.body, &ret_regs);
+    prune_adjacent_overwritten_promoted_stores(f);
+}
+
 /// Remove a pure promoted-stack write immediately shadowed by an equal-width write.
 ///
 /// `push rax; mov [rsp], rcx` is a common clang-cl spelling for reserving one
@@ -1161,6 +1175,8 @@ fn expr_reads(e: &Expr, dst: &VReg) -> bool {
 mod tests {
     use super::*;
     use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
+    use crate::ir::ssa::SsaValue;
+    use std::collections::HashMap;
 
     fn reg(n: &str) -> VReg {
         VReg::phys(n)
@@ -1187,6 +1203,63 @@ mod tests {
         if let Stmt::Assign { src, .. } = &f.body[0] {
             assert_eq!(*src, Expr::Const(2));
         }
+    }
+
+    fn local_ret_around_call() -> Function {
+        Function {
+            name: "local_ret_around_call".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("ret"),
+                    src: Expr::Const(1),
+                },
+                Stmt::Call {
+                    dst: None,
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "foo".into(),
+                    },
+                    args: vec![],
+                    call_spec: None,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("ret"))),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn call_does_not_kill_an_unowned_ret_spelling() {
+        let mut function = local_ret_around_call();
+
+        eliminate_dead_stores_with_identities(
+            &mut function,
+            CallConv::SysVAmd64,
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
+
+        assert!(matches!(function.body.first(), Some(Stmt::Assign { .. })));
+    }
+
+    #[test]
+    fn call_kills_a_pipeline_owned_ret_role() {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            reg("rax"),
+            SsaValue {
+                base: reg("rax"),
+                version: 1,
+            },
+        );
+        identities =
+            identities.with_role_aliases(&HashMap::from([("rax".to_string(), "ret".to_string())]));
+        let mut function = local_ret_around_call();
+
+        eliminate_dead_stores_with_identities(&mut function, CallConv::SysVAmd64, &identities);
+
+        assert!(matches!(function.body.first(), Some(Stmt::Call { .. })));
     }
 
     #[test]
