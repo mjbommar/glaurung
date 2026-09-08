@@ -1313,6 +1313,12 @@ provenance through lowering.
   stable-value, seed, carried-register, exit-shape, or effect refusals. Its
   observed-red test and all 30 loop-form tests pass; see
   `results/wp3-sentinel-loop-expression-origins.md`.
+  Commit `fca387da` applies the same carrier-transparent sentinel contract to
+  guarded `do/while` rotation. The entry `if` plus rotated loop recovers its
+  pre-tested `while`, retaining the sentinel owner without weakening entry-
+  result, stable-prelude, carried-latch, zero-iteration, or trailing-control
+  proofs. Its observed-red test and all 30 loop-form tests pass; see
+  `results/wp3-guarded-loop-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
