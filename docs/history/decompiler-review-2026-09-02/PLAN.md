@@ -1911,6 +1911,15 @@ provenance through lowering.
   concurrent shared Rust snapshot and is therefore regression evidence, not a
   clean-tip performance measurement. See
   `results/wp3-saturation-select-expression-origin-rendering.md`.
+  Commit `76360517` closes the neighboring logical-right-shift presentation
+  seam. An attributed unsigned cast already stating the shift width no longer
+  receives a second identical cast. The new exact contract was observed red;
+  it and both adjacent load-width and wide-left-shift guards pass with 4,673
+  unrelated tests filtered out. Both targeted fixture-171 `rust_shift_family`
+  cells pass on the shared release snapshot, but a one-line release A/B showed
+  the same O0 baseline improvement with this repair reverted, so no fixture
+  status change is attributed to this increment. See
+  `results/wp3-logical-shift-expression-origin-rendering.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
