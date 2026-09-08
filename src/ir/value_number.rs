@@ -123,9 +123,10 @@ impl ValueIdentities {
             let slots = candidates
                 .iter()
                 .filter(|identity| identity.version == 0)
-                .filter_map(|identity| match &identity.base {
-                    VReg::Phys(name) => crate::ir::abi::argument_slot_of(cc, name),
-                    _ => None,
+                .filter_map(|identity| {
+                    identity
+                        .canonical_physical_base()
+                        .and_then(|name| crate::ir::abi::argument_slot_of(cc, name))
                 })
                 .filter(|slot| live_slots.contains(slot))
                 .collect::<BTreeSet<_>>();
@@ -859,6 +860,36 @@ mod tests {
         assert_eq!(identities.parameter_slot(&VReg::phys("rdi")), Some(0));
         assert_eq!(identities.parameter_slot(&VReg::phys("rdi#1")), None);
         assert_eq!(identities.parameter_slot(&VReg::phys("rsi")), None);
+    }
+
+    #[test]
+    fn abi_parameter_slots_decline_a_noncanonical_identity_base() {
+        let mut identities = ValueIdentities::default();
+        identities.record(
+            VReg::phys("valid_entry"),
+            SsaValue {
+                base: VReg::phys("rdi"),
+                version: 0,
+            },
+        );
+        identities.record(
+            VReg::phys("malformed_entry"),
+            SsaValue {
+                base: VReg::phys("rdi#not_canonical"),
+                version: 0,
+            },
+        );
+
+        identities.attach_abi_parameter_slots(CallConv::SysVAmd64, &HashSet::from([0]));
+
+        assert_eq!(
+            identities.parameter_slot(&VReg::phys("valid_entry")),
+            Some(0)
+        );
+        assert_eq!(
+            identities.parameter_slot(&VReg::phys("malformed_entry")),
+            None
+        );
     }
 
     #[test]
