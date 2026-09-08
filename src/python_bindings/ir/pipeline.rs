@@ -570,7 +570,7 @@ pub(super) fn run_ast_passes(
     // propagation erases the common 16-byte transport identity.
     pass!(
         "recover_wide_copies",
-        crate::ir::vector_copy::recover_wide_copies(f)
+        crate::ir::vector_copy::recover_wide_copies_with_identities(f, value_identities)
     );
     pass!("reconstruct", crate::ir::expr_reconstruct::reconstruct(f));
     pass!(

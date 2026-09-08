@@ -15,21 +15,72 @@ struct LaneLoad {
     address: Expr,
 }
 
-fn lane_name(register: &VReg) -> Option<(String, usize)> {
-    let VReg::Phys(name) = register else {
-        return None;
+fn lane_name(
+    register: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<(String, usize)> {
+    let (name, version) = match identities {
+        Some(identities) => {
+            let identity = identities.exact(register)?;
+            let VReg::Phys(base) = &identity.base else {
+                return None;
+            };
+            (
+                base.as_str(),
+                (identity.version != 0).then_some(identity.version),
+            )
+        }
+        None => {
+            let VReg::Phys(name) = register else {
+                return None;
+            };
+            let (base, version) = name
+                .split_once('#')
+                .map_or((name.as_str(), None), |(base, version)| {
+                    (base, version.parse::<u32>().ok())
+                });
+            (base, version)
+        }
     };
-    let (wide, lane_and_version) = name.rsplit_once("_d")?;
+    let (wide, lane) = name.rsplit_once("_d")?;
     if !wide.starts_with("xmm") {
         return None;
     }
-    let (lane, version) = lane_and_version
-        .split_once('#')
-        .map_or((lane_and_version, None), |(lane, version)| {
-            (lane, Some(version))
-        });
     let wide = version.map_or_else(|| wide.to_string(), |version| format!("{wide}#{version}"));
     Some((wide, lane.parse().ok()?))
+}
+
+fn wide_name(
+    register: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<String> {
+    let (base, version) = match identities {
+        Some(identities) => {
+            let identity = identities.exact(register)?;
+            let VReg::Phys(base) = &identity.base else {
+                return None;
+            };
+            (
+                base.as_str(),
+                (identity.version != 0).then_some(identity.version),
+            )
+        }
+        None => {
+            let VReg::Phys(name) = register else {
+                return None;
+            };
+            let (base, version) = name
+                .split_once('#')
+                .map_or((name.as_str(), None), |(base, version)| {
+                    (base, version.parse::<u32>().ok())
+                });
+            (base, version)
+        }
+    };
+    if !base.starts_with("xmm") || base.contains("_d") {
+        return None;
+    }
+    Some(version.map_or_else(|| base.to_string(), |version| format!("{base}#{version}")))
 }
 
 fn adjacent_address(first: &Expr, candidate: &Expr, delta: i64) -> bool {
@@ -59,7 +110,11 @@ fn adjacent_address(first: &Expr, candidate: &Expr, delta: i64) -> bool {
         && *disp == first_disp.saturating_add(delta)
 }
 
-fn load_batch_at(body: &[Stmt], start: usize) -> Option<LaneLoad> {
+fn load_batch_at(
+    body: &[Stmt],
+    start: usize,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<LaneLoad> {
     let batch = body.get(start..start + 4)?;
     let Stmt::Assign {
         dst: first_dst,
@@ -71,7 +126,7 @@ fn load_batch_at(body: &[Stmt], start: usize) -> Option<LaneLoad> {
     else {
         return None;
     };
-    let (wide, first_lane) = lane_name(first_dst)?;
+    let (wide, first_lane) = lane_name(first_dst, identities)?;
     if first_lane != 0 {
         return None;
     }
@@ -83,7 +138,7 @@ fn load_batch_at(body: &[Stmt], start: usize) -> Option<LaneLoad> {
         else {
             return None;
         };
-        if lane_name(dst) != Some((wide.clone(), lane))
+        if lane_name(dst, identities) != Some((wide.clone(), lane))
             || !adjacent_address(first_addr, addr, (lane * 4) as i64)
         {
             return None;
@@ -95,7 +150,11 @@ fn load_batch_at(body: &[Stmt], start: usize) -> Option<LaneLoad> {
     })
 }
 
-fn lane_store_batch_at(body: &[Stmt], start: usize) -> Option<(VReg, Expr)> {
+fn lane_store_batch_at(
+    body: &[Stmt],
+    start: usize,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<(VReg, Expr)> {
     let batch = body.get(start..start + 4)?;
     let Stmt::Store {
         addr: first_addr,
@@ -105,7 +164,7 @@ fn lane_store_batch_at(body: &[Stmt], start: usize) -> Option<(VReg, Expr)> {
     else {
         return None;
     };
-    let (wide_name, first_lane) = lane_name(first_src)?;
+    let (wide_name, first_lane) = lane_name(first_src, identities)?;
     if first_lane != 0 {
         return None;
     }
@@ -118,7 +177,7 @@ fn lane_store_batch_at(body: &[Stmt], start: usize) -> Option<(VReg, Expr)> {
         else {
             return None;
         };
-        if lane_name(src) != Some((wide_name.clone(), lane))
+        if lane_name(src, identities) != Some((wide_name.clone(), lane))
             || !adjacent_address(first_addr, addr, (lane * 4) as i64)
         {
             return None;
@@ -127,8 +186,13 @@ fn lane_store_batch_at(body: &[Stmt], start: usize) -> Option<(VReg, Expr)> {
     Some((VReg::phys(wide_name), first_addr.clone()))
 }
 
-fn store_batch_at(body: &[Stmt], start: usize, wide: &VReg) -> Option<Expr> {
-    let (candidate_wide, address) = lane_store_batch_at(body, start)?;
+fn store_batch_at(
+    body: &[Stmt],
+    start: usize,
+    wide: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<Expr> {
+    let (candidate_wide, address) = lane_store_batch_at(body, start, identities)?;
     (candidate_wide == *wide).then_some(address)
 }
 
@@ -141,14 +205,17 @@ fn store_batch_at(body: &[Stmt], start: usize, wide: &VReg) -> Option<Expr> {
 /// whether that view is ever read; a plain 128-bit `movups` load gets one
 /// unconditionally. Lowered, a proved packed-dword concat is the exact widened
 /// bit composition `dst = ((u64)(u32)hi << 32) | (u64)(u32)lo`.
-fn scalar_view_bridge_target(statement: &Stmt) -> Option<String> {
-    let Stmt::Assign {
-        dst: VReg::Phys(dst),
-        src,
-    } = statement.semantic()
-    else {
+fn scalar_view_bridge_target(
+    statement: &Stmt,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<String> {
+    let Stmt::Assign { dst, src } = statement.semantic() else {
         return None;
     };
+    let VReg::Phys(destination_name) = dst else {
+        return None;
+    };
+    let destination_identity = wide_name(dst, identities)?;
     let Expr::Bin {
         op: crate::ir::types::BinOp::Or,
         lhs,
@@ -157,9 +224,6 @@ fn scalar_view_bridge_target(statement: &Stmt) -> Option<String> {
     else {
         return None;
     };
-    if !dst.starts_with("xmm") {
-        return None;
-    }
     let Expr::Bin {
         op: crate::ir::types::BinOp::Shl,
         lhs: hi,
@@ -177,8 +241,9 @@ fn scalar_view_bridge_target(statement: &Stmt) -> Option<String> {
     ) else {
         return None;
     };
-    (lane_name(hi) == Some((dst.clone(), 1)) && lane_name(lo) == Some((dst.clone(), 0)))
-        .then(|| dst.clone())
+    (lane_name(hi, identities) == Some((destination_identity.clone(), 1))
+        && lane_name(lo, identities) == Some((destination_identity, 0)))
+    .then(|| destination_name.clone())
 }
 
 /// Peel only the width-exact casts emitted by packed-dword concat lowering.
@@ -216,10 +281,14 @@ fn widened_dword_lane(expression: &Expr) -> Option<&VReg> {
 /// `dead_stores::stmt_reads` already walks every statement and expression
 /// shape, including nested bodies; duplicating that match here would only add
 /// a second place to forget a variant.
-fn reads_register(body: &[Stmt], register: &VReg) -> bool {
+fn reads_register(
+    body: &[Stmt],
+    register: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     body.iter().any(|statement| {
         // A bridge's own read of its lanes is not a read of the view itself.
-        if scalar_view_bridge_target(statement)
+        if scalar_view_bridge_target(statement, identities)
             .is_some_and(|target| matches!(register, VReg::Phys(name) if *name == target))
         {
             return false;
@@ -232,28 +301,39 @@ fn reads_register(body: &[Stmt], register: &VReg) -> bool {
 ///
 /// Computed once over the whole function, because `recover_body` recurses into
 /// nested bodies and a read may live in any of them.
-fn dead_scalar_views(body: &[Stmt]) -> std::collections::HashSet<String> {
-    fn collect(body: &[Stmt], out: &mut std::collections::HashSet<String>) {
+fn dead_scalar_views(
+    body: &[Stmt],
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> std::collections::HashSet<String> {
+    fn collect(
+        body: &[Stmt],
+        out: &mut std::collections::HashSet<String>,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) {
         for statement in body {
-            if let Some(target) = scalar_view_bridge_target(statement) {
+            if let Some(target) = scalar_view_bridge_target(statement, identities) {
                 out.insert(target);
             }
             for nested in child_bodies(statement) {
-                collect(nested, out);
+                collect(nested, out, identities);
             }
         }
     }
-    fn read_anywhere(body: &[Stmt], register: &VReg) -> bool {
-        reads_register(body, register)
+    fn read_anywhere(
+        body: &[Stmt],
+        register: &VReg,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) -> bool {
+        reads_register(body, register, identities)
             || body.iter().any(|statement| {
                 child_bodies(statement)
                     .into_iter()
-                    .any(|nested| read_anywhere(nested, register))
+                    .any(|nested| read_anywhere(nested, register, identities))
             })
     }
     let mut targets = std::collections::HashSet::new();
-    collect(body, &mut targets);
-    targets.retain(|name| !read_anywhere(body, &VReg::phys(name)));
+    collect(body, &mut targets, identities);
+    targets.retain(|name| !read_anywhere(body, &VReg::phys(name), identities));
     targets
 }
 
@@ -290,7 +370,11 @@ fn child_bodies(statement: &Stmt) -> Vec<&Vec<Stmt>> {
 /// computed packed-result bridges that a later ABI materializer consumes. Only
 /// the bridge directly between the four-lane load and its matching four-lane
 /// store is redundant with the 16-byte transport this pass is about to create.
-fn drop_dead_scalar_views(body: &mut Vec<Stmt>, dead: &std::collections::HashSet<String>) {
+fn drop_dead_scalar_views(
+    body: &mut Vec<Stmt>,
+    dead: &std::collections::HashSet<String>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     for statement in body.iter_mut() {
         match statement.semantic_mut() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
@@ -299,26 +383,26 @@ fn drop_dead_scalar_views(body: &mut Vec<Stmt>, dead: &std::collections::HashSet
                 else_body,
                 ..
             } => {
-                drop_dead_scalar_views(then_body, dead);
+                drop_dead_scalar_views(then_body, dead, identities);
                 if let Some(else_body) = else_body {
-                    drop_dead_scalar_views(else_body, dead);
+                    drop_dead_scalar_views(else_body, dead, identities);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                drop_dead_scalar_views(body, dead)
+                drop_dead_scalar_views(body, dead, identities)
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, case) in cases {
-                    drop_dead_scalar_views(case, dead);
+                    drop_dead_scalar_views(case, dead, identities);
                 }
                 if let Some(default) = default {
-                    drop_dead_scalar_views(default, dead);
+                    drop_dead_scalar_views(default, dead, identities);
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                drop_dead_scalar_views(try_body, dead);
+                drop_dead_scalar_views(try_body, dead, identities);
                 for catch in catches {
-                    drop_dead_scalar_views(&mut catch.body, dead);
+                    drop_dead_scalar_views(&mut catch.body, dead, identities);
                 }
             }
             _ => {}
@@ -328,15 +412,15 @@ fn drop_dead_scalar_views(body: &mut Vec<Stmt>, dead: &std::collections::HashSet
         .iter()
         .enumerate()
         .filter_map(|(index, statement)| {
-            let target = scalar_view_bridge_target(statement)?;
+            let target = scalar_view_bridge_target(statement, identities)?;
             if !dead.contains(&target) || index < 4 {
                 return None;
             }
-            let load = load_batch_at(body, index - 4)?;
+            let load = load_batch_at(body, index - 4, identities)?;
             if load.wide != VReg::phys(&target) {
                 return None;
             }
-            store_batch_at(body, index + 1, &load.wide)?;
+            store_batch_at(body, index + 1, &load.wide, identities)?;
             Some(index)
         })
         .collect();
@@ -490,25 +574,29 @@ fn count_reading_statements(body: &[Stmt], register: &VReg) -> usize {
 ///
 /// Counted once up front: this pass only removes and replaces statements, so a
 /// count taken before mutation still decides correctly.
-fn exclusive_lane_registers(body: &[Stmt]) -> std::collections::HashSet<String> {
+fn exclusive_lane_registers(
+    body: &[Stmt],
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> std::collections::HashSet<String> {
     fn collect(
         body: &[Stmt],
         out: &mut std::collections::HashMap<String, std::collections::BTreeSet<VReg>>,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
     ) {
         for statement in body {
             if let Stmt::Assign { dst, .. } = statement.semantic() {
-                if let Some((wide, _)) = lane_name(dst) {
+                if let Some((wide, _)) = lane_name(dst, identities) {
                     out.entry(wide).or_default().insert(dst.clone());
                 }
             }
             for nested in child_bodies(statement) {
-                collect(nested, out);
+                collect(nested, out, identities);
             }
         }
     }
     let mut lanes: std::collections::HashMap<String, std::collections::BTreeSet<VReg>> =
         std::collections::HashMap::new();
-    collect(body, &mut lanes);
+    collect(body, &mut lanes, identities);
     lanes
         .into_iter()
         .filter(|(_, registers)| {
@@ -520,7 +608,11 @@ fn exclusive_lane_registers(body: &[Stmt]) -> std::collections::HashSet<String> 
         .collect()
 }
 
-fn recover_body(body: &mut Vec<Stmt>, exclusive: &std::collections::HashSet<String>) {
+fn recover_body(
+    body: &mut Vec<Stmt>,
+    exclusive: &std::collections::HashSet<String>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     for statement in body.iter_mut() {
         match statement.semantic_mut() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
@@ -529,25 +621,27 @@ fn recover_body(body: &mut Vec<Stmt>, exclusive: &std::collections::HashSet<Stri
                 else_body,
                 ..
             } => {
-                recover_body(then_body, exclusive);
+                recover_body(then_body, exclusive, identities);
                 if let Some(else_body) = else_body {
-                    recover_body(else_body, exclusive);
+                    recover_body(else_body, exclusive, identities);
                 }
             }
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => recover_body(body, exclusive),
-            Stmt::For { body, .. } => recover_body(body, exclusive),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                recover_body(body, exclusive, identities)
+            }
+            Stmt::For { body, .. } => recover_body(body, exclusive, identities),
             Stmt::Switch { cases, default, .. } => {
                 for (_, case) in cases {
-                    recover_body(case, exclusive);
+                    recover_body(case, exclusive, identities);
                 }
                 if let Some(default) = default {
-                    recover_body(default, exclusive);
+                    recover_body(default, exclusive, identities);
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                recover_body(try_body, exclusive);
+                recover_body(try_body, exclusive, identities);
                 for catch in catches {
-                    recover_body(&mut catch.body, exclusive);
+                    recover_body(&mut catch.body, exclusive, identities);
                 }
             }
             _ => {}
@@ -556,7 +650,7 @@ fn recover_body(body: &mut Vec<Stmt>, exclusive: &std::collections::HashSet<Stri
 
     let mut replacements = Vec::new();
     for index in 0..body.len().saturating_sub(7) {
-        let Some(load) = load_batch_at(body, index) else {
+        let Some(load) = load_batch_at(body, index, identities) else {
             continue;
         };
         // Rejoining stops defining the lanes, so a second consumer would be
@@ -564,11 +658,13 @@ fn recover_body(body: &mut Vec<Stmt>, exclusive: &std::collections::HashSet<Stri
         if !matches!(&load.wide, VReg::Phys(name) if exclusive.contains(name)) {
             continue;
         }
-        let store_index = if store_batch_at(body, index + 4, &load.wide).is_some() {
+        let store_index = if store_batch_at(body, index + 4, &load.wide, identities).is_some() {
             Some(index + 4)
-        } else if (load_batch_at(body, index + 4).is_some_and(|other| other.wide != load.wide)
-            || lane_store_batch_at(body, index + 4).is_some_and(|(other, _)| other != load.wide))
-            && store_batch_at(body, index + 8, &load.wide).is_some()
+        } else if (load_batch_at(body, index + 4, identities)
+            .is_some_and(|other| other.wide != load.wide)
+            || lane_store_batch_at(body, index + 4, identities)
+                .is_some_and(|(other, _)| other != load.wide))
+            && store_batch_at(body, index + 8, &load.wide, identities).is_some()
         {
             Some(index + 8)
         } else {
@@ -577,7 +673,7 @@ fn recover_body(body: &mut Vec<Stmt>, exclusive: &std::collections::HashSet<Stri
         let Some(store_index) = store_index else {
             continue;
         };
-        let destination = store_batch_at(body, store_index, &load.wide)
+        let destination = store_batch_at(body, store_index, &load.wide, identities)
             .expect("candidate store batch was checked");
         let load_origins = merged_origins(&body[index..index + 4]);
         let store_origins = merged_origins(&body[store_index..store_index + 4]);
@@ -629,12 +725,28 @@ fn attach_origins(statement: Stmt, origins: OriginSet) -> Stmt {
 
 /// Rejoin exact four-lane load/store batches into one 128-bit copy.
 pub fn recover_wide_copies(function: &mut Function) {
-    let dead = dead_scalar_views(&function.body);
+    recover_wide_copies_with_optional_identities(function, None);
+}
+
+/// Rejoin exact lane batches using exact SSA identities rather than rendered
+/// `#version` suffixes.
+pub fn recover_wide_copies_with_identities(
+    function: &mut Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    recover_wide_copies_with_optional_identities(function, Some(identities));
+}
+
+fn recover_wide_copies_with_optional_identities(
+    function: &mut Function,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
+    let dead = dead_scalar_views(&function.body, identities);
     if !dead.is_empty() {
-        drop_dead_scalar_views(&mut function.body, &dead);
+        drop_dead_scalar_views(&mut function.body, &dead, identities);
     }
-    let exclusive = exclusive_lane_registers(&function.body);
-    recover_body(&mut function.body, &exclusive);
+    let exclusive = exclusive_lane_registers(&function.body, identities);
+    recover_body(&mut function.body, &exclusive, identities);
 }
 
 #[cfg(test)]
@@ -686,7 +798,32 @@ mod tests {
     }
 
     fn is_scalar_view_bridge(statement: &Stmt) -> bool {
-        super::scalar_view_bridge_target(statement).is_some()
+        super::scalar_view_bridge_target(statement, None).is_some()
+    }
+
+    #[test]
+    fn typed_lane_identity_ignores_display_version_spelling() {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            VReg::phys("opaque_lane"),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("xmm3_d2"),
+                version: 7,
+            },
+        );
+        identities.record(
+            VReg::phys("xmm0_d0#9"),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rax"),
+                version: 9,
+            },
+        );
+
+        assert_eq!(
+            lane_name(&VReg::phys("opaque_lane"), Some(&identities)),
+            Some(("xmm3#7".to_string(), 2))
+        );
+        assert_eq!(lane_name(&VReg::phys("xmm0_d0#9"), Some(&identities)), None);
     }
 
     /// Lane loads, the lifter's scalar-view bridge, then lane stores.
