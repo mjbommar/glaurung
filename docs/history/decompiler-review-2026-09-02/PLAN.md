@@ -1359,6 +1359,12 @@ provenance through lowering.
   and iterator-bypass proofs remain mandatory. Its strengthened observed-red
   test and all 30 loop-form tests pass; see
   `results/wp3-counted-loop-condition-origins.md`.
+  Commit `2fac94e2` next makes unit-step recognition transparent to attributed
+  addition, induction-variable, and constant nodes. The exact attributed step
+  survives unchanged in the reconstructed `for`; same-variable, unit-addition,
+  width-cast, and iterator-bypass proofs remain mandatory. Its strengthened
+  observed-red test and all 30 loop-form tests pass; see
+  `results/wp3-counted-loop-step-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
