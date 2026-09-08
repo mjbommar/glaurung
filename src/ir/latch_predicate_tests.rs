@@ -143,7 +143,7 @@ fn coalesces_dead_source_identity_with_immediately_entered_loop_carrier() {
             },
             Stmt::Assign {
                 dst: reg("var5"),
-                src: read("var3"),
+                src: read("var3").with_origins(OriginSet::one(0x1024)),
             }
             .with_origins(OriginSet::one(0x1020)),
             Stmt::DoWhile {
@@ -188,7 +188,7 @@ fn coalesces_dead_source_identity_with_immediately_entered_loop_carrier() {
     assert!(types.get(&reg("var5")).is_some());
     assert_eq!(
         function.body[1].origins(),
-        Some(&OriginSet::from_addresses([0x1020, 0x1030]))
+        Some(&OriginSet::from_addresses([0x1020, 0x1024, 0x1030]))
     );
 }
 

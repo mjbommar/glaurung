@@ -246,14 +246,19 @@ fn coalesce_body(
 
     let mut index = 0;
     while index + 1 < body.len() {
-        let candidate = match (body[index].semantic(), body[index + 1].semantic()) {
-            (
-                Stmt::Assign {
-                    dst,
-                    src: Expr::Reg(source),
-                },
-                loop_statement @ (Stmt::While { .. } | Stmt::DoWhile { .. }),
-            ) if coalescible_value_role(dst)
+        let candidate = (|| {
+            let Stmt::Assign { dst, src } = body[index].semantic() else {
+                return None;
+            };
+            let Expr::Reg(source) = src.semantic() else {
+                return None;
+            };
+            let loop_statement @ (Stmt::While { .. } | Stmt::DoWhile { .. }) =
+                body[index + 1].semantic()
+            else {
+                return None;
+            };
+            if !(coalescible_value_role(dst)
                 && coalescible_value_role(source)
                 && dst != source
                 // Rename the dead seed prefix into a fresh carrier, rather
@@ -277,19 +282,19 @@ fn coalesce_body(
                 && !body.iter().any(statement_contains_goto)
                 && !body[index + 1..]
                     .iter()
-                    .any(|statement| statement_mentions(statement, source)) =>
+                    .any(|statement| statement_mentions(statement, source)))
             {
-                Some((
-                    dst.clone(),
-                    source.clone(),
-                    types
-                        .get(source)
-                        .expect("candidate requires a source type")
-                        .clone(),
-                ))
+                return None;
             }
-            _ => None,
-        };
+            Some((
+                dst.clone(),
+                source.clone(),
+                types
+                    .get(source)
+                    .expect("candidate requires a source type")
+                    .clone(),
+            ))
+        })();
         let Some((carrier, seed, seed_type)) = candidate else {
             index += 1;
             continue;
@@ -301,8 +306,17 @@ fn coalesce_body(
         if types.get(&carrier).is_none() {
             types.upsert_public(carrier, seed_type);
         }
-        if let Some(origins) = body[index].origins().cloned() {
-            body[index + 1].merge_origins(&origins);
+        let mut removed_origins = crate::ir::ast::OriginSet::empty();
+        if let Some(origins) = body[index].origins() {
+            removed_origins.merge(origins);
+        }
+        if let Stmt::Assign { src, .. } = body[index].semantic() {
+            if let Some(origins) = src.origins() {
+                removed_origins.merge(origins);
+            }
+        }
+        if !removed_origins.is_empty() {
+            body[index + 1].merge_origins(&removed_origins);
         }
         body.remove(index);
     }
