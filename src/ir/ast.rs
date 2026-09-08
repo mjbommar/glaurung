@@ -143,6 +143,9 @@ use declaration_plan::{DeclarationInputs, DeclarationPlan, LocalDeclaration};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PdbFieldHint {
     pub type_name: String,
+    /// One validated member name, or an authoritative dotted member path.
+    /// The surrounding `hints` vector remains a set of alternative candidates;
+    /// dots here describe nesting within one unambiguous aggregate layout.
     pub field_name: String,
     pub field_type: Option<String>,
     pub offset: u64,

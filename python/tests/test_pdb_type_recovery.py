@@ -213,6 +213,10 @@ def test_overwritten_win64_push_value_does_not_become_an_undefined_local() -> No
     report = g.ir.take_render_verification()
 
     assert "local_8" not in body
+    assert body.index("struct Point {") < body.index("struct Record {")
+    assert "unsigned char tag;" in body
+    assert "arg0->value" in body
+    assert "arg0->origin.x" in body
     assert not [
         verdict
         for verdict in report["unverified"]

@@ -152,19 +152,19 @@ fn align_up(value: u64, alignment: u64) -> Option<u64> {
     value.checked_add(mask).map(|value| value & !mask)
 }
 
-/// Select only complete, ordinary-layout structures and unions that the emitted
-/// source prototype actually references. This is intentionally fail-closed:
-/// bitfields, packed layouts, ABI-dependent `long`, arrays, nested aggregates,
-/// and conflicting DWARF definitions stay as raw offset accesses until the
-/// middle IR can represent them exactly.
+/// Select complete, ordinary-layout structures and unions referenced by the
+/// source prototype, with by-value dependencies ordered before their parents.
+/// This is intentionally fail-closed: bitfields, packed layouts, ABI-dependent
+/// `long`, arrays, cyclic by-value layouts, and conflicting definitions stay as
+/// raw offset accesses until the middle IR can represent them exactly.
 pub(super) fn renderable_dwarf_structs<'a>(
     prototype: Option<&CallPrototype>,
     dwarf_types: &'a [crate::debug::dwarf::DwarfType],
     dwarf_type_env: &crate::ir::dwarf_type_env::DwarfTypeEnv<'a>,
     pointer_width: u8,
-) -> std::collections::BTreeMap<String, &'a crate::debug::dwarf::DwarfType> {
+) -> Vec<(String, &'a crate::debug::dwarf::DwarfType)> {
     let Some(prototype) = prototype else {
-        return std::collections::BTreeMap::new();
+        return Vec::new();
     };
     let referenced = std::iter::once(&prototype.return_type)
         .chain(&prototype.parameter_types)
@@ -193,27 +193,71 @@ pub(super) fn renderable_dwarf_structs<'a>(
                 })
         })
         .collect::<std::collections::BTreeSet<_>>();
-    let mut selected =
-        std::collections::BTreeMap::<String, &'a crate::debug::dwarf::DwarfType>::new();
-    let mut conflicts = std::collections::BTreeSet::new();
-    for layout in dwarf_types.iter().filter(|layout| {
-        matches!(
-            layout.kind,
-            crate::debug::dwarf::DwarfTypeKind::Struct | crate::debug::dwarf::DwarfTypeKind::Union
-        ) && referenced.contains(layout.name.as_str())
-    }) {
+    let mut validity = std::collections::HashMap::new();
+    let mut valid_roots = Vec::new();
+    for name in referenced {
+        if ordinary_layout_is_renderable(
+            name,
+            dwarf_type_env,
+            pointer_width,
+            &mut validity,
+            &mut std::collections::HashSet::new(),
+        ) {
+            valid_roots.push(name.to_string());
+        }
+    }
+    let mut selected = Vec::new();
+    let mut emitted = std::collections::HashSet::new();
+    for name in valid_roots {
+        append_layout_dependencies(
+            &name,
+            dwarf_types,
+            dwarf_type_env,
+            &mut emitted,
+            &mut selected,
+        );
+    }
+    selected
+}
+
+fn ordinary_layout_is_renderable<'a>(
+    name: &str,
+    dwarf_type_env: &crate::ir::dwarf_type_env::DwarfTypeEnv<'a>,
+    pointer_width: u8,
+    memo: &mut std::collections::HashMap<String, bool>,
+    visiting: &mut std::collections::HashSet<String>,
+) -> bool {
+    if let Some(valid) = memo.get(name) {
+        return *valid;
+    }
+    if !visiting.insert(name.to_string()) {
+        return false;
+    }
+    let valid = dwarf_type_env.aggregate_layout(name).is_some_and(|layout| {
         if !valid_c_identifier(&layout.name) || layout.byte_size == 0 || layout.fields.is_empty() {
-            continue;
+            return false;
         }
         let mut cursor = 0_u64;
         let mut max_alignment = 1_u64;
         let mut max_width = 0_u64;
-        let mut valid = true;
         for field in &layout.fields {
-            let Some(width) = dwarf_scalar_width(&field.c_type, pointer_width) else {
-                valid = false;
-                break;
+            let nested = dwarf_type_env.aggregate_layout(&field.c_type);
+            let width = dwarf_scalar_width(&field.c_type, pointer_width)
+                .or_else(|| nested.map(|nested| nested.byte_size));
+            let Some(width) = width else {
+                return false;
             };
+            if let Some(nested) = nested {
+                if !ordinary_layout_is_renderable(
+                    &nested.name,
+                    dwarf_type_env,
+                    pointer_width,
+                    memo,
+                    visiting,
+                ) {
+                    return false;
+                }
+            }
             let alignment = width.min(u64::from(pointer_width)).max(1);
             max_alignment = max_alignment.max(alignment);
             max_width = max_width.max(width);
@@ -223,20 +267,16 @@ pub(super) fn renderable_dwarf_structs<'a>(
                 _ => None,
             };
             if !valid_c_identifier(&field.name)
-                || !source_prototype_type_is_renderable(&field.c_type, false)
+                || !dwarf_prototype_type_is_renderable(&field.c_type, false, dwarf_type_env)
                 || expected_offset != Some(field.offset)
             {
-                valid = false;
-                break;
+                return false;
             }
             if layout.kind == crate::debug::dwarf::DwarfTypeKind::Struct {
-                cursor = match field.offset.checked_add(width) {
-                    Some(end) => end,
-                    None => {
-                        valid = false;
-                        break;
-                    }
+                let Some(end) = field.offset.checked_add(width) else {
+                    return false;
                 };
+                cursor = end;
             }
         }
         let occupied = if layout.kind == crate::debug::dwarf::DwarfTypeKind::Union {
@@ -244,23 +284,43 @@ pub(super) fn renderable_dwarf_structs<'a>(
         } else {
             cursor
         };
-        if !valid || align_up(occupied, max_alignment) != Some(layout.byte_size) {
-            continue;
-        }
-        match selected.get(&layout.name) {
-            Some(previous) if **previous != *layout => {
-                conflicts.insert(layout.name.clone());
-            }
-            Some(_) => {}
-            None => {
-                selected.insert(layout.name.clone(), layout);
-            }
+        align_up(occupied, max_alignment) == Some(layout.byte_size)
+    });
+    visiting.remove(name);
+    memo.insert(name.to_string(), valid);
+    valid
+}
+
+fn append_layout_dependencies<'a>(
+    name: &str,
+    dwarf_types: &'a [crate::debug::dwarf::DwarfType],
+    dwarf_type_env: &crate::ir::dwarf_type_env::DwarfTypeEnv<'a>,
+    emitted: &mut std::collections::HashSet<String>,
+    selected: &mut Vec<(String, &'a crate::debug::dwarf::DwarfType)>,
+) {
+    if emitted.contains(name) {
+        return;
+    }
+    let Some(selected_layout) = dwarf_type_env.aggregate_layout(name) else {
+        return;
+    };
+    let Some(layout) = dwarf_types.iter().find(|layout| *layout == selected_layout) else {
+        return;
+    };
+    for field in &layout.fields {
+        if let Some(dependency) = dwarf_type_env.aggregate_layout(&field.c_type) {
+            append_layout_dependencies(
+                &dependency.name,
+                dwarf_types,
+                dwarf_type_env,
+                emitted,
+                selected,
+            );
         }
     }
-    for conflict in conflicts {
-        selected.remove(&conflict);
+    if emitted.insert(name.to_string()) {
+        selected.push((name.to_string(), layout));
     }
-    selected
 }
 
 pub(super) fn source_type_with_complete_struct_alias(

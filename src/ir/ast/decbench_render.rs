@@ -519,8 +519,8 @@ pub(crate) fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_an
         })
         .collect::<std::collections::HashMap<_, _>>();
     let complete_structs = aggregate_layouts
-        .keys()
-        .cloned()
+        .iter()
+        .map(|(name, _)| name.clone())
         .collect::<std::collections::BTreeSet<_>>();
     // Complete layouts already emit `typedef struct T T;`. Give an explicit
     // opaque `struct T *`/`union T *` source contract the same standalone alias

@@ -209,7 +209,7 @@ fn pointer_expression_compatible(
     pointer_width: u8,
     pointer_types: &HashMap<VReg, String>,
 ) -> bool {
-    match expression {
+    match expression.semantic() {
         Expr::Const(0) => true,
         Expr::Cast { expr, .. } => {
             pointer_expression_compatible(expr, expected, layouts, pointer_width, pointer_types)
@@ -316,7 +316,7 @@ fn pointer_source_type(
     if let Some(register) = direct_register(expression) {
         return pointer_types.get(register).cloned();
     }
-    let Expr::Deref { addr, size } = expression else {
+    let Expr::Deref { addr, size } = expression.semantic() else {
         return None;
     };
     let (base, offset) = address_base_offset(addr)?;
@@ -333,7 +333,7 @@ fn pointer_source_type(
 }
 
 fn direct_register(expression: &Expr) -> Option<&VReg> {
-    match expression {
+    match expression.semantic() {
         Expr::Reg(register) => Some(register),
         Expr::Cast { expr, .. } => direct_register(expr),
         _ => None,
@@ -341,7 +341,7 @@ fn direct_register(expression: &Expr) -> Option<&VReg> {
 }
 
 fn address_base_offset(expression: &Expr) -> Option<(VReg, i64)> {
-    match expression {
+    match expression.semantic() {
         Expr::Reg(register) => Some((register.clone(), 0)),
         Expr::Cast { expr, .. } => address_base_offset(expr),
         Expr::Lea {
@@ -360,7 +360,7 @@ fn address_base_offset(expression: &Expr) -> Option<(VReg, i64)> {
             op: BinOp::Add,
             lhs,
             rhs,
-        } => match (lhs.as_ref(), rhs.as_ref()) {
+        } => match (lhs.semantic(), rhs.semantic()) {
             (Expr::Const(offset), other) | (other, Expr::Const(offset)) => {
                 address_base_offset(other)
                     .map(|(base, prior)| (base, prior.saturating_add(*offset)))
@@ -371,7 +371,7 @@ fn address_base_offset(expression: &Expr) -> Option<(VReg, i64)> {
             op: BinOp::Sub,
             lhs,
             rhs,
-        } => match rhs.as_ref() {
+        } => match rhs.semantic() {
             Expr::Const(offset) => {
                 address_base_offset(lhs).map(|(base, prior)| (base, prior.saturating_sub(*offset)))
             }
@@ -763,13 +763,17 @@ fn annotate_address(
     let Some(layout) = layouts.get(type_name) else {
         return;
     };
-    let Some(field) = layout.fields.iter().find(|field| {
-        field.offset == offset
-            && c_type_width(&field.c_type, pointer_width).is_some_and(|width| width == access_width)
-    }) else {
+    let Some((field_path, field_type)) = unique_field_path(
+        layout,
+        offset,
+        access_width,
+        layouts,
+        pointer_width,
+        &mut HashSet::new(),
+    ) else {
         return;
     };
-    *address = Expr::PdbFieldAddr {
+    *address.semantic_mut() = Expr::PdbFieldAddr {
         base: Some(base),
         index,
         scale,
@@ -777,14 +781,74 @@ fn annotate_address(
         segment: None,
         hints: vec![PdbFieldHint {
             type_name: type_name.clone(),
-            field_name: field.name.clone(),
-            field_type: Some(field.c_type.clone()),
-            offset: field.offset,
+            field_name: field_path,
+            field_type: Some(field_type),
+            offset,
             index_signed: index_view.map(|view| view.0),
             index_width: index_view.map(|view| view.1),
             renderable: true,
         }],
     };
+}
+
+fn unique_field_path(
+    layout: &DwarfType,
+    offset: u64,
+    access_width: u8,
+    layouts: &HashMap<String, &DwarfType>,
+    pointer_width: u8,
+    visiting: &mut HashSet<String>,
+) -> Option<(String, String)> {
+    if !visiting.insert(layout.name.clone()) {
+        return None;
+    }
+    let mut matches = Vec::new();
+    for field in &layout.fields {
+        if field.offset == offset
+            && c_type_width(&field.c_type, pointer_width).is_some_and(|width| width == access_width)
+        {
+            matches.push((field.name.clone(), field.c_type.clone()));
+        }
+        // A pointer-valued member is a scalar address, not inline storage.
+        if field.c_type.trim_end().ends_with('*') {
+            continue;
+        }
+        let nested_name = field
+            .c_type
+            .split_whitespace()
+            .filter(|word| {
+                !matches!(
+                    *word,
+                    "const" | "volatile" | "restrict" | "struct" | "union" | "class"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let Some(nested) = layouts.get(&nested_name).copied() else {
+            continue;
+        };
+        let Some(relative) = offset.checked_sub(field.offset) else {
+            continue;
+        };
+        if relative >= nested.byte_size {
+            continue;
+        }
+        if let Some((suffix, terminal_type)) = unique_field_path(
+            nested,
+            relative,
+            access_width,
+            layouts,
+            pointer_width,
+            visiting,
+        ) {
+            matches.push((format!("{}.{}", field.name, suffix), terminal_type));
+        }
+    }
+    visiting.remove(&layout.name);
+    let [selected] = matches.as_slice() else {
+        return None;
+    };
+    Some(selected.clone())
 }
 
 #[derive(Default)]
@@ -849,7 +913,7 @@ fn affine_form(
     definitions: &HashMap<VReg, Expr>,
     expanding: &mut Vec<VReg>,
 ) -> Option<AffineForm> {
-    match expression {
+    match expression.semantic() {
         Expr::Const(value) => Some(AffineForm {
             terms: HashMap::new(),
             views: HashMap::new(),
@@ -902,7 +966,7 @@ fn affine_form(
             op: BinOp::Mul,
             lhs,
             rhs,
-        } => match (lhs.as_ref(), rhs.as_ref()) {
+        } => match (lhs.semantic(), rhs.semantic()) {
             (Expr::Const(factor), value) | (value, Expr::Const(factor)) => {
                 scale_affine(affine_form(value, definitions, expanding)?, *factor)
             }
@@ -954,14 +1018,14 @@ fn casted_register_view(expression: &Expr) -> Option<(&VReg, bool, u8)> {
         signed,
         width,
         expr,
-    } = current
+    } = current.semantic()
     {
         if selected.is_none_or(|(_, selected_width)| *width < selected_width) {
             selected = Some((*signed, *width));
         }
         current = expr;
     }
-    let Expr::Reg(register) = current else {
+    let Expr::Reg(register) = current.semantic() else {
         return None;
     };
     selected.map(|(signed, width)| (register, signed, width))
@@ -1118,10 +1182,10 @@ mod tests {
     }
 
     fn field_hint(expression: &Expr) -> Option<&PdbFieldHint> {
-        let Expr::Deref { addr, .. } = expression else {
+        let Expr::Deref { addr, .. } = expression.semantic() else {
             return None;
         };
-        let Expr::PdbFieldAddr { hints, .. } = addr.as_ref() else {
+        let Expr::PdbFieldAddr { hints, .. } = addr.semantic() else {
             return None;
         };
         let [hint] = hints.as_slice() else {
@@ -1141,26 +1205,39 @@ mod tests {
                     src: Expr::Cast {
                         signed: true,
                         width: 8,
-                        expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
-                    },
+                        expr: Box::new(
+                            Expr::Reg(VReg::phys("arg0")).with_origins(OriginSet::one(0x1000)),
+                        ),
+                    }
+                    .with_origins(OriginSet::one(0x1004)),
                 },
                 Stmt::Assign {
                     dst: VReg::phys("var1"),
                     src: Expr::Deref {
-                        addr: Box::new(Expr::Bin {
-                            op: BinOp::Add,
-                            lhs: Box::new(Expr::Reg(VReg::phys("var0"))),
-                            rhs: Box::new(Expr::Const(8)),
-                        }),
+                        addr: Box::new(
+                            Expr::Bin {
+                                op: BinOp::Add,
+                                lhs: Box::new(
+                                    Expr::Reg(VReg::phys("var0"))
+                                        .with_origins(OriginSet::one(0x1008)),
+                                ),
+                                rhs: Box::new(Expr::Const(8).with_origins(OriginSet::one(0x100c))),
+                            }
+                            .with_origins(OriginSet::one(0x1010)),
+                        ),
                         size: 4,
-                    },
+                    }
+                    .with_origins(OriginSet::one(0x1014)),
                 },
                 Stmt::Assign {
                     dst: VReg::phys("var0"),
                     src: Expr::Deref {
-                        addr: Box::new(Expr::Reg(VReg::phys("var0"))),
+                        addr: Box::new(
+                            Expr::Reg(VReg::phys("var0")).with_origins(OriginSet::one(0x1018)),
+                        ),
                         size: 8,
-                    },
+                    }
+                    .with_origins(OriginSet::one(0x101c)),
                 },
             ],
         };
@@ -1174,6 +1251,10 @@ mod tests {
             field_hint(value).map(|hint| hint.field_name.as_str()),
             Some("val")
         );
+        let Expr::Deref { addr, .. } = value.semantic() else {
+            panic!("expected attributed value load");
+        };
+        assert_eq!(addr.origins(), Some(&OriginSet::one(0x1010)));
         let Stmt::Assign { src: next, .. } = &function.body[2] else {
             panic!("expected next assignment");
         };
@@ -1181,6 +1262,10 @@ mod tests {
             field_hint(next).map(|hint| hint.field_name.as_str()),
             Some("next")
         );
+        let Expr::Deref { addr, .. } = next.semantic() else {
+            panic!("expected attributed next load");
+        };
+        assert_eq!(addr.origins(), Some(&OriginSet::one(0x1018)));
     }
 
     #[test]

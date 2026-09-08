@@ -161,17 +161,17 @@ fn pdb_type_layouts<'a>(
 ) -> Vec<crate::debug::dwarf::DwarfType> {
     use crate::debug::dwarf::{DwarfField, DwarfParameterType, DwarfReturnType, DwarfType};
 
-    let mut names = std::collections::BTreeMap::new();
+    let mut names = std::collections::BTreeSet::new();
     for contract in contracts {
         if let DwarfReturnType::Type(c_type) = &contract.return_type {
-            if let Some((name, kind)) = tagged_pdb_type_name(c_type) {
-                names.insert(name, kind);
+            if let Some(name) = pdb_aggregate_candidate_name(c_type) {
+                names.insert(name);
             }
         }
         for parameter in &contract.parameter_types {
             if let DwarfParameterType::Type(c_type) = parameter {
-                if let Some((name, kind)) = tagged_pdb_type_name(c_type) {
-                    names.insert(name, kind);
+                if let Some(name) = pdb_aggregate_candidate_name(c_type) {
+                    names.insert(name);
                 }
             }
         }
@@ -181,17 +181,17 @@ fn pdb_type_layouts<'a>(
         return Vec::new();
     };
 
-    let requested = names
-        .keys()
-        .cloned()
-        .collect::<std::collections::BTreeSet<_>>();
-    let Ok(layouts) = source.find_struct_layouts(&requested) else {
+    let Ok(layouts) = source.find_struct_layouts(&names) else {
         return Vec::new();
     };
     layouts
         .into_iter()
         .filter_map(|layout| {
-            let kind = *names.get(&layout.name)?;
+            let kind = match layout.kind.as_str() {
+                "union" => crate::debug::dwarf::DwarfTypeKind::Union,
+                "struct" | "class" | "interface" => crate::debug::dwarf::DwarfTypeKind::Struct,
+                _ => return None,
+            };
             Some(DwarfType {
                 kind,
                 name: layout.name,
@@ -203,7 +203,7 @@ fn pdb_type_layouts<'a>(
                         Some(DwarfField {
                             offset: field.byte_offset,
                             name: field.name,
-                            c_type: field.type_name?,
+                            c_type: standalone_dwarf_type(&field.type_name?),
                             size: 0,
                         })
                     })
@@ -216,20 +216,23 @@ fn pdb_type_layouts<'a>(
         .collect()
 }
 
-fn tagged_pdb_type_name(c_type: &str) -> Option<(String, crate::debug::dwarf::DwarfTypeKind)> {
-    use crate::debug::dwarf::DwarfTypeKind;
-
+fn pdb_aggregate_candidate_name(c_type: &str) -> Option<String> {
     let normalized = c_type.split_whitespace().collect::<Vec<_>>().join(" ");
+    let is_pointer = normalized.trim_end().ends_with('*');
     let base = normalized.trim_end_matches('*').trim();
-    let mut words = base.split_whitespace();
-    let kind = match words.next()? {
-        "struct" | "class" => DwarfTypeKind::Struct,
-        "union" => DwarfTypeKind::Union,
-        "enum" => DwarfTypeKind::Enum,
-        _ => return None,
-    };
-    let name = words.next()?;
-    (words.next().is_none()).then(|| (name.to_string(), kind))
+    let words = base
+        .split_whitespace()
+        .filter(|word| !matches!(*word, "const" | "volatile" | "restrict" | "__restrict"))
+        .collect::<Vec<_>>();
+    match words.as_slice() {
+        ["struct" | "class" | "union", name] => Some((*name).to_string()),
+        // CodeView commonly spells a C typedef pointer as `Record *`, even
+        // though the same TPI stream contains the complete `Record` aggregate.
+        // Treat the bare identifier only as a lookup candidate; the PDB lookup
+        // itself must confirm that a complete aggregate with this name exists.
+        [name] if is_pointer => Some((*name).to_string()),
+        _ => None,
+    }
 }
 
 pub(super) fn dwarf_stack_object_hints(
@@ -817,13 +820,13 @@ fn standalone_dwarf_type(source_type: &str) -> String {
         return normalized;
     }
     let rust_scalar = match source_type {
-        "u8" => Some("unsigned char"),
+        "u8" | "uchar" => Some("unsigned char"),
         "i8" => Some("signed char"),
-        "u16" => Some("unsigned short"),
+        "u16" | "ushort" => Some("unsigned short"),
         "i16" => Some("short"),
-        "u32" => Some("unsigned int"),
+        "u32" | "uint" => Some("unsigned int"),
         "i32" => Some("int"),
-        "u64" => Some("unsigned long long"),
+        "u64" | "ulonglong" => Some("unsigned long long"),
         "i64" => Some("long long"),
         "usize" => Some("__SIZE_TYPE__"),
         "isize" => Some("__PTRDIFF_TYPE__"),

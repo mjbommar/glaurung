@@ -1353,7 +1353,7 @@ fn renderable_field_access(addr: &Expr) -> Option<(&VReg, Option<&VReg>, &PdbFie
     (hint.renderable
         && ((*scale == 1 && index.is_none()) || (*scale > 0 && index.is_some()))
         && valid_c_identifier(&hint.type_name)
-        && valid_c_identifier(&hint.field_name)
+        && hint.field_name.split('.').all(valid_c_identifier)
         && DEC_RENDERABLE_STRUCTS.with(|selected| selected.borrow().contains(&hint.type_name)))
     .then_some((base, index.as_ref(), hint))
 }
