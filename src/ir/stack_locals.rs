@@ -372,23 +372,41 @@ fn is_arm_frame_pointer(name: &str, ctx: StackContext) -> bool {
 /// than a dereference of whatever pointer the caller left in `r7`, and it is
 /// the piece ARM32's Thumb mode was missing: `entry_sp` reached A32's `fp`
 /// through [`STACK_BASES`] and never reached Thumb's `r7` at all.
-fn arm_frame_register(body: &[Stmt], cc: Option<CallConv>) -> Option<&'static str> {
+fn register_has_storage(
+    register: &VReg,
+    expected: &str,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    crate::ir::call_args::register_is_storage(register, expected, identities)
+}
+
+fn arm_frame_register(
+    body: &[Stmt],
+    cc: Option<CallConv>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<&'static str> {
     if !matches!(cc, Some(CallConv::Arm | CallConv::ArmHardFloat)) {
         return None;
     }
-    fn derived_from_the_stack_pointer(src: &Expr) -> bool {
+    fn derived_from_the_stack_pointer(
+        src: &Expr,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) -> bool {
         match src {
-            Expr::Reg(VReg::Phys(name)) => crate::ir::abi::ssa_base(name) == "sp",
+            Expr::Reg(register) => register_has_storage(register, "sp", identities),
             Expr::Lea {
-                base: Some(VReg::Phys(name)),
+                base: Some(register),
                 index: None,
                 ..
-            } => crate::ir::abi::ssa_base(name) == "sp",
+            } => register_has_storage(register, "sp", identities),
             Expr::Bin {
                 op: crate::ir::types::BinOp::Add | crate::ir::types::BinOp::Sub,
                 lhs,
                 rhs,
-            } => matches!(rhs.as_ref(), Expr::Const(_)) && derived_from_the_stack_pointer(lhs),
+            } => {
+                matches!(rhs.as_ref(), Expr::Const(_))
+                    && derived_from_the_stack_pointer(lhs, identities)
+            }
             _ => false,
         }
     }
@@ -396,33 +414,30 @@ fn arm_frame_register(body: &[Stmt], cc: Option<CallConv>) -> Option<&'static st
     // assumes for x86. A frame register first assigned inside a branch is not a
     // frame establishment this pass will trust.
     body.iter().find_map(|statement| {
-        let Stmt::Assign {
-            dst: VReg::Phys(dst),
-            src,
-        } = statement.semantic()
-        else {
+        let Stmt::Assign { dst, src } = statement.semantic() else {
             return None;
         };
-        let candidate = match crate::ir::abi::ssa_base(dst) {
-            "fp" => "fp",
-            "r7" => "r7",
-            "r11" => "r11",
-            _ => return None,
-        };
-        derived_from_the_stack_pointer(src).then_some(candidate)
+        let candidate = ["fp", "r7", "r11"]
+            .into_iter()
+            .find(|candidate| register_has_storage(dst, candidate, identities))?;
+        derived_from_the_stack_pointer(src, identities).then_some(candidate)
     })
 }
 
 /// Whether the function's first assignment to x86's nominal frame register
 /// makes it an ordinary callee-saved value instead of establishing a frame.
-fn rbp_is_repurposed(body: &[Stmt], cc: Option<CallConv>) -> bool {
+fn rbp_is_repurposed(
+    body: &[Stmt],
+    cc: Option<CallConv>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     if !matches!(
         cc,
         Some(CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Cdecl32)
     ) {
         return false;
     }
-    frame_pointer_assignment(body).is_some_and(|establishes| !establishes)
+    frame_pointer_assignment(body, identities).is_some_and(|establishes| !establishes)
 }
 
 /// Whether the body establishes an x86 frame pointer.
@@ -430,33 +445,37 @@ fn rbp_is_repurposed(body: &[Stmt], cc: Option<CallConv>) -> bool {
 /// This is NOT `!rbp_is_repurposed`: a function that never writes `rbp` at all
 /// (the ordinary frame-pointer-omitted `-O2` shape) repurposes nothing and
 /// establishes nothing.
-fn frame_pointer_is_established(body: &[Stmt], cc: Option<CallConv>) -> bool {
+fn frame_pointer_is_established(
+    body: &[Stmt],
+    cc: Option<CallConv>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     matches!(
         cc,
         Some(CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Cdecl32)
-    ) && frame_pointer_assignment(body) == Some(true)
+    ) && frame_pointer_assignment(body, identities) == Some(true)
 }
 
 /// `Some(true)` when the first assignment to x86's nominal frame register comes
 /// from the stack pointer, `Some(false)` when it comes from anything else, and
 /// `None` when the register is never assigned.
-fn frame_pointer_assignment(body: &[Stmt]) -> Option<bool> {
+fn frame_pointer_assignment(
+    body: &[Stmt],
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<bool> {
     for statement in body {
-        let Stmt::Assign {
-            dst: VReg::Phys(dst),
-            src,
-        } = statement.semantic()
-        else {
+        let Stmt::Assign { dst, src } = statement.semantic() else {
             continue;
         };
-        if !matches!(crate::ir::abi::ssa_base(dst), "rbp" | "ebp" | "bp") {
+        if !["rbp", "ebp", "bp"]
+            .into_iter()
+            .any(|base| register_has_storage(dst, base, identities))
+        {
             continue;
         }
-        return Some(matches!(
-            src,
-            Expr::Reg(VReg::Phys(stack))
-                if matches!(crate::ir::abi::ssa_base(stack), "rsp" | "esp" | "sp")
-        ));
+        return Some(matches!(src, Expr::Reg(stack) if ["rsp", "esp", "sp"]
+            .into_iter()
+            .any(|base| register_has_storage(stack, base, identities))));
     }
     None
 }
@@ -572,9 +591,9 @@ fn promote_stack_locals_with_optional_identities(
     let mut names = SlotNames::default();
     let ctx = StackContext {
         cc,
-        rbp_repurposed: rbp_is_repurposed(&f.body, cc),
-        frame_pointer_established: frame_pointer_is_established(&f.body, cc),
-        arm_frame_register: arm_frame_register(&f.body, cc),
+        rbp_repurposed: rbp_is_repurposed(&f.body, cc, identities),
+        frame_pointer_established: frame_pointer_is_established(&f.body, cc, identities),
+        arm_frame_register: arm_frame_register(&f.body, cc, identities),
         parameter_count,
     };
     address_aliases::expand(&mut f.body, ctx);
@@ -3148,6 +3167,50 @@ mod tests {
         assert!(
             sizes.is_empty(),
             "repurposed rbp invented locals: {sizes:?}"
+        );
+    }
+
+    #[test]
+    fn frame_anchor_detection_uses_exact_identity_not_display_spelling() {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for (numbered, base) in [
+            ("opaque_frame", "rbp"),
+            ("opaque_stack", "rsp"),
+            ("rbp#looks_like_frame", "rax"),
+            ("rsp#looks_like_stack", "rsi"),
+            ("opaque_arm_frame", "r7"),
+            ("opaque_arm_stack", "sp"),
+        ] {
+            identities.record(
+                reg(numbered),
+                crate::ir::ssa::SsaValue {
+                    base: reg(base),
+                    version: 3,
+                },
+            );
+        }
+        let x86 = vec![
+            Stmt::Assign {
+                dst: reg("rbp#looks_like_frame"),
+                src: Expr::Reg(reg("rsp#looks_like_stack")),
+            },
+            Stmt::Assign {
+                dst: reg("opaque_frame"),
+                src: Expr::Reg(reg("opaque_stack")),
+            },
+        ];
+        let arm = vec![Stmt::Assign {
+            dst: reg("opaque_arm_frame"),
+            src: Expr::Reg(reg("opaque_arm_stack")),
+        }];
+
+        assert_eq!(
+            frame_pointer_assignment(&x86, Some(&identities)),
+            Some(true)
+        );
+        assert_eq!(
+            arm_frame_register(&arm, Some(CallConv::Arm), Some(&identities)),
+            Some("r7")
         );
     }
 
