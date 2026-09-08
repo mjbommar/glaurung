@@ -592,13 +592,38 @@ fn coalesces_a_typed_loop_update_scratch_into_its_source_carrier() {
     );
     let exact_widths = std::collections::HashMap::from([("ret".to_string(), 4)]);
     let protected = std::collections::HashSet::from(["var4".to_string()]);
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
+    identities.record(
+        reg("var4"),
+        crate::ir::ssa::SsaValue {
+            base: reg("rax"),
+            version: 1,
+        },
+    );
+    identities.record(
+        reg("ret"),
+        crate::ir::ssa::SsaValue {
+            base: reg("rax"),
+            version: 2,
+        },
+    );
 
-    coalesce_source_loop_updates(&mut function, &protected, &types, Some(&exact_widths));
+    let renames =
+        coalesce_source_loop_updates(&mut function, &protected, &types, Some(&exact_widths));
+    identities.apply_renames(&renames);
 
     let text = crate::ir::ast::render(&function);
     assert!(!text.contains("%ret"), "{text}");
     assert!(text.contains("%var4 = (%var4 + 1)"), "{text}");
     assert!(text.contains("(%var4 u< %limit)"), "{text}");
+    assert_eq!(renames.get(&reg("ret")), Some(&reg("var4")));
+    assert!(identities.candidates(&reg("ret")).is_none());
+    assert_eq!(
+        identities
+            .candidates(&reg("var4"))
+            .map(std::collections::BTreeSet::len),
+        Some(2)
+    );
     assert_eq!(
         function.body[1].origins(),
         Some(&OriginSet::from_addresses([0x1030, 0x1040, 0x1044]))

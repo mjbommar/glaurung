@@ -73,7 +73,8 @@ pub(crate) fn coalesce_source_loop_updates(
     protected: &std::collections::HashSet<String>,
     types: &crate::ir::types_recover::TypeMap,
     exact_value_widths: Option<&std::collections::HashMap<String, u8>>,
-) {
+) -> std::collections::HashMap<VReg, VReg> {
+    let mut renames = std::collections::HashMap::new();
     let mut index = 0;
     while index < function.body.len() {
         let candidate = source_loop_update_candidate(
@@ -114,9 +115,11 @@ pub(crate) fn coalesce_source_loop_updates(
             if let Some(origins) = removed_origins {
                 function.body[index].merge_origins(&origins);
             }
+            renames.insert(scratch, carrier);
         }
         index += 1;
     }
+    renames
 }
 
 fn source_loop_update_candidate(

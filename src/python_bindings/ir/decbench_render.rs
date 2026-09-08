@@ -302,15 +302,15 @@ fn decbench_text_with_installed_environment(
             );
             value_identities.apply_renames(&renames);
         });
-        pass!(
-            "coalesce_source_loop_updates",
-            crate::ir::latch_predicate::coalesce_source_loop_updates(
+        pass!("coalesce_source_loop_updates", {
+            let renames = crate::ir::latch_predicate::coalesce_source_loop_updates(
                 &mut prepared,
                 &protected_locals,
                 tm,
                 exact_value_widths,
-            )
-        );
+            );
+            value_identities.apply_renames(&renames);
+        });
     }
     if let Some(tm) = refined_width.as_mut() {
         refine!(
