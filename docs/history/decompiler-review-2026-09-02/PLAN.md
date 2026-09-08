@@ -1688,6 +1688,14 @@ provenance through lowering.
   exact contracts, all 23 return-bank tests, and the directly motivating
   fixture-197 GCC-O0 function pass; see
   `results/wp3-callee-bank-return-storage-identities.md`.
+  Commit `696af8e1` next migrates the complete DWARF field pass transaction:
+  promoted-store classification now uses one identity authority during pointer
+  inference, definition compatibility, and final field annotation, including
+  every recursive structured body. Opaque owned spills retain authoritative
+  struct-pointer fields, while unowned `local_*` lookalikes stay raw. Both
+  exact contracts, all 13 module tests, and the Clang-O0 linked-list compile
+  and runtime round trip pass; see
+  `results/wp3-dwarf-field-storage-identities.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
