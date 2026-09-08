@@ -1752,6 +1752,13 @@ provenance through lowering.
   focused contract was observed red, and all 52 functions in the directly
   relevant host bool/narrow-return slice remain green after a release rebuild;
   see `results/wp3-boolean-expression-origin-rendering.md`.
+  Commit `b6786298` then makes the explicit unsigned-subtract range renderer
+  transparent to carriers around casts, bounds, and arithmetic. The strengthened
+  existing test was observed red as raw unsigned machine arithmetic and now
+  recovers the compact two-sided range again. A narrow range-fixture run exposed
+  two regressions and one improvement, but an exact production-line reversal
+  reproduced all three unchanged, so none is attributed to this slice. See
+  `results/wp3-unsigned-range-expression-origin-rendering.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
