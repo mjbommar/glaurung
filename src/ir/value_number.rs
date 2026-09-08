@@ -311,12 +311,25 @@ pub fn value_number_with_parameter_slots_lifetimes_and_identities(
                 }
                 use_index += 1;
             });
-            if let (Some(dst), Some(width)) = (
-                def_ref(&ins.op),
-                operation_definition_width(&lf.blocks[bi].instrs[ii].op),
-            ) {
+            let raw_op = &lf.blocks[bi].instrs[ii].op;
+            if let (Op::Intrinsic { outs: numbered, .. }, Op::Intrinsic { outs: raw, .. }) =
+                (&ins.op, raw_op)
+            {
+                for (output_index, ((destination, _), (_, width))) in
+                    numbered.iter().zip(raw).enumerate()
+                {
+                    let width = width_bytes(*width);
+                    definition_widths.insert(destination.clone(), width);
+                    definition_widths_by_site.insert((addr, output_index), width);
+                    if let Some(value) = ssa.def_value_ref_at(lf, addr, output_index) {
+                        definition_widths_by_value.insert(value.clone(), width);
+                    }
+                }
+            } else if let (Some(dst), Some(width)) =
+                (def_ref(&ins.op), operation_definition_width(raw_op))
+            {
                 definition_widths.insert(dst.clone(), width);
-                definition_widths_by_site.insert(addr, width);
+                definition_widths_by_site.insert((addr, 0), width);
                 if let Some(value) = ssa.def_value_ref(lf, addr) {
                     definition_widths_by_value.insert(value.clone(), width);
                 }
@@ -2516,7 +2529,7 @@ mod tests {
                 name: "pair.result".into(),
                 ins: Vec::new(),
                 outs: vec![
-                    (VReg::phys("rax"), crate::ir::types::Width::W64),
+                    (VReg::phys("rax"), crate::ir::types::Width::W32),
                     (VReg::phys("rdx"), crate::ir::types::Width::W64),
                 ],
                 reads_mem: false,
@@ -2529,7 +2542,7 @@ mod tests {
         ]);
         let ssa = compute_ssa(&lf);
 
-        let (numbered, _, _, identities) =
+        let (numbered, definition_widths, _, identities) =
             value_number_with_parameter_slots_lifetimes_and_identities(
                 &lf,
                 &ssa,
@@ -2542,6 +2555,8 @@ mod tests {
         };
         assert_eq!(outs[0].0, VReg::phys("rax#1"));
         assert_eq!(outs[1].0, VReg::phys("rdx#1"));
+        assert_eq!(definition_widths.get(&outs[0].0), Some(&4));
+        assert_eq!(definition_widths.get(&outs[1].0), Some(&8));
         assert!(matches!(
             &numbered.blocks[0].instrs[1].op,
             Op::Assign {

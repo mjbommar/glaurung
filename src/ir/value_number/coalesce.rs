@@ -9,7 +9,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::types::{LlirFunction, Op, VReg, Value};
-use crate::ir::use_def::{def_ref, def_uses, for_each_use, InstrAddr};
+use crate::ir::use_def::{def_ref, def_uses, for_each_def, for_each_use, InstrAddr};
 
 use super::architectural_reads::architecturally_read_names;
 use super::vreg_walk::for_each_vreg_mut;
@@ -24,13 +24,13 @@ pub struct SourceRegisterLifetime {
     pub ranges: Vec<(u64, u64)>,
 }
 
-/// Exact machine width of the definition at one raw LLIR instruction site.
+/// Exact machine width of one positional definition at a raw LLIR instruction.
 ///
 /// A kept-bare ABI register can have several definitions which deliberately
 /// share one [`VReg`] spelling. The public name-keyed width map cannot represent
 /// those definitions independently, so phi coalescing consumes this companion
 /// map before deciding whether a shared name supplies consistent width evidence.
-pub(crate) type DefinitionWidthsBySite = HashMap<InstrAddr, u8>;
+pub(crate) type DefinitionWidthsBySite = HashMap<(InstrAddr, usize), u8>;
 
 /// A value-numbered name eligible for coalescing: `reg#version`.
 ///
@@ -121,33 +121,34 @@ fn coalescing_definition_claims(
     let mut claims = HashMap::new();
     for (block_idx, block) in out.blocks.iter().enumerate() {
         for (instr_idx, instruction) in block.instrs.iter().enumerate() {
-            let Some(destination) = def_ref(&instruction.op).cloned() else {
-                continue;
-            };
             let site = InstrAddr {
                 block_idx,
                 instr_idx,
             };
-            let claim = match &instruction.op {
-                Op::Bin { .. }
-                | Op::Un { .. }
-                | Op::Ite { .. }
-                | Op::ZExt { .. }
-                | Op::SExt { .. }
-                | Op::Intrinsic { .. } => definition_widths_by_site
-                    .get(&site)
-                    // Direct primitive tests construct already-numbered LLIR and
-                    // historically provide only the compatibility map. The real
-                    // value-numbering path always supplies the per-site entry.
-                    .or_else(|| definition_widths.get(&destination))
-                    .copied()
-                    .map_or(ClassWidth::Open, ClassWidth::Known),
-                _ => ClassWidth::Open,
-            };
-            claims
-                .entry(destination)
-                .and_modify(|existing: &mut ClassWidth| *existing = existing.join(claim))
-                .or_insert(claim);
+            let mut output_index = 0usize;
+            for_each_def(&instruction.op, |destination| {
+                let claim = match &instruction.op {
+                    Op::Bin { .. }
+                    | Op::Un { .. }
+                    | Op::Ite { .. }
+                    | Op::ZExt { .. }
+                    | Op::SExt { .. }
+                    | Op::Intrinsic { .. } => definition_widths_by_site
+                        .get(&(site, output_index))
+                        // Direct primitive tests construct already-numbered LLIR and
+                        // historically provide only the compatibility map. The real
+                        // value-numbering path always supplies the positional entry.
+                        .or_else(|| definition_widths.get(destination))
+                        .copied()
+                        .map_or(ClassWidth::Open, ClassWidth::Known),
+                    _ => ClassWidth::Open,
+                };
+                claims
+                    .entry(destination.clone())
+                    .and_modify(|existing: &mut ClassWidth| *existing = existing.join(claim))
+                    .or_insert(claim);
+                output_index += 1;
+            });
         }
     }
     // Lowering often materialises a widening into a temporary and then moves
@@ -176,7 +177,7 @@ fn coalescing_definition_claims(
                     instr_idx,
                 };
                 let destination_width = definition_widths_by_site
-                    .get(&site)
+                    .get(&(site, 0))
                     .or_else(|| definition_widths.get(dst))
                     .copied();
                 if destination_width != Some(source_width) {
@@ -804,17 +805,23 @@ mod tests {
             &HashMap::from([(widened, 8), (value.clone(), 8)]),
             &DefinitionWidthsBySite::from([
                 (
-                    InstrAddr {
-                        block_idx: 0,
-                        instr_idx: 0,
-                    },
+                    (
+                        InstrAddr {
+                            block_idx: 0,
+                            instr_idx: 0,
+                        },
+                        0,
+                    ),
                     8,
                 ),
                 (
-                    InstrAddr {
-                        block_idx: 0,
-                        instr_idx: 1,
-                    },
+                    (
+                        InstrAddr {
+                            block_idx: 0,
+                            instr_idx: 1,
+                        },
+                        0,
+                    ),
                     8,
                 ),
             ]),
@@ -977,17 +984,23 @@ mod tests {
         let name_widths = HashMap::from([(kept_bare.clone(), 8)]);
         let site_widths = DefinitionWidthsBySite::from([
             (
-                InstrAddr {
-                    block_idx: 0,
-                    instr_idx: 0,
-                },
+                (
+                    InstrAddr {
+                        block_idx: 0,
+                        instr_idx: 0,
+                    },
+                    0,
+                ),
                 4,
             ),
             (
-                InstrAddr {
-                    block_idx: 0,
-                    instr_idx: 1,
-                },
+                (
+                    InstrAddr {
+                        block_idx: 0,
+                        instr_idx: 1,
+                    },
+                    0,
+                ),
                 8,
             ),
         ]);
