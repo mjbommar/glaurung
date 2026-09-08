@@ -1549,6 +1549,7 @@ fn write_call_arg_dec(arg: &Expr, out: &mut String) {
 /// GCC 14 and later treat as an error.
 fn call_argument_pointer_ctype(arg: &Expr) -> Option<String> {
     match arg {
+        Expr::Origin { expr, .. } => call_argument_pointer_ctype(expr),
         Expr::Reg(register @ VReg::Phys(_)) => {
             let declared = declared_reg_ctype(register);
             declared.ends_with('*').then_some(declared)
@@ -1634,6 +1635,14 @@ mod pointer_parameter_tests {
     fn typed_const_char_argument_renders_without_redundant_cast() {
         let mut rendered = String::new();
         write_typed_call_arg_dec("const char *", &string_literal(), &mut rendered);
+        assert_eq!(rendered, "\"Hello, World!\"");
+    }
+
+    #[test]
+    fn attributed_const_char_argument_renders_without_redundant_cast() {
+        let argument = string_literal().with_origins(super::super::OriginSet::one(0x1010));
+        let mut rendered = String::new();
+        write_typed_call_arg_dec("const char *", &argument, &mut rendered);
         assert_eq!(rendered, "\"Hello, World!\"");
     }
 }
