@@ -1397,6 +1397,12 @@ provenance through lowering.
   and old-carrier-read proofs remain mandatory. Its strengthened observed-red
   test and all 12 latch-predicate tests pass; see
   `results/wp3-loop-update-source-expression-origins.md`.
+  Commit `2644823c` then makes loop-entry carrier coalescing recognize an
+  attributed register source and transfers both ownership layers from the
+  deleted entry copy to the surviving loop. Typed-source, dead-source,
+  coalescible-role, protected-identity, and whole-function-goto refusals remain
+  mandatory. Its strengthened observed-red test and all 12 latch-predicate
+  tests pass; see `results/wp3-loop-entry-source-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
