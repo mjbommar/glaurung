@@ -1726,8 +1726,17 @@ provenance through lowering.
   bases fail closed. All 24 type-map tests pass. A strict four-function ARMv7
   A/B removes integer bit-cast plumbing from narrow and wide loop arithmetic
   without changing the failure set. The existing missing-`count` signature
-  regression is identical with the change reversed and remains separate debt;
+  regression was identical with the change reversed and remained separate debt;
   see `results/wp3-float-storage-identities.md`.
+  Commit `02376480` closes that adjacent source-role identity defect. Mixed
+  hard-float prototypes may place source `arg0` in VFP storage and source
+  `arg1` in core-bank machine slot zero; after naming, authoritative source
+  slots now replace stale bank-local slots instead of becoming ambiguous with
+  them. The exact ARMv7 O0 `accumulate_narrow` cell moves from a one-parameter,
+  undefined-input failure to a two-parameter pass. All 60 value-identity tests,
+  three renderer census tests, and the 16-lane ARMv7 vector/float set show one
+  regression removed and none added; see
+  `results/wp3-mixed-parameter-source-slots.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
