@@ -1143,6 +1143,12 @@ provenance through lowering.
   unreachable arm's owner is excluded. Its observed-red four-owner test and
   all 62 constant-fold tests pass; see
   `results/wp3-constant-select-expression-origins.md`.
+  Commit `02791f18` next makes full-width cdecl32 parameter-address loads
+  transparent. Attributed `Deref(StackAddr(argN))` recovers the parameter and
+  retains the exact address/load owner union, while partial-load and non-
+  parameter refusal remains unchanged. Its observed-red test and all 63
+  constant-fold tests pass; see
+  `results/wp3-parameter-load-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
