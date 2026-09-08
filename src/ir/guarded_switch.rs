@@ -313,6 +313,10 @@ fn merge_statement_origin(target: &mut Stmt, source: &Stmt) {
     match source.semantic() {
         Stmt::If { cond, .. } => collect_expression_origins(cond, &mut origins),
         Stmt::Assign { src, .. } => collect_expression_origins(src, &mut origins),
+        Stmt::Store { addr, src, .. } => {
+            collect_expression_origins(addr, &mut origins);
+            collect_expression_origins(src, &mut origins);
+        }
         _ => {}
     }
     if !origins.is_empty() {
@@ -473,15 +477,15 @@ fn discriminant_copy(statement: &Stmt, types: Option<&TypeMap>) -> Option<(VReg,
         // source's recovered width fits in the destination object. Requiring
         // the promoted-local prefix prevents a genuine pointer store from ever
         // being mistaken for a register copy.
-        Stmt::Store {
-            addr: Expr::Reg(dst @ VReg::Phys(name)),
-            src,
-            size,
-        } if (name.starts_with("local_") || name.starts_with("stack_"))
-            && known_width(src, types).is_some_and(|width| width <= *size) =>
-        {
-            Some((dst.clone(), src.clone()))
-        }
+        Stmt::Store { addr, src, size } => match addr.semantic() {
+            Expr::Reg(dst @ VReg::Phys(name))
+                if (name.starts_with("local_") || name.starts_with("stack_"))
+                    && known_width(src, types).is_some_and(|width| width <= *size) =>
+            {
+                Some((dst.clone(), src.clone()))
+            }
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -1399,10 +1403,11 @@ mod tests {
             entry_va: 0,
             body: vec![
                 Stmt::Store {
-                    addr: Expr::Reg(temporary.clone()),
-                    src: Expr::Reg(source.clone()),
+                    addr: Expr::Reg(temporary.clone()).with_origins(OriginSet::one(0x1004)),
+                    src: Expr::Reg(source.clone()).with_origins(OriginSet::one(0x1008)),
                     size: 8,
-                },
+                }
+                .with_origins(OriginSet::one(0x1000)),
                 Stmt::If {
                     cond: Expr::Cmp {
                         op: CmpOp::Ule,
@@ -1429,13 +1434,15 @@ mod tests {
 
         collapse_range_guards_with_types(&mut function, &types);
 
+        assert_eq!(function.body.len(), 1);
+        let Stmt::Switch { discriminant, .. } = function.body[0].semantic() else {
+            panic!("expected recovered switch: {:#?}", function.body)
+        };
+        assert_eq!(discriminant.semantic(), &Expr::Reg(source));
+        assert_eq!(discriminant.origins(), Some(&OriginSet::one(0x1008)));
         assert_eq!(
-            function.body,
-            vec![Stmt::Switch {
-                discriminant: Expr::Reg(source),
-                cases: (0..=3).map(|case| (Some(case), vec![Stmt::Nop])).collect(),
-                default: None,
-            }]
+            function.body[0].origins(),
+            Some(&OriginSet::from_addresses([0x1000, 0x1004, 0x1008]))
         );
     }
 }
