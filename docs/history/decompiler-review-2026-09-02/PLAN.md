@@ -1390,6 +1390,13 @@ provenance through lowering.
   no-intervening-write proofs remain mandatory. Its strengthened observed-red
   test and all 12 latch-predicate tests pass; see
   `results/wp3-latch-predicate-expression-origins.md`.
+  Commit `e8dab427` then makes typed source-loop update coalescing recognize an
+  attributed scratch-to-carrier source and transfers both the deleted tail
+  statement owner and its source-expression owner to the surviving loop.
+  Protected identity, type/width compatibility, single-definition, suffix-use,
+  and old-carrier-read proofs remain mandatory. Its strengthened observed-red
+  test and all 12 latch-predicate tests pass; see
+  `results/wp3-loop-update-source-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
