@@ -807,6 +807,7 @@ pub(super) fn finalize_prepared_ast(
         &prepared.numbered,
         &prepared.role_names,
         &prepared.value_identities,
+        &prepared.parameter_slots,
         arch,
         cc,
         dwarf_type_env,

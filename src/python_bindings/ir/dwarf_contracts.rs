@@ -463,6 +463,7 @@ pub(super) fn merge_dwarf_register_local_facts(
     numbered: &crate::ir::types::LlirFunction,
     role_names: &std::collections::HashMap<String, String>,
     identities: &crate::ir::value_number::ValueIdentities,
+    parameter_slots: &std::collections::HashSet<usize>,
     arch: crate::core::binary::Arch,
     cc: crate::ir::call_args::CallConv,
     type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
@@ -482,6 +483,10 @@ pub(super) fn merge_dwarf_register_local_facts(
         })
         .collect::<Vec<_>>();
     let preferred = widest_claimant_per_role(&contract.register_locals, &roles, cc, type_env);
+    let parameter_roles = parameter_slots
+        .iter()
+        .map(|slot| format!("arg{slot}"))
+        .collect::<std::collections::HashSet<_>>();
 
     for (index, local) in contract.register_locals.iter().enumerate() {
         let role = match &roles[index] {
@@ -501,7 +506,7 @@ pub(super) fn merge_dwarf_register_local_facts(
             continue;
         }
         if !crate::ir::naming::valid_authoritative_local_name(&local.source_name)
-            || crate::ir::ast::parse_arg_index(&role).is_some()
+            || parameter_roles.contains(&role)
             || facts.source_names.contains_key(&role)
             || facts.source_types.contains_key(&role)
             || facts
@@ -861,6 +866,98 @@ pub(super) fn dwarf_render_prototype(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn register_local_merge_uses_parameter_slots_not_arg_spelling() {
+        use crate::core::binary::Arch;
+        use crate::debug::dwarf::{DwarfRegisterLocal, DwarfRegisterLocation, DwarfReturnType};
+        use crate::ir::call_args::CallConv;
+        use crate::ir::ssa::SsaValue;
+        use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
+
+        let local = DwarfRegisterLocal {
+            source_name: "counter".to_string(),
+            c_type: "int".to_string(),
+            locations: vec![DwarfRegisterLocation {
+                start: 0x100,
+                end: 0x110,
+                register: 4,
+            }],
+        };
+        let contract = super::DwarfPrototypeContract {
+            function_name: Some("example".to_string()),
+            prototyped: true,
+            variadic: false,
+            parameter_types: Vec::new(),
+            parameter_names: Vec::new(),
+            return_type: DwarfReturnType::Void,
+            stack_objects: Vec::new(),
+            register_locals: vec![local],
+            static_locals: Vec::new(),
+        };
+        let opaque = VReg::phys("opaque-value");
+        let numbered = LlirFunction {
+            entry_va: 0x100,
+            blocks: vec![LlirBlock {
+                start_va: 0x100,
+                end_va: 0x110,
+                instrs: vec![LlirInstr {
+                    va: 0x108,
+                    op: Op::Assign {
+                        dst: VReg::phys("sink"),
+                        src: Value::Reg(opaque.clone()),
+                    },
+                }],
+                succs: Vec::new(),
+            }],
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            opaque,
+            SsaValue {
+                base: VReg::phys("r4"),
+                version: 7,
+            },
+        );
+        let mut facts = crate::ir::stack_locals::StackLocalFacts::default();
+
+        super::merge_dwarf_register_local_facts(
+            &mut facts,
+            Some(&contract),
+            &numbered,
+            &std::collections::HashMap::from([("opaque-value".to_string(), "arg99".to_string())]),
+            &identities,
+            &std::collections::HashSet::new(),
+            Arch::ARM,
+            CallConv::Arm,
+            None,
+        );
+
+        assert_eq!(
+            facts.source_names.get("arg99").map(String::as_str),
+            Some("counter")
+        );
+        assert_eq!(
+            facts.source_types.get("arg99").map(String::as_str),
+            Some("int")
+        );
+
+        let mut protected_facts = crate::ir::stack_locals::StackLocalFacts::default();
+        super::merge_dwarf_register_local_facts(
+            &mut protected_facts,
+            Some(&contract),
+            &numbered,
+            &std::collections::HashMap::from([("opaque-value".to_string(), "arg99".to_string())]),
+            &identities,
+            &std::collections::HashSet::from([99]),
+            Arch::ARM,
+            CallConv::Arm,
+            None,
+        );
+
+        assert!(!protected_facts.source_names.contains_key("arg99"));
+        assert!(!protected_facts.source_types.contains_key("arg99"));
+    }
+
     #[test]
     fn register_local_role_uses_opaque_identity_not_numbered_spelling() {
         use crate::core::binary::Arch;
