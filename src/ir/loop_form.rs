@@ -653,7 +653,8 @@ fn sentinel_search_candidate(body: &[Stmt], start: usize) -> Option<SentinelSear
     if !matches!(sentinel.semantic(), Expr::Const(_)) {
         return None;
     }
-    let initial = equality_other_side(initial_guard, sentinel)?.clone();
+    let (initial, initial_guard_sentinel) = equality_other_side(initial_guard, sentinel)?;
+    let initial = initial.clone();
     if !stable_value_expr(&initial) {
         return None;
     }
@@ -684,7 +685,8 @@ fn sentinel_search_candidate(body: &[Stmt], start: usize) -> Option<SentinelSear
         return None;
     };
     let semantic_loop_body = loop_body.iter().map(Stmt::semantic).collect::<Vec<_>>();
-    let (result, current, advance, exit_body) = match semantic_loop_body.as_slice() {
+    let (result, current, advance, exit_body, exit_guard_sentinel) =
+        match semantic_loop_body.as_slice() {
         [Stmt::Assign {
             dst: current,
             src: advance,
@@ -693,15 +695,15 @@ fn sentinel_search_candidate(body: &[Stmt], start: usize) -> Option<SentinelSear
             then_body: exit_body,
             else_body: None,
         }] if seeds.len() == 1 => {
+            let (exit_value, exit_guard_sentinel) = equality_other_side(exit_guard, sentinel)?;
             if seeds[0].0 != current
-                || equality_other_side(exit_guard, sentinel).and_then(reg_through_casts)
-                    != Some(current)
+                || reg_through_casts(exit_value) != Some(current)
                 || !match_continue.contains_reg(current)
                 || !advance.contains_reg(current)
             {
                 return None;
             }
-            (current, current, advance, exit_body)
+            (current, current, advance, exit_body, exit_guard_sentinel)
         }
         [Stmt::Assign {
             dst: result,
@@ -714,10 +716,10 @@ fn sentinel_search_candidate(body: &[Stmt], start: usize) -> Option<SentinelSear
             then_body: exit_body,
             else_body: None,
         }] if seeds.len() == 2 => {
+            let (exit_value, exit_guard_sentinel) = equality_other_side(exit_guard, sentinel)?;
             if result == current
                 || reg_through_casts(carried_result) != Some(result)
-                || equality_other_side(exit_guard, sentinel).and_then(reg_through_casts)
-                    != Some(result)
+                || reg_through_casts(exit_value) != Some(result)
                 || !seeds.iter().any(|(seed, _)| *seed == result)
                 || !seeds.iter().any(|(seed, _)| *seed == current)
                 || !match_continue.contains_reg(current)
@@ -727,14 +729,20 @@ fn sentinel_search_candidate(body: &[Stmt], start: usize) -> Option<SentinelSear
             {
                 return None;
             }
-            (result, current, advance, exit_body)
+            (result, current, advance, exit_body, exit_guard_sentinel)
         }
         _ => return None,
     };
-    if !matches!(exit_body.as_slice(), [statement]
-        if matches!(statement.semantic(), Stmt::Return { value: Some(value) }
-            if value.semantic() == sentinel.semantic()))
-    {
+    let [exit_statement] = exit_body.as_slice() else {
+        return None;
+    };
+    let Stmt::Return {
+        value: Some(exit_return_sentinel),
+    } = exit_statement.semantic()
+    else {
+        return None;
+    };
+    if exit_return_sentinel.semantic() != sentinel.semantic() {
         return None;
     }
 
@@ -753,17 +761,29 @@ fn sentinel_search_candidate(body: &[Stmt], start: usize) -> Option<SentinelSear
         return None;
     }
 
+    let sentinel_origins = sentinel
+        .origins()
+        .into_iter()
+        .chain(initial_guard_sentinel.origins())
+        .chain(exit_guard_sentinel.origins())
+        .chain(exit_return_sentinel.origins())
+        .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+            owners.union(next)
+        });
     Some(SentinelSearch {
         end: return_index,
         current: current.clone(),
         initial,
-        sentinel: sentinel.clone(),
+        sentinel: sentinel
+            .semantic()
+            .clone()
+            .with_optional_origins((!sentinel_origins.is_empty()).then_some(sentinel_origins)),
         match_continue: match_continue.clone(),
         advance: advance.clone(),
     })
 }
 
-fn equality_other_side<'a>(expr: &'a Expr, expected: &Expr) -> Option<&'a Expr> {
+fn equality_other_side<'a>(expr: &'a Expr, expected: &Expr) -> Option<(&'a Expr, &'a Expr)> {
     let Expr::Cmp {
         op: CmpOp::Eq,
         lhs,
@@ -773,9 +793,9 @@ fn equality_other_side<'a>(expr: &'a Expr, expected: &Expr) -> Option<&'a Expr> 
         return None;
     };
     if lhs.semantic() == expected.semantic() {
-        Some(rhs)
+        Some((rhs, lhs))
     } else if rhs.semantic() == expected.semantic() {
-        Some(lhs)
+        Some((lhs, rhs))
     } else {
         None
     }
@@ -1612,7 +1632,10 @@ mod tests {
     fn coalesced_sentinel_result_rotates_to_a_null_guarded_loop() {
         let current = reg("current");
         let initial = Expr::Reg(reg("arg0"));
-        let sentinel = Expr::Const(0);
+        let initial_sentinel = Expr::Const(0).with_origins(OriginSet::one(0x1000));
+        let guard_return_sentinel = Expr::Const(0).with_origins(OriginSet::one(0x1004));
+        let exit_sentinel = Expr::Const(0).with_origins(OriginSet::one(0x1008));
+        let exit_return_sentinel = Expr::Const(0).with_origins(OriginSet::one(0x100c));
         let match_continue = Expr::Cmp {
             op: CmpOp::Ne,
             lhs: Box::new(Expr::Deref {
@@ -1637,10 +1660,10 @@ mod tests {
                     cond: Expr::Cmp {
                         op: CmpOp::Eq,
                         lhs: Box::new(initial.clone()),
-                        rhs: Box::new(sentinel.clone()),
+                        rhs: Box::new(initial_sentinel),
                     },
                     then_body: vec![Stmt::Return {
-                        value: Some(sentinel.clone()),
+                        value: Some(guard_return_sentinel),
                     }],
                     else_body: None,
                 },
@@ -1659,10 +1682,10 @@ mod tests {
                             cond: Expr::Cmp {
                                 op: CmpOp::Eq,
                                 lhs: Box::new(Expr::Reg(current.clone())),
-                                rhs: Box::new(sentinel.clone()),
+                                rhs: Box::new(exit_sentinel),
                             },
                             then_body: vec![Stmt::Return {
-                                value: Some(sentinel.clone()),
+                                value: Some(exit_return_sentinel),
                             }],
                             else_body: None,
                         },
@@ -1682,17 +1705,27 @@ mod tests {
             Stmt::While {
                 cond: Expr::Cmp { op: CmpOp::Ne, lhs, rhs },
                 body,
-            } if lhs.as_ref() == &Expr::Reg(current.clone())
-                && rhs.as_ref() == &Expr::Const(0)
+            } if lhs.semantic() == &Expr::Reg(current.clone())
+                && rhs.semantic() == &Expr::Const(0)
+                && rhs.origins() == Some(&OriginSet::from_addresses([
+                    0x1000, 0x1004, 0x1008, 0x100c,
+                ]))
                 && matches!(body.as_slice(), [Stmt::If { then_body, .. }, Stmt::Assign { dst, .. }]
                     if then_body == &[Stmt::Return { value: Some(Expr::Reg(current.clone())) }]
                         && dst == &current)
         ));
+        let Stmt::Return {
+            value: Some(final_sentinel),
+        } = &function.body[2]
+        else {
+            panic!("expected final sentinel return: {:#?}", function.body)
+        };
+        assert_eq!(final_sentinel.semantic(), &Expr::Const(0));
         assert_eq!(
-            function.body[2],
-            Stmt::Return {
-                value: Some(Expr::Const(0)),
-            }
+            final_sentinel.origins(),
+            Some(&OriginSet::from_addresses([
+                0x1000, 0x1004, 0x1008, 0x100c,
+            ]))
         );
     }
 
