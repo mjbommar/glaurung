@@ -1159,6 +1159,12 @@ provenance through lowering.
   owner while the source value keeps its independent subtree owner; narrowing
   refusal is unchanged. Its observed-red test and all 65 constant-fold tests
   pass; see `results/wp3-subsumed-cast-expression-origins.md`.
+  Commit `66e533d7` then makes safe eager SETcc boolean-tree recovery
+  recursively transparent. Terminal, byte-view, tree, and predicate-leaf
+  owners survive on the recovered logical expression while memory/effect and
+  missing-byte-view refusals remain unchanged. Its observed-red test and all
+  66 constant-fold tests pass; see
+  `results/wp3-eager-boolean-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
