@@ -1711,7 +1711,11 @@ provenance through lowering.
   register naming. Stack promotion now publishes its proven parameter-slot
   bindings as typed facts; naming preserves those bindings but treats an
   unowned `argN` spelling as ordinary storage. Compatibility-only naming keeps
-  the legacy spelling fallback.
+  the legacy spelling fallback. Commit `32698e2e` removes the guessed
+  `remap_type_map` production path from plain typed rendering. That renderer
+  now recovers types over numbered LLIR and projects them through the exact
+  role map and opaque identities, so typed `varN` values no longer fall through
+  merely because a reconstructed calling-convention table cannot name them.
   See
   `results/wp3-parameter-role-metadata.md`. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
@@ -1719,8 +1723,11 @@ provenance through lowering.
   honest strict xfail rather than a semantic identity exception.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
-- [ ] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
+- [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
   `src/python_bindings/ir/type_maps.rs` after value-keyed type maps are live.
+  Commit `32698e2e` replaces the final plain-typed-render caller with numbered
+  type recovery plus exact role/identity projection; the guessed remapper no
+  longer exists.
 - [ ] Keep naming as a render mapping, not a program rewrite.
 
 ### Origin and mapping surface
@@ -3728,6 +3735,9 @@ relevant ratchet's accepted-regression record.
    like a parameter, while a proven stacked `arg6` remains intact. The two
    exact naming regressions, the exact stack-fact test, all 20 naming tests,
    and 13 stack-argument neighbors pass. Continue the remaining semantic-reader audit;
+   Commit `32698e2e` then closes the explicit `remap_type_map` migration target
+   for plain typed output. Its exact integer-role regression and all 20 local
+   type-map tests pass; no corpus or broad suite ran.
    keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.

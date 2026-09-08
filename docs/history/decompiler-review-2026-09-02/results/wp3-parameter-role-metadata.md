@@ -382,6 +382,30 @@ cargo test --features python-ext --lib ir::verify_defs::tests -- --nocapture
 
 No broad Rust/Python suite, fixture matrix, DecBench, or Joern lane ran.
 
+## Exact plain-typed role projection
+
+Commit `32698e2e` removes the guessed `remap_type_map` path from the production
+plain `types=True` renderer. Type recovery now runs over the prepared numbered
+LLIR and projects through the exact canonical role map plus opaque SSA
+identities. An integer value renamed from `eax#1` to `var0` therefore keeps its
+recovered `int` fact rather than remaining under an internal key the rendered
+AST never uses. The old calling-convention reconstruction function and its last
+caller are gone.
+
+Focused evidence:
+
+```text
+cargo test --features python-ext --lib \
+  plain_typed_render_projects_exact_integer_roles -- --nocapture
+1 passed; 4,457 filtered out
+
+cargo test --features python-ext --lib \
+  python_bindings::ir::type_maps::tests -- --nocapture
+20 passed; 4,438 filtered out
+```
+
+No broad Rust/Python suite, fixture matrix, DecBench, or Joern lane ran.
+
 ## Typed dead-store call clobbers
 
 Commit `fbb7f596` migrates the production post-naming dead-store pass from the
