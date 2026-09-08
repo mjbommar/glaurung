@@ -1749,6 +1749,12 @@ provenance through lowering.
   `xmm0_d0#9` spelling mapped to `rax` refuses. The owning nine-test module and
   one real fixture-188 GCC O2 lane pass; see
   `results/wp3-vector-copy-identities.md`.
+  Commit `b40b4226` migrates production incoming-call backfill to the same
+  authority. Whole-function live-in discovery and nested call fallbacks now
+  accept only exact version-zero ABI argument identities; misleading
+  `rdi#version` spellings cannot invent arguments. All 112 call-argument tests
+  and two exact host/ARM end-to-end checks pass; see
+  `results/wp3-call-live-in-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
@@ -3783,9 +3789,13 @@ relevant ratchet's accepted-regression record.
    packed-vector consumer's lane grouping, scalar-view bridges, exclusivity
    checks, and synthesized wide views to exact identities. Its nine module
    tests and one directly owning fixture-188 GCC O2 lane pass; see
-   `results/wp3-vector-copy-identities.md`. Re-audit remaining production name
-   parsers next, beginning with the value-numbered incoming-argument selection
-   in `src/ir/call_args.rs`; keep pre-sidecar tagging internals and explicit
+   `results/wp3-vector-copy-identities.md`. Commit `b40b4226` then replaces the
+   value-numbered incoming-argument spelling scan with exact version-zero ABI
+   identities across whole-function and nested-call recovery. Its 112 owning
+   tests and two exact C end-to-end checks pass; see
+   `results/wp3-call-live-in-identities.md`. Continue the remaining production
+   parser classification in `src/ir/call_args.rs`, `dead_stores.rs`, and
+   `types_recover/tagging.rs`; keep pre-sidecar tagging internals and explicit
    no-sidecar compatibility parsers classified separately.
    Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
