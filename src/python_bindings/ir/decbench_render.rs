@@ -465,11 +465,12 @@ fn decbench_text_with_installed_environment(
     );
     let mut dwarf_pointer_types = pass!(
         "annotate_function_fields",
-        crate::ir::dwarf_fields::annotate_function_fields(
+        crate::ir::dwarf_fields::annotate_function_fields_with_identities(
             &mut prepared,
             declared_prototype,
             dwarf_types,
             calling_convention_pointer_width(cc),
+            Some(&value_identities),
         )
     );
     for (internal_name, source_name) in &dwarf_local_names {

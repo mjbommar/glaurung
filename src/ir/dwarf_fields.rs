@@ -14,12 +14,33 @@ use crate::ir::ast::{Expr, Function, PdbFieldHint, Stmt};
 use crate::ir::call_contracts::CallPrototype;
 use crate::ir::types::{is_promoted_local_reg, BinOp, VReg};
 
+fn is_promoted_stack_object(
+    value: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    identities.map_or_else(
+        || is_promoted_local_reg(value),
+        |identities| identities.is_promoted_stack_object(value),
+    )
+}
+
 /// Attach exact DWARF field identities to memory accesses in `function`.
 pub fn annotate_function_fields(
     function: &mut Function,
     prototype: Option<&CallPrototype>,
     types: &[DwarfType],
     pointer_width: u8,
+) -> HashMap<VReg, String> {
+    annotate_function_fields_with_identities(function, prototype, types, pointer_width, None)
+}
+
+/// Attach DWARF fields using promoted-object identity when available.
+pub fn annotate_function_fields_with_identities(
+    function: &mut Function,
+    prototype: Option<&CallPrototype>,
+    types: &[DwarfType],
+    pointer_width: u8,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> HashMap<VReg, String> {
     let Some(prototype) = prototype else {
         return HashMap::new();
@@ -53,7 +74,13 @@ pub fn annotate_function_fields(
     // or a pointer-valued member can add a fact.  A small fixpoint handles loop
     // carried `p = p->next` regardless of structured statement order.
     for _ in 0..8 {
-        if !infer_body(&function.body, &layouts, pointer_width, &mut pointer_types) {
+        if !infer_body(
+            &function.body,
+            &layouts,
+            pointer_width,
+            &mut pointer_types,
+            identities,
+        ) {
             break;
         }
     }
@@ -72,6 +99,7 @@ pub fn annotate_function_fields(
                     &layouts,
                     pointer_width,
                     &pointer_types,
+                    identities,
                 ))
                 .then_some(register.clone())
             })
@@ -89,6 +117,7 @@ pub fn annotate_function_fields(
         pointer_width,
         &pointer_types,
         &mut HashMap::new(),
+        identities,
     );
     pointer_types
 }
@@ -100,10 +129,11 @@ fn all_definitions_compatible(
     layouts: &HashMap<String, &DwarfType>,
     pointer_width: u8,
     pointer_types: &HashMap<VReg, String>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> bool {
     let mut seen = false;
     let mut compatible = true;
-    visit_definitions(body, target, &mut |source| {
+    visit_definitions(body, target, identities, &mut |source| {
         seen = true;
         compatible &= source.is_some_and(|source| {
             pointer_expression_compatible(source, expected, layouts, pointer_width, pointer_types)
@@ -115,6 +145,7 @@ fn all_definitions_compatible(
 fn visit_definitions<'a>(
     body: &'a [Stmt],
     target: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
     visitor: &mut impl FnMut(Option<&'a Expr>),
 ) {
     for statement in body {
@@ -125,7 +156,7 @@ fn visit_definitions<'a>(
                 addr: Expr::Reg(dst),
                 src,
                 ..
-            } if dst == target && is_promoted_local_reg(dst) => visitor(Some(src)),
+            } if dst == target && is_promoted_stack_object(dst, identities) => visitor(Some(src)),
             Stmt::Call { dst: Some(dst), .. } if dst == target => visitor(None),
             Stmt::Pop { target: dst } if dst == target => visitor(None),
             Stmt::If {
@@ -133,27 +164,37 @@ fn visit_definitions<'a>(
                 else_body,
                 ..
             } => {
-                visit_definitions(then_body, target, visitor);
+                visit_definitions(then_body, target, identities, visitor);
                 if let Some(else_body) = else_body {
-                    visit_definitions(else_body, target, visitor);
+                    visit_definitions(else_body, target, identities, visitor);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                visit_definitions(body, target, visitor)
+                visit_definitions(body, target, identities, visitor)
             }
             Stmt::For {
                 init, step, body, ..
             } => {
-                visit_definitions(std::slice::from_ref(init.as_ref()), target, visitor);
-                visit_definitions(body, target, visitor);
-                visit_definitions(std::slice::from_ref(step.as_ref()), target, visitor);
+                visit_definitions(
+                    std::slice::from_ref(init.as_ref()),
+                    target,
+                    identities,
+                    visitor,
+                );
+                visit_definitions(body, target, identities, visitor);
+                visit_definitions(
+                    std::slice::from_ref(step.as_ref()),
+                    target,
+                    identities,
+                    visitor,
+                );
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, body) in cases {
-                    visit_definitions(body, target, visitor);
+                    visit_definitions(body, target, identities, visitor);
                 }
                 if let Some(default) = default {
-                    visit_definitions(default, target, visitor);
+                    visit_definitions(default, target, identities, visitor);
                 }
             }
             _ => {}
@@ -195,6 +236,7 @@ fn infer_body(
     layouts: &HashMap<String, &DwarfType>,
     pointer_width: u8,
     pointer_types: &mut HashMap<VReg, String>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> bool {
     let mut changed = false;
     for statement in body {
@@ -213,7 +255,7 @@ fn infer_body(
                 addr: Expr::Reg(dst),
                 src,
                 ..
-            } if is_promoted_local_reg(dst) => {
+            } if is_promoted_stack_object(dst, identities) => {
                 if let Some(name) = pointer_source_type(src, layouts, pointer_width, pointer_types)
                 {
                     if pointer_types.get(dst) != Some(&name) {
@@ -227,20 +269,22 @@ fn infer_body(
                 else_body,
                 ..
             } => {
-                changed |= infer_body(then_body, layouts, pointer_width, pointer_types);
+                changed |= infer_body(then_body, layouts, pointer_width, pointer_types, identities);
                 if let Some(else_body) = else_body {
-                    changed |= infer_body(else_body, layouts, pointer_width, pointer_types);
+                    changed |=
+                        infer_body(else_body, layouts, pointer_width, pointer_types, identities);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                changed |= infer_body(body, layouts, pointer_width, pointer_types);
+                changed |= infer_body(body, layouts, pointer_width, pointer_types, identities);
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, body) in cases {
-                    changed |= infer_body(body, layouts, pointer_width, pointer_types);
+                    changed |= infer_body(body, layouts, pointer_width, pointer_types, identities);
                 }
                 if let Some(default) = default {
-                    changed |= infer_body(default, layouts, pointer_width, pointer_types);
+                    changed |=
+                        infer_body(default, layouts, pointer_width, pointer_types, identities);
                 }
             }
             Stmt::Store { .. }
@@ -373,6 +417,7 @@ fn annotate_body(
     pointer_width: u8,
     pointer_types: &HashMap<VReg, String>,
     definitions: &mut HashMap<VReg, Expr>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
     for statement in body {
         match statement.semantic_mut() {
@@ -392,7 +437,8 @@ fn annotate_body(
                 // type propagation proves the slot contains `struct T *`,
                 // annotating offset zero here would turn `local = value` into
                 // the unrelated field store `local->first_field = value`.
-                if !matches!(addr, Expr::Reg(register) if is_promoted_local_reg(register)) {
+                if !matches!(addr, Expr::Reg(register) if is_promoted_stack_object(register, identities))
+                {
                     annotate_address(
                         addr,
                         *size,
@@ -432,6 +478,7 @@ fn annotate_body(
                     pointer_width,
                     pointer_types,
                     &mut then_definitions,
+                    identities,
                 );
                 if let Some(else_body) = else_body {
                     let mut else_definitions = definitions.clone();
@@ -441,6 +488,7 @@ fn annotate_body(
                         pointer_width,
                         pointer_types,
                         &mut else_definitions,
+                        identities,
                     );
                 }
                 invalidate_written_definitions(statement, definitions);
@@ -468,6 +516,7 @@ fn annotate_body(
                     pointer_width,
                     pointer_types,
                     &mut loop_definitions,
+                    identities,
                 );
                 invalidate_registers(&written, definitions);
             }
@@ -484,6 +533,7 @@ fn annotate_body(
                     pointer_width,
                     pointer_types,
                     &mut loop_definitions,
+                    identities,
                 );
                 annotate_expr(
                     cond,
@@ -511,6 +561,7 @@ fn annotate_body(
                     pointer_width,
                     pointer_types,
                     definitions,
+                    identities,
                 );
                 let mut loop_definitions = definitions.clone();
                 invalidate_registers(&written, &mut loop_definitions);
@@ -527,6 +578,7 @@ fn annotate_body(
                     pointer_width,
                     pointer_types,
                     &mut loop_definitions,
+                    identities,
                 );
                 annotate_body(
                     std::slice::from_mut(step.as_mut()),
@@ -534,6 +586,7 @@ fn annotate_body(
                     pointer_width,
                     pointer_types,
                     &mut loop_definitions,
+                    identities,
                 );
                 invalidate_registers(&written, definitions);
             }
@@ -556,6 +609,7 @@ fn annotate_body(
                         pointer_width,
                         pointer_types,
                         &mut definitions.clone(),
+                        identities,
                     );
                 }
                 if let Some(default) = default {
@@ -565,6 +619,7 @@ fn annotate_body(
                         pointer_width,
                         pointer_types,
                         &mut definitions.clone(),
+                        identities,
                     );
                 }
                 invalidate_written_definitions(statement, definitions);
@@ -582,6 +637,7 @@ fn annotate_body(
                     pointer_width,
                     pointer_types,
                     &mut definitions.clone(),
+                    identities,
                 );
                 for catch in catches {
                     annotate_body(
@@ -590,6 +646,7 @@ fn annotate_body(
                         pointer_width,
                         pointer_types,
                         &mut definitions.clone(),
+                        identities,
                     );
                 }
                 invalidate_written_definitions(statement, definitions);
@@ -1167,6 +1224,70 @@ mod tests {
                 ..
             } if dst == &local
         ));
+    }
+
+    #[test]
+    fn opaque_promoted_stack_result_uses_identity_for_pointer_type() {
+        let object_name = "saved_result".to_string();
+        let local = VReg::phys(&object_name);
+        let mut function = Function {
+            name: "list_find".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(local.clone()),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                    size: 8,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(local.clone())),
+                },
+            ],
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object_name]);
+
+        let pointer_types = annotate_function_fields_with_identities(
+            &mut function,
+            Some(&node_prototype()),
+            &[node_layout()],
+            8,
+            Some(&identities),
+        );
+
+        assert_eq!(pointer_types.get(&local).map(String::as_str), Some("node"));
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Store {
+                addr: Expr::Reg(dst),
+                ..
+            } if dst == &local
+        ));
+    }
+
+    #[test]
+    fn unowned_local_spelling_does_not_gain_dwarf_pointer_type() {
+        let local = VReg::phys("local_looks_promoted");
+        let mut function = Function {
+            name: "list_find".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Store {
+                addr: Expr::Reg(local.clone()),
+                src: Expr::Reg(VReg::phys("arg0")),
+                size: 8,
+            }],
+        };
+        let identities = crate::ir::value_number::ValueIdentities::default();
+
+        let pointer_types = annotate_function_fields_with_identities(
+            &mut function,
+            Some(&node_prototype()),
+            &[node_layout()],
+            8,
+            Some(&identities),
+        );
+
+        assert!(!pointer_types.contains_key(&local));
     }
 
     #[test]
