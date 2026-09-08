@@ -1681,6 +1681,13 @@ provenance through lowering.
   fails closed. The two observed-red contracts, both owning five-test modules,
   a narrow-local fixture lane, and the four-cell x86-64/AArch64 Hello canary
   pass; see `results/wp3-promoted-store-type-identities.md`.
+  Commit `858f8957` then migrates aggregate bank-return composition to the
+  same storage identity boundary. Recursive return reaching-state now accepts
+  an opaque promoted scalar copy and refuses an unowned `local_*` lookalike;
+  the final production renderer supplies the sidecar it already owns. Both
+  exact contracts, all 23 return-bank tests, and the directly motivating
+  fixture-197 GCC-O0 function pass; see
+  `results/wp3-callee-bank-return-storage-identities.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
