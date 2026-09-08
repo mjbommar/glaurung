@@ -1887,6 +1887,13 @@ provenance through lowering.
   rejected. The exact regression, all ten owning module tests, and only the
   GCC O0 `bv195_make_quad` fixture pass. No broad suite or corpus ran. See
   `results/wp3-callee-pair-return-identities.md`.
+  Commit `4345efff` closes the sibling register-resident multi-bank return
+  consumer. Split INTEGER/SSE and `xmm0:xmm1` parts, call destinations, return
+  projections, nested flow, and pop invalidation now use exact identities.
+  Opaque exact bank values materialize, while misleading `xmm1#version` text
+  backed by `rax` refuses. The exact regression, all 21 owning module tests,
+  and only the GCC O2 `bv195_make_mixed` fixture pass. No broad suite or corpus
+  ran. See `results/wp3-register-return-bank-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
