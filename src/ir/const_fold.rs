@@ -1823,7 +1823,7 @@ fn invert_mixed_view_equal_or_signed_less(expr: &Expr) -> Option<Expr> {
         || !less_signed
         || equality_outer != less_outer
         || equality_inner != less_inner
-        || equality_value != less_value
+        || equality_value.semantic() != less_value.semantic()
         || *equality_constant < 0
         || !cast_preserves_constant(*equality_constant, true, equality_inner)
     {
@@ -1836,6 +1836,8 @@ fn invert_mixed_view_equal_or_signed_less(expr: &Expr) -> Option<Expr> {
         .chain(less.origins())
         .chain((!equality_origins.is_empty()).then_some(&equality_origins))
         .chain((!less_origins.is_empty()).then_some(&less_origins))
+        .chain(equality_value.origins())
+        .chain(less_value.origins())
         .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
             owners.union(next)
         });
@@ -2821,12 +2823,20 @@ mod tests {
         let zero_owner = crate::ir::ast::OriginSet::one(0x1010);
         let equality_constant_owner = crate::ir::ast::OriginSet::one(0x1014);
         let less_constant_owner = crate::ir::ast::OriginSet::one(0x1018);
-        let signed_value = view(true, value.clone());
+        let equality_value_owner = crate::ir::ast::OriginSet::one(0x101c);
+        let less_value_owner = crate::ir::ast::OriginSet::one(0x1020);
+        let signed_value = view(
+            true,
+            value.clone().with_origins(less_value_owner.clone()),
+        );
         let relation = bin(
             BinOp::Or,
             Expr::Cmp {
                 op: CmpOp::Eq,
-                lhs: Box::new(view(false, value)),
+                lhs: Box::new(view(
+                    false,
+                    value.with_origins(equality_value_owner.clone()),
+                )),
                 rhs: Box::new(
                     Expr::Const(100).with_origins(equality_constant_owner.clone()),
                 ),
@@ -2872,7 +2882,9 @@ mod tests {
             .union(&relation_owner)
             .union(&equality_owner)
             .union(&less_owner)
-            .union(&zero_owner);
+            .union(&zero_owner)
+            .union(&equality_value_owner)
+            .union(&less_value_owner);
         assert_eq!(src.origins(), Some(&expected));
     }
 
