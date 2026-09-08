@@ -1318,10 +1318,14 @@ fn is_unit_increment(stmt: &Stmt, target: &VReg) -> bool {
 fn assigned_target(stmt: &Stmt) -> Option<&VReg> {
     match stmt.semantic() {
         Stmt::Assign { dst, .. } => Some(dst),
-        Stmt::Store {
-            addr: Expr::Reg(dst @ VReg::Phys(name)),
-            ..
-        } if name.starts_with("local_") || name.starts_with("stack_") => Some(dst),
+        Stmt::Store { addr, .. } => match addr.semantic() {
+            Expr::Reg(dst @ VReg::Phys(name))
+                if name.starts_with("local_") || name.starts_with("stack_") =>
+            {
+                Some(dst)
+            }
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -2567,12 +2571,12 @@ mod tests {
     fn promotes_counted_loop_with_switch_and_early_return() {
         let induction = reg("local_i");
         let init = Stmt::Store {
-            addr: Expr::Reg(induction.clone()),
+            addr: Expr::Reg(induction.clone()).with_origins(OriginSet::one(0x1000)),
             src: Expr::Const(0),
             size: 4,
         };
         let step = Stmt::Store {
-            addr: Expr::Reg(induction.clone()),
+            addr: Expr::Reg(induction.clone()).with_origins(OriginSet::one(0x1004)),
             src: Expr::Bin {
                 op: BinOp::Add,
                 lhs: Box::new(Expr::Reg(induction.clone())),
