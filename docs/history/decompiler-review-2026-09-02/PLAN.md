@@ -1633,7 +1633,10 @@ provenance through lowering.
   refine and an unowned `arg99` refuses. Commit `14f6d24a` threads the same
   authority through recursive pointer classification and copy-origin proofs;
   an unowned `varN` intermediary now refuses while an exact intermediary still
-  transports the owned parameter fact. See
+  transports the owned parameter fact. Commit `11ae7601` migrates exact integer
+  and float type-role projection to its already-authoritative `param_slots` set;
+  only owned slots are withheld from legacy storage projection, so an unrelated
+  role spelled `arg99` is no longer misclassified. See
   `results/wp3-parameter-role-metadata.md`. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
   merge hid the unresolved SysV `al` variadic live-in. That cell is now an

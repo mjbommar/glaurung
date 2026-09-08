@@ -22,6 +22,12 @@ and separately modelled promoted storage are trusted. An unowned `var2` copy no
 longer transports a pointer fact merely because of its spelling; an exact
 `var2` still transports the owned `arg0` fact.
 
+Commit `11ae7601` migrates exact type-role projection. The remapper already
+receives pipeline-owned `param_slots`; it now derives the protected role set
+from those slots rather than parsing every alias that looks like `argN`.
+Consequently the real `arg0` remains protected from later storage definitions,
+while an unrelated exact role called `arg99` is projected normally.
+
 Focused validation used exact Rust tests only:
 
 ```text
@@ -48,6 +54,12 @@ recovered_callee_pointer_flows_back_through_one_exact_parameter_copy
 
 attributed_authoritative_callee_refines_a_forwarded_argument
 1 passed; 4,426 filtered out
+
+exact_role_projection_uses_parameter_slots_instead_of_arg_spelling
+1 passed; 4,427 filtered out
+
+float_role_projection_uses_opaque_identity_instead_of_numbered_spelling
+1 passed; 4,427 filtered out
 ```
 
 Each command was `cargo test --features python-ext --lib
