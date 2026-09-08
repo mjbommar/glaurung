@@ -163,9 +163,8 @@ fn remap_type_map_impl(
                             let same_storage = value_identities.map_or_else(
                                 || crate::ir::abi::ssa_base(storage) == n,
                                 |identities| {
-                                    identities.exact(&storage_value).is_some_and(|identity| {
-                                        identity.base == crate::ir::types::VReg::Phys(n.clone())
-                                    })
+                                    identities.unambiguous_physical_base(&storage_value)
+                                        == Some(n.as_str())
                                 },
                             );
                             if same_storage
@@ -791,6 +790,70 @@ mod tests {
             projected.get(&VReg::phys("var0")),
             Some(TypeHint::Float { width: 4 })
         );
+    }
+
+    #[test]
+    fn float_role_projection_accepts_coalesced_versions_of_one_storage() {
+        let storage = VReg::phys("coalesced-float");
+        let mut raw = TypeMap::default();
+        raw.upsert_public(VReg::phys("s15"), TypeHint::Float { width: 4 });
+        let roles = HashMap::from([("coalesced-float".to_string(), "var0".to_string())]);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for version in [3, 7] {
+            identities.record(
+                storage.clone(),
+                SsaValue {
+                    base: VReg::phys("s15"),
+                    version,
+                },
+            );
+        }
+
+        let projected = remap_type_map_impl(
+            &raw,
+            CallConv::ArmHardFloat,
+            &Default::default(),
+            false,
+            Some(&roles),
+            Some(&identities),
+            false,
+        );
+
+        assert_eq!(identities.exact(&storage), None);
+        assert_eq!(
+            projected.get(&VReg::phys("var0")),
+            Some(TypeHint::Float { width: 4 })
+        );
+    }
+
+    #[test]
+    fn float_role_projection_rejects_conflicting_coalesced_storage() {
+        let storage = VReg::phys("ambiguous-float");
+        let mut raw = TypeMap::default();
+        raw.upsert_public(VReg::phys("s15"), TypeHint::Float { width: 4 });
+        let roles = HashMap::from([("ambiguous-float".to_string(), "var0".to_string())]);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for (base, version) in [("s15", 3), ("s14", 7)] {
+            identities.record(
+                storage.clone(),
+                SsaValue {
+                    base: VReg::phys(base),
+                    version,
+                },
+            );
+        }
+
+        let projected = remap_type_map_impl(
+            &raw,
+            CallConv::ArmHardFloat,
+            &Default::default(),
+            false,
+            Some(&roles),
+            Some(&identities),
+            false,
+        );
+
+        assert_eq!(projected.get(&VReg::phys("var0")), None);
     }
 
     #[test]
