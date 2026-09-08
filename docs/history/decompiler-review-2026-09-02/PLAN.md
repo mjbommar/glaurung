@@ -1154,6 +1154,11 @@ provenance through lowering.
   select/condition owner union while excluding the unreachable prior value.
   Its observed-red test and all 64 constant-fold tests pass; see
   `results/wp3-repeated-select-expression-origins.md`.
+  Commit `22cb5827` next makes equal-or-wider inner-cast subsumption
+  transparent. The surviving outer cast receives the consumed inner-cast
+  owner while the source value keeps its independent subtree owner; narrowing
+  refusal is unchanged. Its observed-red test and all 65 constant-fold tests
+  pass; see `results/wp3-subsumed-cast-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
