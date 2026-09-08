@@ -1165,6 +1165,11 @@ provenance through lowering.
   missing-byte-view refusals remain unchanged. Its observed-red test and all
   66 constant-fold tests pass; see
   `results/wp3-eager-boolean-expression-origins.md`.
+  Commit `1647953d` next makes observed-mask simplification transparent to an
+  attributed partial-register merge. The low-bit predicate retains its merge
+  and observation owners, while the provably masked-out high-parent owner is
+  excluded. Its observed-red test and all 67 constant-fold tests pass; see
+  `results/wp3-observed-mask-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
