@@ -72,6 +72,7 @@ pub struct ValueIdentities {
     parameter_slots_by_value: HashMap<VReg, BTreeSet<usize>>,
     result_roles: HashSet<VReg>,
     machine_saved_slots: HashSet<VReg>,
+    promoted_stack_objects: HashSet<VReg>,
 }
 
 impl ValueIdentities {
@@ -104,10 +105,24 @@ impl ValueIdentities {
         self.machine_saved_slots.contains(value)
     }
 
+    /// Whether stack promotion minted `value` as a source-level storage object.
+    pub(crate) fn is_promoted_stack_object(&self, value: &VReg) -> bool {
+        self.promoted_stack_objects.contains(value)
+    }
+
     /// Publish machine-save storage identities discovered during promotion.
     pub(crate) fn attach_machine_saved_slots(&mut self, slots: &HashSet<String>) {
         self.machine_saved_slots
             .extend(slots.iter().cloned().map(VReg::phys));
+    }
+
+    /// Publish every storage identity minted by stack promotion.
+    pub(crate) fn attach_promoted_stack_objects<'a>(
+        &mut self,
+        objects: impl IntoIterator<Item = &'a String>,
+    ) {
+        self.promoted_stack_objects
+            .extend(objects.into_iter().cloned().map(VReg::phys));
     }
 
     pub(crate) fn record(&mut self, numbered: VReg, identity: SsaValue) {

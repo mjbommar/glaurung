@@ -167,6 +167,27 @@ pub(crate) fn prune_unread_promoted_locals(
     function: &mut Function,
     protected_locals: &std::collections::HashSet<String>,
 ) {
+    prune_unread_promoted_locals_where(function, protected_locals, &|value| {
+        crate::ir::types::is_promoted_local_reg(value)
+    });
+}
+
+/// Remove unread stack objects using stack-promotion's typed ownership facts.
+pub(crate) fn prune_unread_promoted_locals_with_identities(
+    function: &mut Function,
+    protected_locals: &std::collections::HashSet<String>,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    prune_unread_promoted_locals_where(function, protected_locals, &|value| {
+        identities.is_promoted_stack_object(value)
+    });
+}
+
+fn prune_unread_promoted_locals_where(
+    function: &mut Function,
+    protected_locals: &std::collections::HashSet<String>,
+    is_promoted_stack_object: &impl Fn(&VReg) -> bool,
+) {
     fn pure(expression: &Expr) -> bool {
         match expression {
             Expr::Origin { expr, .. } => pure(expr),
@@ -334,56 +355,75 @@ pub(crate) fn prune_unread_promoted_locals(
             .body
             .iter()
             .flat_map(|statement| {
-                fn collect(statement: &Stmt, out: &mut Vec<VReg>) {
+                fn collect(
+                    statement: &Stmt,
+                    out: &mut Vec<VReg>,
+                    is_promoted_stack_object: &impl Fn(&VReg) -> bool,
+                ) {
                     match statement.semantic() {
                         Stmt::Origin { .. } => {
                             unreachable!("semantic statement cannot be an origin wrapper")
                         }
-                        Stmt::Assign {
-                            dst: VReg::Phys(name),
-                            ..
-                        } if name.starts_with("local_") => out.push(VReg::phys(name)),
+                        Stmt::Assign { dst, .. } if is_promoted_stack_object(dst) => {
+                            out.push(dst.clone())
+                        }
                         Stmt::Store {
-                            addr: Expr::Reg(VReg::Phys(name)),
+                            addr: Expr::Reg(dst),
                             ..
-                        } if name.starts_with("local_") => out.push(VReg::phys(name)),
+                        } if is_promoted_stack_object(dst) => out.push(dst.clone()),
                         Stmt::If {
                             then_body,
                             else_body,
                             ..
                         } => {
-                            then_body.iter().for_each(|statement| collect(statement, out));
+                            then_body.iter().for_each(|statement| {
+                                collect(statement, out, is_promoted_stack_object)
+                            });
                             if let Some(else_body) = else_body {
-                                else_body.iter().for_each(|statement| collect(statement, out));
+                                else_body.iter().for_each(|statement| {
+                                    collect(statement, out, is_promoted_stack_object)
+                                });
                             }
                         }
                         Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                            body.iter().for_each(|statement| collect(statement, out));
+                            body.iter().for_each(|statement| {
+                                collect(statement, out, is_promoted_stack_object)
+                            });
                         }
                         Stmt::For { init, step, body, .. } => {
-                            collect(init, out);
-                            body.iter().for_each(|statement| collect(statement, out));
-                            collect(step, out);
+                            collect(init, out, is_promoted_stack_object);
+                            body.iter().for_each(|statement| {
+                                collect(statement, out, is_promoted_stack_object)
+                            });
+                            collect(step, out, is_promoted_stack_object);
                         }
                         Stmt::Switch { cases, default, .. } => {
                             for (_, body) in cases {
-                                body.iter().for_each(|statement| collect(statement, out));
+                                body.iter().for_each(|statement| {
+                                    collect(statement, out, is_promoted_stack_object)
+                                });
                             }
                             if let Some(default) = default {
-                                default.iter().for_each(|statement| collect(statement, out));
+                                default.iter().for_each(|statement| {
+                                    collect(statement, out, is_promoted_stack_object)
+                                });
                             }
                         }
                         Stmt::TryCatch { try_body, catches } => {
-                            try_body.iter().for_each(|statement| collect(statement, out));
+                            try_body.iter().for_each(|statement| {
+                                collect(statement, out, is_promoted_stack_object)
+                            });
                             for catch in catches {
-                                catch.body.iter().for_each(|statement| collect(statement, out));
+                                catch.body.iter().for_each(|statement| {
+                                    collect(statement, out, is_promoted_stack_object)
+                                });
                             }
                         }
                         _ => {}
                     }
                 }
                 let mut found = Vec::new();
-                collect(statement, &mut found);
+                collect(statement, &mut found, is_promoted_stack_object);
                 found
             })
             .filter(|candidate| {
@@ -1038,6 +1078,67 @@ mod tests {
                 value: Some(Expr::Const(0)),
             }]
         );
+    }
+
+    #[test]
+    fn unread_opaque_stack_object_is_removed_by_typed_ownership() {
+        let object = "opaque_frame_object".to_string();
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object]);
+        let mut function = Function {
+            name: "main".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys(&object)),
+                    src: Expr::Const(0),
+                    size: 4,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Const(0)),
+                },
+            ],
+        };
+
+        prune_unread_promoted_locals_with_identities(
+            &mut function,
+            &std::collections::HashSet::new(),
+            &identities,
+        );
+
+        assert_eq!(
+            function.body,
+            vec![Stmt::Return {
+                value: Some(Expr::Const(0)),
+            }]
+        );
+    }
+
+    #[test]
+    fn an_unowned_local_spelling_is_not_treated_as_stack_storage() {
+        let original = Stmt::Store {
+            addr: Expr::Reg(VReg::phys("local_4")),
+            src: Expr::Const(0),
+            size: 4,
+        };
+        let mut function = Function {
+            name: "main".into(),
+            entry_va: 0,
+            body: vec![
+                original.clone(),
+                Stmt::Return {
+                    value: Some(Expr::Const(0)),
+                },
+            ],
+        };
+
+        prune_unread_promoted_locals_with_identities(
+            &mut function,
+            &std::collections::HashSet::new(),
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
+
+        assert_eq!(function.body.first(), Some(&original));
     }
 
     #[test]

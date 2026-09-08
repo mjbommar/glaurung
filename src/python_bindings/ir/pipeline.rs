@@ -687,6 +687,7 @@ pub(super) fn run_ast_passes(
             value_identities,
         )
     );
+    value_identities.attach_promoted_stack_objects(stack_facts.sizes.keys());
     value_identities.attach_machine_saved_slots(&stack_facts.machine_saved_slots);
     // Now that the buffer is a named object, make it the destination of the
     // call that fills it. Before promotion its address is still `sp + k`

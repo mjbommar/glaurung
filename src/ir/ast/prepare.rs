@@ -490,7 +490,16 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
     // Clang -O0's unobserved `main` return slot is machine bookkeeping, not a
     // source local. Drop only pure writes to unread anonymous promoted slots;
     // authoritative debug locals remain protected.
-    crate::ir::direct_output::prune_unread_promoted_locals(&mut owned, protected_locals);
+    match identities {
+        Some(identities) => crate::ir::direct_output::prune_unread_promoted_locals_with_identities(
+            &mut owned,
+            protected_locals,
+            identities,
+        ),
+        None => {
+            crate::ir::direct_output::prune_unread_promoted_locals(&mut owned, protected_locals)
+        }
+    }
     if output_kind == crate::ir::types_recover::RecoveredOutputKind::Void {
         crate::ir::direct_output::prune_void_fallthrough_return(&mut owned);
     }
