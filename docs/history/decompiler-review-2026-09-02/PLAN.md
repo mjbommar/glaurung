@@ -1636,7 +1636,11 @@ provenance through lowering.
   transports the owned parameter fact. Commit `11ae7601` migrates exact integer
   and float type-role projection to its already-authoritative `param_slots` set;
   only owned slots are withheld from legacy storage projection, so an unrelated
-  role spelled `arg99` is no longer misclassified. See
+  role spelled `arg99` is no longer misclassified. Commit `5c88a5bd` migrates
+  exact-definition-width merging to the same slot
+  fact. This removes the final `parse_arg_index` call from `type_maps.rs` while
+  retaining protection for real parameter prototypes and ordinary local
+  narrowing. See
   `results/wp3-parameter-role-metadata.md`. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
   merge hid the unresolved SysV `al` variadic live-in. That cell is now an

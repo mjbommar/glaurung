@@ -28,6 +28,13 @@ from those slots rather than parsing every alias that looks like `argN`.
 Consequently the real `arg0` remains protected from later storage definitions,
 while an unrelated exact role called `arg99` is projected normally.
 
+Commit `5c88a5bd` applies the same rule to exact-definition-width merging. The
+production caller now passes `param_slots` into the merge instead of forcing it
+to rediscover parameters from names. A later subregister definition remains
+unable to narrow an owned parameter prototype, an unrelated `arg99` can receive
+its legitimate exact width, and ordinary local narrowing is unchanged. This
+removes the final `parse_arg_index` call from `type_maps.rs`.
+
 Focused validation used exact Rust tests only:
 
 ```text
@@ -60,6 +67,15 @@ exact_role_projection_uses_parameter_slots_instead_of_arg_spelling
 
 float_role_projection_uses_opaque_identity_instead_of_numbered_spelling
 1 passed; 4,427 filtered out
+
+definition_width_merge_does_not_parse_unowned_arg_spelling
+1 passed; 4,428 filtered out
+
+later_subregister_definition_does_not_narrow_a_parameter_prototype
+1 passed; 4,428 filtered out
+
+a_narrowing_definition_still_types_a_local_on_a_sixty_four_bit_target
+1 passed; 4,428 filtered out
 ```
 
 Each command was `cargo test --features python-ext --lib
