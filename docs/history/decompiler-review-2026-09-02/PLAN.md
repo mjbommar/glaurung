@@ -1964,6 +1964,13 @@ provenance through lowering.
   paths retain their old behavior. Seven exact tests and only the GCC O2
   `se189_select_call` fixture pass with a fresh extension. No broad suite or
   corpus ran. See `results/wp3-canonical-ssa-base-boundary.md`.
+  Commit `0d8a77cc` then moves `ValueIdentities`' own source-parameter role
+  attachment behind that boundary. A malformed `rdi#not_canonical` identity
+  no longer receives slot-zero authority, while a valid version-zero `rdi`
+  identity still does. The ownership-level regression was observed red before
+  the fix; it, two nearest authority controls, and only the GCC O0 `sum_arg7`
+  fixture pass with a fresh extension. No broad suite or corpus ran. See
+  `results/wp3-canonical-parameter-authority.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
