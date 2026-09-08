@@ -326,7 +326,14 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
         crate::ir::direct_output::clear_return_values(&mut owned);
         crate::ir::direct_output::prune_void_entry_result_restores(&mut owned);
     } else {
-        crate::ir::direct_output::materialize_direct_output(&mut owned);
+        match identities {
+            Some(identities) => {
+                crate::ir::direct_output::materialize_direct_output_with_identities(
+                    &mut owned, identities,
+                )
+            }
+            None => crate::ir::direct_output::materialize_direct_output(&mut owned),
+        }
     }
     coalesce_param_spills(&mut owned.body, protected_locals, identities);
     crate::ir::label_prune::prune_unreachable_tails(&mut owned);

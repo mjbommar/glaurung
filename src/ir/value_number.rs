@@ -70,6 +70,7 @@ use temp_remap::build_temp_remap;
 pub struct ValueIdentities {
     by_numbered_value: HashMap<VReg, BTreeSet<SsaValue>>,
     parameter_slots_by_value: HashMap<VReg, BTreeSet<usize>>,
+    result_roles: HashSet<VReg>,
 }
 
 impl ValueIdentities {
@@ -90,6 +91,11 @@ impl ValueIdentities {
     pub(crate) fn parameter_slot(&self, value: &VReg) -> Option<usize> {
         let slots = self.parameter_slots_by_value.get(value)?;
         (slots.len() == 1).then(|| slots.first().copied()).flatten()
+    }
+
+    /// Whether `value` carries the pipeline-owned source result role.
+    pub(crate) fn is_result_role(&self, value: &VReg) -> bool {
+        self.result_roles.contains(value)
     }
 
     pub(crate) fn record(&mut self, numbered: VReg, identity: SsaValue) {
@@ -119,6 +125,9 @@ impl ValueIdentities {
                 .entry(VReg::Phys(role.clone()))
                 .or_default()
                 .extend(identities.iter().cloned());
+            if role == "ret" {
+                projected.result_roles.insert(VReg::Phys(role.clone()));
+            }
         }
         for (value, slots) in &self.parameter_slots_by_value {
             let VReg::Phys(storage) = value else {
@@ -172,6 +181,11 @@ impl ValueIdentities {
                 .entry(numbered)
                 .or_default()
                 .extend(slots);
+        }
+        let previous = std::mem::take(&mut self.result_roles);
+        for value in previous {
+            self.result_roles
+                .insert(renames.get(&value).cloned().unwrap_or(value));
         }
     }
 
