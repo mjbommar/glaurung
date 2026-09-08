@@ -1087,7 +1087,14 @@ provenance through lowering.
   tests pass, and the 12-cell cross-ABI `call_into_spill` release A/B is exactly
   neutral, including the same pre-existing legacy `armv7:O0` failure. See
   `results/wp3-recovered-layout-expression-origins.md`. Specialized cdecl32,
-  hard-float, and table-call fallback expression producers remain open.
+  hard-float, and table-call fallback expression producers remain open. Commit
+  `e68ff86f` next attributes cdecl32 preallocated-store and lowered-push
+  arguments to their exact value stores. Stack decrements remain on the
+  synthesized net adjustment, while the call keeps every consumed setup owner.
+  Both forms were observed red, all 111 call-argument tests pass, and the exact
+  i386 O0/O2 `call_into_spill` release A/B remains 2/2 green; see
+  `results/wp3-cdecl32-argument-expression-origins.md`. Hard-float and
+  table-call fallback expression producers remain open.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
