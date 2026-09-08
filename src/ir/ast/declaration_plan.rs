@@ -184,7 +184,7 @@ impl DeclarationPlan {
         if let Some(tm) = tm {
             for (v, hint) in tm.iter() {
                 if let (VReg::Phys(n), TypeHint::Pointer { pointee_width }) = (v, hint) {
-                    if parse_arg_index(n).is_some()
+                    if is_parameter_role(n, value_identities)
                         || is_promoted_local_in(n, source_locals)
                         || is_identity_value(n, value_identities)
                     {
@@ -192,7 +192,7 @@ impl DeclarationPlan {
                     }
                 }
                 if let (VReg::Phys(n), TypeHint::Int { signed, width }) = (v, hint) {
-                    if parse_arg_index(n).is_some()
+                    if is_parameter_role(n, value_identities)
                         || is_promoted_local_in(n, source_locals)
                         || is_identity_value(n, value_identities)
                     {
@@ -214,7 +214,7 @@ impl DeclarationPlan {
             for (v, hint) in wtm.iter() {
                 if let (VReg::Phys(n), TypeHint::Int { width, .. }) = (v, hint) {
                     if *width > 0
-                        && (parse_arg_index(n).is_some()
+                        && (is_parameter_role(n, value_identities)
                             || is_promoted_local_in(n, source_locals)
                             || is_identity_value(n, value_identities))
                     {
@@ -498,6 +498,16 @@ fn is_identity_value(
     identities.is_some_and(|identities| identities.exact(&VReg::phys(name)).is_some())
 }
 
+fn is_parameter_role(
+    name: &str,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    match identities {
+        Some(identities) => identities.parameter_slot(&VReg::phys(name)).is_some(),
+        None => parse_arg_index(name).is_some(),
+    }
+}
+
 fn selected_integer_type(c_type: &str, pointer_width: u8) -> Option<(bool, u8)> {
     let signed = match c_type.trim() {
         "signed char"
@@ -655,6 +665,48 @@ mod identity_tests {
         }
 
         assert!(!is_identity_value("opaque_value", Some(&identities)));
+    }
+
+    #[test]
+    fn declaration_facts_do_not_trust_an_unowned_arg_spelling() {
+        let ids = DecIdents::default();
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            VReg::phys("arg0"),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+        types.upsert_public(VReg::phys("arg1"), TypeHint::Pointer { pointee_width: 1 });
+        let identities = crate::ir::value_number::ValueIdentities::default();
+        let source_type_aliases = BTreeSet::new();
+        let dwarf_types = Vec::new();
+        let dwarf_type_env = DwarfTypeEnv::new(&dwarf_types);
+        let struct_pointer_types = HashMap::new();
+        let source_locals = HashSet::new();
+        let aggregate_value_widths = HashMap::new();
+        let plan = DeclarationPlan::compute(DeclarationInputs {
+            ids: &ids,
+            body: &[],
+            tm: Some(&types),
+            value_identities: Some(&identities),
+            width_tm: Some(&types),
+            output_kind: RecoveredOutputKind::Void,
+            declared_prototype: None,
+            declared_parameter_names: None,
+            arg_count: 0,
+            pointer_width: 8,
+            source_type_aliases: &source_type_aliases,
+            dwarf_type_env: &dwarf_type_env,
+            struct_pointer_types: &struct_pointer_types,
+            source_locals: &source_locals,
+            aggregate_value_widths: &aggregate_value_widths,
+        });
+
+        assert_eq!(plan.integer_type("arg0"), None);
+        assert_eq!(plan.integer_width("arg0"), None);
+        assert_eq!(plan.pointee_width("arg1"), None);
     }
 
     #[test]
