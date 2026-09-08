@@ -1619,7 +1619,11 @@ provenance through lowering.
   Commit `633df9f7` removes the `varN` fallback from loop-entry coalescing when
   identity authority is installed: a missing or ambiguous identity now refuses,
   while spelling fallback remains only for compatibility callers with no
-  sidecar. Compatibility and other product consumers remain. The latter migration also
+  sidecar. Commit `db6c4756` applies the same authority rule to exact high-bit
+  and pointer-value type refinement, while promoted stack objects retain their
+  separate storage-model eligibility. See
+  `results/wp3-semantic-name-fallbacks.md`. Compatibility and other product
+  consumers remain. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
   merge hid the unresolved SysV `al` variadic live-in. That cell is now an
   honest strict xfail rather than a semantic identity exception.
