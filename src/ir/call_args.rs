@@ -1276,7 +1276,11 @@ fn resolve_recovered_layout_sources(
         match body[index].semantic() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
-                if !crate::ir::types::is_promoted_local_reg(dst) {
+                let promoted = identities.map_or_else(
+                    || crate::ir::types::is_promoted_local_reg(dst),
+                    |identities| identities.is_promoted_stack_object(dst),
+                );
+                if !promoted {
                     continue;
                 }
                 let feeds = found
@@ -5955,6 +5959,44 @@ mod tests {
             body[1].origins().expect("folded call owner").addresses(),
             &[0x1014, 0x1018]
         );
+    }
+
+    #[test]
+    fn recovered_layout_follows_opaque_promoted_spill_identity() {
+        let object_name = "frame_object".to_string();
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object_name]);
+        identities.record(
+            reg("opaque_argument"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi"),
+                version: 1,
+            },
+        );
+        let mut body = vec![
+            Stmt::Assign {
+                dst: reg(&object_name),
+                src: Expr::Reg(reg("arg0")),
+            },
+            Stmt::Assign {
+                dst: reg("opaque_argument"),
+                src: Expr::Reg(reg(&object_name)),
+            },
+            call_to("callee"),
+        ];
+
+        assert!(fold_one_recovered_layout_call(
+            &mut body,
+            2,
+            &[reg("rdi")],
+            Some(&identities),
+        ));
+
+        assert_eq!(body.len(), 2, "only the ABI setup is consumed");
+        assert!(matches!(
+            &body[1],
+            Stmt::Call { args, .. } if args == &[Expr::Reg(reg("arg0"))]
+        ));
     }
 
     #[test]
