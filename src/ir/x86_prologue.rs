@@ -33,8 +33,8 @@ use crate::ir::types::{BinOp, CmpOp, VReg};
 /// Run the pass over `f`'s body.
 pub fn recognise_x86_prologue(f: &mut Function) {
     collapse_omit_frame_pointer_frame(&mut f.body, None);
-    collapse_prologue(&mut f.body);
-    collapse_epilogue(&mut f.body);
+    collapse_prologue(&mut f.body, None);
+    collapse_epilogue(&mut f.body, None);
 }
 
 /// Run x86-64 frame recognition with exact SSA value authority.
@@ -43,8 +43,8 @@ pub fn recognise_x86_prologue_with_identities(
     identities: &crate::ir::value_number::ValueIdentities,
 ) {
     collapse_omit_frame_pointer_frame(&mut f.body, Some(identities));
-    collapse_prologue(&mut f.body);
-    collapse_epilogue(&mut f.body);
+    collapse_prologue(&mut f.body, Some(identities));
+    collapse_epilogue(&mut f.body, Some(identities));
 }
 
 /// Remove MinGW's implicit constructor-runtime initialization from source main.
@@ -111,7 +111,7 @@ fn collapse_cdecl32_realign_frame(body: &mut Vec<Stmt>) {
     {
         (start + 3, None, rsp_sub_width(&body[start + 2]))
     } else if body.len().saturating_sub(start) >= 7
-        && matches!(body[start + 1].semantic(), Stmt::Push { value: Expr::Reg(saved) } if is_promoted_stack_slot(saved))
+        && matches!(body[start + 1].semantic(), Stmt::Push { value: Expr::Reg(saved) } if is_promoted_stack_slot(saved, None))
         && matches!(body[start + 2].semantic(), Stmt::Push { value: Expr::Reg(saved) } if is_rbp(saved))
         && matches!(body[start + 3].semantic(), Stmt::Assign { dst, src: Expr::Reg(source) } if is_rbp(dst) && is_rsp(source))
     {
@@ -170,7 +170,7 @@ fn collapse_cdecl32_realign_frame(body: &mut Vec<Stmt>) {
         Stmt::Assign {
             dst,
             src: Expr::Reg(saved),
-        } if is_rbp(dst) && is_promoted_stack_slot(saved) => saved.clone(),
+        } if is_rbp(dst) && is_promoted_stack_slot(saved, None) => saved.clone(),
         _ => return,
     };
     let entry_stack = match body[restore_stack_index].semantic() {
@@ -520,22 +520,16 @@ fn is_sysv_callee_saved(
 
 fn fixed_promoted_stack_address(expression: &Expr) -> Option<(VReg, i64, u16)> {
     match expression {
-        Expr::StackAddr { object, size } if is_promoted_stack_slot(object) => {
-            Some((object.clone(), 0, *size))
-        }
+        Expr::StackAddr { object, size } => Some((object.clone(), 0, *size)),
         Expr::Bin {
             op: BinOp::Add,
             lhs,
             rhs,
         } => match (lhs.as_ref(), rhs.as_ref()) {
-            (Expr::StackAddr { object, size }, Expr::Const(offset))
-                if is_promoted_stack_slot(object) =>
-            {
+            (Expr::StackAddr { object, size }, Expr::Const(offset)) => {
                 Some((object.clone(), *offset, *size))
             }
-            (Expr::Const(offset), Expr::StackAddr { object, size })
-                if is_promoted_stack_slot(object) =>
-            {
+            (Expr::Const(offset), Expr::StackAddr { object, size }) => {
                 Some((object.clone(), *offset, *size))
             }
             _ => None,
@@ -883,13 +877,21 @@ fn is_rsp(v: &VReg) -> bool {
     matches!(v, VReg::Phys(n) if n == "rsp" || n == "esp")
 }
 
-fn is_promoted_stack_slot(v: &VReg) -> bool {
-    matches!(
-        v,
-        VReg::Phys(name)
-            if name == "stack_top"
-                || name.starts_with("stack_")
-                || name.starts_with("local_")
+fn is_promoted_stack_slot(
+    value: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    identities.map_or_else(
+        || {
+            matches!(
+                value,
+                VReg::Phys(name)
+                    if name == "stack_top"
+                        || name.starts_with("stack_")
+                        || name.starts_with("local_")
+            )
+        },
+        |identities| identities.is_promoted_stack_object(value),
     )
 }
 
@@ -969,7 +971,10 @@ fn dead_rsp_sub_predicate(predicate: &Stmt, sub: &Stmt, suffix: &[Stmt]) -> Opti
     .then_some(width)
 }
 
-fn collapse_prologue(body: &mut Vec<Stmt>) {
+fn collapse_prologue(
+    body: &mut Vec<Stmt>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     // Skip leading nops (the lifter emits them for ENDBR64).
     let mut i = 0usize;
     while i < body.len() && matches!(body[i].semantic(), Stmt::Nop) {
@@ -995,7 +1000,10 @@ fn collapse_prologue(body: &mut Vec<Stmt>) {
                     size,
                 },
                 Some(width),
-            ) if is_promoted_stack_slot(slot) && is_rbp(value) && width == i64::from(*size) => {
+            ) if is_promoted_stack_slot(slot, identities)
+                && is_rbp(value)
+                && width == i64::from(*size) =>
+            {
                 i + 2
             }
             _ => return,
@@ -1056,7 +1064,10 @@ fn collapse_prologue(body: &mut Vec<Stmt>) {
     );
 }
 
-fn collapse_epilogue(body: &mut Vec<Stmt>) {
+fn collapse_epilogue(
+    body: &mut Vec<Stmt>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     // Returns can remain inside recovered branches/loops. Collapse those
     // lexical epilogues before handling this statement list itself.
     for statement in body.iter_mut() {
@@ -1069,20 +1080,20 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
                 else_body,
                 ..
             } => {
-                collapse_epilogue(then_body);
+                collapse_epilogue(then_body, identities);
                 if let Some(else_body) = else_body {
-                    collapse_epilogue(else_body);
+                    collapse_epilogue(else_body, identities);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                collapse_epilogue(body);
+                collapse_epilogue(body, identities);
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, case_body) in cases {
-                    collapse_epilogue(case_body);
+                    collapse_epilogue(case_body, identities);
                 }
                 if let Some(default_body) = default {
-                    collapse_epilogue(default_body);
+                    collapse_epilogue(default_body, identities);
                 }
             }
             _ => {}
@@ -1176,7 +1187,7 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
             && matches!(
                 body[ret_idx - 2].semantic(),
                 Stmt::Assign { dst, src: Expr::Reg(slot) }
-                    if is_rbp(dst) && is_promoted_stack_slot(slot)
+                    if is_rbp(dst) && is_promoted_stack_slot(slot, identities)
             )
         {
             let start = if ret_idx >= 3
@@ -1228,7 +1239,7 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
             && matches!(
                 body[ret_idx - 1].semantic(),
                 Stmt::Assign { dst, src: Expr::Reg(slot) }
-                    if is_rbp(dst) && is_promoted_stack_slot(slot)
+                    if is_rbp(dst) && is_promoted_stack_slot(slot, identities)
             )
         {
             let mut start = ret_idx - 1;
@@ -2102,6 +2113,71 @@ mod tests {
             Stmt::Comment(text) if text == "x86-64 epilogue: restore rbp"
         ));
         assert!(matches!(&f.body[2], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn identity_aware_scalar_frame_accepts_an_owned_opaque_slot() {
+        let slot_name = "frame_base_save".to_string();
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&slot_name]);
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                sub_rsp(8),
+                Stmt::Store {
+                    addr: Expr::Reg(reg(&slot_name)),
+                    src: Expr::Reg(reg("rbp")),
+                    size: 8,
+                },
+                mov_rbp_rsp(),
+                sub_rsp(32),
+                rsp_add(32),
+                Stmt::Assign {
+                    dst: reg("rbp"),
+                    src: Expr::Reg(reg(&slot_name)),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        recognise_x86_prologue_with_identities(&mut f, &identities);
+
+        assert_eq!(f.body.len(), 3, "owned scalar frame leaked: {:#?}", f.body);
+        assert!(matches!(&f.body[0], Stmt::Comment(text) if text.contains("prologue")));
+        assert!(matches!(&f.body[1], Stmt::Comment(text) if text.contains("epilogue")));
+    }
+
+    #[test]
+    fn identity_aware_scalar_frame_rejects_unowned_stack_spelling() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                sub_rsp(8),
+                Stmt::Store {
+                    addr: Expr::Reg(reg("stack_0")),
+                    src: Expr::Reg(reg("rbp")),
+                    size: 8,
+                },
+                mov_rbp_rsp(),
+                sub_rsp(32),
+                rsp_add(32),
+                Stmt::Assign {
+                    dst: reg("rbp"),
+                    src: Expr::Reg(reg("stack_0")),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+        let original = f.clone();
+
+        recognise_x86_prologue_with_identities(
+            &mut f,
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
+
+        assert_eq!(f, original);
     }
 
     #[test]
