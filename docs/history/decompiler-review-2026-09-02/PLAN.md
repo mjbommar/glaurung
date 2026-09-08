@@ -2072,6 +2072,15 @@ provenance through lowering.
   periodic four-cell Hello canary was not repeated because this slice cannot
   affect rendering. No broad suite or corpus ran. See
   `results/wp3-unobserved-object-store-identities.md`.
+  Commit `592ea81b` then migrates the adjacent overwritten promoted-store rule
+  inside production dead-store elimination. The fail-closed regression was
+  observed red: an unowned value spelled `local_8` lost its first store merely
+  because of its name. Production now preserves it while still optimizing an
+  opaque producer-owned `frame_object`. Both exact tests, all 47 dead-store
+  tests, the census gate, and only the exact committed Win64/PDB `record_value`
+  regression pass after a fresh serial extension rebuild. The Hello canary was
+  not repeated for this non-Hello identity seam. No broad suite or corpus ran.
+  See `results/wp3-adjacent-store-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and

@@ -617,6 +617,20 @@ commit. A fresh serial native rebuild passes the build guard, and only
 periodic Hello matrix was not repeated for this non-rendering identity seam.
 No broad suite or corpus ran.
 
+## Adjacent overwritten-store identities
+
+Commit `592ea81b` makes the adjacent overwritten promoted-store cleanup inside
+production dead-store elimination require producer-owned stack identity. Its
+fail-closed test was observed red before the fix: an unowned `local_8` lost a
+store solely because of its spelling. An opaque owned `frame_object` remains
+eligible. Both exact tests and all 47 dead-store tests pass, with 4,566
+unrelated Rust tests filtered out. The census records 5,150 declared Rust tests
+and zero outside every gate; all six census checks pass after the source
+commit. A fresh serial native rebuild passes the build guard and the exact
+committed Win64/PDB `record_value` regression passes. The periodic Hello matrix
+was not repeated for this non-Hello identity seam. No broad suite or corpus
+ran.
+
 ## Ground rules
 
 Verified before any claim of done: `cargo test --features python-ext`,
