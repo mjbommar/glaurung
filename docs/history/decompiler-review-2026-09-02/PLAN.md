@@ -1928,6 +1928,13 @@ provenance through lowering.
   fixture pass. A controlled one-file A/B proves the initially selected
   fixture-196 failure predates this patch. No broad suite or corpus ran. See
   `results/wp3-frame-anchor-identities.md`.
+  Commit `e82617fd` then removes canonical naming's suffix-stripped test for
+  the producer-owned `sse_pair_return_object`. A misleading
+  `sse_pair_return_object#fake` can no longer suppress the ordinary `xmm0`
+  result role, while the genuine materialized pair and scalar-return controls
+  remain green. Three exact naming tests and only the GCC O2
+  `hfa197_tagged_control` fixture pass with a fresh extension. No broad suite
+  or corpus ran. See `results/wp3-sse-pair-object-identity.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
