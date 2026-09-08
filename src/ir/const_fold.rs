@@ -1517,15 +1517,22 @@ fn recover_eager_boolean_guard(expr: &Expr) -> Option<(Expr, usize, bool)> {
             lhs,
             rhs,
         } => {
-            let masked = match (lhs.as_ref(), rhs.as_ref()) {
-                (inner, Expr::Const(mask)) | (Expr::Const(mask), inner) if mask & 1 == 1 => {
-                    Some((inner, *mask))
+            let masked = match (lhs.semantic(), rhs.semantic()) {
+                (_, Expr::Const(mask)) if mask & 1 == 1 => {
+                    Some((lhs.as_ref(), *mask, rhs.origins().cloned()))
+                }
+                (Expr::Const(mask), _) if mask & 1 == 1 => {
+                    Some((rhs.as_ref(), *mask, lhs.origins().cloned()))
                 }
                 _ => None,
             };
-            if let Some((inner, mask)) = masked {
+            if let Some((inner, mask, mask_origins)) = masked {
                 let (logical, leaves, saw_byte_view) = recover_eager_boolean_guard(inner)?;
-                return Some((logical, leaves, saw_byte_view || mask == 255));
+                return Some((
+                    logical.with_optional_origins(mask_origins),
+                    leaves,
+                    saw_byte_view || mask == 255,
+                ));
             }
             recover_eager_boolean_pair(BinOp::LogicalAnd, lhs, rhs)
         }
@@ -3729,6 +3736,8 @@ mod tests {
         let tree_owner = crate::ir::ast::OriginSet::one(0x1008);
         let first_owner = crate::ir::ast::OriginSet::one(0x100c);
         let second_owner = crate::ir::ast::OriginSet::one(0x1010);
+        let mask_tree_owner = crate::ir::ast::OriginSet::one(0x1014);
+        let mask_owner = crate::ir::ast::OriginSet::one(0x1018);
         let comparison = |name: &str, owner: crate::ir::ast::OriginSet| {
             Expr::Cmp {
                 op: CmpOp::Eq,
@@ -3750,7 +3759,14 @@ mod tests {
                     Expr::Cast {
                         signed: false,
                         width: 1,
-                        expr: Box::new(eager),
+                        expr: Box::new(
+                            bin(
+                                BinOp::And,
+                                eager,
+                                Expr::Const(255).with_origins(mask_owner.clone()),
+                            )
+                            .with_origins(mask_tree_owner.clone()),
+                        ),
                     }
                     .with_origins(cast_owner.clone()),
                 ),
@@ -3774,7 +3790,13 @@ mod tests {
         };
         assert_eq!(
             src.origins(),
-            Some(&terminal_owner.union(&cast_owner).union(&tree_owner))
+            Some(
+                &terminal_owner
+                    .union(&cast_owner)
+                    .union(&mask_tree_owner)
+                    .union(&mask_owner)
+                    .union(&tree_owner),
+            )
         );
         assert_eq!(lhs.origins(), Some(&first_owner));
         assert_eq!(rhs.origins(), Some(&second_owner));
