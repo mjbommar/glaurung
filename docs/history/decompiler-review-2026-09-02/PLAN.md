@@ -1759,6 +1759,13 @@ provenance through lowering.
   two regressions and one improvement, but an exact production-line reversal
   reproduced all three unchanged, so none is attributed to this slice. See
   `results/wp3-unsigned-range-expression-origin-rendering.md`.
+  Commit `2c9a91bf` closes the adjacent integer shift-width readers. Attributed
+  casts, arithmetic operands, and constant counts now retain their exact machine
+  width, including selection of the narrowest signed cast that can legally
+  supply an arithmetic right shift. Both strengthened contracts were observed
+  red, and all 60 functions in the host shift/narrow-return canary remain green
+  after a release rebuild; see
+  `results/wp3-shift-width-expression-origin-rendering.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
