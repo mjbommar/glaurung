@@ -1843,6 +1843,13 @@ provenance through lowering.
   attempt to infer AST-name immutability from the original SSA version was
   rejected by that canary because post-SSA AST coalescing can reuse a
   presentation variable. See `results/wp3-call-argument-slot-identities.md`.
+  Commit `5042ef6d` then migrates both generic recovered-callee-layout setup
+  folds. Adjacent assignment destinations match the layout's authoritative ABI
+  storage through complete identity candidates rather than stripped display
+  text; an opaque exact `rdi` value folds and a misleading `rdi#version` mapped
+  to `rax` refuses. The exact regression, all 142 owning call-argument tests,
+  and only the directly related Clang O0 `call_into_spill` fixture pass. See
+  `results/wp3-recovered-layout-storage-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
