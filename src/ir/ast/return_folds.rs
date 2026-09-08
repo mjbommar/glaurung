@@ -31,6 +31,21 @@ use crate::ir::types::VReg;
 /// comments/Nops may intervene, so the expression stays at the same observable
 /// point and no state-changing operation is crossed.
 pub(super) fn fold_returns(body: &mut Vec<Stmt>) {
+    fold_returns_where(body, &crate::ir::direct_output::is_exact_return_storage);
+}
+
+pub(super) fn fold_returns_with_identities(
+    body: &mut Vec<Stmt>,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    fold_returns_where(body, &|value| {
+        crate::ir::direct_output::is_exact_return_storage(value)
+            && (!matches!(value, VReg::Phys(name) if name == "ret")
+                || identities.is_result_role(value))
+    });
+}
+
+fn fold_returns_where(body: &mut Vec<Stmt>, is_result: &impl Fn(&VReg) -> bool) {
     // Recurse first so inner bodies are folded before we inspect an outer
     // fall-through return.
     for s in body.iter_mut() {
@@ -41,19 +56,21 @@ pub(super) fn fold_returns(body: &mut Vec<Stmt>) {
                 else_body,
                 ..
             } => {
-                fold_returns(then_body);
+                fold_returns_where(then_body, is_result);
                 if let Some(eb) = else_body {
-                    fold_returns(eb);
+                    fold_returns_where(eb, is_result);
                 }
             }
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => fold_returns(body),
-            Stmt::For { body, .. } => fold_returns(body),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                fold_returns_where(body, is_result)
+            }
+            Stmt::For { body, .. } => fold_returns_where(body, is_result),
             Stmt::Switch { cases, default, .. } => {
                 for (_, body) in cases.iter_mut() {
-                    fold_returns(body);
+                    fold_returns_where(body, is_result);
                 }
                 if let Some(b) = default {
-                    fold_returns(b);
+                    fold_returns_where(b, is_result);
                 }
             }
             _ => {}
@@ -63,9 +80,7 @@ pub(super) fn fold_returns(body: &mut Vec<Stmt>) {
     let mut i = 0;
     while i < body.len() {
         let Some(dst) = (match body[i].semantic() {
-            Stmt::Assign { dst, .. } if crate::ir::direct_output::is_exact_return_storage(dst) => {
-                Some(dst.clone())
-            }
+            Stmt::Assign { dst, .. } if is_result(dst) => Some(dst.clone()),
             _ => None,
         }) else {
             i += 1;
@@ -228,6 +243,14 @@ pub fn fold_exhaustive_switch_returns(function: &mut Function) {
     fold_exhaustive_switch_returns_body(&mut function.body);
 }
 
+pub(crate) fn fold_exhaustive_switch_returns_with_identities(
+    function: &mut Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    fold_returns_with_identities(&mut function.body, identities);
+    fold_exhaustive_switch_returns_body(&mut function.body);
+}
+
 /// Move a joined result return into terminating arms of an exhaustive `if` tree.
 ///
 /// Both arms must end by defining the exact returned value (possibly through
@@ -240,6 +263,14 @@ pub fn fold_exhaustive_switch_returns(function: &mut Function) {
 /// control flow with one unnecessary region join removed.
 pub fn fold_exhaustive_if_returns(function: &mut Function) {
     fold_returns(&mut function.body);
+    fold_exhaustive_if_returns_body(&mut function.body);
+}
+
+pub(crate) fn fold_exhaustive_if_returns_with_identities(
+    function: &mut Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    fold_returns_with_identities(&mut function.body, identities);
     fold_exhaustive_if_returns_body(&mut function.body);
 }
 
@@ -562,6 +593,58 @@ mod tests {
         ];
 
         fold_returns(&mut body);
+
+        assert_eq!(
+            body,
+            vec![Stmt::Return {
+                value: Some(Expr::Const(42)),
+            }]
+        );
+    }
+
+    #[test]
+    fn return_fold_does_not_trust_an_unowned_ret_spelling() {
+        let mut body = vec![
+            Stmt::Assign {
+                dst: VReg::phys("ret"),
+                src: Expr::Const(42),
+            },
+            Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("ret"))),
+            },
+        ];
+
+        fold_returns_with_identities(
+            &mut body,
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
+
+        assert_eq!(body.len(), 2);
+    }
+
+    #[test]
+    fn return_fold_accepts_a_pipeline_owned_ret_role() {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            VReg::phys("rax"),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 1,
+            },
+        );
+        identities =
+            identities.with_role_aliases(&HashMap::from([("rax".to_string(), "ret".to_string())]));
+        let mut body = vec![
+            Stmt::Assign {
+                dst: VReg::phys("ret"),
+                src: Expr::Const(42),
+            },
+            Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("ret"))),
+            },
+        ];
+
+        fold_returns_with_identities(&mut body, &identities);
 
         assert_eq!(
             body,

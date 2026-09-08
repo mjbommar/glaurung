@@ -100,6 +100,7 @@ pub use prepare::{
 };
 pub use return_folds::{fold_exhaustive_if_returns, fold_exhaustive_switch_returns};
 pub(crate) use return_folds::{
+    fold_exhaustive_if_returns_with_identities, fold_exhaustive_switch_returns_with_identities,
     remove_redundant_return_constant_assignments,
     remove_redundant_return_constant_assignments_with_identities,
 };
@@ -131,7 +132,7 @@ use lower_ops::ScalarFloatOperation;
 #[cfg(test)]
 use lower_region::deduplicate_labels;
 use named_calls::recover_named_call_prototypes;
-use return_folds::fold_returns;
+use return_folds::{fold_returns, fold_returns_with_identities};
 
 use dec_render::write_stmt_dec;
 use declaration_plan::{DeclarationInputs, DeclarationPlan, LocalDeclaration};

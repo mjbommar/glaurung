@@ -191,7 +191,10 @@ fn decbench_text_with_installed_environment(
         // boundary, then repeat the narrow joined-return fold it may unblock.
         // The renderer below remains formatting-only.
         recognise_machine_frame(&mut prepared, cc);
-        crate::ir::ast::fold_exhaustive_if_returns(&mut prepared);
+        crate::ir::ast::fold_exhaustive_if_returns_with_identities(
+            &mut prepared,
+            &value_identities,
+        );
         crate::ir::ast::remove_redundant_return_constant_assignments_with_identities(
             &mut prepared.body,
             &value_identities,
@@ -404,7 +407,10 @@ fn decbench_text_with_installed_environment(
     // path. Fold it before verification and rendering as well.
     pass!(
         "fold_exhaustive_switch_returns",
-        crate::ir::ast::fold_exhaustive_switch_returns(&mut prepared)
+        crate::ir::ast::fold_exhaustive_switch_returns_with_identities(
+            &mut prepared,
+            &value_identities,
+        )
     );
     if let Some(tm) = refined_decl.as_ref() {
         pass!(

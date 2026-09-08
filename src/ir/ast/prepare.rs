@@ -16,8 +16,9 @@
 
 use super::param_spills::{coalesce_named_param_spills, coalesce_param_spills, drop_self_stores};
 use super::{
-    fold_exhaustive_if_returns, fold_exhaustive_switch_returns, fold_returns,
-    remove_redundant_return_constant_assignments,
+    fold_exhaustive_if_returns, fold_exhaustive_if_returns_with_identities,
+    fold_exhaustive_switch_returns, fold_exhaustive_switch_returns_with_identities, fold_returns,
+    fold_returns_with_identities, remove_redundant_return_constant_assignments,
     remove_redundant_return_constant_assignments_with_identities, Function,
 };
 
@@ -357,7 +358,10 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
     // above; folding here would recreate one from incidental ABI result-register
     // plumbing such as Clang's `push rax` / `pop rax` stack adjustment.
     if output_kind != crate::ir::types_recover::RecoveredOutputKind::Void {
-        fold_returns(&mut owned.body);
+        match identities {
+            Some(identities) => fold_returns_with_identities(&mut owned.body, identities),
+            None => fold_returns(&mut owned.body),
+        }
     }
     // Copy propagation and the second constant fold can replace a flag read in
     // a condition with its recovered comparison. Prune the now-dead definition
@@ -439,8 +443,16 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
     // copy-propagation rerun is unsound here: loops have already been recovered,
     // and a pre-loop snapshot may depend on a value changed by the loop body.
     crate::ir::copy_prop::propagate_switch_entry_copies(&mut owned);
-    fold_exhaustive_if_returns(&mut owned);
-    fold_exhaustive_switch_returns(&mut owned);
+    match identities {
+        Some(identities) => {
+            fold_exhaustive_if_returns_with_identities(&mut owned, identities);
+            fold_exhaustive_switch_returns_with_identities(&mut owned, identities);
+        }
+        None => {
+            fold_exhaustive_if_returns(&mut owned);
+            fold_exhaustive_switch_returns(&mut owned);
+        }
+    }
     crate::ir::loop_form::promote_for_loops(&mut owned);
     // Loop promotion can expose sequential terminal guards that were nested in
     // the recovered CFG during the earlier pass. Fuse that final exact shape
