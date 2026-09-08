@@ -2091,6 +2091,17 @@ provenance through lowering.
   only the exact x86 stack-clash fixture pass after a fresh serial extension
   rebuild. No broad suite or corpus ran. See
   `results/wp3-machine-save-storage-identities.md`.
+  Commit `00943c69` then introduces the first identity-aware copy-propagation
+  entry point for the late production cleanup. Counted propagation, dead-copy
+  removal, straight-line dead stores, and closed scratch-dataflow pruning use
+  producer-owned promoted-object identity rather than `local_` / `stack_`
+  spelling. An unowned `local_8` is ordinary scratch state; an opaque owned
+  `frame_object` remains storage. Both exact tests, all 64 copy-propagation
+  tests, the census gate, and only the exact x86 stack-clash fixture pass after
+  a fresh serial extension rebuild. The earlier pre-sidecar preparation path
+  retains compatibility behavior, so copy-propagation migration remains open.
+  No broad suite or corpus ran. See
+  `results/wp3-late-copy-storage-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and

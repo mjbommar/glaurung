@@ -647,6 +647,21 @@ passes the build guard and the exact committed x86 stack-clash regression.
 The four-cell Hello checkpoint had just passed and was not repeated for this
 non-Hello seam. No broad suite or corpus ran.
 
+## Late copy-cleanup storage identities
+
+Commit `00943c69` makes late production copy cleanup distinguish scratch state
+from promoted storage by producer-owned identity. An unowned `local_8` is
+ordinary scratch state; an opaque owned `frame_object` remains storage. The
+identity reaches counted propagation, dead-copy removal, straight-line dead
+stores, and closed scratch-dataflow pruning. Both exact tests and all 64 copy-
+propagation tests pass with 4,553 unrelated Rust tests filtered out. The census
+records 5,154 declared Rust tests and zero outside every gate; all six census
+checks pass after the source commit. A fresh serial native rebuild passes the
+build guard and the exact committed x86 stack-clash regression. The pre-sidecar
+preparation pass remains a compatibility boundary, so the wider WP3 migration
+is still open. The four-cell Hello checkpoint had just passed and was not
+repeated. No broad suite or corpus ran.
+
 ## Ground rules
 
 Verified before any claim of done: `cargo test --features python-ext`,

@@ -88,7 +88,15 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
-[`results/wp3-machine-save-storage-identities.md`](results/wp3-machine-save-storage-identities.md):
+[`results/wp3-late-copy-storage-identities.md`](results/wp3-late-copy-storage-identities.md):
+late production copy cleanup now distinguishes scratch values from promoted
+storage by producer-owned identity rather than `local_` / `stack_` spelling.
+Its two exact boundary tests, all 64 copy-propagation tests, census gate, and
+exact x86 stack-clash fixture pass. The pre-sidecar preparation pass remains a
+compatibility boundary, so this is not completion of copy propagation. The
+preceding
+[`results/wp3-machine-save-storage-identities.md`](results/wp3-machine-save-storage-identities.md)
+records that
 production callee-save cleanup now requires both producer-owned machine-save
 storage and exact version-zero ABI machine state. Its two observed-red boundary
 regressions, tightened identity control, all 49 dead-store tests, census gate,
