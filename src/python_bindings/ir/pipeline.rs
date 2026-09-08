@@ -1293,6 +1293,7 @@ pub(super) fn render_prepared_ast(
         );
         super::decbench_render::decbench_text(
             &prepared.function,
+            &prepared.ast_value_identities,
             &mut prepared.profiler,
             prepared.cfg_health,
             exception_sites,
@@ -1435,6 +1436,9 @@ pub(super) struct PreparedAst {
     pub(super) numbered: crate::ir::types::LlirFunction,
     /// Opaque SSA identities keyed by values retained across AST lowering.
     pub(super) value_identities: crate::ir::value_number::ValueIdentities,
+    /// The same identities projected through the exact AST role-name map.
+    /// Separate storage preserves the original keys used by type recovery.
+    pub(super) ast_value_identities: crate::ir::value_number::ValueIdentities,
     pub(super) definition_widths: std::collections::HashMap<crate::ir::types::VReg, u8>,
     pub(super) parameter_slots: std::collections::HashSet<usize>,
     pub(super) inferred_prototype: Option<crate::ir::types_recover::RecoveredPrototype>,
@@ -1510,6 +1514,7 @@ pub(super) fn lower_and_run_ast_passes(
         stack_object_hints,
         got_targets,
     )?;
+    let ast_value_identities = value_identities.with_role_aliases(&role_names);
 
     Ok(PreparedAst {
         function,
@@ -1517,6 +1522,7 @@ pub(super) fn lower_and_run_ast_passes(
         cfg_health,
         numbered,
         value_identities,
+        ast_value_identities,
         definition_widths,
         parameter_slots: param_slots,
         inferred_prototype,

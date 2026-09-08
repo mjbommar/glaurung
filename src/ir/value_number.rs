@@ -92,6 +92,30 @@ impl ValueIdentities {
             .insert(identity);
     }
 
+    /// Clone this sidecar into the AST's presentation-name key space.
+    ///
+    /// `aliases` is the exact raw-name to role-name map returned by naming.
+    /// The original keys remain available because later type projection still
+    /// consumes storage spellings. Multiple raw values mapped to one role are
+    /// unioned, preserving explicit ambiguity rather than choosing one.
+    pub(crate) fn with_role_aliases(&self, aliases: &HashMap<String, String>) -> Self {
+        let mut projected = self.clone();
+        for (value, identities) in &self.by_numbered_value {
+            let VReg::Phys(storage) = value else {
+                continue;
+            };
+            let Some(role) = aliases.get(storage) else {
+                continue;
+            };
+            projected
+                .by_numbered_value
+                .entry(VReg::Phys(role.clone()))
+                .or_default()
+                .extend(identities.iter().cloned());
+        }
+        projected
+    }
+
     fn apply_renames(&mut self, renames: &HashMap<VReg, VReg>) {
         if renames.is_empty() {
             return;
@@ -619,6 +643,35 @@ mod tests {
 
         assert_eq!(identities.exact(&numbered), None);
         assert_eq!(identities.candidates(&numbered).map(BTreeSet::len), Some(2));
+    }
+
+    #[test]
+    fn role_projection_preserves_original_keys_and_explicit_ambiguity() {
+        let first = SsaValue {
+            base: VReg::phys("rax"),
+            version: 1,
+        };
+        let second = SsaValue {
+            base: VReg::phys("rbx"),
+            version: 2,
+        };
+        let mut identities = ValueIdentities::default();
+        identities.record(VReg::phys("opaque-a"), first.clone());
+        identities.record(VReg::phys("opaque-b"), second.clone());
+        let aliases = HashMap::from([
+            ("opaque-a".to_string(), "var0".to_string()),
+            ("opaque-b".to_string(), "var0".to_string()),
+        ]);
+
+        let projected = identities.with_role_aliases(&aliases);
+
+        assert_eq!(projected.exact(&VReg::phys("opaque-a")), Some(&first));
+        assert_eq!(projected.exact(&VReg::phys("opaque-b")), Some(&second));
+        assert_eq!(
+            projected.candidates(&VReg::phys("var0")).map(BTreeSet::len),
+            Some(2)
+        );
+        assert_eq!(projected.exact(&VReg::phys("var0")), None);
     }
 
     #[test]

@@ -10,6 +10,44 @@ fn read(name: &str) -> Expr {
     Expr::Reg(reg(name))
 }
 
+fn opaque_carrier_candidate() -> (Function, VReg, VReg) {
+    let seed = reg("opaque-seed");
+    let carrier = reg("opaque-carrier");
+    let function = Function {
+        name: "opaque_carrier".to_string(),
+        entry_va: 0x1100,
+        body: vec![
+            Stmt::Assign {
+                dst: seed.clone(),
+                src: Expr::Const(0),
+            },
+            Stmt::Assign {
+                dst: carrier.clone(),
+                src: Expr::Reg(seed.clone()),
+            },
+            Stmt::DoWhile {
+                body: vec![Stmt::Assign {
+                    dst: carrier.clone(),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(carrier.clone())),
+                        rhs: Box::new(Expr::Const(1)),
+                    },
+                }],
+                cond: Expr::Cmp {
+                    op: CmpOp::Ult,
+                    lhs: Box::new(Expr::Reg(carrier.clone())),
+                    rhs: Box::new(read("limit")),
+                },
+            },
+            Stmt::Return {
+                value: Some(Expr::Reg(carrier.clone())),
+            },
+        ],
+    };
+    (function, seed, carrier)
+}
+
 fn candidate(extra: Vec<Stmt>) -> Function {
     let mut body = vec![
         Stmt::Assign {
@@ -59,8 +97,7 @@ fn folds_predicate_across_final_carried_value_assignment() {
     let Stmt::Assign { src: snapshot, .. } = &mut body[0] else {
         unreachable!()
     };
-    *snapshot = std::mem::replace(snapshot, Expr::Const(0))
-        .with_origins(OriginSet::one(0x1014));
+    *snapshot = std::mem::replace(snapshot, Expr::Const(0)).with_origins(OriginSet::one(0x1014));
     let Stmt::Assign {
         src: predicate_expression,
         ..
@@ -207,6 +244,93 @@ fn coalesces_dead_source_identity_with_immediately_entered_loop_carrier() {
         function.body[1].origins(),
         Some(&OriginSet::from_addresses([0x1020, 0x1024, 0x1030]))
     );
+}
+
+#[test]
+fn opaque_exact_identities_authorize_loop_entry_coalescing() {
+    let (mut function, seed, carrier) = opaque_carrier_candidate();
+    let mut types = crate::ir::types_recover::TypeMap::default();
+    types.upsert_public(
+        seed.clone(),
+        crate::ir::types_recover::TypeHint::Int {
+            width: 8,
+            signed: true,
+        },
+    );
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
+    identities.record(
+        seed,
+        crate::ir::ssa::SsaValue {
+            base: reg("rax"),
+            version: 1,
+        },
+    );
+    identities.record(
+        carrier.clone(),
+        crate::ir::ssa::SsaValue {
+            base: reg("rbx"),
+            version: 2,
+        },
+    );
+
+    coalesce_loop_entry_copies_with_identities(
+        &mut function,
+        &std::collections::HashSet::new(),
+        &mut types,
+        Some(&identities),
+    );
+
+    assert_eq!(
+        function.body.len(),
+        3,
+        "exact opaque values should coalesce"
+    );
+    assert!(types.get(&carrier).is_some());
+}
+
+#[test]
+fn ambiguous_opaque_identity_keeps_loop_entry_copy() {
+    let (mut function, seed, carrier) = opaque_carrier_candidate();
+    let before = function.clone();
+    let mut types = crate::ir::types_recover::TypeMap::default();
+    types.upsert_public(
+        seed.clone(),
+        crate::ir::types_recover::TypeHint::Int {
+            width: 8,
+            signed: true,
+        },
+    );
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
+    identities.record(
+        seed,
+        crate::ir::ssa::SsaValue {
+            base: reg("rax"),
+            version: 1,
+        },
+    );
+    identities.record(
+        carrier.clone(),
+        crate::ir::ssa::SsaValue {
+            base: reg("rbx"),
+            version: 2,
+        },
+    );
+    identities.record(
+        carrier,
+        crate::ir::ssa::SsaValue {
+            base: reg("rcx"),
+            version: 3,
+        },
+    );
+
+    coalesce_loop_entry_copies_with_identities(
+        &mut function,
+        &std::collections::HashSet::new(),
+        &mut types,
+        Some(&identities),
+    );
+
+    assert_eq!(function, before, "ambiguous values must fail closed");
 }
 
 #[test]

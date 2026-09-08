@@ -28,6 +28,17 @@ pub(crate) fn coalesce_loop_entry_copies(
     protected: &std::collections::HashSet<String>,
     types: &mut crate::ir::types_recover::TypeMap,
 ) {
+    coalesce_loop_entry_copies_with_identities(function, protected, types, None);
+}
+
+/// As [`coalesce_loop_entry_copies`], with opaque SSA identities projected
+/// into the AST's current role-name key space.
+pub(crate) fn coalesce_loop_entry_copies_with_identities(
+    function: &mut Function,
+    protected: &std::collections::HashSet<String>,
+    types: &mut crate::ir::types_recover::TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     // Lexical nesting is not a region boundary when a goto can enter a sibling
     // body or an indirect transfer can target any surviving label. A recursive
     // local scan would otherwise rewrite the destination before seeing the
@@ -36,7 +47,7 @@ pub(crate) fn coalesce_loop_entry_copies(
     if function.body.iter().any(statement_contains_goto) {
         return;
     }
-    coalesce_body(&mut function.body, protected, types);
+    coalesce_body(&mut function.body, protected, types, identities);
 }
 
 /// Fold a typed machine scratch used only to install the next value of a
@@ -113,8 +124,7 @@ fn source_loop_update_candidate(
         _ => return None,
     };
     let (carrier, scratch) = match body.last()?.semantic() {
-        Stmt::Assign { dst, src }
-            if matches!(src.semantic(), Expr::Reg(source) if dst != source) =>
+        Stmt::Assign { dst, src } if matches!(src.semantic(), Expr::Reg(source) if dst != source) =>
         {
             let Expr::Reg(source) = src.semantic() else {
                 unreachable!("candidate guard requires a register source")
@@ -208,6 +218,7 @@ fn coalesce_body(
     body: &mut Vec<Stmt>,
     protected: &std::collections::HashSet<String>,
     types: &mut crate::ir::types_recover::TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
     for statement in body.iter_mut() {
         match statement.semantic_mut() {
@@ -217,27 +228,27 @@ fn coalesce_body(
                 else_body,
                 ..
             } => {
-                coalesce_body(then_body, protected, types);
+                coalesce_body(then_body, protected, types, identities);
                 if let Some(else_body) = else_body {
-                    coalesce_body(else_body, protected, types);
+                    coalesce_body(else_body, protected, types, identities);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                coalesce_body(body, protected, types)
+                coalesce_body(body, protected, types, identities)
             }
-            Stmt::For { body, .. } => coalesce_body(body, protected, types),
+            Stmt::For { body, .. } => coalesce_body(body, protected, types, identities),
             Stmt::Switch { cases, default, .. } => {
                 for (_, case_body) in cases {
-                    coalesce_body(case_body, protected, types);
+                    coalesce_body(case_body, protected, types, identities);
                 }
                 if let Some(default_body) = default {
-                    coalesce_body(default_body, protected, types);
+                    coalesce_body(default_body, protected, types, identities);
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                coalesce_body(try_body, protected, types);
+                coalesce_body(try_body, protected, types, identities);
                 for catch in catches {
-                    coalesce_body(&mut catch.body, protected, types);
+                    coalesce_body(&mut catch.body, protected, types, identities);
                 }
             }
             _ => {}
@@ -258,8 +269,8 @@ fn coalesce_body(
             else {
                 return None;
             };
-            if !(coalescible_value_role(dst)
-                && coalescible_value_role(source)
+            if !(coalescible_value_role(dst, identities)
+                && coalescible_value_role(source, identities)
                 && dst != source
                 // Rename the dead seed prefix into a fresh carrier, rather
                 // than renaming the carrier's suffix into the seed. The latter
@@ -377,7 +388,15 @@ fn statement_contains_goto(statement: &Stmt) -> bool {
     }
 }
 
-fn coalescible_value_role(register: &VReg) -> bool {
+fn coalescible_value_role(
+    register: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    if let Some(identities) = identities {
+        if identities.candidates(register).is_some() {
+            return identities.exact(register).is_some();
+        }
+    }
     matches!(register, VReg::Phys(name) if name.strip_prefix("var").is_some_and(|tail| !tail.is_empty() && tail.chars().all(|ch| ch.is_ascii_digit())))
 }
 

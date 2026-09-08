@@ -83,6 +83,7 @@ pub(super) fn select_renderable_dwarf_local_facts(
 
 pub(super) fn decbench_text(
     f: &crate::ir::ast::Function,
+    value_identities: &crate::ir::value_number::ValueIdentities,
     profiler: &mut crate::decompile::profile::FunctionProfiler,
     cfg_health: crate::ir::health::CfgHealth,
     exception_sites: &[crate::analysis::exception::ExceptionCallSite],
@@ -116,6 +117,7 @@ pub(super) fn decbench_text(
     crate::ir::ast::install_dec_function_static_locals(dwarf_static_locals.iter().cloned());
     let text = decbench_text_with_installed_environment(
         f,
+        value_identities,
         profiler,
         cfg_health,
         exception_sites,
@@ -144,6 +146,7 @@ pub(super) fn decbench_text(
 #[allow(clippy::too_many_arguments)]
 fn decbench_text_with_installed_environment(
     f: &crate::ir::ast::Function,
+    value_identities: &crate::ir::value_number::ValueIdentities,
     profiler: &mut crate::decompile::profile::FunctionProfiler,
     cfg_health: crate::ir::health::CfgHealth,
     exception_sites: &[crate::analysis::exception::ExceptionCallSite],
@@ -286,10 +289,11 @@ fn decbench_text_with_installed_environment(
     if let Some(tm) = refined_decl.as_mut() {
         pass!(
             "coalesce_loop_entry_copies",
-            crate::ir::latch_predicate::coalesce_loop_entry_copies(
+            crate::ir::latch_predicate::coalesce_loop_entry_copies_with_identities(
                 &mut prepared,
                 &protected_locals,
                 tm,
+                Some(value_identities),
             )
         );
         pass!(
