@@ -326,3 +326,30 @@ cargo test --features python-ext --lib value_number::tests:: -- --nocapture
 
 This increment ran 69 directly relevant tests. It did not run the broad Rust or
 Python suites, fixture matrix, DecBench, or Joern.
+
+## Typed late-return cleanup
+
+Commit `e27ab2cc` migrates the late `ret = constant; return constant;` cleanup
+to the same result-role authority. Both production cleanup call sites pass the
+identity sidecar. A local merely spelled `ret` is preserved; a pipeline-owned
+result assignment is removed, with the existing origin-transfer behavior
+unchanged. The no-sidecar helper remains the explicit compatibility path.
+
+Focused RED/GREEN evidence:
+
+```text
+cargo test --features python-ext --lib \
+  late_return_cleanup_does_not_trust_an_unowned_ret_spelling -- --nocapture
+RED: compile failure because the identity-aware cleanup did not exist
+GREEN: 1 passed; 4,448 filtered out
+
+cargo test --features python-ext --lib \
+  late_return_cleanup_accepts_a_pipeline_owned_ret_role -- --nocapture
+1 passed; 4,448 filtered out
+
+cargo test --features python-ext --lib ir::ast::return_folds::tests -- --nocapture
+12 passed; 4,437 filtered out
+```
+
+Only these 14 directly relevant executions ran. No broad Rust/Python suite,
+fixture matrix, DecBench, or Joern lane ran.

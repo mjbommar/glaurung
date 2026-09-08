@@ -1691,7 +1691,11 @@ provenance through lowering.
   path. `ValueIdentities` now carries a pipeline-owned result-role fact through
   role projection and AST renames; source preparation accepts canonical `ret`
   only when that fact is present. The no-sidecar compatibility API retains its
-  legacy spelling behavior explicitly.
+  legacy spelling behavior explicitly. Commit `e27ab2cc` threads the same
+  authority through late redundant-return cleanup in both production render
+  paths. An assignment to an unowned local named `ret` is retained rather than
+  deleted, while a typed result-role assignment still folds and transfers its
+  origins to the surviving return.
   See
   `results/wp3-parameter-role-metadata.md`. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
