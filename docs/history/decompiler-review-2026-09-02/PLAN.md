@@ -1170,6 +1170,11 @@ provenance through lowering.
   and observation owners, while the provably masked-out high-parent owner is
   excluded. Its observed-red test and all 67 constant-fold tests pass; see
   `results/wp3-observed-mask-expression-origins.md`.
+  Commit `14eef6d2` then makes safe constant arithmetic transparent to operand
+  carriers. Attributed constants fold normally and the result retains the
+  enclosing operation plus both operand owners; division-by-zero and invalid-
+  shift refusals are unchanged. Its observed-red test and all 68 constant-fold
+  tests pass; see `results/wp3-constant-arithmetic-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
