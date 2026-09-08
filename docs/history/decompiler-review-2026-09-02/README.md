@@ -88,10 +88,14 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
-[`results/wp3-renderer-owned-local-inventory.md`](results/wp3-renderer-owned-local-inventory.md):
-production definition verification now consumes the renderer's identity-aware
-owned-local inventory instead of parsing conventional local-name prefixes. All
-45 owning tests and two exact compiled/metadata checks pass.
+[`results/wp3-unobserved-object-store-identities.md`](results/wp3-unobserved-object-store-identities.md):
+production unobserved promoted-object cleanup now requires producer-owned
+stack identity instead of `local_` / `stack_` spelling. Both exact adversarial
+tests, all 45 owning dead-store tests, the census gate, and one exact compiled
+fixture pass. The preceding
+[`results/wp3-renderer-owned-local-inventory.md`](results/wp3-renderer-owned-local-inventory.md)
+moves production definition verification onto the renderer's identity-aware
+owned-local inventory.
 
 The latest bounded output-quality record is
 [`results/wp3-wp6-hello-contract.md`](results/wp3-wp6-hello-contract.md):

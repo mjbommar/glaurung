@@ -2063,6 +2063,15 @@ provenance through lowering.
   declines. All 31 loop-form tests and the exact GCC O0 `for_sum` fixture pass,
   with 4,572 unrelated Rust tests filtered out. See
   `results/wp3-wp7b-for-loop-stack-identities.md`.
+  Commit `ca6a4df7` then moves unobserved promoted-object field-store cleanup
+  onto the same producer-owned identity boundary. An opaque owned object is
+  eligible for deletion when otherwise unobserved; an unowned value spelled
+  `local_10` is not granted storage semantics by its name. Both exact
+  adversarial tests, all 45 dead-store tests, the census gate, and only the
+  Clang O0 `tick_n` fixture pass after a fresh serial extension rebuild. The
+  periodic four-cell Hello canary was not repeated because this slice cannot
+  affect rendering. No broad suite or corpus ran. See
+  `results/wp3-unobserved-object-store-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and

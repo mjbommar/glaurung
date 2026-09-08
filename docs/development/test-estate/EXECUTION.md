@@ -604,6 +604,19 @@ O0 declaration/use invariant and the exact shadow verification-metadata test.
 The census records 5,146 declared Rust tests and zero outside every gate; all
 six census checks pass. No broad suite or corpus ran.
 
+## Unobserved object-store identities
+
+Commit `ca6a4df7` makes production cleanup of unobserved promoted-object field
+stores require producer-owned stack identity. An opaque owned object remains
+eligible, while an unowned object named `local_10` fails closed. Both exact
+adversarial tests and all 45 dead-store tests pass, with 4,566 unrelated Rust
+tests filtered out. The regenerated census records 5,148 declared Rust tests
+and zero outside every gate; all six census checks pass after the source
+commit. A fresh serial native rebuild passes the build guard, and only
+`09_memory_effects:clang:O0:tick_n` ran and reported no scoped regression. The
+periodic Hello matrix was not repeated for this non-rendering identity seam.
+No broad suite or corpus ran.
+
 ## Ground rules
 
 Verified before any claim of done: `cargo test --features python-ext`,
