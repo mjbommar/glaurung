@@ -35,6 +35,12 @@ unable to narrow an owned parameter prototype, an unrelated `arg99` can receive
 its legitimate exact width, and ordinary local narrowing is unchanged. This
 removes the final `parse_arg_index` call from `type_maps.rs`.
 
+Commit `f6c9d0ce` migrates high-half ABI-width refinement. When the identity
+sidecar is installed, only values with `parameter_slot` metadata are widened as
+source parameters; the name parser remains solely in the compatibility path.
+Thus a 32-bit `arg0` used above bit 31 becomes 64-bit, while an otherwise
+identical unowned role called `arg99` remains 32-bit.
+
 Focused validation used exact Rust tests only:
 
 ```text
@@ -76,6 +82,15 @@ later_subregister_definition_does_not_narrow_a_parameter_prototype
 
 a_narrowing_definition_still_types_a_local_on_a_sixty_four_bit_target
 1 passed; 4,428 filtered out
+
+high_half_parameter_width_uses_typed_slots_not_arg_spelling
+1 passed; 4,429 filtered out
+
+exact_opaque_identity_authorizes_definition_width_refinement
+1 passed; 4,429 filtered out
+
+ambiguous_opaque_identity_declines_definition_width_refinement
+1 passed; 4,429 filtered out
 ```
 
 Each command was `cargo test --features python-ext --lib

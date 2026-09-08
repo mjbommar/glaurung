@@ -1640,7 +1640,9 @@ provenance through lowering.
   exact-definition-width merging to the same slot
   fact. This removes the final `parse_arg_index` call from `type_maps.rs` while
   retaining protection for real parameter prototypes and ordinary local
-  narrowing. See
+  narrowing. Commit `f6c9d0ce` migrates high-half ABI-width refinement to typed
+  parameter slots when identities are installed; high-bit use widens an owned
+  `arg0` but not an unrelated role spelled `arg99`. See
   `results/wp3-parameter-role-metadata.md`. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
   merge hid the unresolved SysV `al` variadic live-in. That cell is now an
