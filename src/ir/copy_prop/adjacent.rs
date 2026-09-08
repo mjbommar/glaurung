@@ -146,21 +146,46 @@ pub fn propagate_adjacent_overwritten_values(function: &mut Function) {
 /// expression is exact: its evaluation point crosses no observable statement,
 /// and removing the definition keeps the call count at one.
 pub fn move_adjacent_effectful_scratch_values(function: &mut Function) {
+    move_adjacent_effectful_scratch_values_impl(function, None);
+}
+
+/// Identity-aware production form of [`move_adjacent_effectful_scratch_values`].
+pub fn move_adjacent_effectful_scratch_values_with_identities(
+    function: &mut Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    move_adjacent_effectful_scratch_values_impl(function, Some(identities));
+}
+
+fn move_adjacent_effectful_scratch_values_impl(
+    function: &mut Function,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     loop {
         let mut reads = RegMap::default();
         count_reads_body(&function.body, &mut reads);
-        if !move_one_adjacent_effectful_scratch_value(&mut function.body, &reads) {
+        if !move_one_adjacent_effectful_scratch_value(&mut function.body, &reads, identities) {
             break;
         }
     }
 }
 
-fn move_one_adjacent_effectful_scratch_value(body: &mut Vec<Stmt>, reads: &RegMap<usize>) -> bool {
+fn move_one_adjacent_effectful_scratch_value(
+    body: &mut Vec<Stmt>,
+    reads: &RegMap<usize>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    let promoted = |value: &crate::ir::types::VReg| {
+        identities.map_or_else(
+            || is_promoted_local_reg(value),
+            |identities| identities.is_promoted_stack_object(value),
+        )
+    };
     for index in 0..body.len().saturating_sub(1) {
         let Some((destination, mut source)) = (match body[index].semantic() {
             Stmt::Assign { dst, src }
-                if is_scratch_reg(dst, None)
-                    && !is_promoted_local_reg(dst)
+                if is_scratch_reg(dst, identities)
+                    && !promoted(dst)
                     && src.contains_call()
                     && !contains_reg(src, dst)
                     && reads.get(dst).copied() == Some(1) =>
@@ -186,7 +211,7 @@ fn move_one_adjacent_effectful_scratch_value(body: &mut Vec<Stmt>, reads: &RegMa
             // itself, not an indirect pointer evaluation. Moving into a
             // general Store would be unsound: C does not sequence evaluation
             // of the store address and source expression.
-            Stmt::Store { addr, src, .. } if matches!(addr.semantic(), Expr::Reg(address) if is_promoted_local_reg(address)) => {
+            Stmt::Store { addr, src, .. } if matches!(addr.semantic(), Expr::Reg(address) if promoted(address)) => {
                 Some(src)
             }
             _ => None,
@@ -219,25 +244,29 @@ fn move_one_adjacent_effectful_scratch_value(body: &mut Vec<Stmt>, reads: &RegMa
                 else_body,
                 ..
             } => {
-                move_one_adjacent_effectful_scratch_value(then_body, reads)
+                move_one_adjacent_effectful_scratch_value(then_body, reads, identities)
                     || else_body.as_mut().is_some_and(|else_body| {
-                        move_one_adjacent_effectful_scratch_value(else_body, reads)
+                        move_one_adjacent_effectful_scratch_value(else_body, reads, identities)
                     })
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                move_one_adjacent_effectful_scratch_value(body, reads)
+                move_one_adjacent_effectful_scratch_value(body, reads, identities)
             }
             Stmt::Switch { cases, default, .. } => {
                 cases.iter_mut().any(|(_, case_body)| {
-                    move_one_adjacent_effectful_scratch_value(case_body, reads)
+                    move_one_adjacent_effectful_scratch_value(case_body, reads, identities)
                 }) || default.as_mut().is_some_and(|default_body| {
-                    move_one_adjacent_effectful_scratch_value(default_body, reads)
+                    move_one_adjacent_effectful_scratch_value(default_body, reads, identities)
                 })
             }
             Stmt::TryCatch { try_body, catches } => {
-                move_one_adjacent_effectful_scratch_value(try_body, reads)
+                move_one_adjacent_effectful_scratch_value(try_body, reads, identities)
                     || catches.iter_mut().any(|catch| {
-                        move_one_adjacent_effectful_scratch_value(&mut catch.body, reads)
+                        move_one_adjacent_effectful_scratch_value(
+                            &mut catch.body,
+                            reads,
+                            identities,
+                        )
                     })
             }
             _ => false,
@@ -666,6 +695,82 @@ mod tests {
         };
         assert!(matches!(src.semantic(), Expr::Call { .. }));
         assert_eq!(src.origins(), Some(&definition_owner));
+    }
+
+    #[test]
+    fn identity_aware_effectful_move_rejects_opaque_stack_destination() {
+        let destination_name = "frame_object".to_string();
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&destination_name]);
+        let mut function = Function {
+            name: "owned_destination".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg(&destination_name),
+                    src: Expr::Call {
+                        target: Box::new(Expr::Named {
+                            va: 0x2000,
+                            name: "read_once".into(),
+                        }),
+                        args: Vec::new(),
+                        call_spec: None,
+                        result_width: Some(8),
+                    },
+                },
+                Stmt::Assign {
+                    dst: reg("result"),
+                    src: Expr::Reg(reg(&destination_name)),
+                },
+            ],
+        };
+        let before = function.clone();
+
+        move_adjacent_effectful_scratch_values_with_identities(&mut function, &identities);
+
+        assert_eq!(function, before);
+    }
+
+    #[test]
+    fn identity_aware_effectful_move_accepts_opaque_stack_store() {
+        let object_name = "frame_object".to_string();
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object_name]);
+        let call = Expr::Call {
+            target: Box::new(Expr::Named {
+                va: 0x2000,
+                name: "read_once".into(),
+            }),
+            args: Vec::new(),
+            call_spec: None,
+            result_width: Some(8),
+        };
+        let mut function = Function {
+            name: "owned_store".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("var14"),
+                    src: call.clone(),
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(reg(&object_name)),
+                    src: Expr::Reg(reg("var14")),
+                    size: 8,
+                },
+            ],
+        };
+
+        move_adjacent_effectful_scratch_values_with_identities(&mut function, &identities);
+
+        assert_eq!(
+            function.body,
+            vec![Stmt::Store {
+                addr: Expr::Reg(reg(&object_name)),
+                src: call,
+                size: 8,
+            }]
+        );
     }
 
     #[test]

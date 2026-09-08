@@ -430,7 +430,14 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
     // consumer. Ordinary copy propagation may duplicate pure expressions, but
     // an Expr::Call must retain exactly one evaluation.
     crate::ir::select_fold::collapse_assignment_diamonds(&mut owned);
-    crate::ir::copy_prop::move_adjacent_effectful_scratch_values(&mut owned);
+    match identities {
+        Some(identities) => {
+            crate::ir::copy_prop::move_adjacent_effectful_scratch_values_with_identities(
+                &mut owned, identities,
+            )
+        }
+        None => crate::ir::copy_prop::move_adjacent_effectful_scratch_values(&mut owned),
+    }
     // Inlining a shared terminal epilogue can leave its old fallthrough
     // assignment after an explicit return. Remove that newly unreachable tail
     // before exact sentinel-loop matching; it is not an effect the candidate
