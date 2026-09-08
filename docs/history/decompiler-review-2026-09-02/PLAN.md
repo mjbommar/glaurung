@@ -1346,6 +1346,12 @@ provenance through lowering.
   and trailing-control proofs remain mandatory. Its strengthened observed-red
   test and all 30 loop-form tests pass; see
   `results/wp3-guarded-loop-result-origins.md`.
+  Commit `a4326607` then makes the entry-value/current-seed proof transparent
+  to distinct ownership carriers and transfers the removed entry-value owner
+  to the surviving seed expression. Exact current seeding and all stable-
+  value, carried-latch, result-overwrite, and trailing-control refusals remain
+  mandatory. Its strengthened observed-red test and all 30 loop-form tests
+  pass; see `results/wp3-guarded-loop-seed-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
