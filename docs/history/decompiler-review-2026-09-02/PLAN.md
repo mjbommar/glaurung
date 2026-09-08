@@ -1942,6 +1942,14 @@ provenance through lowering.
   fix; those tests, one neighboring recovered-layout control, and only the GCC
   O2 `hfa197_tagged_control` fixture pass with a fresh extension. No broad
   suite or corpus ran. See `results/wp3-canonical-call-identity-bases.md`.
+  Commit `df62ee4c` then makes indirect-result buffer tracking key the exact
+  canonical bases supplied by `ValueIdentities`; a malformed
+  `x8#not_canonical` identity can no longer fabricate either a pre-promotion
+  object hint or post-promotion call destination. The adversarial test was
+  observed red before the fix; it, two nearest buffer controls, and only the
+  AArch64 O2 `agr198_five_roundtrip` fixture pass with a fresh extension. No
+  broad suite or corpus ran. See
+  `results/wp3-indirect-result-canonical-bases.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
