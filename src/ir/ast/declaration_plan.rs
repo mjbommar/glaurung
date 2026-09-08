@@ -192,7 +192,10 @@ impl DeclarationPlan {
                     }
                 }
                 if let (VReg::Phys(n), TypeHint::Int { signed, width }) = (v, hint) {
-                    if parse_arg_index(n).is_some() || is_promoted_local_in(n, source_locals) {
+                    if parse_arg_index(n).is_some()
+                        || is_promoted_local_in(n, source_locals)
+                        || is_identity_value(n, value_identities)
+                    {
                         integer_types.insert(n.clone(), (*signed, *width));
                     }
                 }
@@ -211,7 +214,9 @@ impl DeclarationPlan {
             for (v, hint) in wtm.iter() {
                 if let (VReg::Phys(n), TypeHint::Int { width, .. }) = (v, hint) {
                     if *width > 0
-                        && (parse_arg_index(n).is_some() || is_promoted_local_in(n, source_locals))
+                        && (parse_arg_index(n).is_some()
+                            || is_promoted_local_in(n, source_locals)
+                            || is_identity_value(n, value_identities))
                     {
                         integer_widths.insert(n.clone(), *width);
                     }
@@ -575,6 +580,51 @@ mod identity_tests {
         c_type.clone()
     }
 
+    fn planned_opaque_integer(
+        identities: &crate::ir::value_number::ValueIdentities,
+    ) -> (String, Option<(bool, u8)>, Option<u8>) {
+        let mut ids = DecIdents::default();
+        ids.locals.insert("opaque_value".to_string());
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            VReg::phys("opaque_value"),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+        let source_type_aliases = BTreeSet::new();
+        let dwarf_types = Vec::new();
+        let dwarf_type_env = DwarfTypeEnv::new(&dwarf_types);
+        let struct_pointer_types = HashMap::new();
+        let source_locals = HashSet::new();
+        let aggregate_value_widths = HashMap::new();
+        let plan = DeclarationPlan::compute(DeclarationInputs {
+            ids: &ids,
+            body: &[],
+            tm: Some(&types),
+            value_identities: Some(identities),
+            width_tm: Some(&types),
+            output_kind: RecoveredOutputKind::Void,
+            declared_prototype: None,
+            declared_parameter_names: None,
+            arg_count: 0,
+            pointer_width: 8,
+            source_type_aliases: &source_type_aliases,
+            dwarf_type_env: &dwarf_type_env,
+            struct_pointer_types: &struct_pointer_types,
+            source_locals: &source_locals,
+            aggregate_value_widths: &aggregate_value_widths,
+        });
+        (
+            plan.declared_ctype("opaque_value")
+                .expect("local declaration")
+                .to_string(),
+            plan.integer_type("opaque_value"),
+            plan.integer_width("opaque_value"),
+        )
+    }
+
     #[test]
     fn exact_opaque_identity_is_declaration_eligible() {
         let value = VReg::phys("opaque_value");
@@ -637,5 +687,23 @@ mod identity_tests {
         }
 
         assert_eq!(planned_opaque_type(&identities), "long");
+    }
+
+    #[test]
+    fn exact_opaque_integer_declaration_and_conversion_metadata_agree() {
+        let value = VReg::phys("opaque_value");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            value,
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("eax"),
+                version: 1,
+            },
+        );
+
+        assert_eq!(
+            planned_opaque_integer(&identities),
+            ("unsigned int".to_string(), Some((false, 4)), Some(4))
+        );
     }
 }
