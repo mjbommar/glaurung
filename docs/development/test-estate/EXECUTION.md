@@ -632,6 +632,21 @@ then passes four-for-four across x86-64 Clang and AArch64, each at O0 and O2
 with symbol-bearing PIE input and exact canonical output. No broad suite or
 corpus ran.
 
+## Machine-save storage identities
+
+Commit `00b7ebbc` makes production callee-save cleanup require both producer-
+owned machine-save storage and an exact version-zero ABI callee-saved source.
+The two boundary regressions were observed red before the fix: an unowned
+`stack_2` was deleted from spelling alone, while an opaque owned `frame_save`
+was missed. Both now behave by identity, and the existing entry-versus-later
+SSA control also requires storage ownership. Those three exact tests and all
+49 dead-store tests pass with 4,566 unrelated Rust tests filtered out. The
+census records 5,152 declared Rust tests and zero outside every gate; all six
+census checks pass after the source commit. A fresh serial native rebuild
+passes the build guard and the exact committed x86 stack-clash regression.
+The four-cell Hello checkpoint had just passed and was not repeated for this
+non-Hello seam. No broad suite or corpus ran.
+
 ## Ground rules
 
 Verified before any claim of done: `cargo test --features python-ext`,

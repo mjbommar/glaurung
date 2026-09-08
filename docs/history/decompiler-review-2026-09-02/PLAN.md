@@ -2082,6 +2082,15 @@ provenance through lowering.
   x86-64/AArch64 O0/O2 symbol-bearing PIE Hello checkpoint then remains four-
   for-four with exact canonical output. No broad suite or corpus ran. See
   `results/wp3-adjacent-store-identities.md`.
+  Commit `00b7ebbc` then removes the production callee-save cleanup's remaining
+  `stack_`/`local_` storage shortcut. Deletion now requires producer-owned
+  machine-save storage plus exact version-zero ABI callee-saved source identity.
+  Both boundary regressions were observed red: an unowned `stack_2` was
+  deleted, while an opaque owned `frame_save` was missed. Both now behave by
+  identity. Three exact tests, all 49 dead-store tests, the census gate, and
+  only the exact x86 stack-clash fixture pass after a fresh serial extension
+  rebuild. No broad suite or corpus ran. See
+  `results/wp3-machine-save-storage-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
