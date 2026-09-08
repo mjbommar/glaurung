@@ -382,7 +382,10 @@ fn recover_owned_pretested_do_while(
     // The aliases execute only after the entry guard. They may prove that the
     // latch guard names the entry value, but they must never rewrite the entry
     // guard itself.
-    if resolve_entry_aliases(latch_guard, &aliases, 0) != *entry_guard {
+    let empty_aliases = HashMap::new();
+    if resolve_entry_aliases(latch_guard, &aliases, 0)
+        != resolve_entry_aliases(entry_guard, &empty_aliases, 0)
+    {
         return;
     }
     crate::ir::pass_stats::fire("recover_owned_pretested_do_while");
@@ -395,11 +398,11 @@ fn recover_owned_pretested_do_while(
 
 fn resolve_entry_aliases(expr: &Expr, aliases: &HashMap<VReg, Expr>, depth: usize) -> Expr {
     if depth > aliases.len() {
-        return expr.clone();
+        return expr.semantic().clone();
     }
-    match expr {
+    match expr.semantic() {
         Expr::Reg(reg) => aliases.get(reg).map_or_else(
-            || expr.clone(),
+            || expr.semantic().clone(),
             |value| resolve_entry_aliases(value, aliases, depth + 1),
         ),
         Expr::Bin { op, lhs, rhs } => Expr::Bin {
@@ -425,7 +428,7 @@ fn resolve_entry_aliases(expr: &Expr, aliases: &HashMap<VReg, Expr>, depth: usiz
             width: *width,
             expr: Box::new(resolve_entry_aliases(expr, aliases, depth + 1)),
         },
-        _ => expr.clone(),
+        expression => expression.clone(),
     }
 }
 
@@ -1852,14 +1855,16 @@ mod tests {
     fn an_entry_owned_coalesced_cursor_recovers_a_head_tested_loop() {
         let guard = Expr::Cmp {
             op: CmpOp::Ne,
-            lhs: Box::new(Expr::Reg(reg("arg0"))),
-            rhs: Box::new(Expr::Const(0)),
-        };
+            lhs: Box::new(Expr::Reg(reg("arg0")).with_origins(OriginSet::one(0x1000))),
+            rhs: Box::new(Expr::Const(0).with_origins(OriginSet::one(0x1004))),
+        }
+        .with_origins(OriginSet::one(0x1008));
         let latch = Expr::Cmp {
             op: CmpOp::Ne,
-            lhs: Box::new(Expr::Reg(reg("cursor"))),
-            rhs: Box::new(Expr::Const(0)),
-        };
+            lhs: Box::new(Expr::Reg(reg("cursor")).with_origins(OriginSet::one(0x1010))),
+            rhs: Box::new(Expr::Const(0).with_origins(OriginSet::one(0x1014))),
+        }
+        .with_origins(OriginSet::one(0x1018));
         let mut function = Function {
             name: "list_sum".to_string(),
             entry_va: 0x1000,
@@ -1868,7 +1873,7 @@ mod tests {
                 then_body: vec![
                     Stmt::Assign {
                         dst: reg("cursor"),
-                        src: Expr::Reg(reg("arg0")),
+                        src: Expr::Reg(reg("arg0")).with_origins(OriginSet::one(0x100c)),
                     },
                     Stmt::DoWhile {
                         body: vec![Stmt::Assign {
