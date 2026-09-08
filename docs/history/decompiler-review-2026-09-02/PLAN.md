@@ -1260,6 +1260,13 @@ provenance through lowering.
   signedness, bound, and representability proofs remain mandatory. Its
   strengthened observed-red test and all 76 constant-fold tests pass; see
   `results/wp3-relation-source-expression-origins.md`.
+  Commit `93de6232` then moves the audit into switch recovery. Attributed
+  ladder conditions, operands, machine views, and lifted greater-than trees
+  remain recognizable, and every consumed condition owner joins the
+  synthesized switch's deterministic origin union. Single-discriminant,
+  signed-range, reachability, and control-flow refusals remain unchanged. Its
+  strengthened observed-red test and all 28 switch-ladder tests pass; see
+  `results/wp3-switch-condition-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
