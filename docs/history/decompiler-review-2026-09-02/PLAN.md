@@ -1623,7 +1623,10 @@ provenance through lowering.
   and pointer-value type refinement, while promoted stack objects retain their
   separate storage-model eligibility. See
   `results/wp3-semantic-name-fallbacks.md`. Compatibility and other product
-  consumers remain. The latter migration also
+  consumers remain. Commit `3e302824` removes an `argN` spelling decision from
+  DWARF aggregate-field recovery: only roles seeded from the authoritative
+  prototype are exempt from definition validation, so stale or fabricated
+  argument spellings cannot impersonate parameters. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
   merge hid the unresolved SysV `al` variadic live-in. That cell is now an
   honest strict xfail rather than a semantic identity exception.

@@ -11,6 +11,12 @@ storage model. A missing or ambiguous identity fails closed. Compatibility
 callers that provide no sidecar retain the legacy spelling behavior until they
 are migrated.
 
+Commit `3e302824` removes the first `argN` spelling decision. DWARF aggregate
+field recovery now snapshots the parameter-pointer roles it seeds from the
+authoritative prototype and exempts only those roles from definition
+validation. A stale or fabricated `arg99` outside the prototype is validated
+as an ordinary value and rejected when its definitions conflict.
+
 Focused validation used only exact Rust tests:
 
 ```text
@@ -34,6 +40,15 @@ ambiguous_opaque_identity_is_not_eligible_for_pointer_refinement
 
 origin_wrapped_high_bit_constant_used_by_unsigned_widening_is_unsigned
 1 passed; 4,422 filtered out
+
+arg_spelling_outside_the_prototype_is_not_a_parameter_identity
+1 passed; 4,423 filtered out
+
+authoritative_parameter_and_next_copy_annotate_exact_members
+1 passed; 4,423 filtered out
+
+mixed_reuse_rejects_declaration_but_keeps_reaching_field_identity
+1 passed; 4,423 filtered out
 ```
 
 Each command was `cargo test --features python-ext --lib
