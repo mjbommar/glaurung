@@ -1196,6 +1196,12 @@ provenance through lowering.
   and enclosing-cast owners, while the width-bearing shift-left refusal remains
   unchanged. Its observed-red test and all 72 constant-fold tests pass; see
   `results/wp3-redundant-cast-expression-origins.md`.
+  Commit `64781964` next makes ARM/AArch64-style address reconstruction
+  transparent to page/base and offset carriers. The final address retains both
+  operand owners plus the enclosing arithmetic owner without weakening the
+  non-additive, reversed-subtraction, or stale-name refusals. Its observed-red
+  test and all 73 constant-fold tests pass; see
+  `results/wp3-address-reconstruction-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
