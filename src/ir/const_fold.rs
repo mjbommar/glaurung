@@ -1393,6 +1393,10 @@ fn is_short_circuit_safe_value(expr: &Expr) -> bool {
 /// the machine tree included a byte cast/mask characteristic of SETcc output.
 fn recover_eager_boolean_guard(expr: &Expr) -> Option<(Expr, usize, bool)> {
     match expr {
+        Expr::Origin { origins, expr } => {
+            let (logical, leaves, saw_byte_view) = recover_eager_boolean_guard(expr)?;
+            Some((logical.with_origins(origins.clone()), leaves, saw_byte_view))
+        }
         comparison @ Expr::Cmp { .. } if is_short_circuit_safe_boolean(comparison) => {
             Some((comparison.clone(), 1, false))
         }
@@ -3247,6 +3251,64 @@ mod tests {
                 ),
             }
         );
+    }
+
+    #[test]
+    fn attributed_eager_boolean_tree_recovers_logical_origins() {
+        let terminal_owner = crate::ir::ast::OriginSet::one(0x1000);
+        let cast_owner = crate::ir::ast::OriginSet::one(0x1004);
+        let tree_owner = crate::ir::ast::OriginSet::one(0x1008);
+        let first_owner = crate::ir::ast::OriginSet::one(0x100c);
+        let second_owner = crate::ir::ast::OriginSet::one(0x1010);
+        let comparison = |name: &str, owner: crate::ir::ast::OriginSet| {
+            Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(Expr::Reg(reg(name))),
+                rhs: Box::new(Expr::Const(0)),
+            }
+            .with_origins(owner)
+        };
+        let eager = bin(
+            BinOp::Or,
+            comparison("arg0", first_owner.clone()),
+            comparison("arg1", second_owner.clone()),
+        )
+        .with_origins(tree_owner.clone());
+        let mut function = one_stmt(
+            Expr::Cmp {
+                op: CmpOp::Ne,
+                lhs: Box::new(
+                    Expr::Cast {
+                        signed: false,
+                        width: 1,
+                        expr: Box::new(eager),
+                    }
+                    .with_origins(cast_owner.clone()),
+                ),
+                rhs: Box::new(Expr::Const(0)),
+            }
+            .with_origins(terminal_owner.clone()),
+        );
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        let Expr::Bin {
+            op: BinOp::LogicalOr,
+            lhs,
+            rhs,
+        } = src.semantic()
+        else {
+            panic!("expected logical disjunction: {src:#?}")
+        };
+        assert_eq!(
+            src.origins(),
+            Some(&terminal_owner.union(&cast_owner).union(&tree_owner))
+        );
+        assert_eq!(lhs.origins(), Some(&first_owner));
+        assert_eq!(rhs.origins(), Some(&second_owner));
     }
 
     #[test]
