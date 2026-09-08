@@ -1938,6 +1938,14 @@ provenance through lowering.
   red on the concurrent snapshot because its assertion requires the older
   whitespace spelling `char * arg0`; it is not claimed green. See
   `results/wp3-named-format-call-expression-origin-rendering.md`.
+  Commit `5dcd837c` closes the adjacent address-taken named-symbol inventory
+  boundary. A callback or function address behind an expression-origin carrier
+  remains a declaration candidate, while still carrying no invented prototype;
+  the program environment must independently supply one. The exact candidate
+  contract was observed red and all four named-call module tests pass after the
+  repair. The release extension rebuilds, but the committed fixture corpus has
+  no matching address-taken callback case, so no real-fixture claim is made.
+  See `results/wp3-address-taken-symbol-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
