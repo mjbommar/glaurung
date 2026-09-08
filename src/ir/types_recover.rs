@@ -4978,8 +4978,13 @@ int never_returns(void) { for (;;) {} }
             },
         );
         let widths = HashMap::from([(VReg::phys("opaque_result"), 4)]);
-        let types =
-            recover_types_for_with_identities(&exact, CallConv::SysVAmd64, &identities, &widths);
+        let types = recover_types_for_with_identities(
+            &exact,
+            CallConv::SysVAmd64,
+            &identities,
+            &widths,
+            &TypeMapV::default(),
+        );
         assert_eq!(
             types.get(&VReg::phys("opaque_result")),
             Some(TypeHint::Int {
@@ -5005,6 +5010,7 @@ int never_returns(void) { for (;;) {} }
             CallConv::SysVAmd64,
             &identities,
             &widths,
+            &TypeMapV::default(),
         );
         assert_eq!(
             types.get(&VReg::phys("rax#9")),
@@ -5034,8 +5040,13 @@ int never_returns(void) { for (;;) {} }
         );
         let widths = HashMap::from([(VReg::phys("opaque_local"), 4)]);
 
-        let types =
-            recover_types_for_with_identities(&function, CallConv::SysVAmd64, &identities, &widths);
+        let types = recover_types_for_with_identities(
+            &function,
+            CallConv::SysVAmd64,
+            &identities,
+            &widths,
+            &TypeMapV::default(),
+        );
 
         assert_eq!(
             types.get(&VReg::phys("opaque_local")),
@@ -5043,6 +5054,107 @@ int never_returns(void) { for (;;) {} }
                 signed: true,
                 width: 4,
             })
+        );
+    }
+
+    #[test]
+    fn use_only_width_comes_from_exact_value_facts_not_numbered_spelling() {
+        use crate::ir::call_args::CallConv;
+
+        let raw = mk_block(vec![Op::Bin {
+            dst: VReg::phys("eax"),
+            op: BinOp::Add,
+            lhs: Value::Reg(VReg::phys("edi")),
+            rhs: Value::Const(1),
+        }]);
+        let ssa = crate::ir::ssa::compute_ssa(&raw);
+        let valued_types = recover_types_valued(&raw, &ssa);
+        let (numbered, definition_widths, _, identities) =
+            crate::ir::value_number::value_number_with_parameter_slots_lifetimes_and_identities(
+                &raw,
+                &ssa,
+                CallConv::SysVAmd64,
+                &[],
+            );
+        let Op::Bin {
+            lhs: Value::Reg(source),
+            ..
+        } = &numbered.blocks[0].instrs[0].op
+        else {
+            panic!("numbering must preserve the binary operation")
+        };
+        assert_eq!(
+            reg_width_bytes(source),
+            8,
+            "opaque numbering loses the raw view"
+        );
+
+        let types = recover_types_for_with_identities(
+            &numbered,
+            CallConv::SysVAmd64,
+            &identities,
+            &definition_widths,
+            &valued_types,
+        );
+
+        assert_eq!(
+            types.get(&source),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            }),
+            "an opaque numbered use must retain its exact raw SSA width"
+        );
+    }
+
+    #[test]
+    fn ambiguous_numbered_use_declines_value_keyed_width_projection() {
+        use crate::ir::call_args::CallConv;
+
+        let source = VReg::phys("coalesced_source");
+        let function = mk_block(vec![Op::Bin {
+            dst: VReg::phys("opaque_destination"),
+            op: BinOp::Add,
+            lhs: Value::Reg(source.clone()),
+            rhs: Value::Const(1),
+        }]);
+        let narrow = SsaValue {
+            base: VReg::phys("rdi"),
+            version: 0,
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(source.clone(), narrow.clone());
+        identities.record(
+            source.clone(),
+            SsaValue {
+                base: VReg::phys("rsi"),
+                version: 0,
+            },
+        );
+        let mut valued_types = TypeMapV::default();
+        valued_types.upsert(
+            narrow,
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        let types = recover_types_for_with_identities(
+            &function,
+            CallConv::SysVAmd64,
+            &identities,
+            &HashMap::new(),
+            &valued_types,
+        );
+
+        assert_eq!(
+            types.get(&source),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 8,
+            }),
+            "coalesced ambiguity must not guess which exact value owns the width"
         );
     }
 

@@ -441,8 +441,21 @@ pub fn recover_types_for_with_identities(
     cc: crate::ir::call_args::CallConv,
     identities: &crate::ir::value_number::ValueIdentities,
     definition_widths: &std::collections::HashMap<VReg, u8>,
+    valued_types: &super::TypeMapV,
 ) -> TypeMap {
     let mut tm = recover_types_with_identities(lf, identities);
+    let numbered_values = tm
+        .iter()
+        .map(|(value, _)| value.clone())
+        .collect::<Vec<_>>();
+    for value in numbered_values {
+        let Some(identity) = identities.exact(&value) else {
+            continue;
+        };
+        if let Some(hint) = valued_types.get(identity) {
+            tm.refine_from_value(value, hint);
+        }
+    }
     for (value, &width) in definition_widths {
         if width == 0 || identities.candidates(value).is_none() {
             continue;
