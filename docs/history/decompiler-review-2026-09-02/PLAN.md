@@ -1882,6 +1882,15 @@ provenance through lowering.
   compiler/optimization cells for fixture 97's `size_like_loop` remain green
   after a release rebuild. See
   `results/wp3-signed-destination-literal-expression-origins.md`.
+  Commit `a8078d9a` closes an adjacent pointer-arithmetic correctness seam.
+  Attributed pointer bases, byte displacements, and nested scaled pointer steps
+  now retain the native `p + 1` proof and cross back to an integer byte address
+  before an enclosing machine offset is added. Without that barrier, C could
+  scale the dynamic offset by the pointee width a second time. The motivating
+  contract was observed red, all three exact scaling contracts pass, and all
+  four fixture-207 `word_at_index` compiler/optimization cells remain green
+  after a release rebuild. See
+  `results/wp3-scaled-pointer-expression-origin-rendering.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
