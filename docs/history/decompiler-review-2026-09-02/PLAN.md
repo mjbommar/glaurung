@@ -1911,6 +1911,15 @@ provenance through lowering.
   test, and only the GCC O0 `sum_arg7` fixture pass. Superseded spelling-only
   helpers are test-only in release builds. No broad suite or corpus ran. See
   `results/wp3-caller-stack-arity-identities.md`.
+  Commit `64eb116d` then migrates scalar-float register classification across
+  the production LLIR-to-AST boundary. The pipeline-owned identity sidecar now
+  reaches every recursive lowering shape; float-bank membership, call-result
+  classification, caller-saved ABI detection, packed dword lanes, and `vmov`
+  operand roles use exact canonical storage rather than stripped display text.
+  Missing or ambiguous identities decline. The adversarial exact regression,
+  both owning float-gate tests, and only the GCC O2
+  `hfa197_tagged_control` fixture pass with a fresh extension. No broad suite or
+  corpus ran. See `results/wp3-float-register-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
