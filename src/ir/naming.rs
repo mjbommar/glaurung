@@ -180,7 +180,7 @@ fn apply_role_names_impl(
     // so scalar/unmaterialised returns retain the longstanding role mapping.
     let materialized_sse_pair = collect_first_appearance_phys(&f.body)
         .iter()
-        .any(|name| crate::ir::abi::ssa_base(name) == "sse_pair_return_object");
+        .any(|name| name.as_str() == "sse_pair_return_object");
     if !materialized_sse_pair {
         for name in return_reg_aliases(cc) {
             // `ret` only wins if no arg-slot already claimed the name (x0 case
@@ -1063,6 +1063,36 @@ mod tests {
             converted_source, integer,
             "the conversion must still read EAX's value"
         );
+    }
+
+    #[test]
+    fn sse_pair_object_requires_its_exact_producer_owned_name() {
+        let mut function = Function {
+            name: "misleading_sse_pair_object".into(),
+            entry_va: 0x1028,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("xmm0"),
+                    src: Expr::Const(7),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Deref {
+                        addr: Box::new(Expr::StackAddr {
+                            object: reg("sse_pair_return_object#fake"),
+                            size: 12,
+                        }),
+                        size: 8,
+                    }),
+                },
+            ],
+        };
+
+        apply_role_names(&mut function, CallConv::SysVAmd64);
+
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Assign { dst, .. } if dst == &reg("ret")
+        ));
     }
 
     #[test]
