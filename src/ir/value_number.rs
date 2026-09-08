@@ -53,7 +53,7 @@ mod vreg_walk;
 
 pub use coalesce::SourceRegisterLifetime;
 pub(crate) use keep_bare::{def_reaches_return, def_reaches_unresolved_return};
-pub use parameter_slots::live_in_arg_slots_llir;
+pub use parameter_slots::{live_in_arg_slots_llir, live_in_arg_slots_llir_with_identities};
 pub(crate) use vreg_walk::for_each_vreg_mut;
 
 use coalesce::{coalesce_phi_copies_with_definition_sites, DefinitionWidthsBySite};
@@ -462,7 +462,7 @@ pub fn value_number_with_parameter_slots_lifetimes_and_identities(
         &definition_widths_by_value,
         &mut identities,
     );
-    let parameter_slots = live_in_arg_slots_llir(&out, cc);
+    let parameter_slots = live_in_arg_slots_llir_with_identities(&out, cc, Some(&identities));
     let renames = coalesce_phi_copies_with_definition_sites(
         &mut out,
         &phi_copies.pairs,
@@ -2962,6 +2962,49 @@ mod tests {
             !params.contains(&2),
             "rdx (slot 2) is sub-register scratch, not a parameter: {:?}",
             params
+        );
+    }
+
+    #[test]
+    fn live_in_arg_slots_use_exact_identity_not_display_spelling() {
+        use crate::ir::types::BinOp;
+
+        let lf = mk(vec![
+            Op::Bin {
+                op: BinOp::Add,
+                dst: VReg::phys("tmp0"),
+                lhs: Value::Reg(VReg::phys("opaque_entry")),
+                rhs: Value::Const(1),
+            },
+            Op::Bin {
+                op: BinOp::Add,
+                dst: VReg::phys("tmp1"),
+                lhs: Value::Reg(VReg::phys("rdi#looks_entry")),
+                rhs: Value::Const(1),
+            },
+        ]);
+        let mut identities = ValueIdentities::default();
+        identities.record(
+            VReg::phys("opaque_entry"),
+            SsaValue {
+                base: VReg::phys("rsi"),
+                version: 0,
+            },
+        );
+        identities.record(
+            VReg::phys("rdi#looks_entry"),
+            SsaValue {
+                base: VReg::phys("rdi"),
+                version: 3,
+            },
+        );
+
+        let params =
+            live_in_arg_slots_llir_with_identities(&lf, CallConv::SysVAmd64, Some(&identities));
+        assert!(params.contains(&1), "opaque version-zero rsi is arg1");
+        assert!(
+            !params.contains(&0),
+            "versioned rdi is not an entry value despite its spelling"
         );
     }
 

@@ -27,12 +27,20 @@ fn arg_slot_names(cc: CallConv) -> &'static [&'static [&'static str]] {
 /// (the LLIR predates those passes). Mirrors `naming::live_in_arg_slots` but
 /// authoritative for the signature arity + typing.
 ///
-/// A READ is evidence only when it reads the **version-zero (bare)** name. The
+/// A READ is evidence only when its exact identity is **version zero**. The
 /// CFG walk deliberately ignores block storage/address order. This matters for
 /// switch arms: a lower-address arm may define an argument register as scratch
 /// while a sibling arm reads the incoming value first. The join is existential
 /// (OR): one reachable read-before-definition path is enough to prove the slot.
 pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collections::HashSet<usize> {
+    live_in_arg_slots_llir_with_identities(lf, cc, None)
+}
+
+pub fn live_in_arg_slots_llir_with_identities(
+    lf: &LlirFunction,
+    cc: CallConv,
+    identities: Option<&super::ValueIdentities>,
+) -> std::collections::HashSet<usize> {
     let mut slot_of: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for (i, names) in arg_slot_names(cc).iter().enumerate() {
         for n in *names {
@@ -44,18 +52,35 @@ pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collectio
     // the copy is an ordinary `Assign`, so the `Op::Call` guard below never sees
     // it, and its source is the bare (version-zero) live-in name.
     let really_read = architecturally_read_names(lf);
-    let alignment_padding = crate::ir::arm_input_evidence::ArmAlignmentPadding::classify(lf, cc);
+    let alignment_padding =
+        crate::ir::arm_input_evidence::ArmAlignmentPadding::classify(lf, cc, identities);
     let base_slot = |name: &str| slot_of.get(name.split('#').next().unwrap_or(name)).copied();
-    // The slot a READ is evidence for. `None` for a versioned name: `tag_phys`
-    // spells version zero bare and every later definition `name#version`, so a
-    // versioned read consumes a value this function produced. Two names escape
-    // that rule at a non-zero version — `VnCtx::structural` (frame/stack
-    // registers, in no argument slot on any supported convention) and
-    // `VnCtx::keep` (a return-register definition still reaching an unresolved
-    // return, which on System V can be `rdx`, the third integer argument).
-    // Those reads are admitted exactly as before, so nothing regresses; the
-    // cost is that this rule cannot help there.
-    let read_slot = |name: &str| (!name.contains('#')).then(|| base_slot(name)).flatten();
+    let register_slot = |register: &VReg, require_entry: bool| match identities {
+        Some(identities) => {
+            let candidates = identities.candidates(register)?;
+            let mut slots = candidates.iter().map(|identity| {
+                if require_entry && identity.version != 0 {
+                    return None;
+                }
+                match &identity.base {
+                    VReg::Phys(name) => crate::ir::abi::argument_slot_of(cc, name),
+                    _ => None,
+                }
+            });
+            let first = slots.next()??;
+            slots.all(|slot| slot == Some(first)).then_some(first)
+        }
+        None => match register {
+            VReg::Phys(name) => (!require_entry || !name.contains('#'))
+                .then(|| base_slot(name))
+                .flatten(),
+            _ => None,
+        },
+    };
+    // The slot a READ is evidence for. Production consults the opaque identity
+    // and requires version zero; callers without the sidecar retain the legacy
+    // `tag_phys` spelling convention as an explicit compatibility path.
+    let read_slot = |register: &VReg| register_slot(register, true);
     let block_by_va: std::collections::HashMap<u64, usize> = lf
         .blocks
         .iter()
@@ -96,7 +121,11 @@ pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collectio
                     rhs: Value::Reg(VReg::Phys(rhs)),
                 } = &ins.op
                 {
-                    let slots = (base_slot(dst), base_slot(lhs), base_slot(rhs));
+                    let slots = (
+                        register_slot(&VReg::Phys(dst.clone()), false),
+                        register_slot(&VReg::Phys(lhs.clone()), false),
+                        register_slot(&VReg::Phys(rhs.clone()), false),
+                    );
                     if let (Some(dst_slot), Some(lhs_slot), Some(rhs_slot)) = slots {
                         if dst_slot == lhs_slot && lhs_slot == rhs_slot {
                             if dst_slot == slot {
@@ -136,7 +165,7 @@ pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collectio
                         // predecessor of a loop-header phi reads the bare live-in
                         // name and is real evidence; the one in the latch reads the
                         // loop's own definition and is not.
-                        if read_slot(src) == Some(slot) {
+                        if read_slot(&VReg::phys(src)) == Some(slot) {
                             found_read = true;
                             break;
                         }
@@ -161,20 +190,19 @@ pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collectio
                             instr_idx,
                         },
                         u,
+                        identities,
                     ) {
                         return;
                     }
-                    if let VReg::Phys(n) = u {
-                        if read_slot(n) == Some(slot) {
-                            found_read = true;
-                        }
+                    if read_slot(u) == Some(slot) {
+                        found_read = true;
                     }
                 });
                 if found_read {
                     break;
                 }
-                if let Some(VReg::Phys(n)) = def_ref(&ins.op) {
-                    if base_slot(n) == Some(slot) {
+                if let Some(definition) = def_ref(&ins.op) {
+                    if register_slot(definition, false) == Some(slot) {
                         killed = true;
                         break;
                     }
