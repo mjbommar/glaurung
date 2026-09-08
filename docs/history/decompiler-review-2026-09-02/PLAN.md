@@ -467,6 +467,15 @@ The follow-up keys integer signedness and machine-width render metadata by the
 same identity decision, so a recovered narrow integer declaration and its
 representation-boundary conversions cannot disagree.
 
+Commit `05a524e8` migrates the next render-time consumer: redundant unsigned
+machine-view cleanup now accepts an opaque AST value only when its sidecar has
+one exact SSA identity. Ambiguous identities fail closed and retain the explicit
+cast, while the compatibility path without a sidecar keeps its prior behavior.
+Five exact tests cover the new positive and negative contracts plus contextual
+widening and origin-union regressions; all pass with 4,405 unrelated tests
+filtered out. The adjacent typed-comparison and contextual-widening consumers
+remain open. See `results/wp3-typed-view-identities.md`.
+
 ## Authority and relationship to the roadmaps
 
 `docs/development/roadmap/README.md` remains the canonical roadmap index, and
