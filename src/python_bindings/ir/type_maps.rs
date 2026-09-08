@@ -49,17 +49,24 @@ fn merge_slot_sizes(
     }
 }
 
-/// Rebuild a TypeMap whose keys match the post-rename AST. We walk the
-/// original physical-register TypeMap and, for each entry, look up the
-/// alias the naming pass would have produced. Any remaining entries keep
-/// their original names so the printer still has a chance to annotate.
-pub(super) fn remap_type_map(
+/// Rebuild a TypeMap whose keys match the post-rename AST using the exact role
+/// map and opaque identities produced by the authoritative pipeline.
+pub(super) fn remap_type_map_with_roles(
     tm: &crate::ir::types_recover::TypeMap,
-    _f: &crate::ir::ast::Function,
     cc: crate::ir::call_args::CallConv,
     param_slots: &std::collections::HashSet<usize>,
+    role_names: &std::collections::HashMap<String, String>,
+    value_identities: &crate::ir::value_number::ValueIdentities,
 ) -> crate::ir::types_recover::TypeMap {
-    remap_type_map_impl(tm, cc, param_slots, true, None, None, false)
+    remap_type_map_impl(
+        tm,
+        cc,
+        param_slots,
+        true,
+        Some(role_names),
+        Some(value_identities),
+        true,
+    )
 }
 
 fn remap_type_map_impl(
@@ -719,7 +726,7 @@ fn refine_numbered_declaration(
 mod tests {
     use super::{
         integer_widths_by_role, merge_exact_definition_widths, refine_float_copy_types,
-        refine_numbered_declaration, remap_type_map_impl,
+        refine_numbered_declaration, remap_type_map_impl, remap_type_map_with_roles,
     };
     use crate::ir::ast::{Expr, Stmt};
     use crate::ir::call_args::CallConv;
@@ -756,6 +763,44 @@ mod tests {
             projected.get(&VReg::phys("var0")),
             Some(TypeHint::Float { width: 4 })
         );
+    }
+
+    #[test]
+    fn plain_typed_render_projects_exact_integer_roles() {
+        let mut raw = TypeMap::default();
+        raw.upsert_public(
+            VReg::phys("eax#1"),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+        let roles = HashMap::from([("eax#1".to_string(), "var0".to_string())]);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            VReg::phys("eax#1"),
+            SsaValue {
+                base: VReg::phys("eax"),
+                version: 1,
+            },
+        );
+
+        let projected = remap_type_map_with_roles(
+            &raw,
+            CallConv::SysVAmd64,
+            &Default::default(),
+            &roles,
+            &identities,
+        );
+
+        assert_eq!(
+            projected.get(&VReg::phys("var0")),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            })
+        );
+        assert_eq!(projected.get(&VReg::phys("eax#1")), None);
     }
 
     #[test]

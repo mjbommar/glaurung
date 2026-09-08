@@ -1335,12 +1335,13 @@ pub(super) fn render_prepared_ast(
             None => body,
         }
     } else if render_options.types {
-        let recovered = crate::ir::types_recover::recover_types_for(raw, cc);
-        let renamed = super::type_maps::remap_type_map(
+        let recovered = crate::ir::types_recover::recover_types_for(&prepared.numbered, cc);
+        let renamed = super::type_maps::remap_type_map_with_roles(
             &recovered,
-            &prepared.function,
             cc,
             &prepared.parameter_slots,
+            &prepared.role_names,
+            &prepared.value_identities,
         );
         prepared.profiler.measure("render_with_types", || {
             crate::ir::ast::render_with_types(&prepared.function, &renamed)
