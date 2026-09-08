@@ -253,11 +253,10 @@ fn collect_written_regs(body: &[Stmt], written: &mut RegSet) {
             Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => {
                 written.insert(dst.clone());
             }
-            Stmt::Store {
-                addr: Expr::Reg(dst),
-                ..
-            } => {
-                written.insert(dst.clone());
+            Stmt::Store { addr, .. } => {
+                if let Expr::Reg(dst) = addr.semantic() {
+                    written.insert(dst.clone());
+                }
             }
             Stmt::Call { dst: Some(dst), .. } => {
                 written.insert(dst.clone());
@@ -296,8 +295,7 @@ fn collect_written_regs(body: &[Stmt], written: &mut RegSet) {
                     collect_written_regs(&catch.body, written);
                 }
             }
-            Stmt::Store { .. }
-            | Stmt::Call { dst: None, .. }
+            Stmt::Call { dst: None, .. }
             | Stmt::Return { .. }
             | Stmt::Push { .. }
             | Stmt::IndirectGoto { .. }
@@ -323,4 +321,30 @@ pub(super) fn copies_stable_across_loop(copies: &Copies, body: &[Stmt]) -> Copie
 
 pub(super) fn is_self_ref(dst: &VReg, src: &Expr) -> bool {
     matches!(src, Expr::Reg(r) if r == dst)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::ast::OriginSet;
+
+    #[test]
+    fn attributed_loop_store_target_invalidates_preloop_copy() {
+        let written = VReg::phys("local_0");
+        let alias = VReg::phys("var0");
+        let mut copies = Copies::new();
+        copies.insert(alias.clone(), Expr::Reg(written.clone()));
+        let loop_body = vec![Stmt::Store {
+            addr: Expr::Reg(written).with_origins(OriginSet::one(0x1010)),
+            src: Expr::Const(1),
+            size: 4,
+        }];
+
+        let stable = copies_stable_across_loop(&copies, &loop_body);
+
+        assert!(
+            stable.get(&alias).is_none(),
+            "a loop write must invalidate copies of its entry value"
+        );
+    }
 }
