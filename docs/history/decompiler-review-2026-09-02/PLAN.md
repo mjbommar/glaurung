@@ -1935,6 +1935,13 @@ provenance through lowering.
   remain green. Three exact naming tests and only the GCC O2
   `hfa197_tagged_control` fixture pass with a fresh extension. No broad suite
   or corpus ran. See `results/wp3-sse-pair-object-identity.md`.
+  Commit `2a33f6a5` then hardens the call-recovery side of the same boundary:
+  recovered-layout storage and SSE-pair clobber classification compare
+  authoritative identity bases exactly instead of reparsing them as
+  `#version` display text. Both adversarial tests were observed red before the
+  fix; those tests, one neighboring recovered-layout control, and only the GCC
+  O2 `hfa197_tagged_control` fixture pass with a fresh extension. No broad
+  suite or corpus ran. See `results/wp3-canonical-call-identity-bases.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
