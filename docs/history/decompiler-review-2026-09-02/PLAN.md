@@ -1461,6 +1461,12 @@ provenance through lowering.
   indexed, overlapping, and otherwise unproved addresses remain refusals. Its
   observed-red test and all 58 copy-propagation tests pass; see
   `results/wp3-copy-alias-proof-origins.md`.
+  Commit `7c60441e` next closes a store-lvalue correctness seam: an attributed
+  promoted-local pointer copied through a scratch can no longer collapse an
+  explicit indirect store into a bare local assignment. The explicit address
+  container survives and receives the copied expression owner. Its end-to-end
+  test was observed red and all 59 copy-propagation tests pass; see
+  `results/wp3-copy-indirect-store-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
