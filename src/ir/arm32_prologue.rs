@@ -55,14 +55,29 @@ impl Arm32Frame {
 
 /// Collapse a proven-balanced AAPCS machine frame in `f`.
 pub fn recognise_arm32_frame(f: &mut Function) {
-    let Some(frame) = parse_prologue(&f.body) else {
+    recognise_arm32_frame_with_optional_identities(f, None);
+}
+
+/// Collapse a proven-balanced AAPCS frame using exact SSA value authority.
+pub fn recognise_arm32_frame_with_identities(
+    f: &mut Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    recognise_arm32_frame_with_optional_identities(f, Some(identities));
+}
+
+fn recognise_arm32_frame_with_optional_identities(
+    f: &mut Function,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
+    let Some(frame) = parse_prologue(&f.body, identities) else {
         return;
     };
 
     // Work on a clone so one malformed return path cannot leave a partially
     // rewritten function behind.
     let mut candidate = f.body.clone();
-    let Some(return_count) = collapse_epilogues(&mut candidate, &frame) else {
+    let Some(return_count) = collapse_epilogues(&mut candidate, &frame, identities) else {
         return;
     };
     if return_count == 0 {
@@ -84,13 +99,19 @@ pub fn recognise_arm32_frame(f: &mut Function) {
     // a semantic stack slot. A remaining architectural `sp` is therefore a
     // dynamic or otherwise unproved use; retain the original frame rather than
     // changing its meaning.
-    if candidate.iter().any(stmt_mentions_sp) {
+    if candidate
+        .iter()
+        .any(|statement| stmt_mentions_sp(statement, identities))
+    {
         return;
     }
     f.body = candidate;
 }
 
-fn parse_prologue(body: &[Stmt]) -> Option<Arm32Frame> {
+fn parse_prologue(
+    body: &[Stmt],
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<Arm32Frame> {
     let mut start = 0;
     while body
         .get(start)
@@ -101,11 +122,14 @@ fn parse_prologue(body: &[Stmt]) -> Option<Arm32Frame> {
 
     let mut cursor = start;
     let mut save_groups = Vec::new();
-    while let Some(width) = sp_adjust(body.get(cursor)?, BinOp::Sub) {
+    while let Some(width) = sp_adjust(body.get(cursor)?, BinOp::Sub, identities) {
         let mut group_cursor = cursor + 1;
         let mut stored_width = 0i64;
         let mut registers = Vec::new();
-        while let Some((slot, name, size)) = body.get(group_cursor).and_then(saved_register_store) {
+        while let Some((slot, name, size)) = body
+            .get(group_cursor)
+            .and_then(|statement| saved_register_store(statement, identities))
+        {
             if stored_width + i64::from(size) > width {
                 break;
             }
@@ -124,12 +148,13 @@ fn parse_prologue(body: &[Stmt]) -> Option<Arm32Frame> {
             if let Some((fp_slot, saved_fp_address)) =
                 body.get(group_cursor).and_then(aliased_frame_pointer_store)
             {
-                if let Some((lr_slot, lr_name, lr_size)) =
-                    body.get(group_cursor + 1).and_then(saved_register_store)
+                if let Some((lr_slot, lr_name, lr_size)) = body
+                    .get(group_cursor + 1)
+                    .and_then(|statement| saved_register_store(statement, identities))
                 {
                     let setup_matches = body
                         .get(group_cursor + 2)
-                        .and_then(frame_pointer_setup)
+                        .and_then(|statement| frame_pointer_setup(statement, identities))
                         .is_some_and(|location| location == saved_fp_address);
                     if lr_name == "lr" && lr_size == 4 && width == 8 && setup_matches {
                         registers.push(SavedRegister {
@@ -166,7 +191,7 @@ fn parse_prologue(body: &[Stmt]) -> Option<Arm32Frame> {
     // allocates locals first and then establishes r7. Accept both exact
     // orderings.
     if body.get(cursor).is_some_and(|statement| {
-        frame_pointer_setup(statement).is_some_and(|location| {
+        frame_pointer_setup(statement, identities).is_some_and(|location| {
             save_groups
                 .iter()
                 .flat_map(|group| group.registers.iter())
@@ -178,7 +203,7 @@ fn parse_prologue(body: &[Stmt]) -> Option<Arm32Frame> {
 
     let local_width = body
         .get(cursor)
-        .and_then(|statement| sp_adjust(statement, BinOp::Sub))
+        .and_then(|statement| sp_adjust(statement, BinOp::Sub, identities))
         .unwrap_or(0);
     if local_width > 0 {
         cursor += 1;
@@ -190,7 +215,7 @@ fn parse_prologue(body: &[Stmt]) -> Option<Arm32Frame> {
     // proven by the save group so an arbitrary source pointer assignment is
     // never consumed.
     if body.get(cursor).is_some_and(|statement| {
-        frame_pointer_setup(statement).is_some_and(|location| {
+        frame_pointer_setup(statement, identities).is_some_and(|location| {
             local_width > 0
                 || save_groups
                     .iter()
@@ -209,7 +234,10 @@ fn parse_prologue(body: &[Stmt]) -> Option<Arm32Frame> {
     })
 }
 
-fn saved_register_store(statement: &Stmt) -> Option<(StackLocation, String, u8)> {
+fn saved_register_store(
+    statement: &Stmt,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<(StackLocation, String, u8)> {
     let Stmt::Store {
         addr,
         src: Expr::Reg(register),
@@ -219,7 +247,7 @@ fn saved_register_store(statement: &Stmt) -> Option<(StackLocation, String, u8)>
         return None;
     };
     let slot = stack_location(addr)?;
-    let name = canonical_saved_register(register)?;
+    let name = canonical_saved_register(register, identities)?;
     let expected_size = if name.starts_with('d') { 8 } else { 4 };
     (*size == expected_size).then(|| (slot, name, *size))
 }
@@ -231,7 +259,11 @@ fn aliased_frame_pointer_store(statement: &Stmt) -> Option<(StackLocation, Stack
     Some((stack_location(addr)?, stack_location(src)?))
 }
 
-fn collapse_epilogues(body: &mut Vec<Stmt>, frame: &Arm32Frame) -> Option<usize> {
+fn collapse_epilogues(
+    body: &mut Vec<Stmt>,
+    frame: &Arm32Frame,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<usize> {
     let mut return_count = 0;
     for statement in body.iter_mut() {
         return_count += match statement.semantic_mut() {
@@ -240,22 +272,22 @@ fn collapse_epilogues(body: &mut Vec<Stmt>, frame: &Arm32Frame) -> Option<usize>
                 else_body,
                 ..
             } => {
-                let then_count = collapse_epilogues(then_body, frame)?;
-                let else_count = else_body
-                    .as_mut()
-                    .map_or(Some(0), |else_body| collapse_epilogues(else_body, frame))?;
+                let then_count = collapse_epilogues(then_body, frame, identities)?;
+                let else_count = else_body.as_mut().map_or(Some(0), |else_body| {
+                    collapse_epilogues(else_body, frame, identities)
+                })?;
                 then_count + else_count
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                collapse_epilogues(body, frame)?
+                collapse_epilogues(body, frame, identities)?
             }
             Stmt::Switch { cases, default, .. } => {
                 let mut nested_count = 0;
                 for (_, case_body) in cases {
-                    nested_count += collapse_epilogues(case_body, frame)?;
+                    nested_count += collapse_epilogues(case_body, frame, identities)?;
                 }
                 if let Some(default_body) = default {
-                    nested_count += collapse_epilogues(default_body, frame)?;
+                    nested_count += collapse_epilogues(default_body, frame, identities)?;
                 }
                 nested_count
             }
@@ -272,7 +304,7 @@ fn collapse_epilogues(body: &mut Vec<Stmt>, frame: &Arm32Frame) -> Option<usize>
         .collect();
     return_count += return_positions.len();
     for return_index in return_positions.into_iter().rev() {
-        let start = match_epilogue(body, return_index, frame)?;
+        let start = match_epilogue(body, return_index, frame, identities)?;
         let epilogue_comment = comment_with_origins(
             "arm32 epilogue: restore machine frame".to_string(),
             &body[start..return_index],
@@ -283,16 +315,21 @@ fn collapse_epilogues(body: &mut Vec<Stmt>, frame: &Arm32Frame) -> Option<usize>
     Some(return_count)
 }
 
-fn match_epilogue(body: &[Stmt], return_index: usize, frame: &Arm32Frame) -> Option<usize> {
+fn match_epilogue(
+    body: &[Stmt],
+    return_index: usize,
+    frame: &Arm32Frame,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<usize> {
     // Locate the contiguous machine-only suffix, then validate its exact order
     // below. Large GCC frames restore SP from the frame pointer rather than by
     // adding the allocation width, so a numeric-width sum is not sufficient.
     let mut start = return_index;
     while start > 0 {
         match &body[start - 1] {
-            statement if sp_adjust(statement, BinOp::Add).is_some() => start -= 1,
-            statement if restored_register(statement).is_some() => start -= 1,
-            statement if frame_deallocation_piece(statement, frame) => start -= 1,
+            statement if sp_adjust(statement, BinOp::Add, identities).is_some() => start -= 1,
+            statement if restored_register(statement, identities).is_some() => start -= 1,
+            statement if frame_deallocation_piece(statement, frame, identities) => start -= 1,
             _ => break,
         }
     }
@@ -304,12 +341,12 @@ fn match_epilogue(body: &[Stmt], return_index: usize, frame: &Arm32Frame) -> Opt
             Stmt::Assign {
                 dst,
                 src: Expr::Reg(source),
-            } if is_sp(dst)
-                && canonical_saved_register(source).as_deref() == Some("fp")
+            } if is_sp(dst, identities)
+                && canonical_saved_register(source, identities).as_deref() == Some("fp")
         )
     });
     if frame.local_width > 0 {
-        cursor = match_frame_deallocation(body, cursor, frame)?;
+        cursor = match_frame_deallocation(body, cursor, frame, identities)?;
     }
 
     for group in frame.save_groups.iter().rev() {
@@ -319,25 +356,27 @@ fn match_epilogue(body: &[Stmt], return_index: usize, frame: &Arm32Frame) -> Opt
                 // slot as the return target, so no assignment to `lr` appears.
                 if body
                     .get(cursor)
-                    .and_then(restored_register)
+                    .and_then(|statement| restored_register(statement, identities))
                     .is_some_and(|(name, slot)| name == "lr" && slot == saved.slot)
                 {
                     cursor += 1;
                 }
                 continue;
             }
-            let (name, slot) = body.get(cursor).and_then(restored_register)?;
+            let (name, slot) = body
+                .get(cursor)
+                .and_then(|statement| restored_register(statement, identities))?;
             let promoted_stack_top_alias = a32_restores_sp_from_fp
                 && saved.name == "fp"
                 && first_saved_slot(frame) == Some(&saved.slot)
                 && slot.offset == 0
-                && matches!(&slot.object, VReg::Phys(name) if base_name(name) == "stack_top");
+                && matches!(&slot.object, VReg::Phys(name) if name == "stack_top");
             if name != saved.name || (slot != saved.slot && !promoted_stack_top_alias) {
                 return None;
             }
             cursor += 1;
         }
-        if sp_adjust(body.get(cursor)?, BinOp::Add)? != group.width {
+        if sp_adjust(body.get(cursor)?, BinOp::Add, identities)? != group.width {
             return None;
         }
         cursor += 1;
@@ -354,27 +393,36 @@ fn first_saved_slot(frame: &Arm32Frame) -> Option<&StackLocation> {
         .map(|saved| &saved.slot)
 }
 
-fn frame_deallocation_piece(statement: &Stmt, frame: &Arm32Frame) -> bool {
+fn frame_deallocation_piece(
+    statement: &Stmt,
+    frame: &Arm32Frame,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     match statement.semantic() {
-        Stmt::Assign { dst, src } if is_sp(dst) => {
-            matches!(src, Expr::Reg(register) if matches!(canonical_saved_register(register).as_deref(), Some("r7" | "fp")))
+        Stmt::Assign { dst, src } if is_sp(dst, identities) => {
+            matches!(src, Expr::Reg(register) if matches!(canonical_saved_register(register, identities).as_deref(), Some("r7" | "fp")))
                 || matches!(
                     src,
                     Expr::Bin { op: BinOp::Sub, lhs, rhs }
-                        if matches!(lhs.as_ref(), Expr::Reg(register) if canonical_saved_register(register).as_deref() == Some("fp"))
+                        if matches!(lhs.as_ref(), Expr::Reg(register) if canonical_saved_register(register, identities).as_deref() == Some("fp"))
                             && matches!(rhs.as_ref(), Expr::Const(4))
                 )
         }
         Stmt::Assign { dst, src } => {
-            canonical_saved_register(dst).as_deref() == Some("r7")
+            canonical_saved_register(dst, identities).as_deref() == Some("r7")
                 && stack_location(src).as_ref() == first_saved_slot(frame)
         }
         _ => false,
     }
 }
 
-fn match_frame_deallocation(body: &[Stmt], cursor: usize, frame: &Arm32Frame) -> Option<usize> {
-    if sp_adjust(body.get(cursor)?, BinOp::Add) == Some(frame.local_width) {
+fn match_frame_deallocation(
+    body: &[Stmt],
+    cursor: usize,
+    frame: &Arm32Frame,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<usize> {
+    if sp_adjust(body.get(cursor)?, BinOp::Add, identities) == Some(frame.local_width) {
         return Some(cursor + 1);
     }
 
@@ -385,8 +433,8 @@ fn match_frame_deallocation(body: &[Stmt], cursor: usize, frame: &Arm32Frame) ->
         Some(Stmt::Assign {
             dst,
             src: Expr::Reg(source),
-        }) if is_sp(dst)
-            && canonical_saved_register(source).as_deref() == Some("fp")
+        }) if is_sp(dst, identities)
+            && canonical_saved_register(source, identities).as_deref() == Some("fp")
     ) {
         return Some(cursor + 1);
     }
@@ -403,9 +451,9 @@ fn match_frame_deallocation(body: &[Stmt], cursor: usize, frame: &Arm32Frame) ->
             },
         ) = (first.semantic(), second.semantic())
         {
-            if canonical_saved_register(anchor).as_deref() == Some("r7")
+            if canonical_saved_register(anchor, identities).as_deref() == Some("r7")
                 && stack_location(src).as_ref() == first_saved_slot(frame)
-                && is_sp(dst)
+                && is_sp(dst, identities)
                 && source == anchor
             {
                 return Some(cursor + 2);
@@ -419,8 +467,8 @@ fn match_frame_deallocation(body: &[Stmt], cursor: usize, frame: &Arm32Frame) ->
         Some(Stmt::Assign {
             dst,
             src: Expr::Bin { op: BinOp::Sub, lhs, rhs },
-        }) if is_sp(dst)
-            && matches!(lhs.as_ref(), Expr::Reg(register) if canonical_saved_register(register).as_deref() == Some("fp"))
+        }) if is_sp(dst, identities)
+            && matches!(lhs.as_ref(), Expr::Reg(register) if canonical_saved_register(register, identities).as_deref() == Some("fp"))
             && matches!(rhs.as_ref(), Expr::Const(4))
     ) {
         return Some(cursor + 1);
@@ -429,7 +477,10 @@ fn match_frame_deallocation(body: &[Stmt], cursor: usize, frame: &Arm32Frame) ->
     None
 }
 
-fn restored_register(statement: &Stmt) -> Option<(String, StackLocation)> {
+fn restored_register(
+    statement: &Stmt,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<(String, StackLocation)> {
     let Stmt::Assign { dst, src } = statement.semantic() else {
         return None;
     };
@@ -441,7 +492,7 @@ fn restored_register(statement: &Stmt) -> Option<(String, StackLocation)> {
         Expr::Deref { addr, size } if *size == 4 || *size == 8 => stack_location(addr)?,
         _ => return None,
     };
-    canonical_saved_register(dst).map(|name| (name, slot))
+    canonical_saved_register(dst, identities).map(|name| (name, slot))
 }
 
 fn stack_location(expression: &Expr) -> Option<StackLocation> {
@@ -470,17 +521,24 @@ fn stack_location(expression: &Expr) -> Option<StackLocation> {
     }
 }
 
-fn frame_pointer_setup(statement: &Stmt) -> Option<StackLocation> {
+fn frame_pointer_setup(
+    statement: &Stmt,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<StackLocation> {
     let Stmt::Assign { dst, src } = statement.semantic() else {
         return None;
     };
-    let name = canonical_saved_register(dst)?;
+    let name = canonical_saved_register(dst, identities)?;
     ((name == "r7" || name == "fp") && stack_location(src).is_some())
         .then(|| stack_location(src))
         .flatten()
 }
 
-fn sp_adjust(statement: &Stmt, expected_op: BinOp) -> Option<i64> {
+fn sp_adjust(
+    statement: &Stmt,
+    expected_op: BinOp,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<i64> {
     let Stmt::Assign {
         dst,
         src: Expr::Bin { op, lhs, rhs },
@@ -489,7 +547,7 @@ fn sp_adjust(statement: &Stmt, expected_op: BinOp) -> Option<i64> {
         return None;
     };
     if *op != expected_op
-        || !is_sp(dst)
+        || !is_sp(dst, identities)
         || !matches!(lhs.as_ref(), Expr::Reg(register) if register == dst)
     {
         return None;
@@ -513,11 +571,27 @@ fn comment_with_origins(text: String, statements: &[Stmt]) -> Stmt {
     }
 }
 
-fn canonical_saved_register(register: &VReg) -> Option<String> {
-    let VReg::Phys(name) = register else {
-        return None;
-    };
-    let name = base_name(name);
+fn register_base<'a>(
+    register: &'a VReg,
+    identities: Option<&'a crate::ir::value_number::ValueIdentities>,
+) -> Option<&'a str> {
+    match identities {
+        Some(identities) => match &identities.exact(register)?.base {
+            VReg::Phys(base) => Some(base),
+            _ => None,
+        },
+        None => match register {
+            VReg::Phys(name) => Some(base_name(name)),
+            _ => None,
+        },
+    }
+}
+
+fn canonical_saved_register(
+    register: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<String> {
+    let name = register_base(register, identities)?;
     if name == "lr" || name == "r14" {
         return Some("lr".to_string());
     }
@@ -539,39 +613,54 @@ fn is_promoted_stack_slot(register: &VReg) -> bool {
     matches!(register, VReg::Phys(name) if name == "stack_top" || name.starts_with("stack_"))
 }
 
-fn is_sp(register: &VReg) -> bool {
-    matches!(register, VReg::Phys(name) if base_name(name) == "sp")
+fn is_sp(register: &VReg, identities: Option<&crate::ir::value_number::ValueIdentities>) -> bool {
+    register_base(register, identities) == Some("sp")
 }
 
 fn base_name(name: &str) -> &str {
     name.split_once('#').map_or(name, |(base, _)| base)
 }
 
-fn expr_mentions_sp(expression: &Expr) -> bool {
+fn expr_mentions_sp(
+    expression: &Expr,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     match expression {
-        Expr::Origin { expr, .. } => expr_mentions_sp(expr),
-        Expr::Reg(register) => is_sp(register),
-        Expr::StackAddr { object, .. } => is_sp(object),
-        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
-            base.iter().chain(index.iter()).any(is_sp)
-        }
-        Expr::Deref { addr, .. } => expr_mentions_sp(addr),
+        Expr::Origin { expr, .. } => expr_mentions_sp(expr, identities),
+        Expr::Reg(register) => is_sp(register, identities),
+        Expr::StackAddr { object, .. } => is_sp(object, identities),
+        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => base
+            .iter()
+            .chain(index.iter())
+            .any(|register| is_sp(register, identities)),
+        Expr::Deref { addr, .. } => expr_mentions_sp(addr, identities),
         Expr::Call { target, args, .. } => {
-            expr_mentions_sp(target) || args.iter().any(expr_mentions_sp)
+            expr_mentions_sp(target, identities)
+                || args
+                    .iter()
+                    .any(|argument| expr_mentions_sp(argument, identities))
         }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-            expr_mentions_sp(lhs) || expr_mentions_sp(rhs)
+            expr_mentions_sp(lhs, identities) || expr_mentions_sp(rhs, identities)
         }
         Expr::Select {
             cond,
             if_true,
             if_false,
             ..
-        } => expr_mentions_sp(cond) || expr_mentions_sp(if_true) || expr_mentions_sp(if_false),
-        Expr::Un { src, .. } => expr_mentions_sp(src),
-        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => expr_mentions_sp(expr),
-        Expr::FunctionTableEntry { index, .. } => expr_mentions_sp(index),
-        Expr::WideArithmetic { args, .. } => args.iter().any(expr_mentions_sp),
+        } => {
+            expr_mentions_sp(cond, identities)
+                || expr_mentions_sp(if_true, identities)
+                || expr_mentions_sp(if_false, identities)
+        }
+        Expr::Un { src, .. } => expr_mentions_sp(src, identities),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+            expr_mentions_sp(expr, identities)
+        }
+        Expr::FunctionTableEntry { index, .. } => expr_mentions_sp(index, identities),
+        Expr::WideArithmetic { args, .. } => args
+            .iter()
+            .any(|argument| expr_mentions_sp(argument, identities)),
         Expr::Const(_)
         | Expr::FloatConst { .. }
         | Expr::Addr(_)
@@ -581,32 +670,49 @@ fn expr_mentions_sp(expression: &Expr) -> bool {
     }
 }
 
-fn stmt_mentions_sp(statement: &Stmt) -> bool {
+fn stmt_mentions_sp(
+    statement: &Stmt,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     match statement {
-        Stmt::Origin { stmt, .. } => stmt_mentions_sp(stmt),
-        Stmt::Assign { dst, src } => is_sp(dst) || expr_mentions_sp(src),
-        Stmt::Store { addr, src, .. } => expr_mentions_sp(addr) || expr_mentions_sp(src),
+        Stmt::Origin { stmt, .. } => stmt_mentions_sp(stmt, identities),
+        Stmt::Assign { dst, src } => is_sp(dst, identities) || expr_mentions_sp(src, identities),
+        Stmt::Store { addr, src, .. } => {
+            expr_mentions_sp(addr, identities) || expr_mentions_sp(src, identities)
+        }
         Stmt::Call {
             target, args, dst, ..
         } => {
-            expr_mentions_sp(target)
-                || args.iter().any(expr_mentions_sp)
-                || dst.as_ref().is_some_and(is_sp)
+            expr_mentions_sp(target, identities)
+                || args
+                    .iter()
+                    .any(|argument| expr_mentions_sp(argument, identities))
+                || dst
+                    .as_ref()
+                    .is_some_and(|destination| is_sp(destination, identities))
         }
-        Stmt::Return { value } => value.as_ref().is_some_and(expr_mentions_sp),
+        Stmt::Return { value } => value
+            .as_ref()
+            .is_some_and(|value| expr_mentions_sp(value, identities)),
         Stmt::If {
             cond,
             then_body,
             else_body,
         } => {
-            expr_mentions_sp(cond)
-                || then_body.iter().any(stmt_mentions_sp)
-                || else_body
-                    .as_ref()
-                    .is_some_and(|body| body.iter().any(stmt_mentions_sp))
+            expr_mentions_sp(cond, identities)
+                || then_body
+                    .iter()
+                    .any(|statement| stmt_mentions_sp(statement, identities))
+                || else_body.as_ref().is_some_and(|body| {
+                    body.iter()
+                        .any(|statement| stmt_mentions_sp(statement, identities))
+                })
         }
         Stmt::While { cond, body } | Stmt::DoWhile { body, cond } => {
-            expr_mentions_sp(cond) || body.iter().any(stmt_mentions_sp)
+            expr_mentions_sp(cond, identities)
+                || body
+                    .iter()
+                    .any(|statement| stmt_mentions_sp(statement, identities))
         }
         Stmt::For {
             init,
@@ -614,27 +720,31 @@ fn stmt_mentions_sp(statement: &Stmt) -> bool {
             step,
             body,
         } => {
-            stmt_mentions_sp(init)
-                || expr_mentions_sp(cond)
-                || stmt_mentions_sp(step)
-                || body.iter().any(stmt_mentions_sp)
+            stmt_mentions_sp(init, identities)
+                || expr_mentions_sp(cond, identities)
+                || stmt_mentions_sp(step, identities)
+                || body
+                    .iter()
+                    .any(|statement| stmt_mentions_sp(statement, identities))
         }
-        Stmt::Push { value } => expr_mentions_sp(value),
-        Stmt::Pop { target } => is_sp(target),
+        Stmt::Push { value } => expr_mentions_sp(value, identities),
+        Stmt::Pop { target } => is_sp(target, identities),
         Stmt::Switch {
             discriminant,
             cases,
             default,
         } => {
-            expr_mentions_sp(discriminant)
-                || cases
-                    .iter()
-                    .any(|(_, body)| body.iter().any(stmt_mentions_sp))
-                || default
-                    .as_ref()
-                    .is_some_and(|body| body.iter().any(stmt_mentions_sp))
+            expr_mentions_sp(discriminant, identities)
+                || cases.iter().any(|(_, body)| {
+                    body.iter()
+                        .any(|statement| stmt_mentions_sp(statement, identities))
+                })
+                || default.as_ref().is_some_and(|body| {
+                    body.iter()
+                        .any(|statement| stmt_mentions_sp(statement, identities))
+                })
         }
-        Stmt::IndirectGoto { target } => expr_mentions_sp(target),
+        Stmt::IndirectGoto { target } => expr_mentions_sp(target, identities),
         Stmt::Goto { .. }
         | Stmt::Label(_)
         | Stmt::Break
@@ -655,6 +765,50 @@ mod tests {
 
     fn reg(name: &str) -> VReg {
         VReg::phys(name)
+    }
+
+    #[test]
+    fn typed_frame_registers_ignore_display_spelling() {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            reg("opaque_sp"),
+            crate::ir::ssa::SsaValue {
+                base: reg("sp"),
+                version: 3,
+            },
+        );
+        identities.record(
+            reg("opaque_lr"),
+            crate::ir::ssa::SsaValue {
+                base: reg("r14"),
+                version: 0,
+            },
+        );
+        identities.record(
+            reg("sp#0"),
+            crate::ir::ssa::SsaValue {
+                base: reg("r0"),
+                version: 0,
+            },
+        );
+        identities.record(
+            reg("lr#0"),
+            crate::ir::ssa::SsaValue {
+                base: reg("r0"),
+                version: 0,
+            },
+        );
+
+        assert!(is_sp(&reg("opaque_sp"), Some(&identities)));
+        assert_eq!(
+            canonical_saved_register(&reg("opaque_lr"), Some(&identities)).as_deref(),
+            Some("lr")
+        );
+        assert!(!is_sp(&reg("sp#0"), Some(&identities)));
+        assert_eq!(
+            canonical_saved_register(&reg("lr#0"), Some(&identities)),
+            None
+        );
     }
 
     fn sp_sub(width: i64) -> Stmt {
