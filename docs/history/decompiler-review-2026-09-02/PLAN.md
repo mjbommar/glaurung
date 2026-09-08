@@ -1849,6 +1849,14 @@ provenance through lowering.
   and pass afterward with 4,669 unrelated tests filtered out. After a release
   rebuild, the exact fixture-215 Clang-O2 `wide_selector_high_labels` lane also
   passes. See `results/wp3-signed-comparison-expression-origin-rendering.md`.
+  Commit `90c21f7f` closes the adjacent pointer-call boundary. The pointer-type
+  proof and the call-argument writer now agree when provenance wraps either a
+  declared pointer register or its pointer-width transport cast: compatible
+  arguments render directly, while incompatible recovered pointee types retain
+  their explicit conversion. The positive contract was observed red as
+  `strdup((const char *)((long)((long)arg0)))`; both focused contracts and the
+  exact nullable-locale compile/runtime round trip pass after the repair. See
+  `results/wp3-pointer-call-expression-origin-rendering.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
