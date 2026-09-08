@@ -87,15 +87,19 @@ three places. The detailed file now records the reconciled decisions:
 | [PLAN.md](PLAN.md) | Dependency-ordered implementation work packages with exact production/test paths, TDD sequence, gates, measurements, stop conditions, and milestones. |
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
-The latest WP3 record is
+The latest bounded output-quality record is
+[`results/wp3-wp6-hello-contract.md`](results/wp3-wp6-hello-contract.md):
+attributed string arguments no longer gain redundant pointer casts, and the
+zero-argument hosted `main` form now keeps its authoritative `int` return.
+The periodic amd64/AArch64 Clang O0/O2 canonical Hello canary is four-for-four.
+
+The latest WP3 verifier record is
 [`results/wp3-verifier-stack-identities.md`](results/wp3-verifier-stack-identities.md):
 the final structured and goto-aware output verifier now classifies promoted
 stack stores by producer-owned identity. Its two exact adversarial tests and
 all 43 owning tests pass. The apparent undeclared-`local_8` failure was a gate
 parser defect—initialized declarations were omitted—and commit `4c905ab7`
-makes all eight architecture/optimization cells green. The four-cell Hello
-World canary still exposes a redundant string-literal cast in every cell plus
-an amd64 O2 `main` return-type regression; that contract was not weakened.
+makes all eight architecture/optimization cells green.
 
 The preceding WP3 record is
 [`results/wp3-wp7b-for-loop-stack-identities.md`](results/wp3-wp7b-for-loop-stack-identities.md):

@@ -581,10 +581,17 @@ A fresh debug extension passes `tools/build_guard.py`. The owning compiled
 invariant first claimed two functions used undeclared `local_8`, but direct
 inspection showed initialized declarations in both. Commit `4c905ab7` teaches
 the gate to recognize `name = value`; the exact x86-64 O0 cell and all eight
-architecture/optimization cells pass. The four-cell canonical Hello World
-canary (amd64/AArch64, Clang O0/O2) remains honestly red: every cell adds a
-redundant `(const char *)` string-literal cast, and amd64 O2 additionally uses
-`unsigned long` for `main`. No broad suite or corpus ran.
+architecture/optimization cells pass.
+
+## Hosted Hello contract
+
+Commits `76eb1329` and `fea34010` make pointer-type comparison transparent to
+expression origins and extend the standard hosted-`main` contract to a
+recovered zero-argument body. The exact new tests and their four- and six-test
+owning modules pass. After a fresh debug extension build, all four canonical
+Hello World cells—amd64/AArch64, Clang O0/O2—render exact `int main(void)`, a
+plain `puts("Hello, World!")`, and `return 0`. The census records 5,144 declared
+Rust tests and zero outside every gate. No broad suite or corpus ran.
 
 ## Ground rules
 

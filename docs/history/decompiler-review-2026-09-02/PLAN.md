@@ -2783,6 +2783,13 @@ the flow-insensitive register map continues to provide class and machine width.
 This starts, but does not complete, the production checkboxes above: pointer,
 aggregate, call, confidence, and general solver constraints remain open.
 
+The bounded hosted-entry contract at `76eb1329` and `fea34010` closes two
+periodic Hello World readability regressions without changing the general type
+solver. Pointer comparison at a call boundary now sees through expression
+origins, and a recovered zero-argument hosted `main` receives the C language's
+authoritative `int main(void)` contract. The exact amd64/AArch64 Clang O0/O2
+canary is four-for-four; see `results/wp3-wp6-hello-contract.md`.
+
 ### Required `classify` signed-loop vertical slice
 
 The exact source shape below is a required WP6/WP7 cross-package regression,
