@@ -447,17 +447,17 @@ fn guarded_do_while_candidate(body: &[Stmt], start: usize) -> Option<(usize, VRe
     else {
         return None;
     };
-    let (initial, sentinel) = match entry_guard {
+    let (initial, sentinel) = match entry_guard.semantic() {
         Expr::Cmp {
             op: CmpOp::Eq,
             lhs,
             rhs,
-        } if matches!(rhs.as_ref(), Expr::Const(_)) => (lhs.as_ref(), rhs.as_ref()),
+        } if matches!(rhs.semantic(), Expr::Const(_)) => (lhs.as_ref(), rhs.as_ref()),
         Expr::Cmp {
             op: CmpOp::Eq,
             lhs,
             rhs,
-        } if matches!(lhs.as_ref(), Expr::Const(_)) => (rhs.as_ref(), lhs.as_ref()),
+        } if matches!(lhs.semantic(), Expr::Const(_)) => (rhs.as_ref(), lhs.as_ref()),
         _ => return None,
     };
 
@@ -1721,6 +1721,7 @@ mod tests {
     }
 
     fn guarded_do_while_fixture() -> Function {
+        let sentinel = Expr::Const(0).with_origins(OriginSet::one(0x1000));
         Function {
             name: "sum".into(),
             entry_va: 0,
@@ -1733,7 +1734,7 @@ mod tests {
                     cond: Expr::Cmp {
                         op: CmpOp::Eq,
                         lhs: Box::new(Expr::Reg(reg("arg0"))),
-                        rhs: Box::new(Expr::Const(0)),
+                        rhs: Box::new(sentinel.clone()),
                     },
                     then_body: vec![Stmt::Return {
                         value: Some(Expr::Reg(reg("result"))),
@@ -1770,7 +1771,7 @@ mod tests {
                     cond: Expr::Cmp {
                         op: CmpOp::Ne,
                         lhs: Box::new(Expr::Reg(reg("latch"))),
-                        rhs: Box::new(Expr::Const(0)),
+                        rhs: Box::new(sentinel),
                     },
                 },
                 Stmt::Return {
@@ -1801,7 +1802,8 @@ mod tests {
                 },
                 ..
             } if lhs.as_ref() == &Expr::Reg(reg("current"))
-                && rhs.as_ref() == &Expr::Const(0)
+                && rhs.semantic() == &Expr::Const(0)
+                && rhs.origins() == Some(&OriginSet::one(0x1000))
         ));
     }
 
