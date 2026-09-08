@@ -609,14 +609,17 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
     // one byte of an `int` is not an `int` read, and aggregate/local objects
     // are deliberately outside this parameter-only identity.
     let parameter_address_load = match e {
-        Expr::Deref { addr, size } => match addr.as_ref() {
+        Expr::Deref { addr, size } => match addr.semantic() {
             Expr::StackAddr {
                 object: crate::ir::types::VReg::Phys(name),
                 size: object_size,
             } if usize::from(*size) == usize::from(*object_size)
                 && crate::ir::ast::parse_arg_index(name).is_some() =>
             {
-                Some(Expr::Reg(crate::ir::types::VReg::phys(name.clone())))
+                Some(
+                    Expr::Reg(crate::ir::types::VReg::phys(name.clone()))
+                        .with_optional_origins(addr.origins().cloned()),
+                )
             }
             _ => None,
         },
@@ -3465,6 +3468,33 @@ mod tests {
                 ..
             } if parameter == &reg("arg0")
         ));
+    }
+
+    #[test]
+    fn attributed_full_width_parameter_load_unions_address_and_load_origins() {
+        let load_owner = crate::ir::ast::OriginSet::one(0x1000);
+        let address_owner = crate::ir::ast::OriginSet::one(0x1004);
+        let mut function = one_stmt(
+            Expr::Deref {
+                addr: Box::new(
+                    Expr::StackAddr {
+                        object: reg("arg0"),
+                        size: 4,
+                    }
+                    .with_origins(address_owner.clone()),
+                ),
+                size: 4,
+            }
+            .with_origins(load_owner.clone()),
+        );
+
+        assert!(fold_constants(&mut function));
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        assert_eq!(src.semantic(), &Expr::Reg(reg("arg0")));
+        assert_eq!(src.origins(), Some(&load_owner.union(&address_owner)));
     }
 
     #[test]
