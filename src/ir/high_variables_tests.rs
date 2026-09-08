@@ -658,11 +658,52 @@ fn attributed_authoritative_callee_refines_a_forwarded_argument() {
         }
         .with_origins(crate::ir::ast::OriginSet::one(0x1010))],
     };
+    let identities = crate::ir::value_number::ValueIdentities::default()
+        .with_role_aliases_and_parameter_slots(
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::from([0]),
+        );
     let mut types = TypeMap::default();
 
-    refine_pointer_high_variables(&function, &mut types);
+    refine_pointer_high_variables_with_identities(&function, &mut types, Some(&identities));
 
     assert_eq!(pointer_width(&types, "arg0"), Some(4));
+}
+
+#[test]
+fn callee_pointer_contract_does_not_trust_an_unowned_arg_spelling() {
+    let recovered = CallPrototype {
+        return_type: "int".into(),
+        parameter_types: vec!["int *".into()],
+        variadic: false,
+        authority: CallPrototypeAuthority::Recovered,
+    };
+    let function = Function {
+        name: "stale_parameter_role".into(),
+        entry_va: 0,
+        body: vec![Stmt::Call {
+            target: Expr::Named {
+                va: 0x2000,
+                name: "read_first".into(),
+            },
+            args: vec![Expr::Reg(VReg::phys("arg99"))],
+            dst: Some(VReg::phys("ret")),
+            call_spec: Some(CallSiteSpec {
+                call_prototype: recovered.clone(),
+                callee_prototype: Some(recovered),
+            }),
+        }],
+    };
+    let identities = crate::ir::value_number::ValueIdentities::default()
+        .with_role_aliases_and_parameter_slots(
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::from([0]),
+        );
+    let mut types = TypeMap::default();
+
+    refine_pointer_high_variables_with_identities(&function, &mut types, Some(&identities));
+
+    assert_eq!(pointer_width(&types, "arg99"), None);
 }
 
 #[test]

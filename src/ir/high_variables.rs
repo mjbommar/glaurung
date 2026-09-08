@@ -176,7 +176,7 @@ fn refine_pointer_facts(
     types: &mut TypeMap,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
-    refine_authoritative_pointer_values(body, definitions, unsafe_uses, types);
+    refine_authoritative_pointer_values(body, definitions, unsafe_uses, types, identities);
 
     for _ in 0..=definitions.len() {
         let object_values_learned =
@@ -311,6 +311,7 @@ fn refine_authoritative_pointer_values(
     definitions: &HashMap<String, Vec<Definition>>,
     unsafe_uses: &HashSet<String>,
     types: &mut TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
     fn collect(body: &[Stmt], out: &mut HashMap<String, Vec<u8>>) {
         for statement in body {
@@ -409,7 +410,7 @@ fn refine_authoritative_pointer_values(
         {
             direct_values.push((name.clone(), width));
         }
-        let Some(origin) = single_exact_parameter_origin(&name, definitions) else {
+        let Some(origin) = single_exact_parameter_origin(&name, definitions, identities) else {
             continue;
         };
         if unsafe_uses.contains(&origin) {
@@ -584,13 +585,19 @@ impl Definition {
 fn single_exact_parameter_origin(
     name: &str,
     definitions: &HashMap<String, Vec<Definition>>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Option<String> {
     fn visit(
         name: &str,
         definitions: &HashMap<String, Vec<Definition>>,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
         visiting: &mut HashSet<String>,
     ) -> Option<String> {
-        if crate::ir::ast::parse_arg_index(name).is_some() {
+        let parameter = match identities {
+            Some(identities) => identities.parameter_slot(&VReg::phys(name)).is_some(),
+            None => crate::ir::ast::parse_arg_index(name).is_some(),
+        };
+        if parameter {
             return Some(name.to_string());
         }
         if !is_source_value_local(name) || !visiting.insert(name.to_string()) {
@@ -606,7 +613,7 @@ fn single_exact_parameter_origin(
                 if !is_trusted_copy_source(source) {
                     return None;
                 }
-                let next = visit(source, definitions, visiting)?;
+                let next = visit(source, definitions, identities, visiting)?;
                 if origin.as_ref().is_some_and(|current| current != &next) {
                     return None;
                 }
@@ -618,7 +625,7 @@ fn single_exact_parameter_origin(
         result
     }
 
-    visit(name, definitions, &mut HashSet::new())
+    visit(name, definitions, identities, &mut HashSet::new())
 }
 
 fn collect_definitions(body: &[Stmt], out: &mut HashMap<String, Vec<Definition>>) {
