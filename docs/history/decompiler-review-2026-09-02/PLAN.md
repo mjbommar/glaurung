@@ -957,8 +957,11 @@ provenance through lowering.
   `f05c9a5d` carries exact or explicitly ambiguous `SsaValue` candidates beside
   value-numbered LLIR and the lowered production AST, and migrates float-role
   projection as the first product consumer; `af65c260` migrates optimized
-  DWARF register-local recovery. Multi-output definitions, AST
-  pass-native identities, and the remaining consumers are still open.
+  DWARF register-local recovery. Commit `8bc75c71` carries every positional
+  output of a multi-output intrinsic through value numbering and records each
+  exact identity; a later read of the second output is joined to that producer.
+  AST pass-native identities and the remaining consumers are still open. See
+  `results/wp3-multi-output-identities.md`.
 - [~] Add a compositional instruction-origin set to expressions/statements;
   unions must be deterministic and deduplicated. `7bea3314` defines the
   canonical set and `59840017` adds transparent statement ownership with
