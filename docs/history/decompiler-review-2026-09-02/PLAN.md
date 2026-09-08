@@ -439,6 +439,15 @@ broad suite was run for this bounded increment. This advances WP3 but does not
 complete consumer migration or conservative invalidation. See
 `results/wp3-ast-role-identities.md`.
 
+Commit `697d6358` migrates the next production consumer: pointer eligibility
+inside `high_variables`. The renderer supplies the projected identity sidecar,
+so an exact opaque role can carry proven pointer evidence without being named
+`varN`; a role with multiple candidate identities remains untyped. Existing
+promoted-local and legacy `varN` behavior is preserved while consumers migrate
+incrementally. Both exact contracts and all 29 directly related module tests
+pass, with 4,368 unrelated tests filtered out. See
+`results/wp3-pointer-refinement-identities.md`.
+
 ## Authority and relationship to the roadmaps
 
 `docs/development/roadmap/README.md` remains the canonical roadmap index, and
