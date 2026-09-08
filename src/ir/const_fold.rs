@@ -1806,10 +1806,10 @@ fn invert_mixed_view_equal_or_signed_less(expr: &Expr) -> Option<Expr> {
     else {
         return None;
     };
-    let Expr::Const(equality_constant) = equality_rhs.as_ref() else {
+    let Expr::Const(equality_constant) = equality_rhs.semantic() else {
         return None;
     };
-    let Expr::Const(less_constant) = less_rhs.as_ref() else {
+    let Expr::Const(less_constant) = less_rhs.semantic() else {
         return None;
     };
     if equality_constant != less_constant {
@@ -1839,10 +1839,21 @@ fn invert_mixed_view_equal_or_signed_less(expr: &Expr) -> Option<Expr> {
         .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
             owners.union(next)
         });
+    let constant_origins = equality_rhs
+        .origins()
+        .into_iter()
+        .chain(less_rhs.origins())
+        .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+            owners.union(next)
+        });
     Some(
         Expr::Cmp {
             op: CmpOp::Slt,
-            lhs: less_rhs.clone(),
+            lhs: Box::new(
+                Expr::Const(*less_constant).with_optional_origins(
+                    (!constant_origins.is_empty()).then_some(constant_origins),
+                ),
+            ),
             rhs: less_lhs.clone(),
         }
         .with_optional_origins((!origins.is_empty()).then_some(origins)),
@@ -2808,19 +2819,23 @@ mod tests {
         let equality_owner = crate::ir::ast::OriginSet::one(0x1008);
         let less_owner = crate::ir::ast::OriginSet::one(0x100c);
         let zero_owner = crate::ir::ast::OriginSet::one(0x1010);
+        let equality_constant_owner = crate::ir::ast::OriginSet::one(0x1014);
+        let less_constant_owner = crate::ir::ast::OriginSet::one(0x1018);
         let signed_value = view(true, value.clone());
         let relation = bin(
             BinOp::Or,
             Expr::Cmp {
                 op: CmpOp::Eq,
                 lhs: Box::new(view(false, value)),
-                rhs: Box::new(Expr::Const(100)),
+                rhs: Box::new(
+                    Expr::Const(100).with_origins(equality_constant_owner.clone()),
+                ),
             }
             .with_origins(equality_owner.clone()),
             Expr::Cmp {
                 op: CmpOp::Slt,
                 lhs: Box::new(signed_value.clone()),
-                rhs: Box::new(Expr::Const(100)),
+                rhs: Box::new(Expr::Const(100).with_origins(less_constant_owner.clone())),
             }
             .with_origins(less_owner.clone()),
         )
@@ -2839,13 +2854,19 @@ mod tests {
         let Stmt::Assign { src, .. } = &function.body[0] else {
             panic!("expected assignment")
         };
+        let Expr::Cmp {
+            op: CmpOp::Slt,
+            lhs,
+            rhs,
+        } = src.semantic()
+        else {
+            panic!("expected recovered signed relation: {src:#?}")
+        };
+        assert_eq!(lhs.semantic(), &Expr::Const(100));
+        assert_eq!(rhs.semantic(), signed_value.semantic());
         assert_eq!(
-            src.semantic(),
-            &Expr::Cmp {
-                op: CmpOp::Slt,
-                lhs: Box::new(Expr::Const(100)),
-                rhs: Box::new(signed_value),
-            }
+            lhs.origins(),
+            Some(&equality_constant_owner.union(&less_constant_owner))
         );
         let expected = terminal_owner
             .union(&relation_owner)
