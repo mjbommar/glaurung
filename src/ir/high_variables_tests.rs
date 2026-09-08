@@ -1,4 +1,7 @@
-use super::{refine_pointer_high_variables, refine_pointer_high_variables_with_identities};
+use super::{
+    exact_value_role, is_source_value_local_with_identities, refine_pointer_high_variables,
+    refine_pointer_high_variables_with_identities,
+};
 use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority, CallSiteSpec};
 use crate::ir::types::{BinOp, CmpOp, VReg};
@@ -9,6 +12,23 @@ fn pointer_width(types: &TypeMap, name: &str) -> Option<u8> {
         Some(TypeHint::Pointer { pointee_width }) => Some(pointee_width),
         _ => None,
     }
+}
+
+#[test]
+fn installed_identity_authority_does_not_trust_var_spelling_for_type_refinement() {
+    let identities = crate::ir::value_number::ValueIdentities::default();
+
+    assert!(!exact_value_role("var12", Some(&identities)));
+    assert!(!is_source_value_local_with_identities(
+        "var12",
+        Some(&identities)
+    ));
+    assert!(exact_value_role("var12", None));
+    assert!(is_source_value_local_with_identities("var12", None));
+    assert!(is_source_value_local_with_identities(
+        "local_8",
+        Some(&identities)
+    ));
 }
 
 #[test]

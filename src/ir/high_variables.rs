@@ -162,8 +162,10 @@ fn exact_value_role(
     name: &str,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> bool {
-    is_high_variable(name)
-        || identities.is_some_and(|identities| identities.exact(&VReg::phys(name)).is_some())
+    match identities {
+        Some(identities) => identities.exact(&VReg::phys(name)).is_some(),
+        None => is_high_variable(name),
+    }
 }
 
 fn refine_pointer_facts(
@@ -1074,10 +1076,13 @@ fn is_source_value_local_with_identities(
     name: &str,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> bool {
-    if is_source_value_local(name) {
+    if is_promoted_local(name) {
         return true;
     }
-    identities.is_some_and(|identities| identities.exact(&VReg::phys(name)).is_some())
+    match identities {
+        Some(identities) => identities.exact(&VReg::phys(name)).is_some(),
+        None => is_high_variable(name),
+    }
 }
 
 fn is_high_variable(name: &str) -> bool {
