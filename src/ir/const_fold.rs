@@ -145,17 +145,25 @@ pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
                     signed: left.0,
                     width: left.2,
                     expr: Box::new(left.3.clone()),
-                };
+                }
+                .with_optional_origins((!left.4.is_empty()).then_some(left.4));
                 **rhs = Expr::Cast {
                     signed: right.0,
                     width: right.2,
                     expr: Box::new(right.3.clone()),
-                };
+                }
+                .with_optional_origins((!right.4.is_empty()).then_some(right.4));
             } else if declared_source_type(left.3, left.0, left.2, tm)
                 && declared_source_type(right.3, right.0, right.2, tm)
             {
-                **lhs = left.3.clone();
-                **rhs = right.3.clone();
+                **lhs = left
+                    .3
+                    .clone()
+                    .with_optional_origins((!left.4.is_empty()).then_some(left.4));
+                **rhs = right
+                    .3
+                    .clone()
+                    .with_optional_origins((!right.4.is_empty()).then_some(right.4));
             }
         }
     }
@@ -1551,12 +1559,15 @@ fn recover_eager_boolean_pair(
 /// `(outer)(inner)x` when both casts have the signedness required by `op` and
 /// strictly widen from the common inner machine width. Returns the cast shape
 /// plus `x`, allowing the caller to prove both operands use the same extension.
-fn common_extended_operand(expr: &Expr, op: CmpOp) -> Option<(bool, u8, u8, &Expr)> {
+fn common_extended_operand(
+    expr: &Expr,
+    op: CmpOp,
+) -> Option<(bool, u8, u8, &Expr, crate::ir::ast::OriginSet)> {
     let Expr::Cast {
         signed: outer_signed,
         width: outer_width,
         expr: outer_expr,
-    } = expr
+    } = expr.semantic()
     else {
         return None;
     };
@@ -1564,7 +1575,7 @@ fn common_extended_operand(expr: &Expr, op: CmpOp) -> Option<(bool, u8, u8, &Exp
         signed: inner_signed,
         width: inner_width,
         expr: inner_expr,
-    } = outer_expr.as_ref()
+    } = outer_expr.semantic()
     else {
         return None;
     };
@@ -1576,11 +1587,19 @@ fn common_extended_operand(expr: &Expr, op: CmpOp) -> Option<(bool, u8, u8, &Exp
         CmpOp::Ult | CmpOp::Ule => !*outer_signed,
         CmpOp::Eq | CmpOp::Ne => true,
     };
+    let cast_origins = expr
+        .origins()
+        .into_iter()
+        .chain(outer_expr.origins())
+        .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+            owners.union(next)
+        });
     signedness_matches.then_some((
         *outer_signed,
         *outer_width,
         *inner_width,
         inner_expr.as_ref(),
+        cast_origins,
     ))
 }
 
@@ -1751,9 +1770,9 @@ fn invert_mixed_view_equal_or_signed_less(expr: &Expr) -> Option<Expr> {
     if equality_constant != less_constant {
         return None;
     }
-    let (equality_signed, equality_outer, equality_inner, equality_value) =
+    let (equality_signed, equality_outer, equality_inner, equality_value, equality_origins) =
         common_extended_operand(equality_lhs, CmpOp::Eq)?;
-    let (less_signed, less_outer, less_inner, less_value) =
+    let (less_signed, less_outer, less_inner, less_value, less_origins) =
         common_extended_operand(less_lhs, CmpOp::Slt)?;
     if equality_signed
         || !less_signed
@@ -1770,6 +1789,8 @@ fn invert_mixed_view_equal_or_signed_less(expr: &Expr) -> Option<Expr> {
         .into_iter()
         .chain(equality.origins())
         .chain(less.origins())
+        .chain((!equality_origins.is_empty()).then_some(&equality_origins))
+        .chain((!less_origins.is_empty()).then_some(&less_origins))
         .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
             owners.union(next)
         });
@@ -3437,24 +3458,31 @@ mod tests {
     }
 
     #[test]
-    fn typed_comparison_views_ignore_source_origin_carriers() {
+    fn typed_comparison_views_preserve_cast_and_source_origins() {
         use crate::ir::types_recover::{TypeHint, TypeMap};
 
-        let extended = |name, address| Expr::Cast {
-            signed: true,
-            width: 8,
-            expr: Box::new(Expr::Cast {
+        let extended = |name, base| {
+            Expr::Cast {
                 signed: true,
-                width: 4,
+                width: 8,
                 expr: Box::new(
-                    Expr::Reg(reg(name)).with_origins(crate::ir::ast::OriginSet::one(address)),
+                    Expr::Cast {
+                        signed: true,
+                        width: 4,
+                        expr: Box::new(
+                            Expr::Reg(reg(name))
+                                .with_origins(crate::ir::ast::OriginSet::one(base + 8)),
+                        ),
+                    }
+                    .with_origins(crate::ir::ast::OriginSet::one(base + 4)),
                 ),
-            }),
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(base))
         };
         let mut function = one_stmt(Expr::Cmp {
             op: CmpOp::Slt,
             lhs: Box::new(extended("arg0", 0x1000)),
-            rhs: Box::new(extended("arg1", 0x1004)),
+            rhs: Box::new(extended("arg1", 0x1010)),
         });
         let mut types = TypeMap::default();
         for name in ["arg0", "arg1"] {
@@ -3476,8 +3504,12 @@ mod tests {
                 ..
             } if matches!(lhs.semantic(), Expr::Reg(register) if register == &reg("arg0"))
                 && matches!(rhs.semantic(), Expr::Reg(register) if register == &reg("arg1"))
-                && lhs.origins() == Some(&crate::ir::ast::OriginSet::one(0x1000))
-                && rhs.origins() == Some(&crate::ir::ast::OriginSet::one(0x1004))
+                && lhs.origins() == Some(&crate::ir::ast::OriginSet::from_addresses([
+                    0x1000, 0x1004, 0x1008,
+                ]))
+                && rhs.origins() == Some(&crate::ir::ast::OriginSet::from_addresses([
+                    0x1010, 0x1014, 0x1018,
+                ]))
         ));
     }
 
