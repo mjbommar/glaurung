@@ -1319,6 +1319,12 @@ provenance through lowering.
   result, stable-prelude, carried-latch, zero-iteration, or trailing-control
   proofs. Its observed-red test and all 30 loop-form tests pass; see
   `results/wp3-guarded-loop-expression-origins.md`.
+  Commit `9523e980` then handles distinct entry/latch sentinel owners: the
+  values compare semantically and the recovered pre-tested `while` bound keeps
+  their deterministic union without weakening sentinel equality or any entry,
+  prelude, latch, zero-iteration, or trailing-control proof. Its strengthened
+  observed-red test and all 30 loop-form tests pass; see
+  `results/wp3-guarded-sentinel-composition.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
