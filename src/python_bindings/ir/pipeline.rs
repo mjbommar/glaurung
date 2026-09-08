@@ -730,7 +730,12 @@ pub(super) fn run_ast_passes(
             // while the high half's definition is still present: dead-store
             // elimination runs a few passes below and has nothing to keep it
             // alive until a `return` reads it.
-            crate::ir::callee_return_pair::compose_pair_returns(f, cc, prototype);
+            crate::ir::callee_return_pair::compose_pair_returns_with_identities(
+                f,
+                cc,
+                prototype,
+                Some(value_identities),
+            );
         }
     });
     // Reconstructed expressions now carry their explicit machine width. Make
