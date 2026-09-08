@@ -1858,6 +1858,13 @@ provenance through lowering.
   pass. The selected GCC O2 canary's `const_fold` change-report crash reproduces
   unchanged with the patch removed and remains baseline infrastructure debt.
   See `results/wp3-preceding-call-result-identities.md`.
+  Commit `4ce03e4f` closes the adjacent bare-result decision. An explicit call
+  destination is replaced with a fresh result value only when every exact
+  candidate is version-zero ABI result storage; opaque versioned results stay
+  explicit and misleading result-like names backed by other storage remain
+  untouched. The strengthened exact regression, all 143 owning tests, and the
+  single Clang O0 `call_into_spill` canary pass. See
+  `results/wp3-bare-call-result-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
