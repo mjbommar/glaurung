@@ -26,7 +26,11 @@ fn caller_ast(
     budgets: &Budgets,
     cc: CallConv,
     owner: u64,
-) -> Option<(crate::ir::types::LlirFunction, Function)> {
+) -> Option<(
+    crate::ir::types::LlirFunction,
+    Function,
+    crate::ir::value_number::ValueIdentities,
+)> {
     let targeted_budgets = Budgets {
         max_functions: 1,
         ..*budgets
@@ -36,10 +40,15 @@ fn caller_ast(
     crate::ir::abi::annotate_calls(&mut lifted, cc);
     let ssa = crate::ir::ssa::compute_ssa(&lifted);
     let region = crate::ir::structure::recover_verified(&lifted, &ssa);
-    let (numbered, _, _) =
-        crate::ir::value_number::value_number_with_parameter_slots(&lifted, &ssa, cc);
+    let (numbered, _, _, identities) =
+        crate::ir::value_number::value_number_with_parameter_slots_lifetimes_and_identities(
+            &lifted,
+            &ssa,
+            cc,
+            &[],
+        );
     let ast = crate::ir::ast::lower(&numbered, &region, function.name.clone());
-    Some((lifted, ast))
+    Some((lifted, ast, identities))
 }
 
 fn agreed_stack_proven_arity(cc: CallConv, observations: &[(u64, usize)]) -> Option<usize> {
@@ -116,7 +125,7 @@ pub(super) fn recover_direct_caller_arities(
     let mut observations = HashMap::<u64, Vec<(u64, usize)>>::new();
     let mut invalid = HashSet::<u64>::new();
     for (owner, expected_sites) in sites_by_owner {
-        let Some((lifted, ast)) = caller_ast(image, budgets, cc, owner) else {
+        let Some((lifted, ast, identities)) = caller_ast(image, budgets, cc, owner) else {
             invalid.extend(expected_sites.iter().map(|(_, target)| *target));
             continue;
         };
@@ -142,7 +151,12 @@ pub(super) fn recover_direct_caller_arities(
             continue;
         }
         let stack_proven =
-            crate::ir::caller_arity::stack_proven_direct_call_arities(&ast, cc, requested_vas);
+            crate::ir::caller_arity::stack_proven_direct_call_arities_with_identities(
+                &ast,
+                cc,
+                requested_vas,
+                Some(&identities),
+            );
         let owner_targets = expected_sites
             .iter()
             .map(|(_, target)| *target)

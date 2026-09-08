@@ -4,9 +4,11 @@ use std::collections::HashSet;
 
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::call_args::{
-    outgoing_stack_cleanup, outgoing_sysv_stack_push, ssa_base, stack_pointer_sub_width, CallConv,
+    outgoing_stack_cleanup_with_identities, outgoing_sysv_stack_push_with_identities,
+    register_is_storage, stack_pointer_sub_width_with_identities, CallConv,
 };
 use crate::ir::types::VReg;
+use crate::ir::value_number::ValueIdentities;
 
 /// Direct calls whose balanced outgoing stack area bounds a fixed arity candidate.
 ///
@@ -16,16 +18,27 @@ use crate::ir::types::VReg;
 /// establishes a six-register prefix plus an upper bound from push-shaped words.
 /// One such word may be alignment padding, so the program environment applies a
 /// stricter multi-caller policy before treating the candidate as exact.
+#[cfg(test)]
 pub(crate) fn stack_proven_direct_call_arities(
     function: &Function,
     cc: CallConv,
     requested_targets: &HashSet<u64>,
+) -> Vec<(u64, usize)> {
+    stack_proven_direct_call_arities_with_identities(function, cc, requested_targets, None)
+}
+
+pub(crate) fn stack_proven_direct_call_arities_with_identities(
+    function: &Function,
+    cc: CallConv,
+    requested_targets: &HashSet<u64>,
+    identities: Option<&ValueIdentities>,
 ) -> Vec<(u64, usize)> {
     fn visit(
         body: &[Stmt],
         cc: CallConv,
         requested_targets: &HashSet<u64>,
         found: &mut Vec<(u64, usize)>,
+        identities: Option<&ValueIdentities>,
     ) {
         for (call_index, statement) in body.iter().enumerate() {
             let Stmt::Call { target, .. } = statement.semantic() else {
@@ -38,26 +51,28 @@ pub(crate) fn stack_proven_direct_call_arities(
                         else_body,
                         ..
                     } => {
-                        visit(then_body, cc, requested_targets, found);
+                        visit(then_body, cc, requested_targets, found, identities);
                         if let Some(else_body) = else_body {
-                            visit(else_body, cc, requested_targets, found);
+                            visit(else_body, cc, requested_targets, found, identities);
                         }
                     }
                     Stmt::While { body, .. }
                     | Stmt::DoWhile { body, .. }
-                    | Stmt::For { body, .. } => visit(body, cc, requested_targets, found),
+                    | Stmt::For { body, .. } => {
+                        visit(body, cc, requested_targets, found, identities)
+                    }
                     Stmt::Switch { cases, default, .. } => {
                         for (_, case) in cases {
-                            visit(case, cc, requested_targets, found);
+                            visit(case, cc, requested_targets, found, identities);
                         }
                         if let Some(default) = default {
-                            visit(default, cc, requested_targets, found);
+                            visit(default, cc, requested_targets, found, identities);
                         }
                     }
                     Stmt::TryCatch { try_body, catches } => {
-                        visit(try_body, cc, requested_targets, found);
+                        visit(try_body, cc, requested_targets, found, identities);
                         for catch in catches {
-                            visit(&catch.body, cc, requested_targets, found);
+                            visit(&catch.body, cc, requested_targets, found, identities);
                         }
                     }
                     _ => {}
@@ -72,7 +87,9 @@ pub(crate) fn stack_proven_direct_call_arities(
                 }
                 _ => continue,
             };
-            let Some(arity) = stack_proven_fixed_arity(body, call_index, cc) else {
+            let Some(arity) =
+                stack_proven_fixed_arity_with_identities(body, call_index, cc, identities)
+            else {
                 continue;
             };
             found.push((target, arity));
@@ -80,11 +97,27 @@ pub(crate) fn stack_proven_direct_call_arities(
     }
 
     let mut found = Vec::new();
-    visit(&function.body, cc, requested_targets, &mut found);
+    visit(
+        &function.body,
+        cc,
+        requested_targets,
+        &mut found,
+        identities,
+    );
     found
 }
 
+#[cfg(test)]
 fn stack_proven_fixed_arity(body: &[Stmt], call_index: usize, cc: CallConv) -> Option<usize> {
+    stack_proven_fixed_arity_with_identities(body, call_index, cc, None)
+}
+
+fn stack_proven_fixed_arity_with_identities(
+    body: &[Stmt],
+    call_index: usize,
+    cc: CallConv,
+    identities: Option<&ValueIdentities>,
+) -> Option<usize> {
     if cc != CallConv::SysVAmd64 {
         return None;
     }
@@ -94,7 +127,8 @@ fn stack_proven_fixed_arity(body: &[Stmt], call_index: usize, cc: CallConv) -> O
     let mut padding_bytes = 0i64;
     while cursor > 0 {
         let index = cursor - 1;
-        if let Some((_, width)) = outgoing_sysv_stack_push(body, index) {
+        if let Some((_, width)) = outgoing_sysv_stack_push_with_identities(body, index, identities)
+        {
             stack_arguments = stack_arguments.checked_add(1)?;
             argument_bytes = argument_bytes.checked_add(width)?;
             cursor = index.checked_sub(1)?;
@@ -102,7 +136,7 @@ fn stack_proven_fixed_arity(body: &[Stmt], call_index: usize, cc: CallConv) -> O
         }
         if stack_arguments > 0
             && padding_bytes == 0
-            && stack_pointer_sub_width(&body[index]) == Some(8)
+            && stack_pointer_sub_width_with_identities(&body[index], identities) == Some(8)
         {
             padding_bytes = 8;
             cursor = index;
@@ -113,7 +147,7 @@ fn stack_proven_fixed_arity(body: &[Stmt], call_index: usize, cc: CallConv) -> O
             Stmt::Assign {
                 dst: VReg::Phys(name),
                 ..
-            } if ssa_base(name) != "rsp"
+            } if !register_is_storage(&VReg::Phys(name.clone()), "rsp", identities)
         ) || matches!(
             body[index].semantic(),
             Stmt::Assign {
@@ -130,7 +164,12 @@ fn stack_proven_fixed_arity(body: &[Stmt], call_index: usize, cc: CallConv) -> O
     if stack_arguments == 0 {
         return None;
     }
-    outgoing_stack_cleanup(body, call_index, argument_bytes.checked_add(padding_bytes)?)?;
+    outgoing_stack_cleanup_with_identities(
+        body,
+        call_index,
+        argument_bytes.checked_add(padding_bytes)?,
+        identities,
+    )?;
     crate::ir::abi::argument_slots(cc)
         .len()
         .checked_add(stack_arguments)
@@ -224,6 +263,68 @@ mod tests {
             None
         );
         assert_eq!(stack_proven_fixed_arity(&exact, 4, CallConv::Aarch64), None);
+    }
+
+    #[test]
+    fn caller_stack_arity_uses_exact_identity_not_display_spelling() {
+        let stack_sub = |dst: &str| Stmt::Assign {
+            dst: reg(dst),
+            src: Expr::Bin {
+                op: BinOp::Sub,
+                lhs: Box::new(Expr::Reg(reg(dst))),
+                rhs: Box::new(Expr::Const(8)),
+            },
+        };
+        let stack_add = |dst: &str| Stmt::Assign {
+            dst: reg(dst),
+            src: Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Reg(reg(dst))),
+                rhs: Box::new(Expr::Const(8)),
+            },
+        };
+        let body = vec![
+            stack_sub("opaque_stack"),
+            Stmt::Store {
+                addr: Expr::Lea {
+                    base: Some(reg("opaque_stack")),
+                    index: None,
+                    scale: 1,
+                    disp: 0,
+                    segment: None,
+                },
+                src: Expr::Const(7),
+                size: 8,
+            },
+            assign("rsp#looks_like_stack", 1),
+            call_to("callee"),
+            stack_add("opaque_stack"),
+        ];
+        let mut identities = ValueIdentities::default();
+        identities.record(
+            reg("opaque_stack"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rsp"),
+                version: 4,
+            },
+        );
+        identities.record(
+            reg("rsp#looks_like_stack"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 4,
+            },
+        );
+
+        assert_eq!(
+            stack_proven_fixed_arity_with_identities(
+                &body,
+                3,
+                CallConv::SysVAmd64,
+                Some(&identities),
+            ),
+            Some(7)
+        );
     }
 
     #[test]

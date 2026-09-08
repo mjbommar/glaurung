@@ -1493,6 +1493,7 @@ fn is_pure_arg_normalisation(expr: &Expr) -> bool {
 }
 
 /// Width of `esp/rsp = esp/rsp - N`, if this is exactly a stack allocation.
+#[cfg(test)]
 pub(super) fn stack_pointer_sub_width(stmt: &Stmt) -> Option<i64> {
     stack_pointer_sub_width_with_identities(stmt, None)
 }
@@ -1529,6 +1530,7 @@ pub(super) fn stack_pointer_sub_width_with_identities(
 }
 
 /// One exact SysV `push value` after lowering to stack arithmetic.
+#[cfg(test)]
 pub(super) fn outgoing_sysv_stack_push(body: &[Stmt], store_index: usize) -> Option<(&Expr, i64)> {
     outgoing_sysv_stack_push_with_identities(body, store_index, None)
 }
@@ -1663,6 +1665,7 @@ fn stack_pointer_add_width(
 /// `rsp += N`. The caller supplies the exact byte count implied by the pushes,
 /// so this stops as soon as that amount is balanced and never consumes the
 /// following callee-save pop.
+#[cfg(test)]
 pub(super) fn outgoing_stack_cleanup(
     body: &[Stmt],
     call_index: usize,
