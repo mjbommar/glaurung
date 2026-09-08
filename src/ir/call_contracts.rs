@@ -520,14 +520,14 @@ fn collect_parameter_contract_observations(
                 unreachable!("semantic statement cannot be an origin wrapper")
             }
             Stmt::Call { target, args, .. } => {
-                let Expr::Named { name, .. } = target else {
+                let Expr::Named { name, .. } = target.semantic() else {
                     continue;
                 };
                 let Some(contract) = lookup(name) else {
                     continue;
                 };
                 for (argument, parameter) in args.iter().zip(&contract.params) {
-                    let Expr::Reg(crate::ir::VReg::Phys(name)) = argument else {
+                    let Expr::Reg(crate::ir::VReg::Phys(name)) = argument.semantic() else {
                         continue;
                     };
                     let value = crate::ir::VReg::phys(name);
@@ -943,7 +943,7 @@ fn apply_recovered_body(body: &mut [Stmt], prototypes: &HashMap<u64, CallPrototy
                 dst,
                 call_spec,
             } => {
-                let recovered = match target {
+                let recovered = match target.semantic() {
                     Expr::Named { va, .. } => prototypes.get(va).cloned(),
                     _ => None,
                 };
@@ -1083,7 +1083,7 @@ fn apply_body(body: &mut [Stmt]) {
                 dst,
                 call_spec,
             } => {
-                if let Expr::Named { name, .. } = target {
+                if let Expr::Named { name, .. } = target.semantic() {
                     if let Some(contract) = lookup(name) {
                         if !contract.is_variadic {
                             args.truncate(contract.params.len());
@@ -1717,10 +1717,17 @@ mod tests {
         let mut function = Function {
             name: "caller".into(),
             entry_va: 0x1000,
-            body: vec![
-                named_call("__stack_chk_fail", Vec::new(), Some(VReg::phys("rax#16")))
-                    .with_origins(OriginSet::one(0x1010)),
-            ],
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "__stack_chk_fail".into(),
+                }
+                .with_origins(OriginSet::one(0x100c)),
+                args: Vec::new(),
+                dst: Some(VReg::phys("rax#16")),
+                call_spec: None,
+            }
+            .with_origins(OriginSet::one(0x1010))],
         };
 
         apply_known_call_contracts(&mut function);
@@ -1746,7 +1753,8 @@ mod tests {
                 target: Expr::Named {
                     va: 0x8000258,
                     name: "sub_8000258".into(),
-                },
+                }
+                .with_origins(OriginSet::one(0x8000260)),
                 args: vec![Expr::Const(0x80010e0)],
                 dst: Some(VReg::phys("r0")),
                 call_spec: None,
@@ -1842,11 +1850,16 @@ mod tests {
         let function = Function {
             name: "close_stream".into(),
             entry_va: 0,
-            body: vec![named_call(
-                "fclose",
-                vec![Expr::Reg(VReg::phys("arg0"))],
-                Some(VReg::phys("var0")),
-            )],
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "fclose".into(),
+                }
+                .with_origins(OriginSet::one(0x1004)),
+                args: vec![Expr::Reg(VReg::phys("arg0")).with_origins(OriginSet::one(0x1008))],
+                dst: Some(VReg::phys("var0")),
+                call_spec: None,
+            }],
         };
         let recovered = CallPrototype {
             return_type: "int".into(),
