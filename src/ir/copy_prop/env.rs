@@ -320,7 +320,7 @@ pub(super) fn copies_stable_across_loop(copies: &Copies, body: &[Stmt]) -> Copie
 }
 
 pub(super) fn is_self_ref(dst: &VReg, src: &Expr) -> bool {
-    matches!(src, Expr::Reg(r) if r == dst)
+    matches!(src.semantic(), Expr::Reg(r) if r == dst)
 }
 
 #[cfg(test)]
@@ -346,5 +346,13 @@ mod tests {
             stable.get(&alias).is_none(),
             "a loop write must invalidate copies of its entry value"
         );
+    }
+
+    #[test]
+    fn attributed_self_copy_is_still_a_self_reference() {
+        let destination = VReg::phys("var0");
+        let source = Expr::Reg(destination.clone()).with_origins(OriginSet::one(0x1020));
+
+        assert!(is_self_ref(&destination, &source));
     }
 }
