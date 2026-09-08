@@ -25,6 +25,9 @@ solver. Its latest bounded edge at `8ab39b50` preserves an authoritative
 unsigned parameter declaration while rendering a contradictory signed machine
 comparison at the exact use; fixture-215 Clang O2 is now five-for-five. WP3 and
 the general WP7B idiom framework remain the principal architectural packages.
+WP3 is active rather than unstarted: the tracked SSA lifecycle and opaque
+identity sidecar are in production, and bounded semantic consumers are being
+migrated off display spellings one at a time.
 WP3 has its first bounded consumer migration at `925dc002`: pipeline-owned SSA
 now has explicit conservative invalidation and reconstructs after the
 definedness pass changes uses. Commit `09522773` retains that owner across
@@ -2043,6 +2046,16 @@ provenance through lowering.
   banked-return materialization clones exact owners onto every synthesized
   store and rewritten return. Commit `db2e7735` supplies the structured Python
   exposure above.
+
+Commit `23a8ef7e` retains the existing raw-LLIR `TypeMapV` in the common
+prepared pipeline and projects a fact into ordinary typed rendering only when
+the numbered value has one unambiguous SSA identity. A use whose opaque
+numbered name no longer retains the original `edi` view therefore remains a
+four-byte value; a coalesced name with two candidate identities declines the
+projection instead of guessing. Exact definition widths remain a separate,
+stronger sidecar. This removes one production dependency on `tag_phys`
+spelling, but does not complete WP3 or permit compatibility-tag deletion. See
+`results/wp3-value-keyed-use-types.md`.
 
 ### Tests
 
