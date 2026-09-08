@@ -1111,7 +1111,12 @@ provenance through lowering.
   `results/wp3-enclosing-call-argument-expression-origins.md`. The currently
   identified call-argument expression producer family is complete; universal
   expression attribution and the remaining SSA/invalidation migrations remain
-  open.
+  open. Commit `4c19cb2e` then migrates the adjacent stack-idiom expression
+  constructor: a rematerialized push value keeps its prior owner and receives
+  the exact value-store owner, while the push statement retains the decrement/
+  store union. Its observed-red test, all 11 stack-idiom tests, and four exact
+  release-built flag-roundtrip cells pass; see
+  `results/wp3-stack-idiom-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
