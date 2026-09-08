@@ -127,6 +127,24 @@ impl VersionedSsa {
         self.dirty |= change.affects_ssa();
     }
 
+    /// Apply one LLIR mutation with an explicit invalidation classification.
+    ///
+    /// The mutation reports whether it changed the function. A no-op leaves the
+    /// current SSA artifact valid; an actual definition/use/CFG change makes it
+    /// impossible to consume the artifact until [`Self::ensure`] rebuilds it.
+    pub fn apply_mutation<R>(
+        &mut self,
+        function: &mut LlirFunction,
+        change: Invalidate,
+        mutation: impl FnOnce(&mut LlirFunction) -> (R, bool),
+    ) -> R {
+        let (result, changed) = mutation(function);
+        if changed {
+            self.invalidate(change);
+        }
+        result
+    }
+
     /// Return current SSA, rebuilding it first when a mutation made it stale.
     pub fn ensure(&mut self, function: &LlirFunction) -> &SsaInfo {
         if self.dirty {
@@ -1049,6 +1067,34 @@ mod tests {
         state.invalidate(Invalidate::Types);
         state.invalidate(Invalidate::Presentation);
         assert_eq!(state.ensure(&function).revision(), 0);
+    }
+
+    #[test]
+    fn declared_mutation_invalidates_only_when_it_changes_the_function() {
+        let mut function = mk_cfg(vec![(0x1000, vec![assign("rax", 1)], vec![])]);
+        let target = TargetSpec::from_image_metadata(
+            crate::core::binary::Arch::X86_64,
+            crate::core::binary::Endianness::Little,
+            crate::core::binary::Format::ELF,
+            false,
+        );
+        let mut state = VersionedSsa::compute(&function, target);
+
+        let unchanged =
+            state.apply_mutation(&mut function, Invalidate::Definitions, |_| (7, false));
+        assert_eq!(unchanged, 7);
+        assert_eq!(state.ensure(&function).revision(), 0);
+
+        let changed = state.apply_mutation(&mut function, Invalidate::Definitions, |function| {
+            function.blocks[0].instrs.push(LlirInstr {
+                va: 0x1004,
+                op: assign("rax", 2),
+            });
+            (11, true)
+        });
+        assert_eq!(changed, 11);
+        assert!(state.clone().into_info().is_err());
+        assert_eq!(state.ensure(&function).revision(), 1);
     }
 
     #[test]

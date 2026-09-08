@@ -1391,11 +1391,14 @@ fn normalize_definedness_with_ssa(
     ssa: &mut crate::ir::ssa::VersionedSsa,
 ) {
     let graph = crate::analysis::exception::with_exceptional_successors(function, exception_sites);
-    let oracle = crate::ir::definedness::BitDemandOracle::analyze(&graph, ssa.ensure(&graph), cc);
-    if crate::ir::definedness::erase_unobserved_masked_inputs(function, ssa.ensure(&graph), &oracle)
-        != 0
-    {
-        ssa.invalidate(crate::ir::ssa::Invalidate::Uses);
+    let current_ssa = ssa.ensure(&graph).clone();
+    let oracle = crate::ir::definedness::BitDemandOracle::analyze(&graph, &current_ssa, cc);
+    let erased = ssa.apply_mutation(function, crate::ir::ssa::Invalidate::Uses, |function| {
+        let count =
+            crate::ir::definedness::erase_unobserved_masked_inputs(function, &current_ssa, &oracle);
+        (count, count != 0)
+    });
+    if erased != 0 {
         let normalized_graph =
             crate::analysis::exception::with_exceptional_successors(function, exception_sites);
         ssa.ensure(&normalized_graph);
@@ -1646,10 +1649,14 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
         }
         prototype
     });
-    if prototype.as_ref().is_some_and(|prototype| {
-        crate::ir::types_recover::materialize_return_values(function, cc, prototype) != 0
-    }) {
-        ssa_state.invalidate(crate::ir::ssa::Invalidate::Uses);
+    let materialized_returns = prototype.as_ref().map_or(0, |prototype| {
+        ssa_state.apply_mutation(function, crate::ir::ssa::Invalidate::Uses, |function| {
+            let count =
+                crate::ir::types_recover::materialize_return_values(function, cc, prototype);
+            (count, count != 0)
+        })
+    });
+    if materialized_returns != 0 {
         normalize_definedness_with_ssa(function, exception_sites, cc, &mut ssa_state);
     }
     let current_graph =
