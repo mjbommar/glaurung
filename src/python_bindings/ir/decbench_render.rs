@@ -549,7 +549,10 @@ fn decbench_text_with_installed_environment(
     );
     pass!(
         "recover_throws",
-        crate::ir::exception_recover::recover_throws(&mut prepared)
+        crate::ir::exception_recover::recover_throws_with_identities(
+            &mut prepared,
+            &value_identities,
+        )
     );
     pass!(
         "prune_unobserved_promoted_object_stores",

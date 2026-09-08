@@ -888,11 +888,15 @@ pub(super) fn finalize_prepared_ast(
             &mut prepared.function,
             exception_sites,
         );
-        crate::ir::exception_recover::mark_int_throws_with_address_map(
+        crate::ir::exception_recover::mark_int_throws_with_address_map_and_identities(
             &mut prepared.function,
             address_names,
+            &prepared.ast_value_identities,
         );
-        crate::ir::exception_recover::recover_throws(&mut prepared.function);
+        crate::ir::exception_recover::recover_throws_with_identities(
+            &mut prepared.function,
+            &prepared.ast_value_identities,
+        );
     }
     recognise_machine_frame(&mut prepared.function, cc, &prepared.ast_value_identities);
     if let Some(field_map) = field_map {
