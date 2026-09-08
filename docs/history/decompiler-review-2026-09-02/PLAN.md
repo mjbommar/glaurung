@@ -1755,6 +1755,13 @@ provenance through lowering.
   `rdi#version` spellings cannot invent arguments. All 112 call-argument tests
   and two exact host/ARM end-to-end checks pass; see
   `results/wp3-call-live-in-identities.md`.
+  Commit `11a96792` migrates call-result attribution: exact identities now
+  decide whether later expressions read or overwrite the ABI result storage,
+  including nested bodies and the call-fold liveness probe. A misleading
+  `rax#version` spelling mapped to an argument register refuses, while opaque
+  exact result storage remains visible. All 130 `call_args` tests and the exact
+  effect-only/consumed-result C checks pass; see
+  `results/wp3-call-result-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
@@ -3793,10 +3800,14 @@ relevant ratchet's accepted-regression record.
    value-numbered incoming-argument spelling scan with exact version-zero ABI
    identities across whole-function and nested-call recovery. Its 112 owning
    tests and two exact C end-to-end checks pass; see
-   `results/wp3-call-live-in-identities.md`. Continue the remaining production
-   parser classification in `src/ir/call_args.rs`, `dead_stores.rs`, and
-   `types_recover/tagging.rs`; keep pre-sidecar tagging internals and explicit
-   no-sidecar compatibility parsers classified separately.
+   `results/wp3-call-live-in-identities.md`. Commit `11a96792` then migrates
+   result-register read/write attribution across expressions, nested control,
+   and the call-fold liveness probe. Its 130 owning tests and two exact C output
+   checks pass; see `results/wp3-call-result-identities.md`. Continue the
+   remaining production parser classification in `src/ir/call_args.rs`,
+   `dead_stores.rs`, and `types_recover/tagging.rs`; keep pre-sidecar tagging
+   internals and explicit no-sidecar compatibility parsers classified
+   separately.
    Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
