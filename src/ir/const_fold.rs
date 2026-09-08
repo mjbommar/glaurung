@@ -1119,7 +1119,7 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
         }
 
         // Const × Const fold.
-        if let (Expr::Const(a), Expr::Const(b)) = (lhs.as_ref(), rhs.as_ref()) {
+        if let (Expr::Const(a), Expr::Const(b)) = (lhs.semantic(), rhs.semantic()) {
             let (a, b) = (*a, *b);
             let folded = match op {
                 BinOp::Add => a.wrapping_add(b),
@@ -1158,7 +1158,19 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
                     }
                 }
             };
-            rewrite(e, Expr::Const(folded), changed);
+            let origins = lhs
+                .origins()
+                .into_iter()
+                .chain(rhs.origins())
+                .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+                    owners.union(next)
+                });
+            rewrite(
+                e,
+                Expr::Const(folded)
+                    .with_optional_origins((!origins.is_empty()).then_some(origins)),
+                changed,
+            );
         }
     }
 
@@ -2060,6 +2072,32 @@ mod tests {
         if let Stmt::Assign { src, .. } = &f.body[0] {
             assert_eq!(*src, Expr::Const(5));
         }
+    }
+
+    #[test]
+    fn attributed_constant_arithmetic_folds_and_unions_origins() {
+        let outer_owner = crate::ir::ast::OriginSet::one(0x1000);
+        let lhs_owner = crate::ir::ast::OriginSet::one(0x1004);
+        let rhs_owner = crate::ir::ast::OriginSet::one(0x1008);
+        let mut f = one_stmt(
+            bin(
+                BinOp::Mul,
+                Expr::Const(6).with_origins(lhs_owner.clone()),
+                Expr::Const(7).with_origins(rhs_owner.clone()),
+            )
+            .with_origins(outer_owner.clone()),
+        );
+
+        fold_constants(&mut f);
+
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!("expected assignment");
+        };
+        assert_eq!(src.semantic(), &Expr::Const(42));
+        assert_eq!(
+            src.origins(),
+            Some(&outer_owner.union(&lhs_owner).union(&rhs_owner))
+        );
     }
 
     /// `adrp` + `add` must reassemble into one address.
