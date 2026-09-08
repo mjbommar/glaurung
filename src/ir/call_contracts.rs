@@ -611,7 +611,7 @@ fn recover_call_site_spec_with_types(
     types: Option<&TypeMap>,
     recovered_callee: Option<CallPrototype>,
 ) -> CallSiteSpec {
-    let callee_prototype = match target {
+    let callee_prototype = match target.semantic() {
         Expr::Named { name, .. } => lookup(name)
             .and_then(|contract| contract.standalone_prototype())
             .or(recovered_callee),
@@ -662,7 +662,7 @@ fn recovered_argument_type(argument: &Expr, types: Option<&TypeMap>) -> &'static
         }
     }
 
-    match argument {
+    match argument.semantic() {
         Expr::Reg(register) => types
             .and_then(|types| types.get(register))
             .map(c_type_for_hint)
@@ -1139,7 +1139,8 @@ mod tests {
 
     use super::{
         apply_known_call_contracts, apply_known_llir_call_contracts, call_return_hint,
-        libc_prototypes, lookup, opaque_pointer_typedef, refine_opaque_parameter_types_from_calls,
+        libc_prototypes, lookup, opaque_pointer_typedef, recover_call_site_spec,
+        refine_opaque_parameter_types_from_calls,
         refine_opaque_parameter_types_from_calls_with_identities, standalone_c_type, CallPrototype,
         CallPrototypeAuthority,
     };
@@ -1394,6 +1395,35 @@ mod tests {
         assert_eq!(
             call_spec.call_prototype.authority,
             CallPrototypeAuthority::Recovered
+        );
+    }
+
+    #[test]
+    fn attributed_call_values_retain_catalog_and_argument_types() {
+        let target = Expr::Named {
+            va: 0x2000,
+            name: "printf".into(),
+        }
+        .with_origins(crate::ir::ast::OriginSet::one(0x1004));
+        let args = vec![
+            Expr::StringLit { value: "%s".into() }
+                .with_origins(crate::ir::ast::OriginSet::one(0x1008)),
+            Expr::StackAddr {
+                object: VReg::phys("local_20"),
+                size: 16,
+            }
+            .with_origins(crate::ir::ast::OriginSet::one(0x100c)),
+        ];
+
+        let call_spec = recover_call_site_spec(&target, &args, None);
+
+        assert!(call_spec
+            .callee_prototype
+            .as_ref()
+            .is_some_and(|prototype| prototype.variadic));
+        assert_eq!(
+            call_spec.call_prototype.parameter_types,
+            vec!["const char *", "void *"]
         );
     }
 
