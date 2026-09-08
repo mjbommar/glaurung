@@ -6347,16 +6347,24 @@ function f @ 0x1000 {
         let arg = VReg::phys("arg0");
         let comparison = |constant| Expr::Cmp {
             op: CmpOp::Slt,
-            lhs: Box::new(Expr::Cast {
-                signed: true,
-                width: 8,
-                expr: Box::new(Expr::Cast {
+            lhs: Box::new(
+                Expr::Cast {
                     signed: true,
-                    width: 4,
-                    expr: Box::new(Expr::Reg(arg.clone())),
-                }),
-            }),
-            rhs: Box::new(Expr::Const(constant)),
+                    width: 8,
+                    expr: Box::new(
+                        Expr::Cast {
+                            signed: true,
+                            width: 4,
+                            expr: Box::new(
+                                Expr::Reg(arg.clone()).with_origins(OriginSet::one(0x1000)),
+                            ),
+                        }
+                        .with_origins(OriginSet::one(0x1004)),
+                    ),
+                }
+                .with_origins(OriginSet::one(0x1008)),
+            ),
+            rhs: Box::new(Expr::Const(constant).with_origins(OriginSet::one(0x100c))),
         };
         let mut types = TypeMap::default();
         types.upsert_public(
@@ -10759,8 +10767,10 @@ function f @ 0x1000 {
             body: vec![Stmt::Return {
                 value: Some(Expr::Cmp {
                     op: CmpOp::Slt,
-                    lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
-                    rhs: Box::new(Expr::Const(0x1_0000_0000)),
+                    lhs: Box::new(
+                        Expr::Reg(VReg::phys("arg0")).with_origins(OriginSet::one(0x1000)),
+                    ),
+                    rhs: Box::new(Expr::Const(0x1_0000_0000).with_origins(OriginSet::one(0x1004))),
                 }),
             }],
         };

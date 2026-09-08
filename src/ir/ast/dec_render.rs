@@ -1441,18 +1441,18 @@ fn write_value_preserving_signed_comparison_operand(
     other: &Expr,
     out: &mut String,
 ) -> bool {
-    let Expr::Const(constant) = other else {
+    let Expr::Const(constant) = other.semantic() else {
         return false;
     };
     let Expr::Cast {
         signed: true,
         width: widened_width,
         expr,
-    } = expression
+    } = expression.semantic()
     else {
         return false;
     };
-    let (register, declared_signed, declared_width) = match expr.as_ref() {
+    let (register, declared_signed, declared_width) = match expr.semantic() {
         Expr::Reg(register @ VReg::Phys(name)) => {
             let Some((declared_signed, declared_width)) = dec_int_type(name) else {
                 return false;
@@ -1464,7 +1464,7 @@ fn write_value_preserving_signed_comparison_operand(
             width,
             expr,
         } => {
-            let Expr::Reg(register @ VReg::Phys(name)) = expr.as_ref() else {
+            let Expr::Reg(register @ VReg::Phys(name)) = expr.semantic() else {
                 return false;
             };
             if dec_int_type(name) != Some((*signed, *width)) {
@@ -1498,7 +1498,7 @@ fn write_declared_unsigned_as_signed_comparison_operand(
     expression: &Expr,
     out: &mut String,
 ) -> bool {
-    let Expr::Reg(register @ VReg::Phys(name)) = expression else {
+    let Expr::Reg(register @ VReg::Phys(name)) = expression.semantic() else {
         return false;
     };
     let Some((false, width)) = dec_plan(|plan| plan.authoritative_integer_parameter(name)) else {
