@@ -323,7 +323,7 @@ pub(super) fn fold_one_call(
                             || is_stable_frame_arg_definition_with_identities(
                                 src, body, i, call_idx, identities,
                             ))
-                            && !versioned_operand_is_reassigned(src, body, i, call_idx);
+                            && !versioned_operand_is_reassigned(src, body, i, call_idx, identities);
                         let feeds_captured_register_argument = found
                             .iter()
                             .any(|f| f.as_ref().is_some_and(|(_, e)| reads_reg_in_expr(e, dst)));
@@ -383,7 +383,7 @@ pub(super) fn fold_one_call(
                             found[slot] = if phase_sensitive_stack_read(
                                 src, body, i, call_idx, arch, identities,
                             ) || versioned_operand_is_reassigned(
-                                src, body, i, call_idx,
+                                src, body, i, call_idx, identities,
                             ) {
                                 Some((KEEP_ARG_SETUP, Expr::Reg(dst.clone())))
                             } else {
@@ -419,7 +419,7 @@ pub(super) fn fold_one_call(
                         || is_stable_frame_arg_definition_with_identities(
                             src, body, i, call_idx, identities,
                         ))
-                        && !versioned_operand_is_reassigned(src, body, i, call_idx);
+                        && !versioned_operand_is_reassigned(src, body, i, call_idx, identities);
                     let feeds_captured_argument = resolve_captured_definition(
                         &mut found,
                         &mut stack_args,
@@ -519,7 +519,7 @@ pub(super) fn fold_one_call(
                         || is_stable_frame_arg_definition_with_identities(
                             src, body, i, call_idx, identities,
                         ))
-                        && !versioned_operand_is_reassigned(src, body, i, call_idx);
+                        && !versioned_operand_is_reassigned(src, body, i, call_idx, identities);
                     if resolve_captured_definition_in(
                         &mut found,
                         &mut stack_args,

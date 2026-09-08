@@ -1198,7 +1198,7 @@ fn fold_one_recovered_layout_call(
     {
         return false;
     }
-    if !resolve_recovered_layout_sources(body, call_idx, &mut found) {
+    if !resolve_recovered_layout_sources(body, call_idx, &mut found, identities) {
         return false;
     }
 
@@ -1223,7 +1223,7 @@ fn fold_one_recovered_layout_call(
     // falls back to the general backward scan, which keeps the setup in place
     // and names the argument register at the call.
     if found.iter().flatten().any(|(index, expression, _)| {
-        versioned_operand_is_reassigned(expression, body, *index, call_idx)
+        versioned_operand_is_reassigned(expression, body, *index, call_idx, identities)
     }) {
         return false;
     }
@@ -1267,6 +1267,7 @@ fn resolve_recovered_layout_sources(
     body: &[Stmt],
     call_idx: usize,
     found: &mut [Option<(usize, Expr, VReg)>],
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> bool {
     let Some(first_setup) = found.iter().flatten().map(|(index, _, _)| *index).min() else {
         return true;
@@ -1286,7 +1287,7 @@ fn resolve_recovered_layout_sources(
                     continue;
                 }
                 if !is_pure_arg_normalisation(src)
-                    || versioned_operand_is_reassigned(src, body, index, call_idx)
+                    || versioned_operand_is_reassigned(src, body, index, call_idx, identities)
                 {
                     return false;
                 }
@@ -1419,7 +1420,7 @@ fn fold_one_recovered_layout_call_with_live_ins(
             .iter()
             .any(|destination| reads_reg_in_expr(expression, destination))
     }) || found.iter().flatten().any(|(index, expression, _)| {
-        versioned_operand_is_reassigned(expression, body, *index, call_idx)
+        versioned_operand_is_reassigned(expression, body, *index, call_idx, identities)
     }) {
         return false;
     }
@@ -1861,10 +1862,24 @@ const KEEP_ARG_SETUP: usize = usize::MAX;
 ///
 /// Measured on `11_call_shapes:gcc:O2:call_accumulate_bytes`, which accumulated
 /// `wrap_byte(seed + i + 1)` instead of `wrap_byte(seed + i)`.
-fn versioned_operand_is_reassigned(expr: &Expr, body: &[Stmt], from: usize, to: usize) -> bool {
-    fn writes(statement: &Stmt, out: &mut Vec<VReg>) {
+fn versioned_operand_is_reassigned(
+    expr: &Expr,
+    body: &[Stmt],
+    from: usize,
+    to: usize,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    fn writes(
+        statement: &Stmt,
+        out: &mut Vec<VReg>,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) {
         let mut record = |register: &VReg| {
-            if matches!(register, VReg::Phys(name) if name.contains('#')) {
+            let is_numbered = identities.map_or_else(
+                || matches!(register, VReg::Phys(name) if name.contains('#')),
+                |identities| identities.candidates(register).is_some(),
+            );
+            if is_numbered {
                 out.push(register.clone());
             }
         };
@@ -1878,21 +1893,21 @@ fn versioned_operand_is_reassigned(expr: &Expr, body: &[Stmt], from: usize, to: 
                 ..
             } => {
                 for s in then_body.iter().chain(else_body.iter().flatten()) {
-                    writes(s, out);
+                    writes(s, out, identities);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                 for s in body {
-                    writes(s, out);
+                    writes(s, out, identities);
                 }
             }
             Stmt::For {
                 init, step, body, ..
             } => {
-                writes(init, out);
-                writes(step, out);
+                writes(init, out, identities);
+                writes(step, out, identities);
                 for s in body {
-                    writes(s, out);
+                    writes(s, out, identities);
                 }
             }
             Stmt::Switch { cases, default, .. } => {
@@ -1901,7 +1916,7 @@ fn versioned_operand_is_reassigned(expr: &Expr, body: &[Stmt], from: usize, to: 
                     .flat_map(|(_, b)| b)
                     .chain(default.iter().flatten())
                 {
-                    writes(s, out);
+                    writes(s, out, identities);
                 }
             }
             _ => {}
@@ -1909,18 +1924,37 @@ fn versioned_operand_is_reassigned(expr: &Expr, body: &[Stmt], from: usize, to: 
     }
     let mut reassigned = Vec::new();
     for statement in &body[(from + 1).min(to)..to] {
-        writes(statement, &mut reassigned);
+        writes(statement, &mut reassigned, identities);
     }
-    reassigned
-        .iter()
-        .any(|register| reads_reg_in_expr(expr, register))
+    reassigned.iter().any(|register| {
+        identities.map_or_else(
+            || reads_reg_in_expr(expr, register),
+            |identities| expr_reads_identity_candidate(expr, register, identities),
+        )
+    })
 }
 
-fn reads_reg_in_expr(e: &Expr, target: &VReg) -> bool {
-    match e {
-        Expr::Origin { expr, .. } => reads_reg_in_expr(expr, target),
-        Expr::Reg(r) => r == target,
-        Expr::StackAddr { object, .. } => object == target,
+fn expr_reads_identity_candidate(
+    expression: &Expr,
+    target: &VReg,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> bool {
+    let Some(targets) = identities.candidates(target) else {
+        return false;
+    };
+    let mut reads_same_value = |register: &VReg| {
+        identities
+            .candidates(register)
+            .is_some_and(|reads| reads.iter().any(|value| targets.contains(value)))
+    };
+    any_reg_in_expr(expression, &mut reads_same_value)
+}
+
+fn any_reg_in_expr(expression: &Expr, visit: &mut impl FnMut(&VReg) -> bool) -> bool {
+    match expression {
+        Expr::Origin { expr, .. } => any_reg_in_expr(expr, visit),
+        Expr::Reg(register) => visit(register),
+        Expr::StackAddr { object, .. } => visit(object),
         Expr::Const(_)
         | Expr::FloatConst { .. }
         | Expr::Addr(_)
@@ -1928,21 +1962,19 @@ fn reads_reg_in_expr(e: &Expr, target: &VReg) -> bool {
         | Expr::StringLit { .. }
         | Expr::Unknown(_) => false,
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
-            base.as_ref() == Some(target) || index.as_ref() == Some(target)
+            base.as_ref().is_some_and(&mut *visit) || index.as_ref().is_some_and(&mut *visit)
         }
-        Expr::Deref { addr, .. } => reads_reg_in_expr(addr, target),
+        Expr::Deref { addr, .. } => any_reg_in_expr(addr, visit),
         Expr::Call {
             target: call_target,
             args,
             ..
         } => {
-            reads_reg_in_expr(call_target, target)
-                || args
-                    .iter()
-                    .any(|argument| reads_reg_in_expr(argument, target))
+            any_reg_in_expr(call_target, visit)
+                || args.iter().any(|argument| any_reg_in_expr(argument, visit))
         }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-            reads_reg_in_expr(lhs, target) || reads_reg_in_expr(rhs, target)
+            any_reg_in_expr(lhs, visit) || any_reg_in_expr(rhs, visit)
         }
         Expr::Select {
             cond,
@@ -1950,19 +1982,21 @@ fn reads_reg_in_expr(e: &Expr, target: &VReg) -> bool {
             if_false,
             ..
         } => {
-            reads_reg_in_expr(cond, target)
-                || reads_reg_in_expr(if_true, target)
-                || reads_reg_in_expr(if_false, target)
+            any_reg_in_expr(cond, visit)
+                || any_reg_in_expr(if_true, visit)
+                || any_reg_in_expr(if_false, visit)
         }
-        Expr::Un { src, .. } => reads_reg_in_expr(src, target),
-        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
-            reads_reg_in_expr(expr, target)
+        Expr::Un { src, .. } => any_reg_in_expr(src, visit),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => any_reg_in_expr(expr, visit),
+        Expr::FunctionTableEntry { index, .. } => any_reg_in_expr(index, visit),
+        Expr::WideArithmetic { args, .. } => {
+            args.iter().any(|argument| any_reg_in_expr(argument, visit))
         }
-        Expr::FunctionTableEntry { index, .. } => reads_reg_in_expr(index, target),
-        Expr::WideArithmetic { args, .. } => args
-            .iter()
-            .any(|argument| reads_reg_in_expr(argument, target)),
     }
+}
+
+fn reads_reg_in_expr(e: &Expr, target: &VReg) -> bool {
+    any_reg_in_expr(e, &mut |register| register == target)
 }
 
 #[cfg(test)]
@@ -1972,6 +2006,72 @@ mod tests {
 
     fn reg(n: &str) -> VReg {
         VReg::phys(n)
+    }
+
+    #[test]
+    fn opaque_argument_reassignment_is_detected_by_value_identity() {
+        let read = reg("opaque_read");
+        let written = reg("opaque_write");
+        let value = crate::ir::ssa::SsaValue {
+            base: reg("rbx"),
+            version: 3,
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(read.clone(), value.clone());
+        identities.record(written.clone(), value);
+        let body = vec![
+            Stmt::Comment("setup".into()),
+            Stmt::Assign {
+                dst: written,
+                src: Expr::Const(2),
+            },
+            Stmt::Comment("call".into()),
+        ];
+
+        assert!(versioned_operand_is_reassigned(
+            &Expr::Reg(read),
+            &body,
+            0,
+            2,
+            Some(&identities),
+        ));
+    }
+
+    #[test]
+    fn distinct_argument_identities_do_not_create_a_false_reassignment() {
+        let read = reg("opaque_read");
+        let written = reg("opaque_write");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            read.clone(),
+            crate::ir::ssa::SsaValue {
+                base: reg("rbx"),
+                version: 3,
+            },
+        );
+        identities.record(
+            written.clone(),
+            crate::ir::ssa::SsaValue {
+                base: reg("rbx"),
+                version: 4,
+            },
+        );
+        let body = vec![
+            Stmt::Comment("setup".into()),
+            Stmt::Assign {
+                dst: written,
+                src: Expr::Const(2),
+            },
+            Stmt::Comment("call".into()),
+        ];
+
+        assert!(!versioned_operand_is_reassigned(
+            &Expr::Reg(read),
+            &body,
+            0,
+            2,
+            Some(&identities),
+        ));
     }
 
     #[test]
