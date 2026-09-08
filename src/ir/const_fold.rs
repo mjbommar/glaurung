@@ -1271,12 +1271,17 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
         // is representable at the shared signed source width.  Fuse the whole
         // predicate at once; never expose an intermediate mixed-view `<=`.
         if *op == CmpOp::Eq {
-            let candidate = match (lhs.as_ref(), rhs.as_ref()) {
-                (candidate, Expr::Const(0)) | (Expr::Const(0), candidate) => {
-                    invert_mixed_view_equal_or_signed_less(candidate)
-                }
-                _ => None,
+            let operands = if matches!(rhs.semantic(), Expr::Const(0)) {
+                Some((lhs.as_ref(), rhs.as_ref()))
+            } else if matches!(lhs.semantic(), Expr::Const(0)) {
+                Some((rhs.as_ref(), lhs.as_ref()))
+            } else {
+                None
             };
+            let candidate = operands.and_then(|(candidate, zero)| {
+                invert_mixed_view_equal_or_signed_less(candidate)
+                    .map(|replacement| replacement.with_optional_origins(zero.origins().cloned()))
+            });
             if let Some(replacement) = candidate {
                 rewrite(e, replacement, changed);
                 return;
@@ -1290,12 +1295,22 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
         // globally damages CFG fidelity. Recover only the complete terminal
         // test, and only when every leaf is side-effect-free.
         if *op == CmpOp::Ne {
-            let candidate = match (lhs.as_ref(), rhs.as_ref()) {
-                (candidate, Expr::Const(0)) | (Expr::Const(0), candidate) => {
-                    recover_eager_boolean_guard(candidate)
-                }
-                _ => None,
+            let operands = if matches!(rhs.semantic(), Expr::Const(0)) {
+                Some((lhs.as_ref(), rhs.as_ref()))
+            } else if matches!(lhs.semantic(), Expr::Const(0)) {
+                Some((rhs.as_ref(), lhs.as_ref()))
+            } else {
+                None
             };
+            let candidate = operands.and_then(|(candidate, zero)| {
+                recover_eager_boolean_guard(candidate).map(|(logical, leaves, saw_byte_view)| {
+                    (
+                        logical.with_optional_origins(zero.origins().cloned()),
+                        leaves,
+                        saw_byte_view,
+                    )
+                })
+            });
             if let Some((logical, leaves, saw_byte_view)) = candidate {
                 if leaves >= 2 && saw_byte_view {
                     rewrite(e, logical, changed);
@@ -1304,13 +1319,14 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
             }
         }
 
-        let inner = match (lhs.as_ref(), rhs.as_ref()) {
-            (inner, Expr::Const(0)) | (Expr::Const(0), inner) if is_exact_boolean(inner) => {
-                Some(inner)
-            }
-            _ => None,
+        let inner = if matches!(rhs.semantic(), Expr::Const(0)) && is_exact_boolean(lhs) {
+            Some((lhs.as_ref(), rhs.as_ref()))
+        } else if matches!(lhs.semantic(), Expr::Const(0)) && is_exact_boolean(rhs) {
+            Some((rhs.as_ref(), lhs.as_ref()))
+        } else {
+            None
         };
-        if let Some(inner) = inner {
+        if let Some((inner, zero)) = inner {
             let replacement = match (op, inner.semantic()) {
                 (CmpOp::Ne, boolean) => Some(
                     boolean
@@ -1329,7 +1345,8 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
                         .with_optional_origins(inner.origins().cloned()),
                 ),
                 _ => None,
-            };
+            }
+            .map(|replacement| replacement.with_optional_origins(zero.origins().cloned()));
             if let Some(replacement) = replacement {
                 rewrite(e, replacement, changed);
             }
@@ -2664,6 +2681,7 @@ mod tests {
         let relation_owner = crate::ir::ast::OriginSet::one(0x1004);
         let equality_owner = crate::ir::ast::OriginSet::one(0x1008);
         let less_owner = crate::ir::ast::OriginSet::one(0x100c);
+        let zero_owner = crate::ir::ast::OriginSet::one(0x1010);
         let signed_value = view(true, value.clone());
         let relation = bin(
             BinOp::Or,
@@ -2685,7 +2703,7 @@ mod tests {
             Expr::Cmp {
                 op: CmpOp::Eq,
                 lhs: Box::new(relation),
-                rhs: Box::new(Expr::Const(0)),
+                rhs: Box::new(Expr::Const(0).with_origins(zero_owner.clone())),
             }
             .with_origins(terminal_owner.clone()),
         );
@@ -2706,7 +2724,8 @@ mod tests {
         let expected = terminal_owner
             .union(&relation_owner)
             .union(&equality_owner)
-            .union(&less_owner);
+            .union(&less_owner)
+            .union(&zero_owner);
         assert_eq!(src.origins(), Some(&expected));
     }
 
