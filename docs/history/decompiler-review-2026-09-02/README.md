@@ -88,6 +88,11 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
+[`results/wp3-aarch64-frame-storage-identities.md`](results/wp3-aarch64-frame-storage-identities.md):
+production AArch64 fp/lr save and restore cleanup now uses producer-owned stack
+identity instead of `stack_` spelling. Four exact identity boundaries, all 16
+owning tests, the census gate, and one exact AArch64 O2 stack-protected lane
+pass. The preceding
 [`results/wp3-canary-storage-identities.md`](results/wp3-canary-storage-identities.md):
 production stack-canary save collapse now accepts only producer-owned promoted
 storage, rather than trusting `stack_` spelling. Its two exact boundary tests,

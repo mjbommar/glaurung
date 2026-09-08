@@ -2118,6 +2118,14 @@ provenance through lowering.
   fresh serial extension rebuild. The recent four-cell Hello checkpoint was
   not repeated for this metadata seam. No broad suite or corpus ran. See
   `results/wp3-canary-storage-identities.md`.
+  Commit `2f664dfe` then closes the AArch64 scalar frame save/restore consumer.
+  Both production call sites use producer-owned promoted-stack identity;
+  opaque owned fp/lr slots are recognized and misleading unowned `stack_`
+  spellings fail closed. Four exact boundary tests, all 16 module tests, the
+  census gate, and only the AArch64 O2 `bst_inorder_checksum` lane pass after a
+  fresh serial extension rebuild. The typed `StackAddr` frame-record form and
+  explicit no-sidecar wrapper remain separate. No broad suite or corpus ran.
+  See `results/wp3-aarch64-frame-storage-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and

@@ -690,6 +690,19 @@ committed GCC O2 packet-parser canary ran through the production decompiler.
 The recent four-cell Hello checkpoint was not repeated for this metadata seam.
 No broad suite or corpus ran.
 
+## AArch64 frame-storage identities
+
+Commit `2f664dfe` moves production AArch64 fp/lr scalar save and restore
+recognition from `stack_` display spelling to producer-owned promoted-stack
+identity. Four exact positive/adversarial tests and all 16 module tests pass,
+with 4,609 unrelated library tests filtered out. The census records 5,162
+declared Rust tests and zero outside every gate; all six census checks pass.
+
+A fresh serial extension rebuild passes the build guard, and only the exact
+AArch64 O2 `bst_inorder_checksum` lane ran, reporting no scoped regression. The
+recent four-cell Hello checkpoint was not repeated. No broad suite or corpus
+ran.
+
 ## Ground rules
 
 Verified before any claim of done: `cargo test --features python-ext`,
