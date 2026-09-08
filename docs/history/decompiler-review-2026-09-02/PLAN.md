@@ -1191,6 +1191,11 @@ provenance through lowering.
   the genuinely irrelevant value owner. Its observed-red policy test and all
   71 constant-fold tests pass; see
   `results/wp3-constant-identity-expression-origins.md`.
+  Commit `c79f57db` then makes redundant literal and exact-boolean cast removal
+  transparent to the inner carrier. The replacement retains both inner-value
+  and enclosing-cast owners, while the width-bearing shift-left refusal remains
+  unchanged. Its observed-red test and all 72 constant-fold tests pass; see
+  `results/wp3-redundant-cast-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
