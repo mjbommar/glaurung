@@ -1810,6 +1810,24 @@ pub(super) fn register_is_return_storage(
     }
 }
 
+/// Whether every exact candidate is the version-zero ABI result carrier.
+pub(super) fn register_is_entry_return_storage(
+    arch: CallConv,
+    register: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    match identities {
+        Some(identities) => identities.candidates(register).is_some_and(|candidates| {
+            !candidates.is_empty()
+                && candidates.iter().all(|identity| {
+                    identity.version == 0
+                        && matches!(&identity.base, VReg::Phys(name) if crate::ir::abi::is_return_register(arch, name))
+                })
+        }),
+        None => matches!(register, VReg::Phys(name) if crate::ir::abi::is_return_register(arch, name) && !name.contains('#')),
+    }
+}
+
 /// A captured argument slot that must keep its defining statement: the value is
 /// referenced by name at the call instead of being spliced into it.
 const KEEP_ARG_SETUP: usize = usize::MAX;
@@ -2841,7 +2859,14 @@ mod tests {
             reg("rax#looks_like_result"),
             crate::ir::ssa::SsaValue {
                 base: reg("rdi"),
-                version: 1,
+                version: 0,
+            },
+        );
+        identities.record(
+            reg("opaque_entry_result"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 0,
             },
         );
         identities.record(
@@ -2872,6 +2897,34 @@ mod tests {
             misleading.body.first().map(Stmt::semantic),
             Some(Stmt::Call { dst: Some(result), .. }) if result == &reg("rax#looks_like_result")
         ));
+
+        let entry = run(caller("opaque_entry_result"), &identities);
+        let producer_result = entry
+            .body
+            .iter()
+            .find_map(|statement| match statement.semantic() {
+                Stmt::Call {
+                    target: Expr::Named { name, .. },
+                    dst: Some(result),
+                    ..
+                } if name == "producer" => Some(result.clone()),
+                _ => None,
+            });
+        let consumer_argument =
+            entry
+                .body
+                .iter()
+                .find_map(|statement| match statement.semantic() {
+                    Stmt::Call {
+                        target: Expr::Named { name, .. },
+                        args,
+                        ..
+                    } if name == "consumer" => args.first().cloned(),
+                    _ => None,
+                });
+        let result = producer_result.expect("producer result must remain explicit");
+        assert_ne!(result, reg("opaque_entry_result"));
+        assert_eq!(consumer_argument, Some(Expr::Reg(result)));
     }
 
     #[test]

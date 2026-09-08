@@ -33,10 +33,10 @@ use super::{
     mark_arg_writes_in_stmt_with_identities, outgoing_aapcs_stack_area_with_identities,
     outgoing_stack_cleanup_with_identities, outgoing_sysv_stack_area,
     outgoing_sysv_stack_push_with_identities, reads_reg_in_expr, register_argument_slot,
-    register_is_return_storage, register_is_storage, resolve_captured_definition,
-    resolve_captured_definition_in, return_reg, ssa_base, stack_pointer_sub_width_with_identities,
-    substitute_exact_reg, table_call_may_use_layout, versioned_operand_is_reassigned, CallConv,
-    CalleeLayouts, EnclosingSlots, KEEP_ARG_SETUP,
+    register_is_entry_return_storage, register_is_return_storage, register_is_storage,
+    resolve_captured_definition, resolve_captured_definition_in, return_reg, ssa_base,
+    stack_pointer_sub_width_with_identities, substitute_exact_reg, table_call_may_use_layout,
+    versioned_operand_is_reassigned, CallConv, CalleeLayouts, EnclosingSlots, KEEP_ARG_SETUP,
 };
 
 pub(super) fn fold_one_call(
@@ -594,14 +594,7 @@ pub(super) fn fold_one_call(
                     Stmt::Call { dst, .. } => dst.clone(),
                     _ => None,
                 }
-                .filter(|result| {
-                    !matches!(
-                        result,
-                        VReg::Phys(name)
-                            if crate::ir::abi::is_return_register(arch, name)
-                                && !name.contains('#')
-                    )
-                });
+                .filter(|result| !register_is_entry_return_storage(arch, result, identities));
                 let result = existing_result
                     .unwrap_or_else(|| VReg::phys(format!("{}#call_result_{i}", return_reg(arch))));
                 let replacement = Expr::Reg(result.clone());
