@@ -2,6 +2,8 @@
 
 ![Glaurung logo](assets/glaurung-logo-512px.png)
 
+Home page: [glaurung.dev](https://glaurung.dev)
+
 Glaurung is a pre-1.0 reverse-engineering framework with a Rust analysis core,
 Python bindings, a command-line interface, persistent SQLite project files,
 and optional LLM-assisted workflows.
@@ -192,6 +194,7 @@ covers the decompiler-specific loop.
 
 ## Documentation map
 
+- [Home page](https://glaurung.dev)
 - [Documentation index](docs/README.md)
 - [Installation and development setup](docs/development/setup.md)
 - [Tutorial](docs/tutorial/README.md)
