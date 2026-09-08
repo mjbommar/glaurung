@@ -1450,6 +1450,11 @@ provenance through lowering.
   materialized identity instead of being scalarized at its single use. Its
   public-pass test was observed red and all 56 copy-propagation tests pass; see
   `results/wp3-copy-wide-load-refusal.md`.
+  Commit `13b1143a` then makes the shared read walker treat an attributed
+  promoted-local store target as a write rather than a pointer read. Exact use
+  counts no longer retain artificial temporaries solely because provenance is
+  present. Its count test was observed red and all 57 copy-propagation tests
+  pass; see `results/wp3-copy-store-read-counts.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
