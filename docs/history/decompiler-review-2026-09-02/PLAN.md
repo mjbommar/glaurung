@@ -1168,7 +1168,10 @@ provenance through lowering.
   Commit `1647953d` next makes observed-mask simplification transparent to an
   attributed partial-register merge. The low-bit predicate retains its merge
   and observation owners, while the provably masked-out high-parent owner is
-  excluded. Its observed-red test and all 67 constant-fold tests pass; see
+  excluded. Follow-on `997ec48c` makes the entry matcher transparent to an
+  attributed mask constant and retains that additional owner without reviving
+  the dead parent. Its strengthened observed-red test and all 73 constant-fold
+  tests pass; see
   `results/wp3-observed-mask-expression-origins.md`.
   Commit `14eef6d2` then makes safe constant arithmetic transparent to operand
   carriers. Attributed constants fold normally and the result retains the
