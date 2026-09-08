@@ -43,8 +43,9 @@ mod slot_marking;
 mod tail_calls;
 
 use aapcs::{
-    aapcs_core_register_arity, aapcs_integer_stack_suffix, fold_one_arm_hard_float_call,
-    known_arm_core_register_arity, known_arm_hard_float_layout, outgoing_aapcs_stack_area,
+    aapcs_core_register_arity, aapcs_integer_stack_suffix,
+    fold_one_arm_hard_float_call_with_identities, known_arm_core_register_arity,
+    known_arm_hard_float_layout, outgoing_aapcs_stack_area,
 };
 use captured_defs::{
     is_stable_frame_arg_definition_with_identities, resolve_captured_definition,

@@ -24,13 +24,14 @@ use crate::ir::types::VReg;
 
 use super::{
     aapcs_core_register_arity, aapcs_integer_stack_suffix, arg_slots, direct_call_target_va,
-    fold_one_arm_hard_float_call, fold_one_cdecl32_call, fold_one_recovered_layout_call,
-    fold_one_recovered_layout_call_with_live_ins, fold_one_table_call, is_frame_coordinate_storage,
-    is_pure_arg_normalisation, is_stable_frame_arg_definition_with_identities,
-    known_arm_core_register_arity, known_arm_hard_float_layout,
-    layout_matches_abi_allocation_order, mark_arg_reads_in_expr_with_identities,
-    mark_arg_reads_in_stmt_with_identities, mark_arg_writes_in_stmt_with_identities,
-    outgoing_aapcs_stack_area, outgoing_stack_cleanup_with_identities, outgoing_sysv_stack_area,
+    fold_one_arm_hard_float_call_with_identities, fold_one_cdecl32_call,
+    fold_one_recovered_layout_call, fold_one_recovered_layout_call_with_live_ins,
+    fold_one_table_call, is_frame_coordinate_storage, is_pure_arg_normalisation,
+    is_stable_frame_arg_definition_with_identities, known_arm_core_register_arity,
+    known_arm_hard_float_layout, layout_matches_abi_allocation_order,
+    mark_arg_reads_in_expr_with_identities, mark_arg_reads_in_stmt_with_identities,
+    mark_arg_writes_in_stmt_with_identities, outgoing_aapcs_stack_area,
+    outgoing_stack_cleanup_with_identities, outgoing_sysv_stack_area,
     outgoing_sysv_stack_push_with_identities, reads_reg_in_expr, register_is_storage,
     resolve_captured_definition, resolve_captured_definition_in, return_reg, slot_of, ssa_base,
     stack_pointer_sub_width_with_identities, substitute_exact_reg, table_call_may_use_layout,
@@ -186,7 +187,7 @@ pub(super) fn fold_one_call(
             // register prefix even when the setup was not locally foldable.
             return;
         }
-        if fold_one_arm_hard_float_call(body, call_idx) {
+        if fold_one_arm_hard_float_call_with_identities(body, call_idx, identities) {
             return;
         }
     }

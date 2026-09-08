@@ -15,6 +15,7 @@
 
 use crate::ir::ast::{Expr, Stmt};
 use crate::ir::types::VReg;
+use crate::ir::value_number::ValueIdentities;
 
 use super::{ssa_base, CallConv};
 
@@ -159,6 +160,45 @@ fn arm_hard_float_slot_of(name: &str) -> Option<usize> {
         .position(|aliases| aliases.contains(&base))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum ArmArgumentStorage {
+    Vfp(usize),
+    Core,
+    Other,
+}
+
+fn arm_argument_storage(
+    register: &VReg,
+    identities: Option<&ValueIdentities>,
+) -> Option<ArmArgumentStorage> {
+    let classify = |register: &VReg| match register {
+        VReg::Phys(name) => arm_hard_float_slot_of(name)
+            .map(ArmArgumentStorage::Vfp)
+            .or_else(|| {
+                crate::ir::abi::argument_slot_of(CallConv::Arm, name)
+                    .is_some()
+                    .then_some(ArmArgumentStorage::Core)
+            })
+            .unwrap_or(ArmArgumentStorage::Other),
+        _ => ArmArgumentStorage::Other,
+    };
+    match identities {
+        Some(identities) => {
+            let Some(candidates) = identities.candidates(register) else {
+                return Some(ArmArgumentStorage::Other);
+            };
+            let classes = candidates
+                .iter()
+                .map(|identity| classify(&identity.base))
+                .collect::<std::collections::BTreeSet<_>>();
+            (classes.len() == 1)
+                .then(|| classes.first().copied())
+                .flatten()
+        }
+        None => Some(classify(register)),
+    }
+}
+
 /// Fold a proven pure-VFP call setup.
 ///
 /// AAPCS-VFP has two independent allocation banks, so flattening r0-r3 and
@@ -166,7 +206,16 @@ fn arm_hard_float_slot_of(name: &str) -> Option<usize> {
 /// handles the unambiguous case: a contiguous s0..sN setup with no core-bank
 /// argument write in the same setup window. Mixed calls remain on the existing
 /// core-bank path until a recovered callee prototype supplies source order.
-pub(super) fn fold_one_arm_hard_float_call(body: &mut Vec<Stmt>, call_idx: usize) -> bool {
+#[cfg(test)]
+fn fold_one_arm_hard_float_call(body: &mut Vec<Stmt>, call_idx: usize) -> bool {
+    fold_one_arm_hard_float_call_with_identities(body, call_idx, None)
+}
+
+pub(super) fn fold_one_arm_hard_float_call_with_identities(
+    body: &mut Vec<Stmt>,
+    call_idx: usize,
+    identities: Option<&ValueIdentities>,
+) -> bool {
     let slots = crate::ir::abi::arm_hard_float_argument_slots();
     let mut found: Vec<Option<(usize, Expr)>> = vec![None; slots.len()];
     let mut saw_vfp = false;
@@ -177,11 +226,11 @@ pub(super) fn fold_one_arm_hard_float_call(body: &mut Vec<Stmt>, call_idx: usize
         index -= 1;
         match body[index].semantic() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
-            Stmt::Assign {
-                dst: VReg::Phys(name),
-                src,
-            } => {
-                if let Some(slot) = arm_hard_float_slot_of(name) {
+            Stmt::Assign { dst, src } => {
+                let Some(storage) = arm_argument_storage(dst, identities) else {
+                    return false;
+                };
+                if let ArmArgumentStorage::Vfp(slot) = storage {
                     saw_vfp = true;
                     if found[slot].is_none() {
                         let mut argument = src.clone();
@@ -192,7 +241,7 @@ pub(super) fn fold_one_arm_hard_float_call(body: &mut Vec<Stmt>, call_idx: usize
                     }
                     continue;
                 }
-                if crate::ir::abi::argument_slot_of(CallConv::Arm, name).is_some() {
+                if storage == ArmArgumentStorage::Core {
                     saw_core = true;
                 }
                 if saw_vfp {
@@ -381,6 +430,52 @@ mod tests {
 
         let asinf = call_to("asinf").with_origins(OriginSet::one(0x1004));
         assert_eq!(known_arm_hard_float_layout(&asinf), Some(vec![reg("s0")]));
+    }
+
+    #[test]
+    fn pure_vfp_setup_uses_exact_identity_not_display_spelling() {
+        let setup = |name: &str| {
+            vec![
+                Stmt::Assign {
+                    dst: reg(name),
+                    src: Expr::Const(7),
+                },
+                call_to("callee"),
+            ]
+        };
+        let mut identities = ValueIdentities::default();
+        identities.record(
+            reg("opaque_vfp"),
+            crate::ir::ssa::SsaValue {
+                base: reg("s0"),
+                version: 2,
+            },
+        );
+        identities.record(
+            reg("s0#2"),
+            crate::ir::ssa::SsaValue {
+                base: reg("r0"),
+                version: 2,
+            },
+        );
+
+        let mut exact = setup("opaque_vfp");
+        assert!(fold_one_arm_hard_float_call_with_identities(
+            &mut exact,
+            1,
+            Some(&identities),
+        ));
+        assert!(matches!(&exact[..], [Stmt::Call { args, .. }] if args == &vec![Expr::Const(7)]));
+
+        let mut misleading = setup("s0#2");
+        assert!(!fold_one_arm_hard_float_call_with_identities(
+            &mut misleading,
+            1,
+            Some(&identities),
+        ));
+        assert!(
+            matches!(&misleading[..], [Stmt::Assign { .. }, Stmt::Call { args, .. }] if args.is_empty())
+        );
     }
 
     #[test]
