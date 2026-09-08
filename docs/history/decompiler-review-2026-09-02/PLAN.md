@@ -1968,6 +1968,14 @@ provenance through lowering.
   per-arm conversions. The exact contract was observed red, both neighboring
   pointer/select guards pass, and the single guarded-call release test passes.
   See `results/wp3-typed-call-select-expression-origins.md`.
+  Commit `80ec2b73` closes the matching destination-side select reader. An
+  origin around a mixed pointer/integer select assigned to a pointer no longer
+  moves the conversion outside the conditional or forces its pointer arm
+  through `long`; attributed and plain forms render byte-identically with the
+  existing per-arm conversions. The exact contract was observed red, three
+  adjacent destination/boolean contracts pass, the release extension rebuilds,
+  and the single real pointer-word-select compile/decompile/recompile test
+  passes. See `results/wp3-destination-select-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
