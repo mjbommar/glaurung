@@ -294,3 +294,35 @@ cargo test --features python-ext --lib ir::direct_output::tests -- --nocapture
 
 No fixture matrix, broad Rust/Python suite, DecBench, or Joern lane was run for
 this single-module semantic correction.
+
+## Typed post-naming result roles
+
+Commit `e30c727f` carries the source result role beside opaque SSA identities.
+Role projection records `ret` only when a value with actual identity was mapped
+there by the pipeline, and later AST renames move that fact with the value.
+Production source preparation consumes this fact: an arbitrary local named
+`ret` no longer supplies a bare return, while a pipeline-owned `ret` continues
+to do so. The no-sidecar compatibility function remains explicitly spelling-
+based and is not mistaken for production authority.
+
+Focused RED/GREEN evidence:
+
+```text
+cargo test --features python-ext --lib \
+  attributed_output_does_not_trust_an_unowned_ret_spelling -- --nocapture
+RED: compile failure because the identity-aware entry point did not exist
+GREEN: 1 passed; 4,446 filtered out
+
+cargo test --features python-ext --lib \
+  attributed_output_accepts_a_pipeline_owned_ret_role -- --nocapture
+1 passed; 4,446 filtered out
+
+cargo test --features python-ext --lib ir::direct_output::tests -- --nocapture
+16 passed; 4,431 filtered out
+
+cargo test --features python-ext --lib value_number::tests:: -- --nocapture
+51 passed; 4,396 filtered out
+```
+
+This increment ran 69 directly relevant tests. It did not run the broad Rust or
+Python suites, fixture matrix, DecBench, or Joern.

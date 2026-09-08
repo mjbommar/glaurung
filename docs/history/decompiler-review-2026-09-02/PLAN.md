@@ -1687,8 +1687,11 @@ provenance through lowering.
   recovery. Prototype-backed identity returns now recognize body writes only
   through the selected calling convention's ABI result registers; an unrelated
   value literally named `ret` cannot suppress or replace the proven live-in
-  result. The post-naming compatibility projection still accepts the canonical
-  `ret` role and remains a separate migration target.
+  result. Commit `e30c727f` closes the corresponding production post-naming
+  path. `ValueIdentities` now carries a pipeline-owned result-role fact through
+  role projection and AST renames; source preparation accepts canonical `ret`
+  only when that fact is present. The no-sidecar compatibility API retains its
+  legacy spelling behavior explicitly.
   See
   `results/wp3-parameter-role-metadata.md`. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
