@@ -30,8 +30,8 @@ use super::{
     known_arm_hard_float_layout, layout_matches_abi_allocation_order, mark_arg_reads_in_expr,
     mark_arg_reads_in_stmt, mark_arg_writes_in_stmt, outgoing_aapcs_stack_area,
     outgoing_stack_cleanup, outgoing_sysv_stack_area, outgoing_sysv_stack_push, reads_reg_in_expr,
-    resolve_captured_definition, resolve_captured_definition_in, return_reg, return_value_is_read,
-    slot_of, ssa_base, stack_pointer_sub_width, substitute_exact_reg, table_call_may_use_layout,
+    resolve_captured_definition, resolve_captured_definition_in, return_reg, slot_of, ssa_base,
+    stack_pointer_sub_width, substitute_exact_reg, table_call_may_use_layout,
     versioned_operand_is_reassigned, CallConv, CalleeLayouts, EnclosingSlots, KEEP_ARG_SETUP,
 };
 
@@ -624,7 +624,12 @@ pub(super) fn fold_one_call(
                     ..
                 } if args.is_empty()
                     && (dst.is_some()
-                        || return_value_is_read(body, call_idx, return_reg(arch)))
+                        || super::return_attribution::return_value_is_read_with_identities(
+                            body,
+                            call_idx,
+                            return_reg(arch),
+                            identities,
+                        ))
             );
         if first_direct_value_call {
             // SysV integer parameter slots are contiguous. A proven slot one

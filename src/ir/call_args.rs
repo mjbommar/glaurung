@@ -53,7 +53,7 @@ use captured_defs::{
 use cdecl32::fold_one_cdecl32_call;
 use enclosing_slots::EnclosingSlots;
 use fold_one_call::fold_one_call;
-use return_attribution::{attribute_call_results, return_value_is_read};
+use return_attribution::{attribute_call_results, attribute_call_results_with_identities};
 use slot_marking::{
     mark_arg_reads_in_expr, mark_arg_reads_in_stmt, mark_arg_writes_in_stmt, mark_slot_write,
 };
@@ -529,7 +529,10 @@ fn reconstruct_args_with_layouts_prototypes_strings_and_optional_identities(
         string_pool,
         identities,
     );
-    attribute_call_results(&mut f.body, arch);
+    match identities {
+        Some(identities) => attribute_call_results_with_identities(&mut f.body, arch, identities),
+        None => attribute_call_results(&mut f.body, arch),
+    }
 }
 
 /// The register a callee leaves its return value in.

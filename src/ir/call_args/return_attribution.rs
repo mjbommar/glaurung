@@ -19,17 +19,27 @@ use super::{return_reg, ssa_base, CallConv};
 /// Is the return register read after the call at `call_idx`, before anything
 /// overwrites it? Nested bodies are treated as opaque reads (conservative): if a
 /// branch might read it, the result is consumed.
-pub(super) fn return_value_is_read(body: &[Stmt], call_idx: usize, ret: &str) -> bool {
-    return_value_read_before_write(body, call_idx, ret).unwrap_or(true)
+pub(super) fn return_value_is_read_with_identities(
+    body: &[Stmt],
+    call_idx: usize,
+    ret: &str,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    return_value_read_before_write(body, call_idx, ret, identities).unwrap_or(true)
 }
 
 /// Whether `ret` is explicitly read or overwritten after a call. `None`
 /// means the structured body ended without either event.
-fn return_value_read_before_write(body: &[Stmt], call_idx: usize, ret: &str) -> Option<bool> {
+fn return_value_read_before_write(
+    body: &[Stmt],
+    call_idx: usize,
+    ret: &str,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<bool> {
     for s in &body[call_idx + 1..] {
         let mut reads = false;
         let mut writes = false;
-        walk_stmt_regs(s, ret, &mut reads, &mut writes);
+        walk_stmt_regs(s, ret, &mut reads, &mut writes, identities);
         if reads {
             return Some(true);
         }
@@ -40,26 +50,44 @@ fn return_value_read_before_write(body: &[Stmt], call_idx: usize, ret: &str) -> 
     None
 }
 
-fn expr_reads_storage(expr: &Expr, storage: &str) -> bool {
+fn register_matches_storage(
+    register: &VReg,
+    storage: &str,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    match identities {
+        Some(identities) => identities
+            .exact(register)
+            .is_some_and(|identity| matches!(&identity.base, VReg::Phys(base) if base == storage)),
+        None => matches!(register, VReg::Phys(name) if ssa_base(name) == storage),
+    }
+}
+
+fn expr_reads_storage(
+    expr: &Expr,
+    storage: &str,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     let register_matches =
-        |register: &VReg| matches!(register, VReg::Phys(name) if ssa_base(name) == storage);
+        |register: &VReg| register_matches_storage(register, storage, identities);
     match expr {
-        Expr::Origin { expr, .. } => expr_reads_storage(expr, storage),
+        Expr::Origin { expr, .. } => expr_reads_storage(expr, storage, identities),
         Expr::Reg(register) => register_matches(register),
         Expr::StackAddr { object, .. } => register_matches(object),
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
             base.as_ref().is_some_and(register_matches)
                 || index.as_ref().is_some_and(register_matches)
         }
-        Expr::Deref { addr, .. } => expr_reads_storage(addr, storage),
+        Expr::Deref { addr, .. } => expr_reads_storage(addr, storage, identities),
         Expr::Call { target, args, .. } => {
-            expr_reads_storage(target, storage)
+            expr_reads_storage(target, storage, identities)
                 || args
                     .iter()
-                    .any(|argument| expr_reads_storage(argument, storage))
+                    .any(|argument| expr_reads_storage(argument, storage, identities))
         }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-            expr_reads_storage(lhs, storage) || expr_reads_storage(rhs, storage)
+            expr_reads_storage(lhs, storage, identities)
+                || expr_reads_storage(rhs, storage, identities)
         }
         Expr::Select {
             cond,
@@ -67,18 +95,18 @@ fn expr_reads_storage(expr: &Expr, storage: &str) -> bool {
             if_false,
             ..
         } => {
-            expr_reads_storage(cond, storage)
-                || expr_reads_storage(if_true, storage)
-                || expr_reads_storage(if_false, storage)
+            expr_reads_storage(cond, storage, identities)
+                || expr_reads_storage(if_true, storage, identities)
+                || expr_reads_storage(if_false, storage, identities)
         }
-        Expr::Un { src, .. } => expr_reads_storage(src, storage),
+        Expr::Un { src, .. } => expr_reads_storage(src, storage, identities),
         Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
-            expr_reads_storage(expr, storage)
+            expr_reads_storage(expr, storage, identities)
         }
-        Expr::FunctionTableEntry { index, .. } => expr_reads_storage(index, storage),
+        Expr::FunctionTableEntry { index, .. } => expr_reads_storage(index, storage, identities),
         Expr::WideArithmetic { args, .. } => args
             .iter()
-            .any(|argument| expr_reads_storage(argument, storage)),
+            .any(|argument| expr_reads_storage(argument, storage, identities)),
         Expr::Const(_)
         | Expr::FloatConst { .. }
         | Expr::Addr(_)
@@ -90,9 +118,15 @@ fn expr_reads_storage(expr: &Expr, storage: &str) -> bool {
 
 /// Note reads and writes of `name` in `s`. A statement with a nested body reports a
 /// read if the name appears anywhere inside it, so a conditional consumer counts.
-fn walk_stmt_regs(s: &Stmt, name: &str, reads: &mut bool, writes: &mut bool) {
+fn walk_stmt_regs(
+    s: &Stmt,
+    name: &str,
+    reads: &mut bool,
+    writes: &mut bool,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     let mut expr_reads = |e: &Expr| {
-        if expr_reads_storage(e, name) {
+        if expr_reads_storage(e, name, identities) {
             *reads = true;
         }
     };
@@ -100,7 +134,7 @@ fn walk_stmt_regs(s: &Stmt, name: &str, reads: &mut bool, writes: &mut bool) {
         Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { dst, src } => {
             expr_reads(src);
-            if matches!(dst, VReg::Phys(n) if ssa_base(n) == name) {
+            if register_matches_storage(dst, name, identities) {
                 *writes = true;
             }
         }
@@ -116,7 +150,11 @@ fn walk_stmt_regs(s: &Stmt, name: &str, reads: &mut bool, writes: &mut bool) {
                 expr_reads(a);
             }
             // A later call clobbers the register whether or not it took the value.
-            if dst.is_none() || matches!(dst, Some(VReg::Phys(n)) if ssa_base(n) == name) {
+            if dst.is_none()
+                || dst
+                    .as_ref()
+                    .is_some_and(|dst| register_matches_storage(dst, name, identities))
+            {
                 *writes = true;
             }
         }
@@ -127,7 +165,7 @@ fn walk_stmt_regs(s: &Stmt, name: &str, reads: &mut bool, writes: &mut bool) {
         }
         Stmt::Push { value } => expr_reads(value),
         Stmt::Pop { target } => {
-            if matches!(target, VReg::Phys(n) if ssa_base(n) == name) {
+            if register_matches_storage(target, name, identities) {
                 *writes = true;
             }
         }
@@ -138,13 +176,13 @@ fn walk_stmt_regs(s: &Stmt, name: &str, reads: &mut bool, writes: &mut bool) {
         } => {
             expr_reads(cond);
             for b in then_body.iter().chain(else_body.iter().flatten()) {
-                walk_stmt_regs(b, name, reads, writes);
+                walk_stmt_regs(b, name, reads, writes, identities);
             }
         }
         Stmt::While { cond, body } => {
             expr_reads(cond);
             for b in body {
-                walk_stmt_regs(b, name, reads, writes);
+                walk_stmt_regs(b, name, reads, writes, identities);
             }
         }
         Stmt::For {
@@ -154,11 +192,11 @@ fn walk_stmt_regs(s: &Stmt, name: &str, reads: &mut bool, writes: &mut bool) {
             body,
         } => {
             expr_reads(cond);
-            walk_stmt_regs(init, name, reads, writes);
+            walk_stmt_regs(init, name, reads, writes, identities);
             for stmt in body {
-                walk_stmt_regs(stmt, name, reads, writes);
+                walk_stmt_regs(stmt, name, reads, writes, identities);
             }
-            walk_stmt_regs(step, name, reads, writes);
+            walk_stmt_regs(step, name, reads, writes, identities);
         }
         Stmt::DoWhile { body, cond } => {
             // This walk only accumulates whether a read/write occurs anywhere;
@@ -166,7 +204,7 @@ fn walk_stmt_regs(s: &Stmt, name: &str, reads: &mut bool, writes: &mut bool) {
             // recursing into the body.
             expr_reads(cond);
             for b in body {
-                walk_stmt_regs(b, name, reads, writes);
+                walk_stmt_regs(b, name, reads, writes, identities);
             }
         }
         Stmt::Switch {
@@ -180,7 +218,7 @@ fn walk_stmt_regs(s: &Stmt, name: &str, reads: &mut bool, writes: &mut bool) {
                 .flat_map(|(_, b)| b)
                 .chain(default.iter().flatten())
             {
-                walk_stmt_regs(b, name, reads, writes);
+                walk_stmt_regs(b, name, reads, writes, identities);
             }
         }
         _ => {}
@@ -213,6 +251,22 @@ fn walk_stmt_regs(s: &Stmt, name: &str, reads: &mut bool, writes: &mut bool) {
 /// the costs are asymmetric — a spurious assignment is dead code a later pass can
 /// drop, while a missing one makes the reader take a stale value.
 pub(super) fn attribute_call_results(body: &mut Vec<Stmt>, arch: CallConv) {
+    attribute_call_results_with_optional_identities(body, arch, None);
+}
+
+pub(super) fn attribute_call_results_with_identities(
+    body: &mut Vec<Stmt>,
+    arch: CallConv,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    attribute_call_results_with_optional_identities(body, arch, Some(identities));
+}
+
+fn attribute_call_results_with_optional_identities(
+    body: &mut Vec<Stmt>,
+    arch: CallConv,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     let ret = return_reg(arch);
     let consumed: Vec<Option<&'static str>> = (0..body.len())
         .map(|i| {
@@ -221,12 +275,13 @@ pub(super) fn attribute_call_results(body: &mut Vec<Stmt>, arch: CallConv) {
             }
             if arch == CallConv::ArmHardFloat {
                 for candidate in ["s0", "d0", "r0"] {
-                    if return_value_read_before_write(body, i, candidate) == Some(true) {
+                    if return_value_read_before_write(body, i, candidate, identities) == Some(true)
+                    {
                         return Some(candidate);
                     }
                 }
             }
-            return_value_is_read(body, i, ret).then_some(ret)
+            return_value_is_read_with_identities(body, i, ret, identities).then_some(ret)
         })
         .collect();
     for (i, s) in body.iter_mut().enumerate() {
@@ -244,24 +299,88 @@ pub(super) fn attribute_call_results(body: &mut Vec<Stmt>, arch: CallConv) {
                 else_body,
                 ..
             } => {
-                attribute_call_results(then_body, arch);
+                attribute_call_results_with_optional_identities(then_body, arch, identities);
                 if let Some(eb) = else_body {
-                    attribute_call_results(eb, arch);
+                    attribute_call_results_with_optional_identities(eb, arch, identities);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                attribute_call_results(body, arch)
+                attribute_call_results_with_optional_identities(body, arch, identities)
             }
-            Stmt::For { body, .. } => attribute_call_results(body, arch),
+            Stmt::For { body, .. } => {
+                attribute_call_results_with_optional_identities(body, arch, identities)
+            }
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases.iter_mut() {
-                    attribute_call_results(b, arch);
+                    attribute_call_results_with_optional_identities(b, arch, identities);
                 }
                 if let Some(b) = default {
-                    attribute_call_results(b, arch);
+                    attribute_call_results_with_optional_identities(b, arch, identities);
                 }
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn call() -> Stmt {
+        Stmt::Call {
+            target: Expr::Named {
+                va: 0x1000,
+                name: "callee".into(),
+            },
+            args: Vec::new(),
+            dst: None,
+            call_spec: None,
+        }
+    }
+
+    #[test]
+    fn result_read_uses_exact_identity_not_display_spelling() {
+        let body = vec![
+            call(),
+            Stmt::Store {
+                addr: Expr::Const(0),
+                src: Expr::Reg(VReg::phys("rax#7")),
+                size: 8,
+            },
+            call(),
+        ];
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            VReg::phys("rax#7"),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rdi"),
+                version: 7,
+            },
+        );
+        identities.record(
+            VReg::phys("opaque_result"),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rax"),
+                version: 3,
+            },
+        );
+
+        assert!(!return_value_is_read_with_identities(
+            &body,
+            0,
+            "rax",
+            Some(&identities),
+        ));
+        let mut exact_body = body;
+        if let Stmt::Store { src, .. } = &mut exact_body[1] {
+            *src = Expr::Reg(VReg::phys("opaque_result"));
+        }
+        assert!(return_value_is_read_with_identities(
+            &exact_body,
+            0,
+            "rax",
+            Some(&identities),
+        ));
     }
 }
