@@ -102,7 +102,7 @@ pub(super) fn fold_one_call(
         })
         .flatten();
     if let Some(layout) = recovered_layout.filter(|_| aapcs_stack.is_none()) {
-        if fold_one_recovered_layout_call(body, call_idx, layout) {
+        if fold_one_recovered_layout_call(body, call_idx, layout, identities) {
             return;
         }
         if fold_one_recovered_layout_call_with_live_ins(
@@ -184,7 +184,7 @@ pub(super) fn fold_one_call(
             .filter(|_| known_arm_core_arity.is_none())
         {
             if !layout.is_empty() {
-                let _ = fold_one_recovered_layout_call(body, call_idx, layout);
+                let _ = fold_one_recovered_layout_call(body, call_idx, layout, identities);
             }
             // A locked fixed-arity declaration is stronger than a scratch
             // register prefix even when the setup was not locally foldable.

@@ -1121,7 +1121,7 @@ fn fold_one_table_call(
     enclosing: &EnclosingSlots,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> bool {
-    if fold_one_recovered_layout_call(body, call_idx, layout) {
+    if fold_one_recovered_layout_call(body, call_idx, layout, identities) {
         return true;
     }
     let mut blocked_here = vec![false; arg_slots(arch).len()];
@@ -1154,7 +1154,12 @@ fn fold_one_table_call(
 /// window. Moving a load-valued argument across a store or another call would
 /// change its value, so less obvious shapes remain explicit until the AST owns
 /// a full reaching-definition query.
-fn fold_one_recovered_layout_call(body: &mut Vec<Stmt>, call_idx: usize, layout: &[VReg]) -> bool {
+fn fold_one_recovered_layout_call(
+    body: &mut Vec<Stmt>,
+    call_idx: usize,
+    layout: &[VReg],
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     if layout.is_empty() {
         return false;
     }
@@ -1164,14 +1169,13 @@ fn fold_one_recovered_layout_call(body: &mut Vec<Stmt>, call_idx: usize, layout:
         index -= 1;
         match body[index].semantic() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
-            Stmt::Assign {
-                dst: VReg::Phys(name),
-                src,
-            } => {
-                let base = ssa_base(name);
-                let Some(slot) = layout.iter().position(
-                    |storage| matches!(storage, VReg::Phys(storage) if ssa_base(storage) == base),
-                ) else {
+            Stmt::Assign { dst, src } => {
+                let Some(slot) = layout.iter().position(|storage| {
+                    let VReg::Phys(storage) = storage else {
+                        return false;
+                    };
+                    register_is_storage(dst, ssa_base(storage), identities)
+                }) else {
                     continue;
                 };
                 if found[slot].is_none() {
@@ -1179,7 +1183,7 @@ fn fold_one_recovered_layout_call(body: &mut Vec<Stmt>, call_idx: usize, layout:
                     if let Some(origins) = body[index].origins() {
                         argument.merge_origins(origins);
                     }
-                    found[slot] = Some((index, argument, VReg::Phys(name.clone())));
+                    found[slot] = Some((index, argument, dst.clone()));
                 }
             }
             Stmt::Nop | Stmt::Comment(_) => {}
@@ -1324,14 +1328,13 @@ fn fold_one_recovered_layout_call_with_live_ins(
         index -= 1;
         match body[index].semantic() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
-            Stmt::Assign {
-                dst: VReg::Phys(name),
-                src,
-            } => {
-                let base = ssa_base(name);
-                let Some(slot) = layout.iter().position(
-                    |storage| matches!(storage, VReg::Phys(storage) if ssa_base(storage) == base),
-                ) else {
+            Stmt::Assign { dst, src } => {
+                let Some(slot) = layout.iter().position(|storage| {
+                    let VReg::Phys(storage) = storage else {
+                        return false;
+                    };
+                    register_is_storage(dst, ssa_base(storage), identities)
+                }) else {
                     continue;
                 };
                 if found[slot].is_none() {
@@ -1339,7 +1342,7 @@ fn fold_one_recovered_layout_call_with_live_ins(
                     if let Some(origins) = body[index].origins() {
                         argument.merge_origins(origins);
                     }
-                    found[slot] = Some((index, argument, VReg::Phys(name.clone())));
+                    found[slot] = Some((index, argument, dst.clone()));
                 }
             }
             Stmt::Nop | Stmt::Comment(_) => {}
@@ -5476,6 +5479,7 @@ mod tests {
             &mut body,
             2,
             &[reg("rdi"), reg("rsi")],
+            None,
         ));
 
         assert_eq!(body.len(), 1);
@@ -5494,6 +5498,50 @@ mod tests {
     }
 
     #[test]
+    fn recovered_layout_setup_uses_exact_identity_not_display_spelling() {
+        let setup = |destination: &str| vec![assign(destination, 7), call_to("callee")];
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            reg("opaque_argument"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi"),
+                version: 1,
+            },
+        );
+        identities.record(
+            reg("rdi#looks_versioned"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 1,
+            },
+        );
+
+        let mut exact = setup("opaque_argument");
+        assert!(fold_one_recovered_layout_call(
+            &mut exact,
+            1,
+            &[reg("rdi")],
+            Some(&identities),
+        ));
+        assert!(matches!(
+            exact.as_slice(),
+            [Stmt::Call { args, .. }] if args == &[Expr::Const(7)]
+        ));
+
+        let mut misleading = setup("rdi#looks_versioned");
+        assert!(!fold_one_recovered_layout_call(
+            &mut misleading,
+            1,
+            &[reg("rdi")],
+            Some(&identities),
+        ));
+        assert!(matches!(
+            misleading.as_slice(),
+            [Stmt::Assign { .. }, Stmt::Call { args, .. }] if args.is_empty()
+        ));
+    }
+
+    #[test]
     fn attributed_recovered_layout_follows_a_pure_spill_definition() {
         let mut body = vec![
             Stmt::Assign {
@@ -5509,7 +5557,12 @@ mod tests {
             call_to("callee").with_origins(crate::ir::ast::OriginSet::one(0x1018)),
         ];
 
-        assert!(fold_one_recovered_layout_call(&mut body, 2, &[reg("rdi")],));
+        assert!(fold_one_recovered_layout_call(
+            &mut body,
+            2,
+            &[reg("rdi")],
+            None,
+        ));
 
         assert_eq!(body.len(), 2, "only the ABI setup is consumed");
         let Stmt::Call { args, .. } = body[1].semantic() else {
@@ -5551,7 +5604,12 @@ mod tests {
             call_to("callee").with_origins(crate::ir::ast::OriginSet::one(0x1018)),
         ];
 
-        assert!(!fold_one_recovered_layout_call(&mut body, 1, &[reg("s0")],));
+        assert!(!fold_one_recovered_layout_call(
+            &mut body,
+            1,
+            &[reg("s0")],
+            None,
+        ));
         assert_eq!(body.len(), 2, "the general fold must retain the load root");
         assert!(matches!(body[1].semantic(), Stmt::Call { args, .. } if args.is_empty()));
     }
