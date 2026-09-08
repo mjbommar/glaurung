@@ -468,16 +468,33 @@ fn fixed_scalar_argument_registers(contract: &CallContract, cc: CallConv) -> Opt
 ///
 /// This is deliberately narrower than ordinary call-site coercion.  A caller
 /// parameter is refined only when every canonical call observation for that
-/// exact `argN` agrees on one type, and only when that type is an opaque pointer
-/// typedef whose representation had otherwise collapsed to `void *`.  A
-/// conflicting use retains the recovered machine-level declaration.
+/// exact parameter value agrees on one type, and only when that type is an
+/// opaque pointer typedef whose representation had otherwise collapsed to
+/// `void *`. A conflicting use retains the recovered machine-level declaration.
 pub fn refine_opaque_parameter_types_from_calls(
     function: &Function,
     recovered: &CallPrototype,
 ) -> CallPrototype {
+    refine_opaque_parameter_types_from_calls_impl(function, recovered, None)
+}
+
+/// Refine nominal pointer spellings using authoritative AST parameter roles.
+pub(crate) fn refine_opaque_parameter_types_from_calls_with_identities(
+    function: &Function,
+    recovered: &CallPrototype,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> CallPrototype {
+    refine_opaque_parameter_types_from_calls_impl(function, recovered, Some(identities))
+}
+
+fn refine_opaque_parameter_types_from_calls_impl(
+    function: &Function,
+    recovered: &CallPrototype,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> CallPrototype {
     let mut observations =
         vec![std::collections::BTreeSet::<String>::new(); recovered.parameter_types.len()];
-    collect_parameter_contract_observations(&function.body, &mut observations);
+    collect_parameter_contract_observations(&function.body, &mut observations, identities);
 
     let mut refined = recovered.clone();
     for (slot, types) in observations.into_iter().enumerate() {
@@ -495,6 +512,7 @@ pub fn refine_opaque_parameter_types_from_calls(
 fn collect_parameter_contract_observations(
     body: &[Stmt],
     observations: &mut [std::collections::BTreeSet<String>],
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
     for statement in body {
         match statement.semantic() {
@@ -512,7 +530,12 @@ fn collect_parameter_contract_observations(
                     let Expr::Reg(crate::ir::VReg::Phys(name)) = argument else {
                         continue;
                     };
-                    let Some(slot) = crate::ir::ast::parse_arg_index(name) else {
+                    let value = crate::ir::VReg::phys(name);
+                    let slot = match identities {
+                        Some(identities) => identities.parameter_slot(&value),
+                        None => crate::ir::ast::parse_arg_index(name),
+                    };
+                    let Some(slot) = slot else {
                         continue;
                     };
                     if let Some(slot_observations) = observations.get_mut(slot) {
@@ -531,13 +554,13 @@ fn collect_parameter_contract_observations(
                 else_body,
                 ..
             } => {
-                collect_parameter_contract_observations(then_body, observations);
+                collect_parameter_contract_observations(then_body, observations, identities);
                 if let Some(else_body) = else_body {
-                    collect_parameter_contract_observations(else_body, observations);
+                    collect_parameter_contract_observations(else_body, observations, identities);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                collect_parameter_contract_observations(body, observations);
+                collect_parameter_contract_observations(body, observations, identities);
             }
             Stmt::For {
                 init, step, body, ..
@@ -545,19 +568,21 @@ fn collect_parameter_contract_observations(
                 collect_parameter_contract_observations(
                     std::slice::from_ref(init.as_ref()),
                     observations,
+                    identities,
                 );
-                collect_parameter_contract_observations(body, observations);
+                collect_parameter_contract_observations(body, observations, identities);
                 collect_parameter_contract_observations(
                     std::slice::from_ref(step.as_ref()),
                     observations,
+                    identities,
                 );
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, case) in cases {
-                    collect_parameter_contract_observations(case, observations);
+                    collect_parameter_contract_observations(case, observations, identities);
                 }
                 if let Some(default) = default {
-                    collect_parameter_contract_observations(default, observations);
+                    collect_parameter_contract_observations(default, observations, identities);
                 }
             }
             _ => {}
@@ -1115,7 +1140,8 @@ mod tests {
     use super::{
         apply_known_call_contracts, apply_known_llir_call_contracts, call_return_hint,
         libc_prototypes, lookup, opaque_pointer_typedef, refine_opaque_parameter_types_from_calls,
-        standalone_c_type, CallPrototype, CallPrototypeAuthority,
+        refine_opaque_parameter_types_from_calls_with_identities, standalone_c_type, CallPrototype,
+        CallPrototypeAuthority,
     };
     use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
     use crate::ir::call_args::CallConv;
@@ -1779,6 +1805,40 @@ mod tests {
 
         assert_eq!(refined.parameter_types, ["FILE *", "int"]);
         assert_eq!(refined.authority, CallPrototypeAuthority::Recovered);
+    }
+
+    #[test]
+    fn opaque_parameter_refinement_uses_typed_parameter_roles() {
+        let function = Function {
+            name: "close_stream".into(),
+            entry_va: 0,
+            body: vec![named_call(
+                "fclose",
+                vec![Expr::Reg(VReg::phys("arg0"))],
+                Some(VReg::phys("var0")),
+            )],
+        };
+        let recovered = CallPrototype {
+            return_type: "int".into(),
+            parameter_types: vec!["void *".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Recovered,
+        };
+        let unowned = crate::ir::value_number::ValueIdentities::default();
+
+        let unchanged = refine_opaque_parameter_types_from_calls_with_identities(
+            &function, &recovered, &unowned,
+        );
+        assert_eq!(unchanged, recovered);
+
+        let parameter = unowned.with_role_aliases_and_parameter_slots(
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::from([0]),
+        );
+        let refined = refine_opaque_parameter_types_from_calls_with_identities(
+            &function, &recovered, &parameter,
+        );
+        assert_eq!(refined.parameter_types, ["FILE *"]);
     }
 
     #[test]

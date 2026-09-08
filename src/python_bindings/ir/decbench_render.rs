@@ -608,10 +608,12 @@ fn decbench_text_with_installed_environment(
                     }
                 }
             }
-            let refined = crate::ir::call_contracts::refine_opaque_parameter_types_from_calls(
-                &prepared,
-                &machine_prototype,
-            );
+            let refined =
+                crate::ir::call_contracts::refine_opaque_parameter_types_from_calls_with_identities(
+                    &prepared,
+                    &machine_prototype,
+                    &value_identities,
+                );
             (refined != machine_prototype).then_some(refined)
         })
     } else {
