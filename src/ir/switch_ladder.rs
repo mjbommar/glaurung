@@ -620,7 +620,7 @@ fn classify(cond: &Expr, disc: &mut Option<VReg>) -> Option<Test> {
     };
     // Exactly one side must be the discriminant and the other a constant, and
     // which side it is decides the direction of the bound.
-    let (v, k, disc_on_left) = match (lhs.as_ref(), rhs.as_ref()) {
+    let (v, k, disc_on_left) = match (lhs.semantic(), rhs.semantic()) {
         (Expr::Reg(v), Expr::Const(k)) => (v, *k, true),
         (Expr::Const(k), Expr::Reg(v)) => (v, *k, false),
         (view, Expr::Const(k)) => (signed_i32_view(view)?, *k, true),
@@ -1082,6 +1082,54 @@ fn statement_tree_origins(statement: &Stmt) -> Option<OriginSet> {
         }
     }
 
+    fn walk_expression(expression: &Expr, out: &mut Option<OriginSet>) {
+        merge(out, expression.origins());
+        match expression.semantic() {
+            Expr::Origin { .. } => unreachable!("semantic expression cannot be an origin wrapper"),
+            Expr::FunctionTableEntry { index, .. } | Expr::Deref { addr: index, .. } => {
+                walk_expression(index, out);
+            }
+            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+                walk_expression(lhs, out);
+                walk_expression(rhs, out);
+            }
+            Expr::Un { src, .. }
+            | Expr::Cast { expr: src, .. }
+            | Expr::NumericConvert { expr: src, .. } => walk_expression(src, out),
+            Expr::Call { target, args, .. } => {
+                walk_expression(target, out);
+                for argument in args {
+                    walk_expression(argument, out);
+                }
+            }
+            Expr::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => {
+                walk_expression(cond, out);
+                walk_expression(if_true, out);
+                walk_expression(if_false, out);
+            }
+            Expr::WideArithmetic { args, .. } => {
+                for argument in args {
+                    walk_expression(argument, out);
+                }
+            }
+            Expr::Reg(_)
+            | Expr::Const(_)
+            | Expr::FloatConst { .. }
+            | Expr::Addr(_)
+            | Expr::Named { .. }
+            | Expr::StringLit { .. }
+            | Expr::StackAddr { .. }
+            | Expr::Lea { .. }
+            | Expr::PdbFieldAddr { .. }
+            | Expr::Unknown(_) => {}
+        }
+    }
+
     fn walk(statement: &Stmt, out: &mut Option<OriginSet>) {
         merge(out, statement.origins());
         match statement.semantic() {
@@ -1091,7 +1139,7 @@ fn statement_tree_origins(statement: &Stmt) -> Option<OriginSet> {
                 then_body,
                 else_body,
             } => {
-                merge(out, cond.origins());
+                walk_expression(cond, out);
                 for child in then_body {
                     walk(child, out);
                 }
@@ -1256,6 +1304,14 @@ mod tests {
                         attribute_control_tree(child, next);
                     }
                 }
+                if let Expr::Cmp { lhs, rhs, .. } = cond.semantic_mut() {
+                    for operand in [lhs, rhs] {
+                        let origin = OriginSet::one(*next);
+                        *next += 4;
+                        let owned = std::mem::replace(operand.as_mut(), Expr::Const(0));
+                        **operand = owned.with_origins(origin);
+                    }
+                }
                 let origin = OriginSet::one(*next);
                 *next += 4;
                 let owned = std::mem::replace(cond, Expr::Const(0));
@@ -1286,6 +1342,13 @@ mod tests {
         {
             if let Some(origins) = cond.origins() {
                 out.merge(origins);
+            }
+            if let Expr::Cmp { lhs, rhs, .. } = cond.semantic() {
+                for operand in [lhs, rhs] {
+                    if let Some(origins) = operand.origins() {
+                        out.merge(origins);
+                    }
+                }
             }
             for child in then_body {
                 collect_origins(child, out);
