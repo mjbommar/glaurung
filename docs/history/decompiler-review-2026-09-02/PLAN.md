@@ -1435,6 +1435,11 @@ provenance through lowering.
   instead of freezing the entry value. Its negative test was observed red and
   all 53 copy-propagation tests pass; see
   `results/wp3-copy-loop-store-invalidation.md`.
+  Commit `be69b02b` next makes the shared self-copy refusal compare semantic
+  expressions through origin carriers. Attributed `x = x` assignments are no
+  longer admitted to ordinary, switch-entry, or dead-copy environments. Its
+  observed-red invariant and all 54 copy-propagation tests pass; see
+  `results/wp3-copy-self-reference-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
