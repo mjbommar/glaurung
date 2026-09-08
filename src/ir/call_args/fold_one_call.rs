@@ -999,21 +999,29 @@ fn register_is_sse_pair_storage(
     register: &VReg,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> bool {
-    let is_pair_storage = |register: &VReg| {
+    let is_exact_pair_storage = |register: &VReg| {
         let VReg::Phys(name) = register else {
             return false;
         };
-        matches!(ssa_base(name), "xmm0" | "xmm1")
-            || crate::ir::abi::sse_pair_result_lane_offset(arch, name).is_some()
+        matches!(name.as_str(), "xmm0" | "xmm1")
+            || crate::ir::abi::sse_pair_result_lanes(arch)
+                .iter()
+                .any(|(lane, _)| lane == name)
     };
     match identities {
         Some(identities) => identities.candidates(register).is_some_and(|candidates| {
             !candidates.is_empty()
                 && candidates
                     .iter()
-                    .all(|identity| is_pair_storage(&identity.base))
+                    .all(|identity| is_exact_pair_storage(&identity.base))
         }),
-        None => is_pair_storage(register),
+        None => {
+            let VReg::Phys(name) = register else {
+                return false;
+            };
+            matches!(ssa_base(name), "xmm0" | "xmm1")
+                || crate::ir::abi::sse_pair_result_lane_offset(arch, name).is_some()
+        }
     }
 }
 

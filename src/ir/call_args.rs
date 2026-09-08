@@ -1759,9 +1759,9 @@ pub(super) fn register_is_storage(
                 return false;
             };
             !candidates.is_empty()
-                && candidates.iter().all(|identity| {
-                    matches!(&identity.base, VReg::Phys(base) if ssa_base(base) == expected)
-                })
+                && candidates
+                    .iter()
+                    .all(|identity| matches!(&identity.base, VReg::Phys(base) if base == expected))
         }
         None => matches!(register, VReg::Phys(name) if ssa_base(name) == expected),
     }
@@ -5542,10 +5542,21 @@ mod tests {
                 version: 2,
             },
         );
+        identities.record(
+            reg("malformed_identity_base"),
+            crate::ir::ssa::SsaValue {
+                base: reg("xmm1#not_canonical"),
+                version: 2,
+            },
+        );
 
         assert_eq!(run("opaque_high", &identities), Some(Vec::new()));
         assert_eq!(
             run("xmm1#looks_high", &identities),
+            Some(vec![Expr::Reg(reg("xmm0")), Expr::Reg(reg("xmm1"))])
+        );
+        assert_eq!(
+            run("malformed_identity_base", &identities),
             Some(vec![Expr::Reg(reg("xmm0")), Expr::Reg(reg("xmm1"))])
         );
     }
@@ -6696,6 +6707,24 @@ mod tests {
         assert!(matches!(
             misleading.body.as_slice(),
             [Stmt::Assign { .. }, Stmt::Call { args, .. }] if args.is_empty()
+        ));
+    }
+
+    #[test]
+    fn storage_match_does_not_reparse_an_authoritative_identity_base() {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            reg("opaque_argument"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi#not_canonical"),
+                version: 2,
+            },
+        );
+
+        assert!(!register_is_storage(
+            &reg("opaque_argument"),
+            "rdi",
+            Some(&identities),
         ));
     }
 
