@@ -3749,6 +3749,13 @@ relevant ratchet's accepted-regression record.
    Commit `32698e2e` then closes the explicit `remap_type_map` migration target
    for plain typed output. Its exact integer-role regression and all 20 local
    type-map tests pass; no corpus or broad suite ran.
+   Commit `521d9524` next migrates callee-save cleanup from parsed SSA display
+   names to exact version-zero identities carried through stack promotion. The
+   same focused real-binary check closes the pre-existing promoted stack-probe
+   self-store defect using promotion-owned storage facts, while retaining an
+   unowned pointer self-store. Fifteen callee-save tests, the exact self-store
+   unit, and the x86/ARM real-binary checks pass; see
+   `results/wp3-typed-callee-save-ownership.md`.
    keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
