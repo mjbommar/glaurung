@@ -1473,6 +1473,12 @@ provenance through lowering.
   output temporary while retaining its exact owner; wider and unproved values
   still decline. Its observed-red test and all 20 adjacent-copy tests pass; see
   `results/wp3-copy-typed-value-origins.md`.
+  Commit `e3b29fe3` then repairs the shared substitution boundary: replacing an
+  attributed register use with an attributed definition now produces one
+  canonical deterministic union rather than nested origin carriers. The
+  normalization occurs only after a real substitution, preserving exact change
+  reporting. Its observed-red test and all 61 copy-propagation tests pass; see
+  `results/wp3-copy-substitution-origin-union.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
