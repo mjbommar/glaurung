@@ -50,6 +50,16 @@ pub(crate) fn refine_decbench_abi_widths_with_value_widths(
     tm: &mut TypeMap,
     value_widths: Option<&std::collections::HashMap<String, u8>>,
 ) {
+    refine_decbench_abi_widths_with_identities(f, tm, value_widths, None);
+}
+
+/// Refine declarations with exact width and opaque SSA identity evidence.
+pub(crate) fn refine_decbench_abi_widths_with_identities(
+    f: &Function,
+    tm: &mut TypeMap,
+    value_widths: Option<&std::collections::HashMap<String, u8>>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     refine_signed_comparison_operands(&f.body, tm);
 
     let mut required_wide = std::collections::HashSet::new();
@@ -82,7 +92,9 @@ pub(crate) fn refine_decbench_abi_widths_with_value_widths(
         }
     }
     for (name, &ast_definition_width) in &defs {
-        if !is_high_variable(name) || !all_definitions_proven_scalar(&f.body, name, tm) {
+        if !is_width_refinement_value(name, identities)
+            || !all_definitions_proven_scalar(&f.body, name, tm)
+        {
             continue;
         }
         let value = VReg::phys(name);
@@ -135,6 +147,16 @@ pub(crate) fn refine_decbench_abi_widths_with_value_widths(
         }
     }
     refine_pointer_access_widths(&f.body, tm);
+}
+
+fn is_width_refinement_value(
+    name: &str,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    if is_high_variable(name) {
+        return true;
+    }
+    identities.is_some_and(|identities| identities.exact(&VReg::phys(name)).is_some())
 }
 
 /// Signed comparison operators carry source-level signedness evidence that is
@@ -411,6 +433,102 @@ fn refine_pointer_access_widths(body: &[Stmt], tm: &mut TypeMap) {
                 *widths.first().expect("one observed pointer width"),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    fn wide_opaque_value() -> Function {
+        Function {
+            name: "wide_opaque".into(),
+            entry_va: 0,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("opaque-value"),
+                src: Expr::Cast {
+                    signed: true,
+                    width: 8,
+                    expr: Box::new(Expr::Const(1)),
+                },
+            }],
+        }
+    }
+
+    fn narrow_types() -> TypeMap {
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            VReg::phys("opaque-value"),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+        types
+    }
+
+    #[test]
+    fn exact_opaque_identity_authorizes_definition_width_refinement() {
+        let function = wide_opaque_value();
+        let value = VReg::phys("opaque-value");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            value.clone(),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rax"),
+                version: 1,
+            },
+        );
+        let widths = std::collections::HashMap::from([("opaque-value".to_string(), 8)]);
+        let mut types = narrow_types();
+
+        refine_decbench_abi_widths_with_identities(
+            &function,
+            &mut types,
+            Some(&widths),
+            Some(&identities),
+        );
+
+        assert_eq!(
+            types.get(&value),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 8,
+            })
+        );
+    }
+
+    #[test]
+    fn ambiguous_opaque_identity_declines_definition_width_refinement() {
+        let function = wide_opaque_value();
+        let value = VReg::phys("opaque-value");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for (base, version) in [("rax", 1), ("rbx", 2)] {
+            identities.record(
+                value.clone(),
+                crate::ir::ssa::SsaValue {
+                    base: VReg::phys(base),
+                    version,
+                },
+            );
+        }
+        let widths = std::collections::HashMap::from([("opaque-value".to_string(), 8)]);
+        let mut types = narrow_types();
+
+        refine_decbench_abi_widths_with_identities(
+            &function,
+            &mut types,
+            Some(&widths),
+            Some(&identities),
+        );
+
+        assert_eq!(
+            types.get(&value),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            })
+        );
     }
 }
 

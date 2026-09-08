@@ -102,6 +102,7 @@ pub use return_folds::{fold_exhaustive_if_returns, fold_exhaustive_switch_return
 
 #[cfg(test)]
 pub(crate) use abi_widths::refine_decbench_abi_widths;
+pub(crate) use abi_widths::refine_decbench_abi_widths_with_identities;
 pub(crate) use abi_widths::refine_decbench_abi_widths_with_value_widths;
 pub(crate) use return_ctype::{
     declared_int_type, fold_typed_return_abi_extensions, infer_return_ctype, inferred_return_width,

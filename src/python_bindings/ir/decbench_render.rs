@@ -278,10 +278,11 @@ fn decbench_text_with_installed_environment(
     let mut refined_width = width.cloned();
     if let Some(tm) = refined_decl.as_mut() {
         refine!("refine_decbench_abi_widths", {
-            crate::ir::ast::refine_decbench_abi_widths_with_value_widths(
+            crate::ir::ast::refine_decbench_abi_widths_with_identities(
                 &prepared,
                 tm,
                 exact_value_widths,
+                Some(value_identities),
             );
             crate::ir::high_variables::refine_pointer_high_variables_with_identities(
                 &prepared,
@@ -313,10 +314,11 @@ fn decbench_text_with_installed_environment(
     if let Some(tm) = refined_width.as_mut() {
         refine!(
             "refine_decbench_abi_widths_for_width_map",
-            crate::ir::ast::refine_decbench_abi_widths_with_value_widths(
+            crate::ir::ast::refine_decbench_abi_widths_with_identities(
                 &prepared,
                 tm,
                 exact_value_widths,
+                Some(value_identities),
             )
         );
     }
