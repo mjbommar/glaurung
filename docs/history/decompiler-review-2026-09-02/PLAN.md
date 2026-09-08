@@ -1879,6 +1879,14 @@ provenance through lowering.
   regression, all six owning module tests, and only the AArch64 O2
   `agr198_five_roundtrip` fixture pass. No broad suite or corpus ran. See
   `results/wp3-indirect-result-storage-identities.md`.
+  Commit `489622b4` then migrates callee-side integer-pair return recovery.
+  Reaching high-half definitions and nested-control invalidation now use exact
+  identities, as does the guard that refuses to reinterpret a floating result
+  bank as the low half of an integer pair. Opaque exact `rdx`/`xmm0` values are
+  classified correctly and misleading `rdx#version` text backed by `rax` is
+  rejected. The exact regression, all ten owning module tests, and only the
+  GCC O0 `bv195_make_quad` fixture pass. No broad suite or corpus ran. See
+  `results/wp3-callee-pair-return-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
