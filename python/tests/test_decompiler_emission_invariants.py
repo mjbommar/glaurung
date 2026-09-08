@@ -579,7 +579,7 @@ def test_every_local_used_is_also_declared(built, arch, opt, request) -> None:
     for name, body in _fixture_units(text).items():
         declared = set(
             re.findall(
-                r"^[ \t]+[\w \*]+?\b((?:var|local_|stack_)\w+)\s*[;\[]",
+                r"^[ \t]+[\w \*]+?\b((?:var|local_|stack_)\w+)\s*(?:[;\[]|=)",
                 body,
                 re.MULTILINE,
             )
