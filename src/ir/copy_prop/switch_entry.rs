@@ -31,7 +31,7 @@ use super::subst::{subst, subst_store_addr};
 /// by the body and therefore is not invariant on later iterations.
 pub fn propagate_switch_entry_copies(f: &mut Function) {
     if propagate_switch_entries_in_body(&mut f.body) {
-        while eliminate_dead_copies(&mut f.body) {}
+        while eliminate_dead_copies(&mut f.body, None) {}
     }
 }
 

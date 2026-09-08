@@ -389,7 +389,7 @@ fn decbench_text_with_installed_environment(
         // expression pipeline has already run. Re-propagate and fold immediately so
         // consumers such as packed byte-table permutations see the literal index
         // rather than rendering a dynamic 16-way lookup for a compiler-emitted mask.
-        crate::ir::copy_prop::propagate_copies(&mut prepared);
+        crate::ir::copy_prop::propagate_copies_with_identities(&mut prepared, &value_identities);
         crate::ir::const_fold::fold_constants_with_identities(&mut prepared, &value_identities);
     });
     // PIC address materialisation on 32-bit ARM/x86 can become an absolute

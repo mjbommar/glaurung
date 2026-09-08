@@ -105,6 +105,21 @@ pub(crate) fn register_read_count(function: &Function, target: &crate::ir::types
 /// already at its fixed point produces the same body — so none of these tries
 /// to prove that the value it wrote differs from the value it replaced.
 pub fn propagate_copies(f: &mut Function) -> bool {
+    propagate_copies_impl(f, None)
+}
+
+/// Run copy propagation with pipeline-owned promoted-storage identity.
+pub fn propagate_copies_with_identities(
+    f: &mut Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> bool {
+    propagate_copies_impl(f, Some(identities))
+}
+
+fn propagate_copies_impl(
+    f: &mut Function,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     #[cfg(debug_assertions)]
     let before = f.clone();
     // Global read counts. With SSA value-numbering upstream every scratch value
@@ -121,22 +136,22 @@ pub fn propagate_copies(f: &mut Function) -> bool {
     let mut changed = false;
     let mut reads: RegMap<usize> = RegMap::default();
     count_reads_body(&f.body, &mut reads);
-    propagate_run_counted(&mut f.body, &reads, &mut changed);
+    propagate_run_counted(&mut f.body, &reads, &mut changed, identities);
     propagate_run(&mut f.body, &mut changed);
     for _ in 0..8 {
-        if !eliminate_dead_copies(&mut f.body) {
+        if !eliminate_dead_copies(&mut f.body, identities) {
             break;
         }
         changed = true;
         let mut reads: RegMap<usize> = RegMap::default();
         count_reads_body(&f.body, &mut reads);
-        propagate_run_counted(&mut f.body, &reads, &mut changed);
+        propagate_run_counted(&mut f.body, &reads, &mut changed, identities);
     }
     // Copy propagation exposes local dead stores (`ret = local_c; ret =
     // (local_c >> 1)` — the first write is overwritten before any read once the
     // reload was folded away). Remove those within each straight-line run.
-    changed |= dead_store_runs(&mut f.body);
-    changed |= prune_unobservable_scratch_dataflow(f);
+    changed |= dead_store_runs(&mut f.body, identities);
+    changed |= prune_unobservable_scratch_dataflow(f, identities);
     #[cfg(debug_assertions)]
     audit_change_report("copy_prop::propagate_copies", changed, &before, f);
     changed
@@ -291,7 +306,12 @@ fn propagate_run(stmts: &mut [Stmt], changed: &mut bool) -> Copies {
 /// scratch destination is read exactly once in the whole body — safe because
 /// value-numbering makes each such destination single-def, so folding it in
 /// duplicates no computation. Copies still do not cross control-flow edges.
-fn propagate_run_counted(stmts: &mut [Stmt], reads: &RegMap<usize>, changed: &mut bool) -> Copies {
+fn propagate_run_counted(
+    stmts: &mut [Stmt],
+    reads: &RegMap<usize>,
+    changed: &mut bool,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Copies {
     let mut copies = Copies::new();
     for s in stmts.iter_mut() {
         match s.semantic_mut() {
@@ -302,7 +322,7 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &RegMap<usize>, changed: &mu
                 if !is_self_ref(dst, src) {
                     let record = is_pure_copyable(src)
                         || is_repeatable_versioned_flag_expr(dst, src)
-                        || (is_scratch_reg(dst)
+                        || (is_scratch_reg(dst, identities)
                             && reads.get(dst).copied().unwrap_or(0) == 1
                             // A single use prevents duplicate *reads* but does
                             // not let this in-place pass delete the original
@@ -362,9 +382,9 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &RegMap<usize>, changed: &mu
             } => {
                 let return_guard = is_exact_return_guard(then_body, else_body);
                 *changed |= subst(cond, &copies);
-                propagate_run_counted(then_body, reads, changed);
+                propagate_run_counted(then_body, reads, changed, identities);
                 if let Some(eb) = else_body {
-                    propagate_run_counted(eb, reads, changed);
+                    propagate_run_counted(eb, reads, changed, identities);
                 }
                 if !return_guard {
                     copies.clear();
@@ -372,7 +392,7 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &RegMap<usize>, changed: &mu
             }
             Stmt::While { cond, body } => {
                 *changed |= subst(cond, &copies_stable_across_loop(&copies, body));
-                propagate_run_counted(body, reads, changed);
+                propagate_run_counted(body, reads, changed, identities);
                 copies.clear();
             }
             Stmt::For {
@@ -381,14 +401,24 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &RegMap<usize>, changed: &mu
                 step,
                 body,
             } => {
-                propagate_run_counted(std::slice::from_mut(init.as_mut()), reads, changed);
+                propagate_run_counted(
+                    std::slice::from_mut(init.as_mut()),
+                    reads,
+                    changed,
+                    identities,
+                );
                 *changed |= subst(cond, &copies);
-                propagate_run_counted(body, reads, changed);
-                propagate_run_counted(std::slice::from_mut(step.as_mut()), reads, changed);
+                propagate_run_counted(body, reads, changed, identities);
+                propagate_run_counted(
+                    std::slice::from_mut(step.as_mut()),
+                    reads,
+                    changed,
+                    identities,
+                );
                 copies.clear();
             }
             Stmt::DoWhile { body, cond } => {
-                let tail_copies = propagate_run_counted(body, reads, changed);
+                let tail_copies = propagate_run_counted(body, reads, changed, identities);
                 *changed |= subst(cond, &tail_copies);
                 copies.clear();
             }
@@ -399,10 +429,10 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &RegMap<usize>, changed: &mu
             } => {
                 *changed |= subst(discriminant, &copies);
                 for (_, body) in cases.iter_mut() {
-                    propagate_run_counted(body, reads, changed);
+                    propagate_run_counted(body, reads, changed, identities);
                 }
                 if let Some(b) = default {
-                    propagate_run_counted(b, reads, changed);
+                    propagate_run_counted(b, reads, changed, identities);
                 }
                 copies.clear();
             }
@@ -459,6 +489,50 @@ mod tests {
                 if matches!(value.semantic(), Expr::Const(7))
                     && value.origins() == Some(&owner)
         ));
+    }
+
+    #[test]
+    fn identity_aware_copy_cleanup_removes_unowned_local_spelling() {
+        let mut function = Function {
+            name: "unowned_spelling".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("local_8"),
+                    src: Expr::Const(7),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        propagate_copies_with_identities(
+            &mut function,
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
+
+        assert_eq!(function.body, vec![Stmt::Return { value: None }]);
+    }
+
+    #[test]
+    fn identity_aware_copy_cleanup_preserves_opaque_owned_stack_object() {
+        let object = "frame_object".to_string();
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object]);
+        let mut function = Function {
+            name: "owned_storage".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg(&object),
+                    src: Expr::Const(7),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        propagate_copies_with_identities(&mut function, &identities);
+
+        assert_eq!(function.body.len(), 2);
     }
 
     #[test]

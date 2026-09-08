@@ -146,7 +146,7 @@ fn move_one_adjacent_effectful_scratch_value(body: &mut Vec<Stmt>, reads: &RegMa
     for index in 0..body.len().saturating_sub(1) {
         let Some((destination, mut source)) = (match body[index].semantic() {
             Stmt::Assign { dst, src }
-                if is_scratch_reg(dst)
+                if is_scratch_reg(dst, None)
                     && !is_promoted_local_reg(dst)
                     && src.contains_call()
                     && !contains_reg(src, dst)
@@ -277,7 +277,7 @@ fn fold_one_adjacent_overwritten_value(body: &mut Vec<Stmt>) -> bool {
     for index in 0..body.len().saturating_sub(1) {
         let Some((destination, mut source)) = (match body[index].semantic() {
             Stmt::Assign { dst, src }
-                if is_scratch_reg(dst)
+                if is_scratch_reg(dst, None)
                     && !is_promoted_local_reg(dst)
                     && !contains_reg(src, dst)
                     && !contains_deref(src)
@@ -354,7 +354,7 @@ fn fold_one_adjacent_guard_value(body: &mut Vec<Stmt>, reads: &RegMap<usize>) ->
     for index in 0..body.len().saturating_sub(1) {
         let Some((dst, mut source)) = (match body[index].semantic() {
             Stmt::Assign { dst, src }
-                if is_scratch_reg(dst)
+                if is_scratch_reg(dst, None)
                     && !is_promoted_local_reg(dst)
                     && reads.get(dst).copied() == Some(1)
                     && !contains_reg(src, dst)

@@ -46,7 +46,10 @@ use super::reads::{visit_expr_reads, visit_stmt_reads};
 /// observable roots even when their result is unused; ordinary non-volatile
 /// loads remain removable.
 /// Returns whether any assignment was removed.
-pub(super) fn prune_unobservable_scratch_dataflow(f: &mut Function) -> bool {
+pub(super) fn prune_unobservable_scratch_dataflow(
+    f: &mut Function,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     /// Add every register `expr` reads to `into`.
     ///
     /// This used to build a `RegMap<usize>` histogram per expression and
@@ -70,6 +73,7 @@ pub(super) fn prune_unobservable_scratch_dataflow(f: &mut Function) -> bool {
         dependencies: &mut RegMap<RegSet>,
         roots: &mut RegSet,
         has_unknown: &mut bool,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
     ) {
         for statement in body {
             match statement {
@@ -78,8 +82,9 @@ pub(super) fn prune_unobservable_scratch_dataflow(f: &mut Function) -> bool {
                     dependencies,
                     roots,
                     has_unknown,
+                    identities,
                 ),
-                Stmt::Assign { dst, src } if is_scratch_reg(dst) => {
+                Stmt::Assign { dst, src } if is_scratch_reg(dst, identities) => {
                     add_regs(src, dependencies.entry(dst.clone()).or_default());
                     if src.contains_call() {
                         roots.insert(dst.clone());
@@ -108,9 +113,9 @@ pub(super) fn prune_unobservable_scratch_dataflow(f: &mut Function) -> bool {
                 }
                 Stmt::Throw { value } => add_roots(value, roots),
                 Stmt::TryCatch { try_body, catches } => {
-                    collect_body(try_body, dependencies, roots, has_unknown);
+                    collect_body(try_body, dependencies, roots, has_unknown, identities);
                     for catch in catches {
-                        collect_body(&catch.body, dependencies, roots, has_unknown);
+                        collect_body(&catch.body, dependencies, roots, has_unknown, identities);
                     }
                 }
                 Stmt::IndirectGoto { target } => add_roots(target, roots),
@@ -120,14 +125,14 @@ pub(super) fn prune_unobservable_scratch_dataflow(f: &mut Function) -> bool {
                     else_body,
                 } => {
                     add_roots(cond, roots);
-                    collect_body(then_body, dependencies, roots, has_unknown);
+                    collect_body(then_body, dependencies, roots, has_unknown, identities);
                     if let Some(else_body) = else_body {
-                        collect_body(else_body, dependencies, roots, has_unknown);
+                        collect_body(else_body, dependencies, roots, has_unknown, identities);
                     }
                 }
                 Stmt::While { cond, body } | Stmt::DoWhile { cond, body } => {
                     add_roots(cond, roots);
-                    collect_body(body, dependencies, roots, has_unknown);
+                    collect_body(body, dependencies, roots, has_unknown, identities);
                 }
                 Stmt::For {
                     init,
@@ -153,7 +158,7 @@ pub(super) fn prune_unobservable_scratch_dataflow(f: &mut Function) -> bool {
                         roots.insert(dst.clone());
                     }
                     add_roots(cond, roots);
-                    collect_body(body, dependencies, roots, has_unknown);
+                    collect_body(body, dependencies, roots, has_unknown, identities);
                 }
                 Stmt::Push { value } => add_roots(value, roots),
                 Stmt::Switch {
@@ -163,10 +168,10 @@ pub(super) fn prune_unobservable_scratch_dataflow(f: &mut Function) -> bool {
                 } => {
                     add_roots(discriminant, roots);
                     for (_, case_body) in cases {
-                        collect_body(case_body, dependencies, roots, has_unknown);
+                        collect_body(case_body, dependencies, roots, has_unknown, identities);
                     }
                     if let Some(default_body) = default {
-                        collect_body(default_body, dependencies, roots, has_unknown);
+                        collect_body(default_body, dependencies, roots, has_unknown, identities);
                     }
                 }
                 // An opaque machine statement may read any scratch value. Abort
@@ -183,10 +188,14 @@ pub(super) fn prune_unobservable_scratch_dataflow(f: &mut Function) -> bool {
         }
     }
 
-    fn prune_body(body: &mut Vec<Stmt>, live: &RegSet) -> bool {
+    fn prune_body(
+        body: &mut Vec<Stmt>,
+        live: &RegSet,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) -> bool {
         let before = body.len();
         body.retain(|statement| {
-            !matches!(statement.semantic(), Stmt::Assign { dst, .. } if is_scratch_reg(dst) && !live.contains(dst))
+            !matches!(statement.semantic(), Stmt::Assign { dst, .. } if is_scratch_reg(dst, identities) && !live.contains(dst))
         });
         let mut pruned = body.len() != before;
         for statement in body {
@@ -199,26 +208,26 @@ pub(super) fn prune_unobservable_scratch_dataflow(f: &mut Function) -> bool {
                     else_body,
                     ..
                 } => {
-                    pruned |= prune_body(then_body, live);
+                    pruned |= prune_body(then_body, live, identities);
                     if let Some(else_body) = else_body {
-                        pruned |= prune_body(else_body, live);
+                        pruned |= prune_body(else_body, live, identities);
                     }
                 }
                 Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                    pruned |= prune_body(body, live);
+                    pruned |= prune_body(body, live, identities);
                 }
                 Stmt::Switch { cases, default, .. } => {
                     for (_, case_body) in cases {
-                        pruned |= prune_body(case_body, live);
+                        pruned |= prune_body(case_body, live, identities);
                     }
                     if let Some(default_body) = default {
-                        pruned |= prune_body(default_body, live);
+                        pruned |= prune_body(default_body, live, identities);
                     }
                 }
                 Stmt::TryCatch { try_body, catches } => {
-                    pruned |= prune_body(try_body, live);
+                    pruned |= prune_body(try_body, live, identities);
                     for catch in catches {
-                        pruned |= prune_body(&mut catch.body, live);
+                        pruned |= prune_body(&mut catch.body, live, identities);
                     }
                 }
                 _ => {}
@@ -230,7 +239,13 @@ pub(super) fn prune_unobservable_scratch_dataflow(f: &mut Function) -> bool {
     let mut dependencies: RegMap<RegSet> = RegMap::default();
     let mut live = RegSet::default();
     let mut has_unknown = false;
-    collect_body(&f.body, &mut dependencies, &mut live, &mut has_unknown);
+    collect_body(
+        &f.body,
+        &mut dependencies,
+        &mut live,
+        &mut has_unknown,
+        identities,
+    );
     if has_unknown {
         return false;
     }
@@ -246,7 +261,7 @@ pub(super) fn prune_unobservable_scratch_dataflow(f: &mut Function) -> bool {
             }
         }
     }
-    prune_body(&mut f.body, &live)
+    prune_body(&mut f.body, &live, identities)
 }
 
 #[cfg(test)]
@@ -307,7 +322,7 @@ mod tests {
             ],
         };
 
-        prune_unobservable_scratch_dataflow(&mut f);
+        prune_unobservable_scratch_dataflow(&mut f, None);
 
         let rendered = format!("{f:#?}");
         for dead in ["var15", "var18", "var22", "arg3", "local_28"] {
@@ -350,7 +365,7 @@ mod tests {
             ],
         };
 
-        prune_unobservable_scratch_dataflow(&mut f);
+        prune_unobservable_scratch_dataflow(&mut f, None);
 
         let rendered = format!("{f:#?}");
         assert!(

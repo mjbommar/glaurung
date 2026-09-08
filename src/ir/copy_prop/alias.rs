@@ -26,10 +26,16 @@ use super::reads::expr_reads_reg;
 /// registers, temporaries, and SSA-versioned predicate values, but NOT promoted
 /// stack locals (owned by dead-store elimination) or unversioned architectural
 /// flag names. A poisoned predicate is separately excluded from propagation.
-pub(super) fn is_scratch_reg(v: &VReg) -> bool {
+pub(super) fn is_scratch_reg(
+    v: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     match v {
         VReg::Temp(_) => true,
-        VReg::Phys(n) => !n.starts_with("local_") && !n.starts_with("stack_"),
+        VReg::Phys(n) => identities.map_or_else(
+            || !n.starts_with("local_") && !n.starts_with("stack_"),
+            |identities| !identities.is_promoted_stack_object(v),
+        ),
         VReg::FlagValue { .. } => true,
         VReg::Flag(_) => false,
     }

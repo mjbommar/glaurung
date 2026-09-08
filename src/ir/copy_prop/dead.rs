@@ -29,7 +29,10 @@ use super::reads::{count_reads_body, visit_expr_reads};
 /// overwritten by a later write before any intervening read (a dead store).
 /// Conservative: resets at every control-flow boundary and only removes writes
 /// whose source is side-effect-free.
-pub(super) fn dead_store_runs(body: &mut Vec<Stmt>) -> bool {
+pub(super) fn dead_store_runs(
+    body: &mut Vec<Stmt>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     // last_write[reg] = index of the most recent not-yet-consumed removable
     // write to `reg` in this run.
     let mut last_write: RegMap<usize> = RegMap::default();
@@ -52,7 +55,10 @@ pub(super) fn dead_store_runs(body: &mut Vec<Stmt>) -> bool {
                 if let Some(prev) = last_write.remove(dst) {
                     dead.push(prev);
                 }
-                if is_pure_copyable(src) && is_scratch_reg(dst) && !is_self_ref(dst, src) {
+                if is_pure_copyable(src)
+                    && is_scratch_reg(dst, identities)
+                    && !is_self_ref(dst, src)
+                {
                     last_write.insert(dst.clone(), i);
                 }
             }
@@ -94,21 +100,21 @@ pub(super) fn dead_store_runs(body: &mut Vec<Stmt>) -> bool {
                 else_body,
                 ..
             } => {
-                removed |= dead_store_runs(then_body);
+                removed |= dead_store_runs(then_body, identities);
                 if let Some(eb) = else_body {
-                    removed |= dead_store_runs(eb);
+                    removed |= dead_store_runs(eb, identities);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                removed |= dead_store_runs(body);
+                removed |= dead_store_runs(body, identities);
             }
-            Stmt::For { body, .. } => removed |= dead_store_runs(body),
+            Stmt::For { body, .. } => removed |= dead_store_runs(body, identities),
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases.iter_mut() {
-                    removed |= dead_store_runs(b);
+                    removed |= dead_store_runs(b, identities);
                 }
                 if let Some(b) = default {
-                    removed |= dead_store_runs(b);
+                    removed |= dead_store_runs(b, identities);
                 }
             }
             _ => {}
@@ -121,21 +127,28 @@ pub(super) fn dead_store_runs(body: &mut Vec<Stmt>) -> bool {
 /// whole body. Returns whether anything was removed. Promoted stack locals
 /// (`local_*`/`stack_*`) are left to the dedicated dead-store pass; here we only
 /// clean scratch registers/temporaries the copy-prop just made dead.
-pub(super) fn eliminate_dead_copies(body: &mut Vec<Stmt>) -> bool {
+pub(super) fn eliminate_dead_copies(
+    body: &mut Vec<Stmt>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     // Count reads of every register across the whole (nested) body.
     let mut reads: RegMap<usize> = RegMap::default();
     count_reads_body(body, &mut reads);
-    remove_dead(body, &reads)
+    remove_dead(body, &reads, identities)
 }
 
-fn remove_dead(body: &mut Vec<Stmt>, reads: &RegMap<usize>) -> bool {
+fn remove_dead(
+    body: &mut Vec<Stmt>,
+    reads: &RegMap<usize>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     let mut changed = false;
     body.retain(|s| {
         // A lazy select may contain a value-producing call. Preserve that
         // effect even when the scratch result is never read; all other current
         // assignment sources are removable when their destination is dead.
         if let Stmt::Assign { dst, src } = s.semantic() {
-            if is_scratch_reg(dst)
+            if is_scratch_reg(dst, identities)
                 && reads.get(dst).copied().unwrap_or(0) == 0
                 && !src.contains_call()
             {
@@ -153,21 +166,21 @@ fn remove_dead(body: &mut Vec<Stmt>, reads: &RegMap<usize>) -> bool {
                 else_body,
                 ..
             } => {
-                changed |= remove_dead(then_body, reads);
+                changed |= remove_dead(then_body, reads, identities);
                 if let Some(eb) = else_body {
-                    changed |= remove_dead(eb, reads);
+                    changed |= remove_dead(eb, reads, identities);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                changed |= remove_dead(body, reads)
+                changed |= remove_dead(body, reads, identities)
             }
-            Stmt::For { body, .. } => changed |= remove_dead(body, reads),
+            Stmt::For { body, .. } => changed |= remove_dead(body, reads, identities),
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases.iter_mut() {
-                    changed |= remove_dead(b, reads);
+                    changed |= remove_dead(b, reads, identities);
                 }
                 if let Some(b) = default {
-                    changed |= remove_dead(b, reads);
+                    changed |= remove_dead(b, reads, identities);
                 }
             }
             _ => {}
