@@ -1130,4 +1130,55 @@ mod identity_census_tests {
         assert!(text.contains("long census_identity(long arg0)"), "{text}");
         assert!(!text.contains("    long arg0;"), "{text}");
     }
+
+    fn render_stack_address_identity(
+        identities: &crate::ir::value_number::ValueIdentities,
+    ) -> String {
+        let function = Function {
+            name: "stack_address_identity".into(),
+            entry_va: 0,
+            body: vec![Stmt::Return {
+                value: Some(Expr::StackAddr {
+                    object: VReg::phys("arg0"),
+                    size: 4,
+                }),
+            }],
+        };
+        render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types_and_parameter_names_and_identities(
+            &function,
+            None,
+            None,
+            crate::ir::types_recover::RecoveredOutputKind::Unknown,
+            None,
+            None,
+            &[],
+            8,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+            Some(identities),
+        )
+    }
+
+    #[test]
+    fn stack_address_rendering_does_not_trust_an_unowned_arg_spelling() {
+        let identities = crate::ir::value_number::ValueIdentities::default();
+        let text = render_stack_address_identity(&identities);
+
+        assert!(text.contains("    unsigned char arg0[4];"), "{text}");
+        assert!(text.contains("&arg0[0]"), "{text}");
+        assert!(!text.contains("(void *)(arg0)"), "{text}");
+    }
+
+    #[test]
+    fn stack_address_rendering_keeps_an_owned_parameter_slot() {
+        let identities = crate::ir::value_number::ValueIdentities::default()
+            .with_role_aliases_and_parameter_slots(
+                &std::collections::HashMap::new(),
+                &std::collections::HashSet::from([0]),
+            );
+        let text = render_stack_address_identity(&identities);
+
+        assert!(!text.contains("unsigned char arg0[4]"), "{text}");
+        assert!(text.contains("(void *)(arg0)"), "{text}");
+    }
 }

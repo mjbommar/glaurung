@@ -107,6 +107,7 @@ pub(super) struct DeclarationPlan {
     returns_void: bool,
     parameters: Vec<String>,
     parameter_names: Vec<String>,
+    parameter_roles: HashMap<String, usize>,
     variadic: bool,
     pointer_parameters: HashMap<String, String>,
     locals: Vec<(String, LocalDeclaration)>,
@@ -133,6 +134,7 @@ impl Default for DeclarationPlan {
             returns_void: false,
             parameters: Vec::new(),
             parameter_names: Vec::new(),
+            parameter_roles: HashMap::new(),
             variadic: false,
             pointer_parameters: HashMap::new(),
             locals: Vec::new(),
@@ -352,6 +354,11 @@ impl DeclarationPlan {
             returns_void,
             parameters,
             parameter_names,
+            parameter_roles: ids
+                .parameter_roles
+                .iter()
+                .map(|(role, slot)| (role.clone(), *slot))
+                .collect(),
             variadic,
             pointer_parameters,
             locals,
@@ -394,9 +401,15 @@ impl DeclarationPlan {
         self.parameter_names.get(index).map(String::as_str)
     }
 
-    /// Source spelling for an internal `argN` role, when one was declared.
+    /// Identity-proved source-parameter slot carried by a displayed role.
+    pub(super) fn parameter_slot(&self, role: &str) -> Option<usize> {
+        self.parameter_roles.get(role).copied()
+    }
+
+    /// Source spelling for an identity-owned parameter role, when declared.
     pub(super) fn displayed_parameter(&self, role: &str) -> Option<&str> {
-        parse_arg_index(role).and_then(|index| self.parameter_name(index))
+        self.parameter_slot(role)
+            .and_then(|index| self.parameter_name(index))
     }
 
     /// Whether the authoritative declaration accepts an unnamed argument tail.

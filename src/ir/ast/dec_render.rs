@@ -51,11 +51,10 @@ use super::{
     binop_sym_c, callee_display_name, cmpop_sym_c, dec_global_name, dec_global_scalar_width,
     dec_int_type, dec_plan, dec_ptr_arg_type, dec_ptr_width, declared_reg_ctype,
     direct_global_address, expr_machine_width, flag_ident, int_ctype,
-    normalize_wrapped_scaled_index_constant, parse_arg_index, sanitize_c_ident,
-    signed_shift_operand, target_int_ctype, unop_sym, width_ctype, write_float_literal, Expr,
-    OriginSet, PdbFieldHint, ScalarType, WideArithmetic, DEC_GLOBAL_ADDRS,
-    DEC_NAMED_CALL_PROTOTYPES, DEC_POINTER_WIDTH, DEC_RENDERABLE_STRUCTS, DEC_SEMANTIC_WIDE_CAST,
-    DEC_STRUCT_PTR_TYPES, DEC_WIDE_LOCALS,
+    normalize_wrapped_scaled_index_constant, sanitize_c_ident, signed_shift_operand,
+    target_int_ctype, unop_sym, width_ctype, write_float_literal, Expr, OriginSet, PdbFieldHint,
+    ScalarType, WideArithmetic, DEC_GLOBAL_ADDRS, DEC_NAMED_CALL_PROTOTYPES, DEC_POINTER_WIDTH,
+    DEC_RENDERABLE_STRUCTS, DEC_SEMANTIC_WIDE_CAST, DEC_STRUCT_PTR_TYPES, DEC_WIDE_LOCALS,
 };
 
 mod stmt;
@@ -539,12 +538,9 @@ fn write_scaled_pointer_offset_dec(op: BinOp, lhs: &Expr, rhs: &Expr, out: &mut 
 fn write_reg_lvalue_dec(v: &VReg, out: &mut String) {
     match v {
         VReg::Phys(n) => {
-            if let Some(idx) = parse_arg_index(n) {
-                let displayed = dec_plan(|plan| {
-                    plan.displayed_parameter(n)
-                        .map(str::to_string)
-                        .unwrap_or_else(|| format!("arg{idx}"))
-                });
+            if let Some(displayed) =
+                dec_plan(|plan| plan.displayed_parameter(n).map(str::to_string))
+            {
                 out.push_str(&displayed);
             } else {
                 out.push_str(&sanitize_c_ident(n));
@@ -804,7 +800,8 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
         Expr::Origin { expr, .. } => write_expr_dec(expr, out),
         Expr::Reg(v) => write_reg_dec(v, out),
         Expr::StackAddr { object, .. } => {
-            if matches!(object, VReg::Phys(name) if parse_arg_index(name).is_some()) {
+            if matches!(object, VReg::Phys(name) if dec_plan(|plan| plan.parameter_slot(name).is_some()))
+            {
                 out.push_str("(void *)(");
                 write_reg_lvalue_dec(object, out);
                 out.push(')');
@@ -1573,7 +1570,8 @@ fn call_argument_pointer_ctype(arg: &Expr) -> Option<String> {
         // `(void *)(argN)` and every other frame object as `&local_N[0]` over
         // an `unsigned char local_N[..]` declaration.
         Expr::StackAddr { object, .. } => Some(
-            if matches!(object, VReg::Phys(name) if parse_arg_index(name).is_some()) {
+            if matches!(object, VReg::Phys(name) if dec_plan(|plan| plan.parameter_slot(name).is_some()))
+            {
                 "void *".to_string()
             } else {
                 "unsigned char *".to_string()

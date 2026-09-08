@@ -1093,6 +1093,8 @@ fn ctype_for(ident: &str, tm: Option<&TypeMap>) -> &'static str {
 struct DecIdents {
     /// Highest `argN` index seen (drives the synthesised signature arity).
     max_arg: Option<usize>,
+    /// Displayed roles paired with their identity-proved source-parameter slot.
+    parameter_roles: std::collections::BTreeMap<String, usize>,
     /// Every non-argument identifier that will appear in the body. Synthetic
     /// values retain their stable lexical order.
     locals: std::collections::BTreeSet<String>,
@@ -1247,6 +1249,7 @@ fn collect_reg(
     let spelling = match v {
         VReg::Phys(n) => {
             if let Some(idx) = parameter_index(n, identities) {
+                ids.parameter_roles.insert(n.clone(), idx);
                 ids.max_arg = Some(ids.max_arg.map_or(idx, |m| m.max(idx)));
                 return;
             }
