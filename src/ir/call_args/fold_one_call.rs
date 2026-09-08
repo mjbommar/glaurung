@@ -25,12 +25,11 @@ use crate::ir::types::VReg;
 use super::{
     aapcs_core_register_arity, aapcs_integer_stack_suffix, arg_slots, direct_call_target_va,
     fold_one_arm_hard_float_call, fold_one_cdecl32_call, fold_one_recovered_layout_call,
-    fold_one_recovered_layout_call_with_live_ins, fold_one_table_call, incoming_arg_expr,
-    is_frame_coordinate_storage, is_pure_arg_normalisation, is_stable_frame_arg_definition,
-    known_arm_core_register_arity, known_arm_hard_float_layout,
-    layout_matches_abi_allocation_order, mark_arg_reads_in_expr, mark_arg_reads_in_stmt,
-    mark_arg_writes_in_stmt, outgoing_aapcs_stack_area, outgoing_stack_cleanup,
-    outgoing_sysv_stack_area, outgoing_sysv_stack_push, reads_reg_in_expr,
+    fold_one_recovered_layout_call_with_live_ins, fold_one_table_call, is_frame_coordinate_storage,
+    is_pure_arg_normalisation, is_stable_frame_arg_definition, known_arm_core_register_arity,
+    known_arm_hard_float_layout, layout_matches_abi_allocation_order, mark_arg_reads_in_expr,
+    mark_arg_reads_in_stmt, mark_arg_writes_in_stmt, outgoing_aapcs_stack_area,
+    outgoing_stack_cleanup, outgoing_sysv_stack_area, outgoing_sysv_stack_push, reads_reg_in_expr,
     resolve_captured_definition, resolve_captured_definition_in, return_reg, return_value_is_read,
     slot_of, ssa_base, stack_pointer_sub_width, substitute_exact_reg, table_call_may_use_layout,
     versioned_operand_is_reassigned, CallConv, CalleeLayouts, EnclosingSlots, KEEP_ARG_SETUP,
@@ -44,6 +43,7 @@ pub(super) fn fold_one_call(
     callee_layouts: CalleeLayouts<'_>,
     enclosing: &EnclosingSlots,
     string_pool: &std::collections::HashMap<u64, String>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
     let incoming_overrides = enclosing.overrides.as_slice();
     let format_proven_arity = format_proven_arity(body, call_idx, arch, string_pool);
@@ -639,7 +639,7 @@ pub(super) fn fold_one_call(
             let incoming = incoming_overrides
                 .first()
                 .and_then(Clone::clone)
-                .or_else(|| incoming_arg_expr(arch, 0, body))
+                .or_else(|| super::incoming_arg_expr_with_identities(arch, 0, body, identities))
                 .or_else(|| enclosing.live_ins.first().and_then(Clone::clone))
                 .unwrap_or_else(|| {
                     Expr::Reg(VReg::phys(
@@ -677,7 +677,9 @@ pub(super) fn fold_one_call(
                 let Some(expr) = incoming_overrides
                     .get(slot_idx)
                     .and_then(Clone::clone)
-                    .or_else(|| incoming_arg_expr(arch, slot_idx, body))
+                    .or_else(|| {
+                        super::incoming_arg_expr_with_identities(arch, slot_idx, body, identities)
+                    })
                     // A call nested in a branch arm sees only that arm. The
                     // function-wide spelling is the same live-in value, and
                     // `blocked_incoming` — seeded from the enclosing scope —

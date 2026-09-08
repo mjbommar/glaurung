@@ -171,8 +171,32 @@ fn is_frame_coordinate_storage(arch: CallConv, name: &str) -> bool {
 /// body: later versions are definitions made inside the function. When the slot's
 /// register does not appear at all there is no incoming value to name and no
 /// argument is invented.
-fn incoming_arg_expr(arch: CallConv, slot: usize, body: &[Stmt]) -> Option<Expr> {
+fn incoming_arg_expr_with_identities(
+    arch: CallConv,
+    slot: usize,
+    body: &[Stmt],
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<Expr> {
     let names = arg_slots(arch).get(slot)?;
+    if let Some(identities) = identities {
+        let mut live_in = None;
+        walk_body_reg_names(body, &mut |name| {
+            if live_in.is_some() {
+                return;
+            }
+            let register = VReg::phys(name);
+            let Some(identity) = identities.exact(&register) else {
+                return;
+            };
+            let VReg::Phys(base) = &identity.base else {
+                return;
+            };
+            if identity.version == 0 && names.contains(&base.as_str()) {
+                live_in = Some(Expr::Reg(register));
+            }
+        });
+        return live_in;
+    }
     // Is this body value-numbered at all? On the un-numbered path the incoming
     // register is implicit — it legitimately appears nowhere — and the bare
     // canonical name is the right reference, as it always was.
@@ -435,12 +459,62 @@ pub fn reconstruct_args_with_layouts_prototypes_and_strings(
     >,
     string_pool: &std::collections::HashMap<u64, String>,
 ) {
+    reconstruct_args_with_layouts_prototypes_strings_and_optional_identities(
+        f,
+        arch,
+        param_slots,
+        callee_layouts,
+        table_entry_layouts,
+        direct_prototypes,
+        string_pool,
+        None,
+    );
+}
+
+/// Production form of [`reconstruct_args_with_layouts_prototypes_and_strings`]
+/// that resolves incoming values through exact SSA identities.
+pub fn reconstruct_args_with_layouts_prototypes_strings_and_identities(
+    f: &mut Function,
+    arch: CallConv,
+    param_slots: &mut std::collections::HashSet<usize>,
+    callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+    table_entry_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+    direct_prototypes: Option<
+        &std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>,
+    >,
+    string_pool: &std::collections::HashMap<u64, String>,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    reconstruct_args_with_layouts_prototypes_strings_and_optional_identities(
+        f,
+        arch,
+        param_slots,
+        callee_layouts,
+        table_entry_layouts,
+        direct_prototypes,
+        string_pool,
+        Some(identities),
+    );
+}
+
+fn reconstruct_args_with_layouts_prototypes_strings_and_optional_identities(
+    f: &mut Function,
+    arch: CallConv,
+    param_slots: &mut std::collections::HashSet<usize>,
+    callee_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+    table_entry_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+    direct_prototypes: Option<
+        &std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>,
+    >,
+    string_pool: &std::collections::HashMap<u64, String>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     // The spelling this function uses for each live-in argument register is a
     // WHOLE-FUNCTION fact. Answering it from the statement list that happens to
     // contain the call makes an untouched incoming parameter invisible to every
     // call nested in a branch arm — see `EnclosingSlots`.
     let function_live_ins = (0..arg_slots(arch).len())
-        .map(|slot| incoming_arg_expr(arch, slot, &f.body))
+        .map(|slot| incoming_arg_expr_with_identities(arch, slot, &f.body, identities))
         .collect::<Vec<_>>();
     fold_body(
         &mut f.body,
@@ -453,6 +527,7 @@ pub fn reconstruct_args_with_layouts_prototypes_and_strings(
         },
         &function_live_ins,
         string_pool,
+        identities,
     );
     attribute_call_results(&mut f.body, arch);
 }
@@ -643,10 +718,19 @@ fn fold_body(
     callee_layouts: CalleeLayouts<'_>,
     function_live_ins: &[Option<Expr>],
     string_pool: &std::collections::HashMap<u64, String>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
     let entry_constant = entry_constant_slots(body, arch);
     let entry = EnclosingSlots::entry(arch, function_live_ins, entry_constant);
-    fold_body_with_context(body, arch, param_slots, callee_layouts, &entry, string_pool);
+    fold_body_with_context(
+        body,
+        arch,
+        param_slots,
+        callee_layouts,
+        &entry,
+        string_pool,
+        identities,
+    );
 }
 
 fn fold_body_with_context(
@@ -656,6 +740,7 @@ fn fold_body_with_context(
     callee_layouts: CalleeLayouts<'_>,
     enclosing: &EnclosingSlots,
     string_pool: &std::collections::HashMap<u64, String>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
     // Recurse into nested bodies first so we don't miss calls inside arms.
     // `running` is the enclosing clobber mask at each position, accumulated in
@@ -684,6 +769,7 @@ fn fold_body_with_context(
                     callee_layouts,
                     &nested,
                     string_pool,
+                    identities,
                 );
                 if let Some(eb) = else_body {
                     fold_body_with_context(
@@ -693,6 +779,7 @@ fn fold_body_with_context(
                         callee_layouts,
                         &nested,
                         string_pool,
+                        identities,
                     );
                 }
             }
@@ -710,6 +797,7 @@ fn fold_body_with_context(
                     callee_layouts,
                     &nested,
                     string_pool,
+                    identities,
                 )
             }
             Stmt::For { body, .. } => {
@@ -722,6 +810,7 @@ fn fold_body_with_context(
                     callee_layouts,
                     &nested,
                     string_pool,
+                    identities,
                 )
             }
             Stmt::Switch { cases, default, .. } => {
@@ -733,6 +822,7 @@ fn fold_body_with_context(
                         callee_layouts,
                         &nested,
                         string_pool,
+                        identities,
                     );
                 }
                 if let Some(default) = default {
@@ -743,6 +833,7 @@ fn fold_body_with_context(
                         callee_layouts,
                         &nested,
                         string_pool,
+                        identities,
                     );
                 }
             }
@@ -777,6 +868,7 @@ fn fold_body_with_context(
             callee_layouts,
             enclosing,
             string_pool,
+            identities,
         );
     }
 }
@@ -5806,6 +5898,44 @@ mod tests {
         assert_eq!(slot_of(CallConv::Aarch64, "x2#1"), Some(2));
         // A non-argument register is still not an argument register.
         assert_eq!(slot_of(CallConv::SysVAmd64, "rbx#2"), None);
+    }
+
+    #[test]
+    fn incoming_argument_uses_exact_identity_not_display_spelling() {
+        let body = vec![Stmt::Return {
+            value: Some(Expr::Reg(VReg::phys("opaque_incoming"))),
+        }];
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            VReg::phys("opaque_incoming"),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rdi"),
+                version: 0,
+            },
+        );
+        identities.record(
+            VReg::phys("rdi#0"),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rax"),
+                version: 0,
+            },
+        );
+
+        assert_eq!(
+            incoming_arg_expr_with_identities(CallConv::SysVAmd64, 0, &body, Some(&identities),),
+            Some(Expr::Reg(VReg::phys("opaque_incoming")))
+        );
+        assert_eq!(
+            incoming_arg_expr_with_identities(
+                CallConv::SysVAmd64,
+                0,
+                &[Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("rdi#0"))),
+                }],
+                Some(&identities),
+            ),
+            None
+        );
     }
 
     /// End to end over the pass: a value-numbered argument write folds into the

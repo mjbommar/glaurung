@@ -606,7 +606,7 @@ pub(super) fn run_ast_passes(
         crate::ir::call_args::recover_proven_vtable_tail_calls(f, cc, &callee_facts.prototypes);
     });
     pass!("reconstruct_args", {
-        crate::ir::call_args::reconstruct_args_with_layouts_prototypes_and_strings(
+        crate::ir::call_args::reconstruct_args_with_layouts_prototypes_strings_and_identities(
             f,
             cc,
             param_slots,
@@ -614,6 +614,7 @@ pub(super) fn run_ast_passes(
             &callee_facts.table_entry_layouts,
             Some(&callee_facts.prototypes),
             str_pool,
+            value_identities,
         );
     });
     // ABI liveness supplies candidate call inputs/outputs; an authoritative
