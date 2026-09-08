@@ -91,10 +91,11 @@ The latest WP3 record is
 [`results/wp3-verifier-stack-identities.md`](results/wp3-verifier-stack-identities.md):
 the final structured and goto-aware output verifier now classifies promoted
 stack stores by producer-owned identity. Its two exact adversarial tests and
-all 43 owning tests pass. One x86-64 O0 declaration cell remains honestly red
-for undeclared `local_8`, and the four-cell Hello World canary exposes a
-redundant string-literal cast in every cell plus an amd64 O2 `main` return-type
-regression; neither contract was weakened.
+all 43 owning tests pass. The apparent undeclared-`local_8` failure was a gate
+parser defect—initialized declarations were omitted—and commit `4c905ab7`
+makes all eight architecture/optimization cells green. The four-cell Hello
+World canary still exposes a redundant string-literal cast in every cell plus
+an amd64 O2 `main` return-type regression; that contract was not weakened.
 
 The preceding WP3 record is
 [`results/wp3-wp7b-for-loop-stack-identities.md`](results/wp3-wp7b-for-loop-stack-identities.md):

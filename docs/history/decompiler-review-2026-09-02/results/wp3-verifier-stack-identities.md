@@ -15,11 +15,12 @@ tests were filtered out. The census records 5,142 declared Rust tests and zero
 outside every gate, and all six census checks pass after the source commit.
 
 After a fresh debug extension build, the single directly relevant invariant
-cell
-`test_every_local_used_is_also_declared[-O0-x86_64]` remains red for two known
-outputs: `buffer_adjacent_scalars` and `two_buffers_and_a_scalar` use undeclared
-`local_8`. This increment makes the verifier's classification authoritative;
-it does not create missing declarations, so that producer defect remains open.
+cell initially reported undeclared `local_8` in `buffer_adjacent_scalars` and
+`two_buffers_and_a_scalar`. Direct output inspection disproved that diagnosis:
+both render `long local_8 = (long)(0x28);`. The test regex recognized only bare
+and array declarations, not initialized declarations. Commit `4c905ab7` fixes
+that parser; the exact x86-64 O0 cell and all eight architecture/optimization
+cells pass. No decompiler behavior was changed or relaxed.
 
 The periodic Hello World canary ran only four exact canonical cells: amd64 and
 AArch64, Clang O0 and O2, symbol-bearing PIE. All four currently fail the exact

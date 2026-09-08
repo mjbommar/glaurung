@@ -577,12 +577,14 @@ verifier tests pass with 4,562 unrelated tests filtered out. The regenerated
 census records 5,142 declared Rust tests and zero outside every gate; all six
 census checks pass after the source commit.
 
-A fresh debug extension passes `tools/build_guard.py`. The one owning compiled
-invariant cell, x86-64 O0 declaration/use consistency, remains red for known
-undeclared `local_8` output in two functions. The four-cell canonical Hello
-World canary (amd64/AArch64, Clang O0/O2) is also honestly red: every cell adds
-a redundant `(const char *)` string-literal cast, and amd64 O2 additionally
-uses `unsigned long` for `main`. No broad suite or corpus ran.
+A fresh debug extension passes `tools/build_guard.py`. The owning compiled
+invariant first claimed two functions used undeclared `local_8`, but direct
+inspection showed initialized declarations in both. Commit `4c905ab7` teaches
+the gate to recognize `name = value`; the exact x86-64 O0 cell and all eight
+architecture/optimization cells pass. The four-cell canonical Hello World
+canary (amd64/AArch64, Clang O0/O2) remains honestly red: every cell adds a
+redundant `(const char *)` string-literal cast, and amd64 O2 additionally uses
+`unsigned long` for `main`. No broad suite or corpus ran.
 
 ## Ground rules
 
