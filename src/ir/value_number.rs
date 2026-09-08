@@ -191,6 +191,26 @@ impl ValueIdentities {
                 .or_default()
                 .extend(slots.iter().copied());
         }
+        for value in &self.machine_saved_slots {
+            let VReg::Phys(storage) = value else {
+                continue;
+            };
+            if let Some(role) = aliases.get(storage) {
+                projected
+                    .machine_saved_slots
+                    .insert(VReg::Phys(role.clone()));
+            }
+        }
+        for value in &self.promoted_stack_objects {
+            let VReg::Phys(storage) = value else {
+                continue;
+            };
+            if let Some(role) = aliases.get(storage) {
+                projected
+                    .promoted_stack_objects
+                    .insert(VReg::Phys(role.clone()));
+            }
+        }
         projected
     }
 
@@ -239,6 +259,12 @@ impl ValueIdentities {
         }
         let previous = std::mem::take(&mut self.machine_saved_slots);
         self.machine_saved_slots.extend(
+            previous
+                .into_iter()
+                .map(|value| renames.get(&value).cloned().unwrap_or(value)),
+        );
+        let previous = std::mem::take(&mut self.promoted_stack_objects);
+        self.promoted_stack_objects.extend(
             previous
                 .into_iter()
                 .map(|value| renames.get(&value).cloned().unwrap_or(value)),
@@ -920,6 +946,18 @@ mod tests {
 
         assert!(identities.candidates(&VReg::phys("local_8")).is_none());
         assert_eq!(identities.exact(&VReg::phys("sum")), Some(&identity));
+    }
+
+    #[test]
+    fn presentation_aliases_project_promoted_stack_ownership() {
+        let object = "stack_object_7".to_string();
+        let mut identities = ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object]);
+
+        let projected =
+            identities.with_role_aliases(&HashMap::from([(object, "local_8".to_string())]));
+
+        assert!(projected.is_promoted_stack_object(&VReg::phys("local_8")));
     }
 
     #[test]

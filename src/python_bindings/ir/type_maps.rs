@@ -255,6 +255,7 @@ fn refine_float_copy_types(
     body: &[crate::ir::ast::Stmt],
     types: &mut crate::ir::types_recover::TypeMap,
     max_rounds: usize,
+    value_identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
     use crate::ir::ast::{Expr, Stmt};
     use crate::ir::types::{VReg, VReg::Phys};
@@ -280,15 +281,22 @@ fn refine_float_copy_types(
         }
     }
 
-    fn visit(body: &[Stmt], types: &mut crate::ir::types_recover::TypeMap, changed: &mut bool) {
+    fn visit(
+        body: &[Stmt],
+        types: &mut crate::ir::types_recover::TypeMap,
+        changed: &mut bool,
+        value_identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) {
         for statement in body {
             match statement {
                 Stmt::Assign { dst, src } => refine(dst, src, types, changed),
                 Stmt::Store {
-                    addr: Expr::Reg(destination @ Phys(name)),
+                    addr: Expr::Reg(destination @ Phys(_)),
                     src,
                     ..
-                } if name.starts_with("local_") || name.starts_with("stack_") => {
+                } if value_identities
+                    .is_some_and(|identities| identities.is_promoted_stack_object(destination)) =>
+                {
                     refine(destination, src, types, changed);
                 }
                 Stmt::If {
@@ -296,27 +304,37 @@ fn refine_float_copy_types(
                     else_body,
                     ..
                 } => {
-                    visit(then_body, types, changed);
+                    visit(then_body, types, changed, value_identities);
                     if let Some(else_body) = else_body {
-                        visit(else_body, types, changed);
+                        visit(else_body, types, changed, value_identities);
                     }
                 }
                 Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                    visit(body, types, changed)
+                    visit(body, types, changed, value_identities)
                 }
                 Stmt::For {
                     init, step, body, ..
                 } => {
-                    visit(std::slice::from_ref(init.as_ref()), types, changed);
-                    visit(body, types, changed);
-                    visit(std::slice::from_ref(step.as_ref()), types, changed);
+                    visit(
+                        std::slice::from_ref(init.as_ref()),
+                        types,
+                        changed,
+                        value_identities,
+                    );
+                    visit(body, types, changed, value_identities);
+                    visit(
+                        std::slice::from_ref(step.as_ref()),
+                        types,
+                        changed,
+                        value_identities,
+                    );
                 }
                 Stmt::Switch { cases, default, .. } => {
                     for (_, case_body) in cases {
-                        visit(case_body, types, changed);
+                        visit(case_body, types, changed, value_identities);
                     }
                     if let Some(default) = default {
-                        visit(default, types, changed);
+                        visit(default, types, changed, value_identities);
                     }
                 }
                 _ => {}
@@ -335,7 +353,7 @@ fn refine_float_copy_types(
     let mut rounds = 0;
     loop {
         let mut changed = false;
-        visit(body, types, &mut changed);
+        visit(body, types, &mut changed, value_identities);
         rounds += 1;
         if !changed {
             break;
@@ -577,7 +595,12 @@ pub(super) fn decbench_type_maps(
     apply_stack_source_types(&mut decl, source_types, source_names, cc, dwarf_type_env);
     merge_exact_definition_widths(&mut decl, definition_widths, role_names, cc, param_slots);
     crate::ir::call_contracts::refine_call_result_types(f, &mut decl);
-    refine_float_copy_types(&f.body, &mut decl, max_refinement_rounds);
+    refine_float_copy_types(
+        &f.body,
+        &mut decl,
+        max_refinement_rounds,
+        Some(value_identities),
+    );
     for (role, hint) in numbered.iter() {
         refine_numbered_declaration(&mut decl, role, hint);
     }
@@ -619,7 +642,12 @@ pub(super) fn decbench_type_maps(
     apply_stack_source_types(&mut width, source_types, source_names, cc, dwarf_type_env);
     merge_exact_definition_widths(&mut width, definition_widths, role_names, cc, param_slots);
     crate::ir::call_contracts::refine_call_result_types(f, &mut width);
-    refine_float_copy_types(&f.body, &mut width, max_refinement_rounds);
+    refine_float_copy_types(
+        &f.body,
+        &mut width,
+        max_refinement_rounds,
+        Some(value_identities),
+    );
     for (role, hint) in numbered.iter() {
         match hint {
             crate::ir::types_recover::TypeHint::Pointer { pointee_width } => {
@@ -861,7 +889,7 @@ mod tests {
             src: Expr::FloatConst { bits: 0, width: 4 },
         }];
 
-        refine_float_copy_types(&body, &mut types, 512);
+        refine_float_copy_types(&body, &mut types, 512, None);
 
         assert_eq!(types.get(&accumulator), Some(TypeHint::Float { width: 8 }));
     }
@@ -877,9 +905,47 @@ mod tests {
             src: Expr::Reg(source),
         }];
 
-        refine_float_copy_types(&body, &mut types, 512);
+        refine_float_copy_types(&body, &mut types, 512, None);
 
         assert_eq!(types.get(&slot), Some(TypeHint::Float { width: 4 }));
+    }
+
+    #[test]
+    fn float_store_refinement_accepts_an_owned_opaque_stack_object() {
+        let object_name = "opaque_float_home".to_string();
+        let object = VReg::phys(&object_name);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object_name]);
+        let mut types = TypeMap::default();
+        let body = vec![Stmt::Store {
+            addr: Expr::Reg(object.clone()),
+            src: Expr::FloatConst { bits: 0, width: 4 },
+            size: 4,
+        }];
+
+        refine_float_copy_types(&body, &mut types, 512, Some(&identities));
+
+        assert_eq!(types.get(&object), Some(TypeHint::Float { width: 4 }));
+    }
+
+    #[test]
+    fn float_store_refinement_rejects_an_unowned_local_spelling() {
+        let misleading = VReg::phys("local_c");
+        let mut types = TypeMap::default();
+        let body = vec![Stmt::Store {
+            addr: Expr::Reg(misleading.clone()),
+            src: Expr::FloatConst { bits: 0, width: 4 },
+            size: 4,
+        }];
+
+        refine_float_copy_types(
+            &body,
+            &mut types,
+            512,
+            Some(&crate::ir::value_number::ValueIdentities::default()),
+        );
+
+        assert_eq!(types.get(&misleading), None);
     }
 
     #[test]
@@ -893,7 +959,7 @@ mod tests {
             src: Expr::Reg(source.clone()),
         }];
 
-        refine_float_copy_types(&body, &mut types, 0);
+        refine_float_copy_types(&body, &mut types, 0, None);
 
         assert_eq!(types.get(&slot), None);
         assert_eq!(types.get(&source), Some(TypeHint::Float { width: 4 }));

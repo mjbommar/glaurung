@@ -1299,7 +1299,7 @@ pub(super) fn render_prepared_ast(
                 &prepared.stack_facts.source_names,
                 debug_type_env,
                 &prepared.role_names,
-                &prepared.value_identities,
+                &prepared.ast_value_identities,
                 &prepared.definition_widths,
                 type_budget.max_refinement_rounds,
             )
