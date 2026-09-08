@@ -1644,6 +1644,14 @@ provenance through lowering.
   through every nested structured body. Its exact role regression, all 71
   copy-propagation tests, and the compiled effectful-loop fixture pass; see
   `results/wp3-copy-guard-value-identities.md`.
+  Commit `1290c291` next migrates adjacent consumed-and-overwritten value
+  folding to pipeline-owned identity. An opaque promoted stack object can no
+  longer be treated as a disposable physical predicate/result scratch merely
+  because its name lacks a stack prefix; the authority is threaded through
+  nested branches, loops, switches, and exception bodies. Its exact role
+  regression, all 72 copy-propagation tests, and the two-function GCC-O2
+  flag/predicate round trip pass; see
+  `results/wp3-copy-overwritten-value-identities.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
