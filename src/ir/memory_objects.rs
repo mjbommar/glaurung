@@ -19,7 +19,7 @@ pub(crate) mod mir;
 mod partition;
 mod shape;
 
-pub(crate) use ast::infer_from_ast;
+pub(crate) use ast::{infer_from_ast, infer_from_ast_with_identities};
 pub use partition::{
     BoundaryEvidence, ExtentBounds, ObjectPartition, PartitionBoundary, PartitionConflict,
     PartitionExtent,

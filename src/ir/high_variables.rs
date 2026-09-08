@@ -14,7 +14,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::ir::ast::{Expr, Function, Stmt};
-use crate::ir::memory_objects::{infer_from_ast, MemoryObjectModel};
+use crate::ir::memory_objects::{infer_from_ast_with_identities, MemoryObjectModel};
 use crate::ir::types::{is_promoted_local_name as is_promoted_local, BinOp, VReg};
 use crate::ir::types_recover::{TypeHint, TypeMap};
 
@@ -46,7 +46,7 @@ pub(crate) fn refine_pointer_high_variables_with_identities(
     let mut definitions: HashMap<String, Vec<Definition>> = HashMap::new();
     collect_definitions(&function.body, &mut definitions);
     refine_exact_unsigned_constants(&function.body, &definitions, types, identities);
-    let object_model = infer_from_ast(function);
+    let object_model = infer_from_ast_with_identities(function, identities);
     if std::env::var_os("GLAURUNG_DUMP_PASSES").is_some() {
         eprintln!("\n===== inferred memory objects =====\n{object_model:#?}");
     }

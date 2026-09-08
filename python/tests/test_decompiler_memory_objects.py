@@ -118,7 +118,7 @@ int main(void) {
     assert re.search(r"memory_region: Some\(\s+HeapUnknown,", diagnostic)
     assert "region: FullyUnknown" in diagnostic
     assert "===== invalid typed MIR memory analysis =====" not in diagnostic
-    cursor_match = re.search(r"char \* (local_[0-9a-f]+);", generated)
+    cursor_match = re.search(r"\bchar \*\s*(local_[0-9a-f]+)\b", generated)
     assert cursor_match is not None, generated
     cursor_name = cursor_match.group(1)
     assert f"({cursor_name} + 64)" in generated, generated

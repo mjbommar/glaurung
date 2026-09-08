@@ -19,8 +19,16 @@ struct Observations {
 
 /// Infer object/access constraints from the prepared structured AST.
 pub(crate) fn infer_from_ast(function: &Function) -> MemoryObjectModel {
+    infer_from_ast_with_identities(function, None)
+}
+
+/// Infer prepared-AST objects using promoted-stack identity when available.
+pub(crate) fn infer_from_ast_with_identities(
+    function: &Function,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> MemoryObjectModel {
     let mut observations = Observations::default();
-    observe_body(&function.body, &mut observations);
+    observe_body(&function.body, &mut observations, identities);
     for base in observations.unclassified_definitions {
         observations
             .objects
@@ -34,7 +42,11 @@ pub(crate) fn infer_from_ast(function: &Function) -> MemoryObjectModel {
     observations.objects.finish()
 }
 
-fn observe_body(body: &[Stmt], observations: &mut Observations) {
+fn observe_body(
+    body: &[Stmt],
+    observations: &mut Observations,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     for statement in body {
         let source = AccessSource::AstStatement(observations.next_statement);
         observations.next_statement = observations.next_statement.saturating_add(1);
@@ -50,7 +62,11 @@ fn observe_body(body: &[Stmt], observations: &mut Observations) {
                 // treating them as `*local = value` here creates a fake object
                 // access and loses the cursor's origin/stride definitions.
                 if let Expr::Reg(dst) = addr {
-                    if is_promoted_local_reg(dst) {
+                    let promoted = identities.map_or_else(
+                        || is_promoted_local_reg(dst),
+                        |identities| identities.is_promoted_stack_object(dst),
+                    );
+                    if promoted {
                         observe_definition(dst, src, source, observations);
                         observe_expr(src, ExprContext::Value, source, observations);
                         continue;
@@ -90,14 +106,14 @@ fn observe_body(body: &[Stmt], observations: &mut Observations) {
                 else_body,
             } => {
                 observe_expr(cond, ExprContext::Comparison, source, observations);
-                observe_body(then_body, observations);
+                observe_body(then_body, observations, identities);
                 if let Some(else_body) = else_body {
-                    observe_body(else_body, observations);
+                    observe_body(else_body, observations, identities);
                 }
             }
             Stmt::While { cond, body } | Stmt::DoWhile { body, cond } => {
                 observe_expr(cond, ExprContext::Comparison, source, observations);
-                observe_body(body, observations);
+                observe_body(body, observations, identities);
             }
             Stmt::For {
                 init,
@@ -105,10 +121,10 @@ fn observe_body(body: &[Stmt], observations: &mut Observations) {
                 step,
                 body,
             } => {
-                observe_body(std::slice::from_ref(init), observations);
+                observe_body(std::slice::from_ref(init), observations, identities);
                 observe_expr(cond, ExprContext::Comparison, source, observations);
-                observe_body(body, observations);
-                observe_body(std::slice::from_ref(step), observations);
+                observe_body(body, observations, identities);
+                observe_body(std::slice::from_ref(step), observations, identities);
             }
             Stmt::Switch {
                 discriminant,
@@ -117,16 +133,16 @@ fn observe_body(body: &[Stmt], observations: &mut Observations) {
             } => {
                 observe_expr(discriminant, ExprContext::Integer, source, observations);
                 for (_, case) in cases {
-                    observe_body(case, observations);
+                    observe_body(case, observations, identities);
                 }
                 if let Some(default) = default {
-                    observe_body(default, observations);
+                    observe_body(default, observations, identities);
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                observe_body(try_body, observations);
+                observe_body(try_body, observations, identities);
                 for catch in catches {
-                    observe_body(&catch.body, observations);
+                    observe_body(&catch.body, observations, identities);
                 }
             }
             Stmt::Label(_)

@@ -1,4 +1,4 @@
-use super::{infer_from_ast, AccessRole, LayoutConflict};
+use super::{infer_from_ast, infer_from_ast_with_identities, AccessRole, LayoutConflict};
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::types::{BinOp, VReg};
 
@@ -86,6 +86,46 @@ fn promoted_cursor_recovers_one_object_stride_and_ordered_access_paths() {
         vec![(40, 4, AccessRole::Write), (44, 4, AccessRole::Write)]
     );
     assert!(model.has_conflict_free_extent(&reg("local_8")));
+}
+
+#[test]
+fn opaque_promoted_cursor_recovers_object_by_identity() {
+    let object_name = "record_cursor".to_string();
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
+    identities.attach_promoted_stack_objects([&object_name]);
+
+    let model = infer_from_ast_with_identities(
+        &function(object_cursor_body(&object_name, 64)),
+        Some(&identities),
+    );
+    let object = model
+        .object_for_base(&reg(&object_name))
+        .expect("cursor object");
+
+    assert_eq!(object.extent, Some(64));
+    assert_eq!(object.stride, Some(64));
+    assert!(object.conflicts.is_empty());
+    assert_eq!(object.accesses.len(), 2);
+}
+
+#[test]
+fn unowned_local_spelling_is_observed_as_a_pointer_store() {
+    let local = "local_looks_promoted";
+    let identities = crate::ir::value_number::ValueIdentities::default();
+    let body = vec![Stmt::Store {
+        addr: Expr::Reg(reg(local)),
+        src: Expr::Addr(0x4000),
+        size: 8,
+    }];
+
+    let model = infer_from_ast_with_identities(&function(body), Some(&identities));
+    let object = model
+        .object_for_base(&reg(local))
+        .expect("pointer store object");
+
+    assert_eq!(object.accesses.len(), 1);
+    assert_eq!(object.accesses[0].offset, 0);
+    assert_eq!(object.accesses[0].role, AccessRole::Write);
 }
 
 #[test]
