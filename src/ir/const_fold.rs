@@ -1093,11 +1093,11 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
             // object from `base`, so carrying the base's name forward would be
             // the same lie the masked-address case below refuses to tell; the
             // folded VA is re-resolved against the symbol table instead.
-            let as_base = |e: &Expr| match e {
+            let as_base = |e: &Expr| match e.semantic() {
                 Expr::Addr(base) | Expr::Named { va: base, .. } => Some(*base),
                 _ => None,
             };
-            let addr_and_offset = match (lhs.as_ref(), rhs.as_ref()) {
+            let addr_and_offset = match (lhs.semantic(), rhs.semantic()) {
                 (base, Expr::Const(off)) if as_base(base).is_some() => {
                     as_base(base).map(|base| (base, *off))
                 }
@@ -1114,7 +1114,19 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
                 } else {
                     base.wrapping_sub(off as u64)
                 };
-                rewrite(e, Expr::Addr(folded), changed);
+                let origins = lhs
+                    .origins()
+                    .into_iter()
+                    .chain(rhs.origins())
+                    .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+                        owners.union(next)
+                    });
+                rewrite(
+                    e,
+                    Expr::Addr(folded)
+                        .with_optional_origins((!origins.is_empty()).then_some(origins)),
+                    changed,
+                );
                 return;
             }
         }
@@ -2154,6 +2166,32 @@ mod tests {
             panic!("expected assignment");
         };
         assert_eq!(*src, Expr::Addr(0x1f2a8));
+    }
+
+    #[test]
+    fn attributed_address_reconstruction_unions_base_and_offset_origins() {
+        let add_owner = crate::ir::ast::OriginSet::one(0x1060);
+        let page_owner = crate::ir::ast::OriginSet::one(0x1064);
+        let offset_owner = crate::ir::ast::OriginSet::one(0x1068);
+        let mut f = one_stmt(
+            bin(
+                BinOp::Add,
+                Expr::Addr(0x1f000).with_origins(page_owner.clone()),
+                Expr::Const(0x2a8).with_origins(offset_owner.clone()),
+            )
+            .with_origins(add_owner.clone()),
+        );
+
+        fold_constants(&mut f);
+
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!("expected assignment")
+        };
+        assert_eq!(src.semantic(), &Expr::Addr(0x1f2a8));
+        assert_eq!(
+            src.origins(),
+            Some(&add_owner.union(&page_owner).union(&offset_owner))
+        );
     }
 
     /// A NAMED base folds too, and loses the name.
