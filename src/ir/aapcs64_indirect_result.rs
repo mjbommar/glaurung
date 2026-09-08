@@ -85,7 +85,7 @@ fn storage_key(register: &VReg, identities: Option<&ValueIdentities>) -> Option<
         Some(identities) => {
             let candidates = identities.candidates(register)?;
             let mut bases = candidates.iter().map(|identity| match &identity.base {
-                VReg::Phys(name) => Some(crate::ir::abi::ssa_base(name)),
+                VReg::Phys(name) => Some(name.as_str()),
                 _ => None,
             });
             let first = bases.next()??.to_string();
@@ -600,6 +600,13 @@ mod tests {
                 version: 3,
             },
         );
+        identities.record(
+            VReg::phys("malformed_identity_base"),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("x8#not_canonical"),
+                version: 3,
+            },
+        );
 
         let hinted = |dst: &str| Function {
             name: "caller".to_string(),
@@ -621,6 +628,12 @@ mod tests {
         assert_eq!((exact[0].base.as_str(), exact[0].disp), ("sp", 0));
         assert!(indirect_result_buffer_hints_with_identities(
             &hinted("x8#looks_like_result_storage"),
+            CallConv::Aarch64,
+            Some(&identities),
+        )
+        .is_empty());
+        assert!(indirect_result_buffer_hints_with_identities(
+            &hinted("malformed_identity_base"),
             CallConv::Aarch64,
             Some(&identities),
         )
@@ -653,6 +666,15 @@ mod tests {
         assert_eq!(
             bind_indirect_result_buffers_with_identities(
                 &mut misleading,
+                CallConv::Aarch64,
+                Some(&identities),
+            ),
+            0
+        );
+        let mut malformed = promoted("malformed_identity_base");
+        assert_eq!(
+            bind_indirect_result_buffers_with_identities(
+                &mut malformed,
                 CallConv::Aarch64,
                 Some(&identities),
             ),
