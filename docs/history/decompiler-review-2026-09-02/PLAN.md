@@ -1616,7 +1616,10 @@ provenance through lowering.
   after each consumer has a typed identity replacement.
   `f05c9a5d` removes `#version` parsing from production float-role projection;
   `af65c260` removes it from optimized DWARF register-local recovery.
-  Compatibility and other product consumers remain. The latter migration also
+  Commit `633df9f7` removes the `varN` fallback from loop-entry coalescing when
+  identity authority is installed: a missing or ambiguous identity now refuses,
+  while spelling fallback remains only for compatibility callers with no
+  sidecar. Compatibility and other product consumers remain. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
   merge hid the unresolved SysV `al` variadic live-in. That cell is now an
   honest strict xfail rather than a semantic identity exception.

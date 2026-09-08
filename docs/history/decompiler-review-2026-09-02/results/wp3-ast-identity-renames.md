@@ -23,6 +23,11 @@ rendering. Both maps now move candidates in the same presentation transaction.
 When multiple old roles acquire one rendered name, their candidates are unioned
 and `exact` deliberately refuses the ambiguous result.
 
+Commit `633df9f7` also closes the loop-entry coalescer's remaining semantic
+`varN` fallback. Once identity authority is installed, an exact identity is
+required; a missing or ambiguous record refuses the rewrite. The legacy spelling
+heuristic remains only for compatibility callers that supply no sidecar.
+
 The exact rename assertions were observed red before the pass returned a map
 and before `ValueIdentities::apply_renames` was available to AST passes. Focused
 validation after implementation:
@@ -51,6 +56,15 @@ presentation_renames_move_identity_candidates_to_the_rendered_name
 
 colliding_presentation_renames_preserve_explicit_identity_ambiguity
 1 passed; 4,420 filtered out
+
+installed_identity_authority_does_not_fall_back_to_var_spelling
+1 passed; 4,421 filtered out
+
+opaque_exact_identities_authorize_loop_entry_coalescing
+1 passed; 4,421 filtered out
+
+ambiguous_opaque_identity_keeps_loop_entry_copy
+1 passed; 4,421 filtered out
 ```
 
 Each case used `cargo test --features python-ext --lib
