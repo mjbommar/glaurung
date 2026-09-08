@@ -972,19 +972,28 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
         }
 
         // Same-operand identities (X op X).
-        if lhs == rhs {
-            match op {
-                BinOp::Xor | BinOp::Sub => {
-                    rewrite(e, Expr::Const(0), changed);
-                    return;
-                }
-                BinOp::And | BinOp::Or => {
-                    // (X & X) == X; replace with X.
-                    let x = std::mem::replace(lhs.as_mut(), Expr::Const(0));
-                    rewrite(e, x, changed);
-                    return;
-                }
-                _ => {}
+        if lhs.semantic() == rhs.semantic() {
+            let origins = lhs
+                .origins()
+                .into_iter()
+                .chain(rhs.origins())
+                .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+                    owners.union(next)
+                });
+            let replacement = match op {
+                BinOp::Xor | BinOp::Sub => Some(Expr::Const(0)),
+                // (X & X) == X; retain both copies' owners on the survivor.
+                BinOp::And | BinOp::Or => Some(lhs.semantic().clone()),
+                _ => None,
+            };
+            if let Some(replacement) = replacement {
+                rewrite(
+                    e,
+                    replacement
+                        .with_optional_origins((!origins.is_empty()).then_some(origins)),
+                    changed,
+                );
+                return;
             }
         }
 
@@ -2265,6 +2274,32 @@ mod tests {
         };
         assert_eq!(src.semantic(), &less);
         assert_eq!(src.origins(), Some(&owner));
+    }
+
+    #[test]
+    fn attributed_same_operand_identity_unions_both_owners() {
+        let outer_owner = crate::ir::ast::OriginSet::one(0x1020);
+        let lhs_owner = crate::ir::ast::OriginSet::one(0x1024);
+        let rhs_owner = crate::ir::ast::OriginSet::one(0x1028);
+        let mut f = one_stmt(
+            bin(
+                BinOp::Xor,
+                Expr::Reg(reg("rax")).with_origins(lhs_owner.clone()),
+                Expr::Reg(reg("rax")).with_origins(rhs_owner.clone()),
+            )
+            .with_origins(outer_owner.clone()),
+        );
+
+        fold_constants(&mut f);
+
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!("expected assignment")
+        };
+        assert_eq!(src.semantic(), &Expr::Const(0));
+        assert_eq!(
+            src.origins(),
+            Some(&outer_owner.union(&lhs_owner).union(&rhs_owner))
+        );
     }
 
     #[test]
