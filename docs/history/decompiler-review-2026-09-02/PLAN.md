@@ -1467,6 +1467,12 @@ provenance through lowering.
   container survives and receives the copied expression owner. Its end-to-end
   test was observed red and all 59 copy-propagation tests pass; see
   `results/wp3-copy-indirect-store-origins.md`.
+  Commit `0e7aa4bb` then makes the existing typed promoted-value width proof
+  transparent to expression ownership. A width-proven attributed comparison
+  now folds through its one-use local into the return, removing an artificial
+  output temporary while retaining its exact owner; wider and unproved values
+  still decline. Its observed-red test and all 20 adjacent-copy tests pass; see
+  `results/wp3-copy-typed-value-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
