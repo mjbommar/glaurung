@@ -184,7 +184,11 @@ pub(super) fn fold_one_arm_hard_float_call(body: &mut Vec<Stmt>, call_idx: usize
                 if let Some(slot) = arm_hard_float_slot_of(name) {
                     saw_vfp = true;
                     if found[slot].is_none() {
-                        found[slot] = Some((index, src.clone()));
+                        let mut argument = src.clone();
+                        if let Some(origins) = body[index].origins() {
+                            argument.merge_origins(origins);
+                        }
+                        found[slot] = Some((index, argument));
                     }
                     continue;
                 }
@@ -381,6 +385,8 @@ mod tests {
 
     #[test]
     fn attributed_pure_vfp_setup_folds_into_the_call_owner() {
+        let first_owner = OriginSet::one(0x1010);
+        let second_owner = OriginSet::one(0x1014);
         let mut body = vec![
             Stmt::Assign {
                 dst: reg("s0#1"),
@@ -389,7 +395,7 @@ mod tests {
                     width: 4,
                 },
             }
-            .with_origins(OriginSet::one(0x1010)),
+            .with_origins(first_owner.clone()),
             Stmt::Assign {
                 dst: reg("s1#1"),
                 src: Expr::FloatConst {
@@ -397,7 +403,7 @@ mod tests {
                     width: 4,
                 },
             }
-            .with_origins(OriginSet::one(0x1014)),
+            .with_origins(second_owner.clone()),
             call_to("float_pair").with_origins(OriginSet::one(0x1018)),
         ];
 
@@ -407,19 +413,17 @@ mod tests {
         let Stmt::Call { args, .. } = body[0].semantic() else {
             panic!("folded statement is not a call: {body:#?}");
         };
-        assert_eq!(
-            args,
-            &[
-                Expr::FloatConst {
-                    bits: 1.0f32.to_bits() as u64,
-                    width: 4,
-                },
-                Expr::FloatConst {
-                    bits: 2.0f32.to_bits() as u64,
-                    width: 4,
-                },
-            ]
-        );
+        assert_eq!(args.len(), 2);
+        assert!(matches!(
+            args[0].semantic(),
+            Expr::FloatConst { bits, width: 4 } if *bits == 1.0f32.to_bits() as u64
+        ));
+        assert!(matches!(
+            args[1].semantic(),
+            Expr::FloatConst { bits, width: 4 } if *bits == 2.0f32.to_bits() as u64
+        ));
+        assert_eq!(args[0].origins(), Some(&first_owner));
+        assert_eq!(args[1].origins(), Some(&second_owner));
         assert_eq!(
             body[0].origins().expect("folded call owner").addresses(),
             &[0x1010, 0x1014, 0x1018]
