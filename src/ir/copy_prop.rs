@@ -61,7 +61,9 @@ pub use adjacent::{
     propagate_adjacent_promoted_values, propagate_adjacent_typed_promoted_values,
     propagate_adjacent_typed_promoted_values_with_identities,
 };
-pub use switch_entry::propagate_switch_entry_copies;
+pub use switch_entry::{
+    propagate_switch_entry_copies, propagate_switch_entry_copies_with_identities,
+};
 
 use alias::{invalidate_loads, invalidate_loads_for_store, is_scratch_reg};
 use dead::{dead_store_runs, eliminate_dead_copies};

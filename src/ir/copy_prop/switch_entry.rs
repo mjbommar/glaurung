@@ -30,15 +30,33 @@ use super::subst::{subst, subst_store_addr};
 /// or through a loop: a source that looks constant at loop entry may be updated
 /// by the body and therefore is not invariant on later iterations.
 pub fn propagate_switch_entry_copies(f: &mut Function) {
-    if propagate_switch_entries_in_body(&mut f.body) {
-        while eliminate_dead_copies(&mut f.body, None) {}
+    propagate_switch_entry_copies_impl(f, None);
+}
+
+/// Identity-aware production form of [`propagate_switch_entry_copies`].
+pub fn propagate_switch_entry_copies_with_identities(
+    f: &mut Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    propagate_switch_entry_copies_impl(f, Some(identities));
+}
+
+fn propagate_switch_entry_copies_impl(
+    f: &mut Function,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
+    if propagate_switch_entries_in_body(&mut f.body, identities) {
+        while eliminate_dead_copies(&mut f.body, identities) {}
     }
 }
 
 /// Find switches in `body` and seed only their arms with aliases established by
 /// the immediately dominating straight-line prefix. Other control flow clears
 /// the environment; nested bodies are searched independently.
-fn propagate_switch_entries_in_body(body: &mut [Stmt]) -> bool {
+fn propagate_switch_entries_in_body(
+    body: &mut [Stmt],
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     let mut copies = Copies::new();
     let mut changed = false;
     for statement in body {
@@ -60,10 +78,10 @@ fn propagate_switch_entries_in_body(body: &mut [Stmt]) -> bool {
                 changed |= !copies.is_empty();
                 subst(discriminant, &copies);
                 for (_, case_body) in cases {
-                    propagate_switch_arm(case_body, &copies);
+                    propagate_switch_arm(case_body, &copies, identities);
                 }
                 if let Some(default_body) = default {
-                    propagate_switch_arm(default_body, &copies);
+                    propagate_switch_arm(default_body, &copies, identities);
                 }
                 copies.clear();
             }
@@ -72,14 +90,14 @@ fn propagate_switch_entries_in_body(body: &mut [Stmt]) -> bool {
                 else_body,
                 ..
             } => {
-                changed |= propagate_switch_entries_in_body(then_body);
+                changed |= propagate_switch_entries_in_body(then_body, identities);
                 if let Some(else_body) = else_body {
-                    changed |= propagate_switch_entries_in_body(else_body);
+                    changed |= propagate_switch_entries_in_body(else_body, identities);
                 }
                 copies.clear();
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                changed |= propagate_switch_entries_in_body(body);
+                changed |= propagate_switch_entries_in_body(body, identities);
                 copies.clear();
             }
             Stmt::Comment(_) | Stmt::Nop => {}
@@ -103,7 +121,11 @@ fn propagate_switch_entries_in_body(body: &mut [Stmt]) -> bool {
 /// Apply switch-entry aliases within one arm. Nested branches inherit them,
 /// while every loop is a hard barrier so no entry snapshot is mistaken for a
 /// loop invariant.
-fn propagate_switch_arm(body: &mut [Stmt], incoming: &Copies) {
+fn propagate_switch_arm(
+    body: &mut [Stmt],
+    incoming: &Copies,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     let mut copies = incoming.clone();
     for statement in body {
         match statement.semantic_mut() {
@@ -116,7 +138,7 @@ fn propagate_switch_arm(body: &mut [Stmt], incoming: &Copies) {
                 }
             }
             Stmt::Store { addr, src, .. } => {
-                subst_store_addr(addr, &copies, None);
+                subst_store_addr(addr, &copies, identities);
                 subst(src, &copies);
                 copies.clear();
             }
@@ -144,9 +166,9 @@ fn propagate_switch_arm(body: &mut [Stmt], incoming: &Copies) {
             } => {
                 subst(cond, &copies);
                 let incoming = copies.clone();
-                propagate_switch_arm(then_body, &incoming);
+                propagate_switch_arm(then_body, &incoming, identities);
                 if let Some(else_body) = else_body {
-                    propagate_switch_arm(else_body, &incoming);
+                    propagate_switch_arm(else_body, &incoming, identities);
                 }
                 copies.clear();
             }
@@ -158,15 +180,15 @@ fn propagate_switch_arm(body: &mut [Stmt], incoming: &Copies) {
                 subst(discriminant, &copies);
                 let incoming = copies.clone();
                 for (_, case_body) in cases {
-                    propagate_switch_arm(case_body, &incoming);
+                    propagate_switch_arm(case_body, &incoming, identities);
                 }
                 if let Some(default_body) = default {
-                    propagate_switch_arm(default_body, &incoming);
+                    propagate_switch_arm(default_body, &incoming, identities);
                 }
                 copies.clear();
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                let _ = propagate_switch_entries_in_body(body);
+                let _ = propagate_switch_entries_in_body(body, identities);
                 copies.clear();
             }
             Stmt::IndirectGoto { target } => {
@@ -294,6 +316,48 @@ mod tests {
         propagate_switch_entry_copies(&mut f);
 
         assert_eq!(f, before, "a loop entry copy is not a loop invariant");
+    }
+
+    #[test]
+    fn identity_aware_switch_store_preserves_opaque_stack_lvalue_boundary() {
+        let object_name = "frame_object".to_string();
+        let scratch = reg("var0");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object_name]);
+        let mut function = Function {
+            name: "dispatch_store".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: scratch.clone(),
+                    src: Expr::Reg(reg(&object_name)),
+                },
+                Stmt::Switch {
+                    discriminant: Expr::Reg(reg("arg0")),
+                    cases: vec![(
+                        Some(0),
+                        vec![Stmt::Store {
+                            addr: Expr::Reg(scratch.clone()),
+                            src: Expr::Const(7),
+                            size: 4,
+                        }],
+                    )],
+                    default: None,
+                },
+            ],
+        };
+
+        propagate_switch_entry_copies_with_identities(&mut function, &identities);
+
+        assert!(matches!(
+            function.body.as_slice(),
+            [Stmt::Assign { dst, .. }, Stmt::Switch { cases, .. }]
+                if dst == &scratch
+                    && matches!(
+                        cases[0].1.as_slice(),
+                        [Stmt::Store { addr: Expr::Reg(address), .. }] if address == &scratch
+                    )
+        ));
     }
 
     #[test]

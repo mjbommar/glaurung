@@ -478,7 +478,12 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
     // directly. Carry only those aliases into the switch arms. A general late
     // copy-propagation rerun is unsound here: loops have already been recovered,
     // and a pre-loop snapshot may depend on a value changed by the loop body.
-    crate::ir::copy_prop::propagate_switch_entry_copies(&mut owned);
+    match identities {
+        Some(identities) => crate::ir::copy_prop::propagate_switch_entry_copies_with_identities(
+            &mut owned, identities,
+        ),
+        None => crate::ir::copy_prop::propagate_switch_entry_copies(&mut owned),
+    }
     match identities {
         Some(identities) => {
             fold_exhaustive_if_returns_with_identities(&mut owned, identities);
