@@ -1793,6 +1793,23 @@ pub(super) fn register_argument_slot(
     }
 }
 
+/// Whether every exact candidate for `register` is ABI result storage.
+pub(super) fn register_is_return_storage(
+    arch: CallConv,
+    register: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    match identities {
+        Some(identities) => identities.candidates(register).is_some_and(|candidates| {
+            !candidates.is_empty()
+                && candidates.iter().all(|identity| {
+                    matches!(&identity.base, VReg::Phys(name) if crate::ir::abi::is_return_register(arch, name))
+                })
+        }),
+        None => matches!(register, VReg::Phys(name) if crate::ir::abi::is_return_register(arch, name)),
+    }
+}
+
 /// A captured argument slot that must keep its defining statement: the value is
 /// referenced by name at the call instead of being spliced into it.
 const KEEP_ARG_SETUP: usize = usize::MAX;
@@ -2774,6 +2791,87 @@ mod tests {
             "the result needs its own value identity"
         );
         assert_eq!(consumer_first, Some(Expr::Reg(result)));
+    }
+
+    #[test]
+    fn preceding_call_result_uses_exact_identity_not_display_spelling() {
+        let caller = |result: &str| Function {
+            name: "caller".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "producer".into(),
+                    },
+                    args: Vec::new(),
+                    dst: Some(reg(result)),
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: reg("rdi"),
+                    src: Expr::Reg(reg(result)),
+                },
+                call_to("consumer"),
+            ],
+        };
+        let run = |mut function: Function,
+                   identities: &crate::ir::value_number::ValueIdentities| {
+            reconstruct_args_with_layouts_prototypes_strings_and_identities(
+                &mut function,
+                CallConv::SysVAmd64,
+                &mut Default::default(),
+                &Default::default(),
+                &Default::default(),
+                None,
+                &Default::default(),
+                identities,
+            );
+            function
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            reg("opaque_result"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 1,
+            },
+        );
+        identities.record(
+            reg("rax#looks_like_result"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi"),
+                version: 1,
+            },
+        );
+        identities.record(
+            reg("rdi"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi"),
+                version: 2,
+            },
+        );
+
+        let exact = run(caller("opaque_result"), &identities);
+        assert!(
+            exact.body.iter().any(|statement| matches!(
+                statement.semantic(),
+                Stmt::Call { target: Expr::Named { name, .. }, args, .. }
+                    if name == "consumer" && args == &[Expr::Reg(reg("opaque_result"))]
+            )),
+            "exact result was not preserved: {exact:#?}"
+        );
+
+        let misleading = run(caller("rax#looks_like_result"), &identities);
+        assert!(misleading.body.iter().any(|statement| matches!(
+            statement.semantic(),
+            Stmt::Call { target: Expr::Named { name, .. }, args, .. }
+                if name == "consumer" && args == &[Expr::Reg(reg("rax#looks_like_result"))]
+        )));
+        assert!(matches!(
+            misleading.body.first().map(Stmt::semantic),
+            Some(Stmt::Call { dst: Some(result), .. }) if result == &reg("rax#looks_like_result")
+        ));
     }
 
     #[test]

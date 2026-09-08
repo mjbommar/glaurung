@@ -33,10 +33,10 @@ use super::{
     mark_arg_writes_in_stmt_with_identities, outgoing_aapcs_stack_area_with_identities,
     outgoing_stack_cleanup_with_identities, outgoing_sysv_stack_area,
     outgoing_sysv_stack_push_with_identities, reads_reg_in_expr, register_argument_slot,
-    register_is_storage, resolve_captured_definition, resolve_captured_definition_in, return_reg,
-    ssa_base, stack_pointer_sub_width_with_identities, substitute_exact_reg,
-    table_call_may_use_layout, versioned_operand_is_reassigned, CallConv, CalleeLayouts,
-    EnclosingSlots, KEEP_ARG_SETUP,
+    register_is_return_storage, register_is_storage, resolve_captured_definition,
+    resolve_captured_definition_in, return_reg, ssa_base, stack_pointer_sub_width_with_identities,
+    substitute_exact_reg, table_call_may_use_layout, versioned_operand_is_reassigned, CallConv,
+    CalleeLayouts, EnclosingSlots, KEEP_ARG_SETUP,
 };
 
 pub(super) fn fold_one_call(
@@ -565,9 +565,8 @@ pub(super) fn fold_one_call(
             // suffix, which is what makes the versioned spelling recognisable.
             let return_register = match body[i].semantic() {
                 Stmt::Call {
-                    dst: Some(VReg::Phys(name)),
-                    ..
-                } if crate::ir::abi::is_return_register(arch, name) => VReg::phys(name),
+                    dst: Some(result), ..
+                } if register_is_return_storage(arch, result, identities) => result.clone(),
                 _ => VReg::phys(return_reg(arch)),
             };
             // ABI arguments form a contiguous prefix. If the current call has
