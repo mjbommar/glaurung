@@ -501,6 +501,21 @@ commit. A fresh debug extension passes `tools/build_guard.py`, and a real
 Clang O0 executable built from `link_configuration_shapes.c` renders `main`
 without an invented return-slot local. No broad suite or corpus ran.
 
+## Promoted float-store identities
+
+Commit `84099fbb` extends stack-promotion ownership through presentation aliases
+and into the float-copy type-map fixed point. Two exact adversarial tests, one
+alias-projection test, and all 22 type-map tests pass; the census is 5,130
+declared Rust tests with zero outside every gate. A parent/tip comparison of the
+Clang O0 `accumulate_wide` rendering is byte-identical. Its execution cell is
+already red at the parent, so this increment neither claims nor hides that
+existing float-output defect.
+
+The periodic four-cell Hello World compile canary (amd64/arm64, Clang O0/O2)
+passes syntax compilation. The amd64 O2 executable matches output and status
+with controlled `argv[0]`; arm64 O2 still omits the second variadic `printf`
+value and remains explicit WP6/WP9 debt. No broad suite or corpus ran.
+
 ## Ground rules
 
 Verified before any claim of done: `cargo test --features python-ext`,

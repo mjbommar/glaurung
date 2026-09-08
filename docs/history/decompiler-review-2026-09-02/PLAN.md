@@ -2008,6 +2008,15 @@ provenance through lowering.
   Clang O0 executable `main` pass after a fresh extension rebuild. No broad
   suite or corpus ran. See
   `results/wp3-promoted-stack-object-identities.md`.
+  Commit `84099fbb` carries the same producer-owned stack-object set through
+  presentation aliases and uses it for the promoted-store branch of float-copy
+  type refinement. Opaque owned objects receive their proven float class;
+  coincidentally named unowned `local_` values do not. The exact positive and
+  refusal tests, all 22 owning type-map tests, and an exact parent/tip rendering
+  comparison pass. The selected Clang O0 `accumulate_wide` execution cell is
+  already red at the parent and renders byte-identically at the tip, so it is
+  recorded as baseline debt rather than attributed to this migration. See
+  `results/wp3-promoted-float-store-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
