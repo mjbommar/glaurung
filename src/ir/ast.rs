@@ -4577,11 +4577,16 @@ function f @ 0x1000 {
             name: "return_pointer".into(),
             entry_va: 0x1000,
             body: vec![Stmt::Return {
-                value: Some(Expr::Cast {
-                    signed: true,
-                    width: 8,
-                    expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
-                }),
+                value: Some(
+                    Expr::Cast {
+                        signed: true,
+                        width: 8,
+                        expr: Box::new(
+                            Expr::Reg(VReg::phys("arg0")).with_origins(OriginSet::one(0x1000)),
+                        ),
+                    }
+                    .with_origins(OriginSet::one(0x1004)),
+                ),
             }],
         };
         let mut types = TypeMap::default();

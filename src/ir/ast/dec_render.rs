@@ -2663,10 +2663,10 @@ fn write_representation_value_dec(destination_type: &str, src: &Expr, out: &mut 
     // explicit pointer-to-pointer cast when the source and destination pointee
     // types differ; only the integer round trip is redundant.
     if destination_is_pointer {
-        if let Expr::Cast { width, expr, .. } = src {
+        if let Expr::Cast { width, expr, .. } = src.semantic() {
             let pointer_width = DEC_POINTER_WIDTH.with(std::cell::Cell::get);
             if *width == pointer_width {
-                if let Expr::Reg(reg @ VReg::Phys(_)) = expr.as_ref() {
+                if let Expr::Reg(reg @ VReg::Phys(_)) = expr.semantic() {
                     let source_type = declared_reg_ctype(reg);
                     if source_type.ends_with('*') {
                         if source_type != destination_type
@@ -2685,7 +2685,7 @@ fn write_representation_value_dec(destination_type: &str, src: &Expr, out: &mut 
 
     let source_is_pointer = expression_has_pointer_representation(src);
     if destination_is_pointer && source_is_pointer {
-        if let Expr::Reg(reg @ VReg::Phys(_)) = src {
+        if let Expr::Reg(reg @ VReg::Phys(_)) = src.semantic() {
             let source_type = declared_reg_ctype(reg);
             // Pointer facts and emitted declarations intentionally have
             // different authorities. A recovered call result can retain its
@@ -2707,17 +2707,17 @@ fn write_representation_value_dec(destination_type: &str, src: &Expr, out: &mut 
                 return;
             }
         }
-        match src {
+        match src.semantic() {
             // Register rvalues are normally rendered as machine words so byte
             // arithmetic remains valid.  At a pointer boundary, use the
             // declared pointer lvalue directly when no arithmetic is present.
             Expr::Reg(reg @ VReg::Phys(_)) => write_reg_lvalue_dec(reg, out),
             Expr::Cast { expr, .. }
-                if matches!(expr.as_ref(), Expr::Reg(VReg::Phys(name))
+                if matches!(expr.semantic(), Expr::Reg(VReg::Phys(name))
                     if dec_ptr_arg_type(name).is_some()
                         || dec_struct_ptr_type(name).is_some()) =>
             {
-                if let Expr::Reg(reg) = expr.as_ref() {
+                if let Expr::Reg(reg) = expr.semantic() {
                     write_reg_lvalue_dec(reg, out);
                 } else {
                     write_expr_dec(src, out);
@@ -2760,7 +2760,7 @@ fn write_representation_value_dec(destination_type: &str, src: &Expr, out: &mut 
     }
 
     if source_is_pointer {
-        if let Expr::Reg(reg @ VReg::Phys(_)) = src {
+        if let Expr::Reg(reg @ VReg::Phys(_)) = src.semantic() {
             let _ = write!(out, "({destination_type})");
             write_reg_lvalue_dec(reg, out);
             return;
