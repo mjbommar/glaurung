@@ -1725,8 +1725,14 @@ provenance through lowering.
 
 ### Migration targets
 
-- [ ] Move copy propagation from `src/ir/copy_prop/` to authoritative SSA
-  consumption before AST lowering.
+- [~] Move copy propagation from `src/ir/copy_prop/` to authoritative SSA
+  consumption before AST lowering. Commit `f273123e` closes the first concrete
+  wiring gap: the production AST preparation fixpoint now passes its existing
+  `ValueIdentities` sidecar into copy propagation instead of silently selecting
+  the spelling-based compatibility entry point. The observed-red preparation
+  contract, all four fixpoint tests, and all 34 copy-propagation tests pass.
+  Moving the transformation before AST lowering remains open; see
+  `results/wp3-copy-fixpoint-identities.md`.
 - [ ] Move constant folding, dead-store elimination, and DCE in bounded
   increments, one pass at a time.
   Commit `079e26d5` implements the next constant-fold prerequisite: value
