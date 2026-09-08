@@ -6271,11 +6271,17 @@ function f @ 0x1000 {
                         lhs: Box::new(Expr::Cast {
                             signed: true,
                             width: 4,
-                            expr: Box::new(Expr::Cast {
-                                signed: true,
-                                width: 1,
-                                expr: Box::new(Expr::Reg(byte.clone())),
-                            }),
+                            expr: Box::new(
+                                Expr::Cast {
+                                    signed: true,
+                                    width: 1,
+                                    expr: Box::new(
+                                        Expr::Reg(byte.clone())
+                                            .with_origins(OriginSet::one(0x1004)),
+                                    ),
+                                }
+                                .with_origins(OriginSet::one(0x1008)),
+                            ),
                         }),
                         rhs: Box::new(Expr::Const(97)),
                     }),

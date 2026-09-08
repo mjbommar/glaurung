@@ -1403,22 +1403,22 @@ fn redundant_declared_integer_cast(expr: &Expr) -> Option<&VReg> {
         signed,
         width,
         expr: inner,
-    } = expr
+    } = expr.semantic()
     else {
         return None;
     };
-    if let Expr::Reg(reg @ VReg::Phys(name)) = inner.as_ref() {
-        return (dec_int_type(name) == Some((*signed, *width))).then_some(reg);
+    if let Expr::Reg(reg @ VReg::Phys(_)) = inner.semantic() {
+        return (declared_reg_ctype(reg) == int_ctype(*signed, *width)).then_some(reg);
     }
     let Expr::Cast {
         signed: inner_signed,
         width: inner_width,
         expr: inner,
-    } = inner.as_ref()
+    } = inner.semantic()
     else {
         return None;
     };
-    let Expr::Reg(reg @ VReg::Phys(name)) = inner.as_ref() else {
+    let Expr::Reg(reg @ VReg::Phys(_)) = inner.semantic() else {
         return None;
     };
     // C's integer promotions convert every 1/2-byte integer to signed int on
@@ -1427,7 +1427,7 @@ fn redundant_declared_integer_cast(expr: &Expr) -> Option<&VReg> {
     (*signed
         && *width == 4
         && *inner_width < 4
-        && dec_int_type(name) == Some((*inner_signed, *inner_width)))
+        && declared_reg_ctype(reg) == int_ctype(*inner_signed, *inner_width))
     .then_some(reg)
 }
 
