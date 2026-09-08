@@ -191,7 +191,12 @@ fn settle_copies_and_constants_with_identities(
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> FixpointReport {
     run_bounded_fixpoint(4, || {
-        let copies_changed = crate::ir::copy_prop::propagate_copies(owned);
+        let copies_changed = match identities {
+            Some(identities) => {
+                crate::ir::copy_prop::propagate_copies_with_identities(owned, identities)
+            }
+            None => crate::ir::copy_prop::propagate_copies(owned),
+        };
         let constants_changed = match identities {
             Some(identities) => {
                 crate::ir::const_fold::fold_constants_with_identities(owned, identities)
@@ -561,9 +566,12 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
 #[cfg(test)]
 mod fixpoint_tests {
     use super::{
-        drop_machine_frame_comments, run_bounded_fixpoint, FixpointReport, FixpointTermination,
+        drop_machine_frame_comments, run_bounded_fixpoint,
+        settle_copies_and_constants_with_identities, FixpointReport, FixpointTermination,
     };
-    use crate::ir::ast::{OriginSet, Stmt};
+    use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
+    use crate::ir::types::VReg;
+    use crate::ir::value_number::ValueIdentities;
 
     #[test]
     fn bounded_fixpoint_records_quiescent_termination_and_firings() {
@@ -622,5 +630,34 @@ mod fixpoint_tests {
         assert!(matches!(nested[0].semantic(), Stmt::Nop));
         assert_eq!(nested[0].origins(), Some(&nested_owner));
         assert!(matches!(body[2].semantic(), Stmt::Comment(_)));
+    }
+
+    #[test]
+    fn preparation_fixpoint_uses_promoted_storage_identity() {
+        let object = "opaque-frame-object".to_string();
+        let mut identities = ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object]);
+        let mut function = Function {
+            name: "owned_storage".to_string(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys(&object),
+                    src: Expr::Const(7),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        settle_copies_and_constants_with_identities(&mut function, Some(&identities));
+
+        assert_eq!(function.body.len(), 2);
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Assign {
+                dst: VReg::Phys(destination),
+                src: Expr::Const(7),
+            } if destination == &object
+        ));
     }
 }
