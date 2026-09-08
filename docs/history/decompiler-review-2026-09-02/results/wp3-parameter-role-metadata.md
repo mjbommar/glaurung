@@ -353,3 +353,31 @@ cargo test --features python-ext --lib ir::ast::return_folds::tests -- --nocaptu
 
 Only these 14 directly relevant executions ran. No broad Rust/Python suite,
 fixture matrix, DecBench, or Joern lane ran.
+
+## Typed pre-render verification
+
+Commit `aab2921d` threads result-role authority into the final verifier. Its
+structured walk, goto-aware CFG builder, and whole-function definition census
+share one explicit decision: a call without a destination implicitly defines
+`ret` only when the pipeline identity sidecar owns that result role. Explicit
+call destinations remain definitions. The no-sidecar verifier retains its
+legacy behavior for compatibility and health-only callers.
+
+Focused evidence:
+
+```text
+cargo test --features python-ext --lib \
+  production_verifier_does_not_let_a_call_define_an_unowned_ret_spelling \
+  -- --nocapture
+1 passed; 4,449 filtered out
+
+cargo test --features python-ext --lib \
+  production_verifier_accepts_a_call_defining_an_owned_ret_role \
+  -- --nocapture
+1 passed; 4,450 filtered out
+
+cargo test --features python-ext --lib ir::verify_defs::tests -- --nocapture
+41 passed; 4,410 filtered out
+```
+
+No broad Rust/Python suite, fixture matrix, DecBench, or Joern lane ran.

@@ -1695,7 +1695,11 @@ provenance through lowering.
   authority through late redundant-return cleanup in both production render
   paths. An assignment to an unowned local named `ret` is retained rather than
   deleted, while a typed result-role assignment still folds and transfers its
-  origins to the surviving return.
+  origins to the surviving return. Commit `aab2921d` carries the authority into
+  the final definition-before-use verifier, including its structured and goto-
+  aware paths. A destination-less call no longer silently defines an unowned
+  `ret` spelling in production, while the pipeline-owned role and explicit call
+  destinations remain valid definitions.
   See
   `results/wp3-parameter-role-metadata.md`. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
