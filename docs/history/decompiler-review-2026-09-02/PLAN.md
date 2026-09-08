@@ -1420,6 +1420,11 @@ provenance through lowering.
   synthesized arm return retains that template's exact expression owner. Its
   observed-red test and all nine return-fold tests pass; see
   `results/wp3-shared-return-expression-origins.md`.
+  Commit `767664db` then makes the basic result-assignment fold recognize an
+  attributed returned register and unions that consumed expression owner with
+  the deleted definition owner on the surviving value. Its strengthened
+  observed-red test and all nine return-fold tests pass; see
+  `results/wp3-folded-return-carrier-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
