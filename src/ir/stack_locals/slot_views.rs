@@ -90,7 +90,7 @@ pub(super) fn compose_little_endian_slots(
         if part_disp != cursor
             || slot.object_size.is_some()
             || slot.bounded_object
-            || crate::ir::ast::parse_arg_index(&slot.name).is_some()
+            || slot.parameter_slot.is_some()
             || slot.declared_size != slot.span_size
             || !matches!(slot.span_size, 1 | 2 | 4 | 8)
         {
@@ -146,5 +146,47 @@ pub(super) fn extract_little_endian_subvalue(parent: String, byte_offset: u8, si
         signed: false,
         width: size,
         expr: Box::new(shifted),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scalar(name: &str) -> SlotVal {
+        SlotVal {
+            name: name.into(),
+            parameter_slot: None,
+            declared_size: 4,
+            span_size: 4,
+            observed_read: true,
+            object_size: None,
+            bounded_object: false,
+            source_type: None,
+            source_name: None,
+            debug_proven: false,
+        }
+    }
+
+    #[test]
+    fn composition_does_not_trust_an_unowned_arg_spelling() {
+        let map = HashMap::from([
+            (
+                SlotKey {
+                    base: "rbp".into(),
+                    disp: -8,
+                },
+                scalar("arg0"),
+            ),
+            (
+                SlotKey {
+                    base: "rbp".into(),
+                    disp: -4,
+                },
+                scalar("local_4"),
+            ),
+        ]);
+
+        assert!(compose_little_endian_slots(&map, "rbp", -8, 8, 8).is_some());
     }
 }

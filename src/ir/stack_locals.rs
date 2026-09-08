@@ -80,6 +80,10 @@ struct SlotKey {
 #[derive(Debug, Clone)]
 struct SlotVal {
     name: String,
+    /// Source-parameter slot proved from this storage coordinate and ABI.
+    /// Kept independently of `name` so later rewrites never recover semantic
+    /// ownership by parsing presentation spelling such as `arg0`.
+    parameter_slot: Option<usize>,
     declared_size: u8,
     span_size: u8,
     /// A read proves that this slot is independently live, so it bounds an
@@ -531,6 +535,7 @@ pub fn promote_stack_locals_with_facts(
             })
             .or_insert(SlotVal {
                 name,
+                parameter_slot: parameter_slot_for_coordinate(&hint_base, hint_disp, ctx),
                 declared_size: scalar_size.unwrap_or(1),
                 span_size: scalar_size.unwrap_or(1),
                 observed_read: false,
@@ -731,6 +736,50 @@ fn body_falls_through(body: &[Stmt]) -> bool {
     }
 }
 
+fn parameter_slot_for_coordinate(base: &str, disp: i64, ctx: StackContext) -> Option<usize> {
+    if base == "entry_sp" {
+        let (register_arguments, stride) = match ctx.cc {
+            Some(CallConv::Arm | CallConv::ArmHardFloat) => (4usize, 4i64),
+            Some(CallConv::Aarch64) => (8usize, 8i64),
+            _ => return None,
+        };
+        if disp >= 0 && disp % stride == 0 {
+            let candidate = register_arguments + usize::try_from(disp / stride).ok()?;
+            return ctx
+                .parameter_count
+                .is_some_and(|count| candidate < count)
+                .then_some(candidate);
+        }
+        return None;
+    }
+    if is_frame_pointer(base) && disp > 0 {
+        let (register_arguments, first, stride) = ctx.cc.and_then(stack_arg_layout)?;
+        if disp >= first && (disp - first) % stride == 0 {
+            let candidate = register_arguments + usize::try_from((disp - first) / stride).ok()?;
+            return ctx
+                .parameter_count
+                .is_none_or(|count| candidate < count)
+                .then_some(candidate);
+        }
+        return None;
+    }
+    if base == "entry_rsp" {
+        let (register_arguments, first, stride) = match ctx.cc {
+            Some(CallConv::SysVAmd64) => (6usize, 8i64, 8i64),
+            Some(CallConv::Cdecl32) => (0usize, 4i64, 4i64),
+            _ => return None,
+        };
+        if disp >= first && (disp - first) % stride == 0 {
+            let candidate = register_arguments + usize::try_from((disp - first) / stride).ok()?;
+            return ctx
+                .parameter_count
+                .is_none_or(|count| candidate < count)
+                .then_some(candidate);
+        }
+    }
+    None
+}
+
 fn alloc_name(base: &str, disp: i64, names: &mut SlotNames, ctx: StackContext) -> String {
     // Both AAPCS variants stack the arguments that do not fit in registers
     // directly at the ENTRY stack pointer. `lr`/`x30` is a register, so unlike
@@ -753,20 +802,8 @@ fn alloc_name(base: &str, disp: i64, names: &mut SlotNames, ctx: StackContext) -
     // `entry_sp+0` has no such anchor, and without the bound an
     // outgoing-argument slot would be renamed into a parameter that does not
     // exist.
-    if base == "entry_sp" {
-        let stacked = match ctx.cc {
-            Some(CallConv::Arm | CallConv::ArmHardFloat) => Some((4usize, 4i64)),
-            Some(CallConv::Aarch64) => Some((8usize, 8i64)),
-            _ => None,
-        };
-        if let Some((register_arguments, stride)) = stacked {
-            if disp >= 0 && disp % stride == 0 {
-                let candidate = register_arguments + (disp / stride) as usize;
-                if ctx.parameter_count.is_some_and(|count| candidate < count) {
-                    return format!("arg{candidate}");
-                }
-            }
-        }
+    if let Some(parameter_slot) = parameter_slot_for_coordinate(base, disp, ctx) {
+        return format!("arg{parameter_slot}");
     }
     if disp == 0 {
         return "stack_top".to_string();
@@ -810,39 +847,12 @@ fn alloc_name(base: &str, disp: i64, names: &mut SlotNames, ctx: StackContext) -
     // verifier reports for `sum_arg7`..`sum_arg10` (`stack_0 is read but never
     // defined`) — and leaves it out of the signature, so the recompiled function
     // reads uninitialised memory instead of its own argument.
-    if is_frame_pointer(base) && disp > 0 {
-        if let Some((reg_args, first, stride)) = ctx.cc.and_then(stack_arg_layout) {
-            if disp >= first && (disp - first) % stride == 0 {
-                let candidate = reg_args + ((disp - first) / stride) as usize;
-                if ctx.parameter_count.is_none_or(|count| candidate < count) {
-                    return format!("arg{candidate}");
-                }
-            }
-        }
-    }
     // A frame-pointer-omitted x86 function addresses incoming stack arguments
     // relative to the architectural entry stack pointer.  The return address
     // occupies the first machine word: SysV AMD64's stacked arguments therefore
     // start at entry_rsp+8 after six register arguments, while cdecl32 starts at
     // entry_esp+4 and has no integer register arguments.  `esp` is normalised to
     // the canonical `entry_rsp` spelling above so both modes share slot identity.
-    if base == "entry_rsp" {
-        match ctx.cc {
-            Some(CallConv::SysVAmd64) if disp >= 8 && (disp - 8) % 8 == 0 => {
-                let candidate = 6 + ((disp - 8) / 8) as usize;
-                if ctx.parameter_count.is_none_or(|count| candidate < count) {
-                    return format!("arg{candidate}");
-                }
-            }
-            Some(CallConv::Cdecl32) if disp >= 4 && (disp - 4) % 4 == 0 => {
-                let candidate = ((disp - 4) / 4) as usize;
-                if ctx.parameter_count.is_none_or(|count| candidate < count) {
-                    return format!("arg{candidate}");
-                }
-            }
-            _ => {}
-        }
-    }
     // Positive offsets from the entry stack pointer are the caller's
     // outgoing-argument / scratch area, and anything whose offset-bearing name
     // was already claimed by another anchor lands here too.
@@ -4418,6 +4428,7 @@ mod tests {
             key.clone(),
             SlotVal {
                 name: "local_a8".into(),
+                parameter_slot: None,
                 declared_size: 1,
                 span_size: 1,
                 observed_read: false,

@@ -8,8 +8,8 @@ use std::collections::{HashMap, HashSet};
 
 use super::{
     alloc_name, body_falls_through, is_arm_frame_pointer, is_stack_pointer_reg, merge_stack_deltas,
-    resolved_memory_address, stack_delta_after_assignment, stack_word_size, SlotKey, SlotNames,
-    SlotVal, StackContext,
+    parameter_slot_for_coordinate, resolved_memory_address, stack_delta_after_assignment,
+    stack_word_size, SlotKey, SlotNames, SlotVal, StackContext,
 };
 use crate::ir::ast::{Expr, Stmt};
 use crate::ir::types::VReg;
@@ -372,6 +372,7 @@ pub(super) fn seed_indexed_stack_objects(
         // because both observe the same indexed start.
         map.entry(key).or_insert_with(|| SlotVal {
             name,
+            parameter_slot: parameter_slot_for_coordinate(base, *start, ctx),
             declared_size: 1,
             span_size: 1,
             observed_read: false,
