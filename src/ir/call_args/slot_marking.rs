@@ -75,9 +75,10 @@ fn argument_slot_of_register(
             };
             let classifications = candidates
                 .iter()
-                .map(|identity| match &identity.base {
-                    VReg::Phys(name) => slot_of(arch, name),
-                    _ => None,
+                .map(|identity| {
+                    identity
+                        .canonical_physical_base()
+                        .and_then(|name| slot_of(arch, name))
                 })
                 .collect::<std::collections::BTreeSet<_>>();
             if classifications.len() != 1 {

@@ -161,17 +161,8 @@ impl EnclosingSlots {
         if let Stmt::Assign { dst, .. } = statement {
             let storage = match identities {
                 Some(identities) => identities.exact(dst).and_then(|identity| {
-                    let VReg::Phys(name) = &identity.base else {
-                        return None;
-                    };
-                    // Identity bases are canonical machine storage, not
-                    // value-numbered display names. Decline malformed sidecar
-                    // evidence instead of feeding it to compatibility slot
-                    // parsers that intentionally strip `#version`.
-                    if name.contains('#') {
-                        return None;
-                    }
-                    Some((name.clone(), identity.version > 0))
+                    let name = identity.canonical_physical_base()?;
+                    Some((name.to_string(), identity.version > 0))
                 }),
                 None => {
                     let VReg::Phys(name) = dst else {

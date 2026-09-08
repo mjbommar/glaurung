@@ -62,10 +62,9 @@ pub fn live_in_arg_slots_llir_with_identities(
                 if require_entry && identity.version != 0 {
                     return None;
                 }
-                match &identity.base {
-                    VReg::Phys(name) => crate::ir::abi::argument_slot_of(cc, name),
-                    _ => None,
-                }
+                identity
+                    .canonical_physical_base()
+                    .and_then(|name| crate::ir::abi::argument_slot_of(cc, name))
             });
             let first = slots.next()??;
             slots.all(|slot| slot == Some(first)).then_some(first)

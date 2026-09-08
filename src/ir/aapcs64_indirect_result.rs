@@ -84,10 +84,9 @@ fn storage_key(register: &VReg, identities: Option<&ValueIdentities>) -> Option<
     match identities {
         Some(identities) => {
             let candidates = identities.candidates(register)?;
-            let mut bases = candidates.iter().map(|identity| match &identity.base {
-                VReg::Phys(name) => Some(name.as_str()),
-                _ => None,
-            });
+            let mut bases = candidates
+                .iter()
+                .map(crate::ir::ssa::SsaValue::canonical_physical_base);
             let first = bases.next()??.to_string();
             bases
                 .all(|base| base == Some(first.as_str()))

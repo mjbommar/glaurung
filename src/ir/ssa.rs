@@ -41,6 +41,21 @@ pub struct SsaValue {
     pub version: u32,
 }
 
+impl SsaValue {
+    /// Canonical physical storage carried by this SSA identity.
+    ///
+    /// ABI lookup helpers also accept value-numbered display spellings. An
+    /// identity consumer must not use that compatibility behavior: a `#` in
+    /// the base means the sidecar is malformed, so semantic classification
+    /// declines instead of silently repairing it.
+    pub(crate) fn canonical_physical_base(&self) -> Option<&str> {
+        let VReg::Phys(name) = &self.base else {
+            return None;
+        };
+        (!name.contains('#')).then_some(name.as_str())
+    }
+}
+
 /// A phi node placed by SSA construction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Phi {
@@ -1019,6 +1034,26 @@ mod tests {
             dst: VReg::phys(reg),
             src: Value::Const(c),
         }
+    }
+
+    #[test]
+    fn ssa_identity_exposes_only_a_canonical_physical_base() {
+        let canonical = SsaValue {
+            base: VReg::phys("rdi"),
+            version: 3,
+        };
+        let malformed = SsaValue {
+            base: VReg::phys("rdi#3"),
+            version: 3,
+        };
+        let temporary = SsaValue {
+            base: VReg::Temp(4),
+            version: 3,
+        };
+
+        assert_eq!(canonical.canonical_physical_base(), Some("rdi"));
+        assert_eq!(malformed.canonical_physical_base(), None);
+        assert_eq!(temporary.canonical_physical_base(), None);
     }
 
     #[test]

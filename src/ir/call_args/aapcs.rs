@@ -189,7 +189,12 @@ fn arm_argument_storage(
             };
             let classes = candidates
                 .iter()
-                .map(|identity| classify(&identity.base))
+                .map(|identity| {
+                    identity
+                        .canonical_physical_base()
+                        .map(|name| classify(&VReg::phys(name)))
+                        .unwrap_or(ArmArgumentStorage::Other)
+                })
                 .collect::<std::collections::BTreeSet<_>>();
             (classes.len() == 1)
                 .then(|| classes.first().copied())

@@ -524,11 +524,9 @@ fn register_is_wide_result_part(
         Some(identities) => identities.candidates(register).is_some_and(|candidates| {
             !candidates.is_empty()
                 && candidates.iter().all(|identity| {
-                    matches!(
-                        &identity.base,
-                        VReg::Phys(name)
-                            if crate::ir::abi::wide_integer_return_part(arch, name) == Some(part)
-                    )
+                    identity.canonical_physical_base().is_some_and(|name| {
+                        crate::ir::abi::wide_integer_return_part(arch, name) == Some(part)
+                    })
                 })
         }),
         None => matches!(

@@ -970,9 +970,7 @@ fn loop_carried_arg_inputs(
         };
         let Some((slot, versioned, initialized)) = (match identities {
             Some(identities) => identities.exact(dst).and_then(|identity| {
-                let VReg::Phys(storage) = &identity.base else {
-                    return None;
-                };
+                let storage = identity.canonical_physical_base()?;
                 let slot = slot_of(arch, storage)?;
                 let initialized = prefix.iter().rev().any(|candidate| {
                     matches!(
@@ -1362,9 +1360,7 @@ fn fold_one_recovered_layout_call_with_live_ins(
             Stmt::Assign { dst, .. } => {
                 let sse_slot = match identities {
                     Some(identities) => identities.exact(dst).and_then(|identity| {
-                        let VReg::Phys(name) = &identity.base else {
-                            return None;
-                        };
+                        let name = identity.canonical_physical_base()?;
                         crate::ir::abi::sse_argument_slot_of(arch, name)
                     }),
                     None => {
@@ -1780,9 +1776,10 @@ pub(super) fn register_argument_slot(
     match identities {
         Some(identities) => {
             let candidates = identities.candidates(register)?;
-            let mut slots = candidates.iter().map(|identity| match &identity.base {
-                VReg::Phys(name) => crate::ir::abi::argument_slot_of(arch, name),
-                _ => None,
+            let mut slots = candidates.iter().map(|identity| {
+                identity
+                    .canonical_physical_base()
+                    .and_then(|name| crate::ir::abi::argument_slot_of(arch, name))
             });
             let slot = slots.next()??;
             slots
@@ -1806,10 +1803,14 @@ pub(super) fn register_is_return_storage(
         Some(identities) => identities.candidates(register).is_some_and(|candidates| {
             !candidates.is_empty()
                 && candidates.iter().all(|identity| {
-                    matches!(&identity.base, VReg::Phys(name) if crate::ir::abi::is_return_register(arch, name))
+                    identity
+                        .canonical_physical_base()
+                        .is_some_and(|name| crate::ir::abi::is_return_register(arch, name))
                 })
         }),
-        None => matches!(register, VReg::Phys(name) if crate::ir::abi::is_return_register(arch, name)),
+        None => {
+            matches!(register, VReg::Phys(name) if crate::ir::abi::is_return_register(arch, name))
+        }
     }
 }
 
@@ -1824,10 +1825,14 @@ pub(super) fn register_is_entry_return_storage(
             !candidates.is_empty()
                 && candidates.iter().all(|identity| {
                     identity.version == 0
-                        && matches!(&identity.base, VReg::Phys(name) if crate::ir::abi::is_return_register(arch, name))
+                        && identity
+                            .canonical_physical_base()
+                            .is_some_and(|name| crate::ir::abi::is_return_register(arch, name))
                 })
         }),
-        None => matches!(register, VReg::Phys(name) if crate::ir::abi::is_return_register(arch, name) && !name.contains('#')),
+        None => {
+            matches!(register, VReg::Phys(name) if crate::ir::abi::is_return_register(arch, name) && !name.contains('#'))
+        }
     }
 }
 
