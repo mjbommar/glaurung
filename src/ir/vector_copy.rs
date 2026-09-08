@@ -144,13 +144,16 @@ fn store_batch_at(body: &[Stmt], start: usize, wide: &VReg) -> Option<Expr> {
 fn scalar_view_bridge_target(statement: &Stmt) -> Option<String> {
     let Stmt::Assign {
         dst: VReg::Phys(dst),
-        src:
-            Expr::Bin {
-                op: crate::ir::types::BinOp::Or,
-                lhs,
-                rhs,
-            },
+        src,
     } = statement.semantic()
+    else {
+        return None;
+    };
+    let Expr::Bin {
+        op: crate::ir::types::BinOp::Or,
+        lhs,
+        rhs,
+    } = src.semantic()
     else {
         return None;
     };
@@ -161,11 +164,11 @@ fn scalar_view_bridge_target(statement: &Stmt) -> Option<String> {
         op: crate::ir::types::BinOp::Shl,
         lhs: hi,
         rhs: shift,
-    } = lhs.as_ref()
+    } = lhs.semantic()
     else {
         return None;
     };
-    if !matches!(shift.as_ref(), Expr::Const(32)) {
+    if !matches!(shift.semantic(), Expr::Const(32)) {
         return None;
     }
     let (Some(hi), Some(lo)) = (
@@ -184,7 +187,7 @@ fn widened_dword_lane(expression: &Expr) -> Option<&VReg> {
         signed: false,
         width: 8,
         expr,
-    } = expression
+    } = expression.semantic()
     else {
         return None;
     };
@@ -192,11 +195,11 @@ fn widened_dword_lane(expression: &Expr) -> Option<&VReg> {
         signed: false,
         width: 4,
         expr,
-    } = expr.as_ref()
+    } = expr.semantic()
     else {
         return None;
     };
-    let Expr::Reg(register) = expr.as_ref() else {
+    let Expr::Reg(register) = expr.semantic() else {
         return None;
     };
     Some(register)
@@ -339,7 +342,11 @@ fn drop_dead_scalar_views(body: &mut Vec<Stmt>, dead: &std::collections::HashSet
         .collect();
     if !removable.is_empty() {
         for &index in &removable {
-            if let Some(origins) = body[index].origins().cloned() {
+            let mut origins = body[index].origins().cloned().unwrap_or_default();
+            if let Stmt::Assign { src, .. } = body[index].semantic() {
+                collect_expression_origins(src, &mut origins);
+            }
+            if !origins.is_empty() {
                 body[index - 4].merge_origins(&origins);
             }
         }
@@ -349,6 +356,56 @@ fn drop_dead_scalar_views(body: &mut Vec<Stmt>, dead: &std::collections::HashSet
             index += 1;
             keep
         });
+    }
+}
+
+fn collect_expression_origins(expression: &Expr, origins: &mut OriginSet) {
+    if let Some(owner) = expression.origins() {
+        origins.merge(owner);
+    }
+    match expression.semantic() {
+        Expr::Origin { .. } => unreachable!("semantic expression cannot be an origin wrapper"),
+        Expr::FunctionTableEntry { index, .. } | Expr::Deref { addr: index, .. } => {
+            collect_expression_origins(index, origins);
+        }
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            collect_expression_origins(lhs, origins);
+            collect_expression_origins(rhs, origins);
+        }
+        Expr::Un { src, .. }
+        | Expr::Cast { expr: src, .. }
+        | Expr::NumericConvert { expr: src, .. } => collect_expression_origins(src, origins),
+        Expr::Call { target, args, .. } => {
+            collect_expression_origins(target, origins);
+            for argument in args {
+                collect_expression_origins(argument, origins);
+            }
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            collect_expression_origins(cond, origins);
+            collect_expression_origins(if_true, origins);
+            collect_expression_origins(if_false, origins);
+        }
+        Expr::WideArithmetic { args, .. } => {
+            for argument in args {
+                collect_expression_origins(argument, origins);
+            }
+        }
+        Expr::Reg(_)
+        | Expr::Const(_)
+        | Expr::FloatConst { .. }
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::StackAddr { .. }
+        | Expr::Lea { .. }
+        | Expr::PdbFieldAddr { .. }
+        | Expr::Unknown(_) => {}
     }
 }
 
@@ -747,7 +804,13 @@ mod tests {
                 .with_origins(OriginSet::one(0x1000 + lane as u64 * 4)),
             );
         }
-        body.push(scalar_view_bridge("xmm0").with_origins(OriginSet::one(0x1010)));
+        let mut bridge = scalar_view_bridge("xmm0");
+        let Stmt::Assign { src, .. } = bridge.semantic_mut() else {
+            unreachable!()
+        };
+        let owned = std::mem::replace(src, Expr::Const(0));
+        *src = owned.with_origins(OriginSet::one(0x1014));
+        body.push(bridge.with_origins(OriginSet::one(0x1010)));
         for lane in 0..4 {
             body.push(
                 Stmt::Store {
@@ -786,7 +849,7 @@ mod tests {
         assert_eq!(
             function.body[0].origins(),
             Some(&OriginSet::from_addresses([
-                0x1000, 0x1004, 0x1008, 0x100c, 0x1010,
+                0x1000, 0x1004, 0x1008, 0x100c, 0x1010, 0x1014,
             ]))
         );
         assert_eq!(
