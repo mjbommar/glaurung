@@ -164,6 +164,13 @@ impl EnclosingSlots {
                     let VReg::Phys(name) = &identity.base else {
                         return None;
                     };
+                    // Identity bases are canonical machine storage, not
+                    // value-numbered display names. Decline malformed sidecar
+                    // evidence instead of feeding it to compatibility slot
+                    // parsers that intentionally strip `#version`.
+                    if name.contains('#') {
+                        return None;
+                    }
                     Some((name.clone(), identity.version > 0))
                 }),
                 None => {
@@ -181,7 +188,7 @@ impl EnclosingSlots {
             // `xmm1` parameter would pass four bytes of unrelated upper-lane
             // residue as a double. Lane writes still block the carrier below;
             // they simply cannot prove its complete value.
-            let complete_storage = !crate::ir::abi::ssa_base(&name).contains("_d");
+            let complete_storage = !name.contains("_d");
             if let Some(slot) = complete_storage
                 .then(|| storage_slot_of(arch, &name))
                 .flatten()

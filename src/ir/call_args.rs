@@ -6442,6 +6442,47 @@ mod tests {
     }
 
     #[test]
+    fn enclosing_reaching_state_does_not_reparse_an_identity_base() {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            reg("opaque_argument"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi"),
+                version: 1,
+            },
+        );
+        identities.record(
+            reg("malformed_identity_base"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi#not_canonical"),
+                version: 1,
+            },
+        );
+        let definition = |dst| Stmt::Assign {
+            dst: reg(dst),
+            src: Expr::Const(7),
+        };
+
+        let mut exact = vec![None; arg_slots(CallConv::SysVAmd64).len()];
+        EnclosingSlots::advance_reaching(
+            &mut exact,
+            &definition("opaque_argument"),
+            CallConv::SysVAmd64,
+            Some(&identities),
+        );
+        assert_eq!(exact[0], Some(Expr::Reg(reg("opaque_argument"))));
+
+        let mut malformed = vec![None; arg_slots(CallConv::SysVAmd64).len()];
+        EnclosingSlots::advance_reaching(
+            &mut malformed,
+            &definition("malformed_identity_base"),
+            CallConv::SysVAmd64,
+            Some(&identities),
+        );
+        assert!(malformed.iter().all(Option::is_none));
+    }
+
+    #[test]
     fn a_result_nobody_reads_is_not_an_assignment() {
         // The ABI clobbers the return register on EVERY call — that belongs in the
         // value model. Printing `ret = puts(..)` claims something else: that the
