@@ -186,7 +186,7 @@ fn safe_to_speculate_before_guard(guard: &Stmt, statement: &Stmt) -> bool {
 }
 
 fn is_total_copy_expression(expr: &Expr) -> bool {
-    match expr {
+    match expr.semantic() {
         Expr::Reg(_) | Expr::Const(_) => true,
         Expr::Cast { expr, .. } => is_total_copy_expression(expr),
         _ => false,
@@ -1095,9 +1095,13 @@ mod tests {
             src: Expr::Cast {
                 signed: true,
                 width: 8,
-                expr: Box::new(Expr::Reg(VReg::phys("rhs"))),
-            },
-        };
+                expr: Box::new(
+                    Expr::Reg(VReg::phys("rhs")).with_origins(OriginSet::one(0x1004)),
+                ),
+            }
+            .with_origins(OriginSet::one(0x1000)),
+        }
+        .with_origins(OriginSet::one(0x1008));
         let cases = vec![
             (
                 Some(0),
