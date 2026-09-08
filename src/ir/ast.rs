@@ -1179,6 +1179,16 @@ pub(crate) fn parse_arg_index(name: &str) -> Option<usize> {
     (index < 1024).then_some(index)
 }
 
+fn parameter_index(
+    name: &str,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<usize> {
+    match identities {
+        Some(identities) => identities.parameter_slot(&VReg::phys(name)),
+        None => parse_arg_index(name),
+    }
+}
+
 fn is_generated_temporary(name: &str) -> bool {
     is_high_variable(name)
         || name.strip_prefix('t').is_some_and(|digits| {
@@ -1229,10 +1239,14 @@ fn sanitize_comment(s: &str) -> String {
 
 /// Record the (sanitised) spelling of a single register operand as either an
 /// argument (updating `max_arg`) or a local.
-fn collect_reg(v: &VReg, ids: &mut DecIdents) {
+fn collect_reg(
+    v: &VReg,
+    ids: &mut DecIdents,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     let spelling = match v {
         VReg::Phys(n) => {
-            if let Some(idx) = parse_arg_index(n) {
+            if let Some(idx) = parameter_index(n, identities) {
                 ids.max_arg = Some(ids.max_arg.map_or(idx, |m| m.max(idx)));
                 return;
             }
@@ -1275,9 +1289,14 @@ fn remove_local(ids: &mut DecIdents, spelling: &str) {
     ids.source_local_order.retain(|local| local != spelling);
 }
 
-fn local_reg_spelling(v: &VReg) -> Option<String> {
+fn local_reg_spelling(
+    v: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<String> {
     match v {
-        VReg::Phys(name) if parse_arg_index(name).is_none() => Some(sanitize_c_ident(name)),
+        VReg::Phys(name) if parameter_index(name, identities).is_none() => {
+            Some(sanitize_c_ident(name))
+        }
         VReg::Phys(_) => None,
         VReg::Temp(index) => Some(format!("t{index}")),
         VReg::Flag(flag) => Some(flag_ident(flag).to_string()),
@@ -1285,14 +1304,18 @@ fn local_reg_spelling(v: &VReg) -> Option<String> {
     }
 }
 
-fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
+fn collect_idents_expr(
+    e: &Expr,
+    ids: &mut DecIdents,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     match e {
-        Expr::Origin { expr, .. } => collect_idents_expr(expr, ids),
-        Expr::Reg(v) => collect_reg(v, ids),
+        Expr::Origin { expr, .. } => collect_idents_expr(expr, ids, identities),
+        Expr::Reg(v) => collect_reg(v, ids, identities),
         Expr::StackAddr { object, size } => {
-            collect_reg(object, ids);
+            collect_reg(object, ids, identities);
             if let VReg::Phys(name) = object {
-                if parse_arg_index(name).is_none() {
+                if parameter_index(name, identities).is_none() {
                     let name = sanitize_c_ident(name);
                     ids.stack_objects
                         .entry(name)
@@ -1319,36 +1342,36 @@ fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
             targets,
             ..
         } => {
-            collect_idents_expr(index, ids);
+            collect_idents_expr(index, ids, identities);
             ids.function_tables
                 .entry(*table_va)
                 .or_insert_with(|| (table_name.clone(), targets.clone()));
         }
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
             if let Some(b) = base {
-                collect_reg(b, ids);
+                collect_reg(b, ids, identities);
             }
             if let Some(i) = index {
-                collect_reg(i, ids);
+                collect_reg(i, ids, identities);
             }
         }
         Expr::Deref { addr, size } => {
             if let Some(address) = direct_global_address(addr) {
                 note_global_address(address, u32::from(*size), ids);
             }
-            collect_idents_expr(addr, ids);
+            collect_idents_expr(addr, ids, identities);
         }
         Expr::Call { target, args, .. } => {
             if !matches!(target.as_ref(), Expr::Named { .. }) {
-                collect_idents_expr(target, ids);
+                collect_idents_expr(target, ids, identities);
             }
             for argument in args {
-                collect_idents_expr(argument, ids);
+                collect_idents_expr(argument, ids, identities);
             }
         }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-            collect_idents_expr(lhs, ids);
-            collect_idents_expr(rhs, ids);
+            collect_idents_expr(lhs, ids, identities);
+            collect_idents_expr(rhs, ids, identities);
         }
         Expr::Select {
             cond,
@@ -1356,34 +1379,38 @@ fn collect_idents_expr(e: &Expr, ids: &mut DecIdents) {
             if_false,
             ..
         } => {
-            collect_idents_expr(cond, ids);
-            collect_idents_expr(if_true, ids);
-            collect_idents_expr(if_false, ids);
+            collect_idents_expr(cond, ids, identities);
+            collect_idents_expr(if_true, ids, identities);
+            collect_idents_expr(if_false, ids, identities);
         }
-        Expr::Un { src, .. } => collect_idents_expr(src, ids),
+        Expr::Un { src, .. } => collect_idents_expr(src, ids, identities),
         Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
-            collect_idents_expr(expr, ids)
+            collect_idents_expr(expr, ids, identities)
         }
         Expr::WideArithmetic { args, .. } => {
             for argument in args {
-                collect_idents_expr(argument, ids);
+                collect_idents_expr(argument, ids, identities);
             }
         }
     }
 }
 
-fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
+fn collect_idents_stmt(
+    s: &Stmt,
+    ids: &mut DecIdents,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     ids.statement_count = ids.statement_count.saturating_add(1);
     match s {
         Stmt::Origin { stmt, .. } => {
             ids.statement_count = ids.statement_count.saturating_sub(1);
-            collect_idents_stmt(stmt, ids);
+            collect_idents_stmt(stmt, ids, identities);
         }
         Stmt::Assign { dst, src } => {
-            collect_reg(dst, ids);
+            collect_reg(dst, ids, identities);
             if matches!(src, Expr::Deref { size: 16, .. }) {
                 let spelling = match dst {
-                    VReg::Phys(name) if parse_arg_index(name).is_none() => {
+                    VReg::Phys(name) if parameter_index(name, identities).is_none() => {
                         Some(sanitize_c_ident(name))
                     }
                     VReg::Temp(index) => Some(format!("t{index}")),
@@ -1395,14 +1422,14 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
                     ids.wide_locals.insert(spelling);
                 }
             }
-            collect_idents_expr(src, ids);
+            collect_idents_expr(src, ids, identities);
         }
         Stmt::Store { addr, src, size } => {
             if let Some(address) = direct_global_address(addr) {
                 note_global_address(address, u32::from(*size), ids);
             }
-            collect_idents_expr(addr, ids);
-            collect_idents_expr(src, ids);
+            collect_idents_expr(addr, ids, identities);
+            collect_idents_expr(src, ids, identities);
         }
         Stmt::Call {
             target,
@@ -1431,16 +1458,16 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
                     ids.calls_stack_check = true;
                 }
             } else {
-                collect_idents_expr(target, ids);
+                collect_idents_expr(target, ids, identities);
             }
             for a in args {
-                collect_idents_expr(a, ids);
+                collect_idents_expr(a, ids, identities);
             }
             // The destination is assigned here, so it needs a declaration.
             if let Some(d) = dst {
-                collect_reg(d, ids);
+                collect_reg(d, ids, identities);
                 if let (Some(spelling), Some(call_spec)) =
-                    (local_reg_spelling(d), call_spec.as_ref())
+                    (local_reg_spelling(d, identities), call_spec.as_ref())
                 {
                     let recovered = call_spec.call_prototype.return_type.clone();
                     ids.call_result_types
@@ -1456,7 +1483,7 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
         }
         Stmt::Return { value } => {
             if let Some(e) = value {
-                collect_idents_expr(e, ids);
+                collect_idents_expr(e, ids, identities);
             }
         }
         Stmt::If {
@@ -1464,20 +1491,20 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
             then_body,
             else_body,
         } => {
-            collect_idents_expr(cond, ids);
+            collect_idents_expr(cond, ids, identities);
             for s in then_body {
-                collect_idents_stmt(s, ids);
+                collect_idents_stmt(s, ids, identities);
             }
             if let Some(eb) = else_body {
                 for s in eb {
-                    collect_idents_stmt(s, ids);
+                    collect_idents_stmt(s, ids, identities);
                 }
             }
         }
         Stmt::While { cond, body } => {
-            collect_idents_expr(cond, ids);
+            collect_idents_expr(cond, ids, identities);
             for s in body {
-                collect_idents_stmt(s, ids);
+                collect_idents_stmt(s, ids, identities);
             }
         }
         Stmt::For {
@@ -1486,33 +1513,33 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
             step,
             body,
         } => {
-            collect_idents_stmt(init, ids);
-            collect_idents_expr(cond, ids);
+            collect_idents_stmt(init, ids, identities);
+            collect_idents_expr(cond, ids, identities);
             for s in body {
-                collect_idents_stmt(s, ids);
+                collect_idents_stmt(s, ids, identities);
             }
-            collect_idents_stmt(step, ids);
+            collect_idents_stmt(step, ids, identities);
         }
         Stmt::DoWhile { body, cond } => {
             for s in body {
-                collect_idents_stmt(s, ids);
+                collect_idents_stmt(s, ids, identities);
             }
-            collect_idents_expr(cond, ids);
+            collect_idents_expr(cond, ids, identities);
         }
         Stmt::Switch {
             discriminant,
             cases,
             default,
         } => {
-            collect_idents_expr(discriminant, ids);
+            collect_idents_expr(discriminant, ids, identities);
             for (_, body) in cases {
                 for s in body {
-                    collect_idents_stmt(s, ids);
+                    collect_idents_stmt(s, ids, identities);
                 }
             }
             if let Some(b) = default {
                 for s in b {
-                    collect_idents_stmt(s, ids);
+                    collect_idents_stmt(s, ids, identities);
                 }
             }
         }
@@ -1525,16 +1552,16 @@ fn collect_idents_stmt(s: &Stmt, ids: &mut DecIdents) {
         }
         Stmt::IndirectGoto { target } => {
             ids.unresolved_transfer_count = ids.unresolved_transfer_count.saturating_add(1);
-            collect_idents_expr(target, ids);
+            collect_idents_expr(target, ids, identities);
         }
-        Stmt::Throw { value } => collect_idents_expr(value, ids),
+        Stmt::Throw { value } => collect_idents_expr(value, ids, identities),
         Stmt::TryCatch { try_body, catches } => {
             for statement in try_body {
-                collect_idents_stmt(statement, ids);
+                collect_idents_stmt(statement, ids, identities);
             }
             for catch in catches {
                 for statement in &catch.body {
-                    collect_idents_stmt(statement, ids);
+                    collect_idents_stmt(statement, ids, identities);
                 }
                 if let VReg::Phys(name) = &catch.binding {
                     remove_local(ids, &sanitize_c_ident(name));
@@ -1569,7 +1596,7 @@ pub(crate) struct HealthIdentifiers {
 pub(crate) fn health_identifiers(function: &Function) -> HealthIdentifiers {
     let mut identifiers = DecIdents::default();
     for statement in &function.body {
-        collect_idents_stmt(statement, &mut identifiers);
+        collect_idents_stmt(statement, &mut identifiers, None);
     }
     HealthIdentifiers {
         parameters: identifiers.max_arg.map_or(0, |index| index + 1),
