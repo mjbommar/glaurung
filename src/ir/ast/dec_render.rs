@@ -1141,8 +1141,8 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
             let true_is_pointer = expression_has_pointer_representation(if_true);
             let false_is_pointer = expression_has_pointer_representation(if_false);
             let null_pointer_pair = (true_is_pointer
-                && matches!(if_false.as_ref(), Expr::Const(0)))
-                || (false_is_pointer && matches!(if_true.as_ref(), Expr::Const(0)));
+                && matches!(if_false.semantic(), Expr::Const(0)))
+                || (false_is_pointer && matches!(if_true.semantic(), Expr::Const(0)));
             let mixed_representation = true_is_pointer != false_is_pointer && !null_pointer_pair;
             out.push('(');
             write_expr_dec(cond, out);
@@ -1154,13 +1154,23 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
                 // cannot emit an invalid pointer/integer conditional.
                 write_representation_value_dec("long", if_true, out);
             } else {
-                write_select_arm_dec(if_true, canonical_true, out);
+                write_nullable_select_arm_dec(
+                    if_true,
+                    null_pointer_pair && true_is_pointer,
+                    canonical_true,
+                    out,
+                );
             }
             out.push_str(" : ");
             if mixed_representation {
                 write_representation_value_dec("long", if_false, out);
             } else {
-                write_select_arm_dec(if_false, canonical_false, out);
+                write_nullable_select_arm_dec(
+                    if_false,
+                    null_pointer_pair && false_is_pointer,
+                    canonical_false,
+                    out,
+                );
             }
             out.push(')');
         }
@@ -1307,6 +1317,17 @@ fn write_select_arm_dec(expression: &Expr, canonical_all_ones: bool, out: &mut S
         }
     } else {
         write_expr_dec(expression, out);
+    }
+}
+
+fn write_nullable_select_arm_dec(
+    expression: &Expr,
+    direct_pointer: bool,
+    canonical_all_ones: bool,
+    out: &mut String,
+) {
+    if !direct_pointer || !write_direct_pointer_value_dec(expression, out) {
+        write_select_arm_dec(expression, canonical_all_ones, out);
     }
 }
 

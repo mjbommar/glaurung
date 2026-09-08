@@ -7918,6 +7918,58 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn attributed_pointer_null_select_keeps_the_native_null_pointer_form() {
+        let argument = VReg::phys("arg0");
+        let function = Function {
+            name: "choose_nullable".to_string(),
+            entry_va: 0x48,
+            body: vec![
+                Stmt::While {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Ne,
+                        lhs: Box::new(Expr::Select {
+                            cond: Box::new(Expr::Reg(VReg::phys("zf_0"))),
+                            if_true: Box::new(
+                                Expr::Reg(argument.clone()).with_origins(OriginSet::one(0x48)),
+                            ),
+                            if_false: Box::new(Expr::Const(0).with_origins(OriginSet::one(0x4c))),
+                            width: 8,
+                        }),
+                        rhs: Box::new(Expr::Const(0)),
+                    },
+                    body: Vec::new(),
+                },
+                Stmt::While {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Ne,
+                        lhs: Box::new(Expr::Select {
+                            cond: Box::new(Expr::Reg(VReg::phys("zf_1"))),
+                            if_true: Box::new(Expr::Const(0).with_origins(OriginSet::one(0x50))),
+                            if_false: Box::new(
+                                Expr::Reg(argument.clone()).with_origins(OriginSet::one(0x54)),
+                            ),
+                            width: 8,
+                        }),
+                        rhs: Box::new(Expr::Const(0)),
+                    },
+                    body: Vec::new(),
+                },
+            ],
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(argument, TypeHint::Pointer { pointee_width: 1 });
+
+        let text = render_decbench_typed(&function, Some(&types), Some(&types));
+
+        assert!(
+            text.contains("while ((zf_0 ? arg0 : 0) != 0)"),
+            "a pointer and attributed zero form a native null-pointer conditional:\n{text}"
+        );
+        assert!(text.contains("while ((zf_1 ? 0 : arg0) != 0)"), "{text}");
+        assert!(!text.contains("(long)(arg0)"), "{text}");
+    }
+
+    #[test]
     fn locked_wide_return_contract_outranks_a_narrow_branch_expression() {
         let f = Function {
             name: "fib".to_string(),
