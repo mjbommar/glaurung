@@ -182,6 +182,7 @@ fn decbench_text_with_installed_environment(
                 output_kind,
                 &protected_locals,
                 calling_convention_pointer_width(cc),
+                Some(&value_identities),
             );
         // Preparation deletes proof-dead caller-saved register zeroing from
         // hardened GCC epilogues.  Only at this point can the x86 frame owner
@@ -207,7 +208,7 @@ fn decbench_text_with_installed_environment(
         // to look up and no address for the renderer to back with a portable object.
         // `read_counter` emitted `*(int *)(0x20000 + 28)` — a dereference of a raw
         // original-image address, which is a wild pointer once recompiled.
-        crate::ir::const_fold::fold_constants(&mut prepared);
+        crate::ir::const_fold::fold_constants_with_identities(&mut prepared, &value_identities);
         crate::ir::name_resolve::resolve_names(&mut prepared, addr_map);
         crate::ir::canary::recognise_canary(&mut prepared);
         // Source-level preparation folds GCC's multi-statement reload/sub/flag
@@ -363,7 +364,7 @@ fn decbench_text_with_installed_environment(
         );
         pass!(
             "fold_constants_after_typed_folds",
-            crate::ir::const_fold::fold_constants(&mut prepared)
+            crate::ir::const_fold::fold_constants_with_identities(&mut prepared, &value_identities,)
         );
         // Comparison fusion may expose `predicate == 0`; constant folding
         // converts that shell to the exact inverse comparison before path
@@ -380,7 +381,7 @@ fn decbench_text_with_installed_environment(
         // consumers such as packed byte-table permutations see the literal index
         // rather than rendering a dynamic 16-way lookup for a compiler-emitted mask.
         crate::ir::copy_prop::propagate_copies(&mut prepared);
-        crate::ir::const_fold::fold_constants(&mut prepared);
+        crate::ir::const_fold::fold_constants_with_identities(&mut prepared, &value_identities);
     });
     // PIC address materialisation on 32-bit ARM/x86 can become an absolute
     // constant only during late AST preparation, after the ordinary LLIR

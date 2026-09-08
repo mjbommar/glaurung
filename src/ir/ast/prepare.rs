@@ -181,9 +181,21 @@ pub(crate) fn drop_machine_frame_comments(body: &mut Vec<super::Stmt>) {
 /// `benches/ir_dataflow.rs` calls this function rather than restating the loop,
 /// so the bench cannot drift from the schedule it claims to measure.
 pub fn settle_copies_and_constants(owned: &mut Function) -> FixpointReport {
+    settle_copies_and_constants_with_identities(owned, None)
+}
+
+fn settle_copies_and_constants_with_identities(
+    owned: &mut Function,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> FixpointReport {
     run_bounded_fixpoint(4, || {
         let copies_changed = crate::ir::copy_prop::propagate_copies(owned);
-        let constants_changed = crate::ir::const_fold::fold_constants(owned);
+        let constants_changed = match identities {
+            Some(identities) => {
+                crate::ir::const_fold::fold_constants_with_identities(owned, identities)
+            }
+            None => crate::ir::const_fold::fold_constants(owned),
+        };
         copies_changed || constants_changed
     })
 }
@@ -297,6 +309,7 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals(
         output_kind,
         protected_locals,
         pointer_width,
+        None,
     )
     .0
 }
@@ -306,6 +319,7 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
     output_kind: crate::ir::types_recover::RecoveredOutputKind,
     protected_locals: &std::collections::HashSet<String>,
     pointer_width: u8,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> (Function, AstPreparationReport) {
     let mut owned = f.clone();
     if output_kind == crate::ir::types_recover::RecoveredOutputKind::Void {
@@ -319,7 +333,7 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
     // Copy propagation exposes algebraic flag identities, while folding those
     // identities changes use counts and exposes new one-use copies. Iterate the
     // monotone pair to a small bounded fixpoint — see the function's own docs.
-    let copies_and_constants = settle_copies_and_constants(&mut owned);
+    let copies_and_constants = settle_copies_and_constants_with_identities(&mut owned, identities);
     // Folding can prove that an initially composite narrow-register rebuild is
     // exactly its incoming argument (`(arg & ~255) | (arg & 255) == arg`). Run
     // the same guarded home analysis again so byte/halfword parameter spills

@@ -29,6 +29,27 @@ use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::types::{BinOp, CmpOp};
 use crate::ir::types_recover::TypeMap;
 
+#[derive(Clone, Copy)]
+enum ParameterAuthority<'a> {
+    LegacySpelling,
+    Slots(&'a std::collections::HashSet<usize>),
+    Identities(&'a crate::ir::value_number::ValueIdentities),
+}
+
+impl ParameterAuthority<'_> {
+    fn owns(self, name: &str) -> bool {
+        match self {
+            Self::LegacySpelling => crate::ir::ast::parse_arg_index(name).is_some(),
+            Self::Slots(slots) => {
+                crate::ir::ast::parse_arg_index(name).is_some_and(|slot| slots.contains(&slot))
+            }
+            Self::Identities(identities) => identities
+                .parameter_slot(&crate::ir::types::VReg::phys(name))
+                .is_some(),
+        }
+    }
+}
+
 /// Overwrite `slot` and record that this pass changed the AST.
 ///
 /// **Every** write the `fold_constants` traversal makes to the AST goes through
@@ -53,10 +74,33 @@ fn rewrite(slot: &mut Expr, value: Expr, changed: &mut bool) {
 ///
 /// Returns whether anything was rewritten — see [`rewrite`].
 pub fn fold_constants(f: &mut Function) -> bool {
+    fold_constants_with_parameter_authority(f, ParameterAuthority::LegacySpelling)
+}
+
+/// Fold constants while recognizing parameters only from pipeline-owned slots.
+pub(crate) fn fold_constants_with_parameter_slots(
+    f: &mut Function,
+    parameter_slots: &std::collections::HashSet<usize>,
+) -> bool {
+    fold_constants_with_parameter_authority(f, ParameterAuthority::Slots(parameter_slots))
+}
+
+/// Fold constants while recognizing parameters only from exact AST identities.
+pub(crate) fn fold_constants_with_identities(
+    f: &mut Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> bool {
+    fold_constants_with_parameter_authority(f, ParameterAuthority::Identities(identities))
+}
+
+fn fold_constants_with_parameter_authority(
+    f: &mut Function,
+    parameter_authority: ParameterAuthority<'_>,
+) -> bool {
     #[cfg(debug_assertions)]
     let before = f.clone();
     let mut changed = false;
-    fold_body(&mut f.body, &mut changed);
+    fold_body(&mut f.body, &mut changed, parameter_authority);
     #[cfg(debug_assertions)]
     assert!(
         changed || before == *f,
@@ -498,26 +542,30 @@ pub fn fold_typed_declared_views_with_identities(
     body(&mut f.body, tm, identities);
 }
 
-fn fold_body(body: &mut [Stmt], changed: &mut bool) {
+fn fold_body(body: &mut [Stmt], changed: &mut bool, parameter_authority: ParameterAuthority<'_>) {
     for s in body.iter_mut() {
         match s {
-            Stmt::Origin { stmt, .. } => fold_body(std::slice::from_mut(stmt.as_mut()), changed),
-            Stmt::IndirectGoto { target } => fold_expr(target, changed),
-            Stmt::Assign { src, .. } => fold_expr(src, changed),
+            Stmt::Origin { stmt, .. } => fold_body(
+                std::slice::from_mut(stmt.as_mut()),
+                changed,
+                parameter_authority,
+            ),
+            Stmt::IndirectGoto { target } => fold_expr(target, changed, parameter_authority),
+            Stmt::Assign { src, .. } => fold_expr(src, changed, parameter_authority),
             Stmt::Store { addr, src, size } => {
-                fold_expr(addr, changed);
-                fold_expr(src, changed);
-                fold_stored_value(src, *size, changed);
+                fold_expr(addr, changed, parameter_authority);
+                fold_expr(src, changed, parameter_authority);
+                fold_stored_value(src, *size, changed, parameter_authority);
             }
             Stmt::Call { target, args, .. } => {
-                fold_expr(target, changed);
+                fold_expr(target, changed, parameter_authority);
                 for a in args {
-                    fold_expr(a, changed);
+                    fold_expr(a, changed, parameter_authority);
                 }
             }
             Stmt::Return { value } => {
                 if let Some(e) = value {
-                    fold_expr(e, changed);
+                    fold_expr(e, changed, parameter_authority);
                 }
             }
             Stmt::If {
@@ -525,15 +573,15 @@ fn fold_body(body: &mut [Stmt], changed: &mut bool) {
                 then_body,
                 else_body,
             } => {
-                fold_expr(cond, changed);
-                fold_body(then_body, changed);
+                fold_expr(cond, changed, parameter_authority);
+                fold_body(then_body, changed, parameter_authority);
                 if let Some(eb) = else_body {
-                    fold_body(eb, changed);
+                    fold_body(eb, changed, parameter_authority);
                 }
             }
             Stmt::While { cond, body } => {
-                fold_expr(cond, changed);
-                fold_body(body, changed);
+                fold_expr(cond, changed, parameter_authority);
+                fold_body(body, changed, parameter_authority);
             }
             Stmt::For {
                 init,
@@ -541,27 +589,35 @@ fn fold_body(body: &mut [Stmt], changed: &mut bool) {
                 step,
                 body,
             } => {
-                fold_body(std::slice::from_mut(init.as_mut()), changed);
-                fold_expr(cond, changed);
-                fold_body(body, changed);
-                fold_body(std::slice::from_mut(step.as_mut()), changed);
+                fold_body(
+                    std::slice::from_mut(init.as_mut()),
+                    changed,
+                    parameter_authority,
+                );
+                fold_expr(cond, changed, parameter_authority);
+                fold_body(body, changed, parameter_authority);
+                fold_body(
+                    std::slice::from_mut(step.as_mut()),
+                    changed,
+                    parameter_authority,
+                );
             }
             Stmt::DoWhile { body, cond } => {
-                fold_body(body, changed);
-                fold_expr(cond, changed);
+                fold_body(body, changed, parameter_authority);
+                fold_expr(cond, changed, parameter_authority);
             }
-            Stmt::Push { value } => fold_expr(value, changed),
+            Stmt::Push { value } => fold_expr(value, changed, parameter_authority),
             Stmt::Switch {
                 discriminant,
                 cases,
                 default,
             } => {
-                fold_expr(discriminant, changed);
+                fold_expr(discriminant, changed, parameter_authority);
                 for (_, body) in cases.iter_mut() {
-                    fold_body(body, changed);
+                    fold_body(body, changed, parameter_authority);
                 }
                 if let Some(b) = default {
-                    fold_body(b, changed);
+                    fold_body(b, changed, parameter_authority);
                 }
             }
             Stmt::Pop { .. }
@@ -578,7 +634,12 @@ fn fold_body(body: &mut [Stmt], changed: &mut bool) {
     }
 }
 
-fn fold_stored_value(src: &mut Expr, size: u8, changed: &mut bool) {
+fn fold_stored_value(
+    src: &mut Expr,
+    size: u8,
+    changed: &mut bool,
+    parameter_authority: ParameterAuthority<'_>,
+) {
     if size == 0 {
         return;
     }
@@ -586,7 +647,7 @@ fn fold_stored_value(src: &mut Expr, size: u8, changed: &mut bool) {
     // cast/mask that the write width proves redundant. Recurse inside it, then
     // flatten any carrier produced by the replacement into one canonical set.
     if let Expr::Origin { origins, expr } = src {
-        fold_stored_value(expr, size, changed);
+        fold_stored_value(expr, size, changed, parameter_authority);
         if matches!(expr.as_ref(), Expr::Origin { .. }) {
             let nested = std::mem::replace(expr.as_mut(), Expr::Unknown(String::new()));
             let (semantic, nested_origins) = nested.into_semantic_with_origins();
@@ -620,7 +681,7 @@ fn fold_stored_value(src: &mut Expr, size: u8, changed: &mut bool) {
     };
     if let Some(replacement) = fold_observed_mask(src, required as i64) {
         rewrite(src, replacement, changed);
-        fold_expr(src, changed);
+        fold_expr(src, changed, parameter_authority);
     }
     let replacement = match src {
         Expr::Bin {
@@ -642,8 +703,8 @@ fn fold_stored_value(src: &mut Expr, size: u8, changed: &mut bool) {
     }
 }
 
-fn fold_expr(e: &mut Expr, changed: &mut bool) {
-    fold_expr_at(e, false, changed);
+fn fold_expr(e: &mut Expr, changed: &mut bool, parameter_authority: ParameterAuthority<'_>) {
+    fold_expr_at(e, false, changed, parameter_authority);
 }
 
 /// `shift_left_operand` marks the one position where a widening cast over a
@@ -661,11 +722,16 @@ fn fold_expr(e: &mut Expr, changed: &mut bool) {
 /// `value | (1 << (index & 63))` disagreed with the original for EVERY index at
 /// or above 32, and at 63 returned 0xffffffff80000000 where the machine returns
 /// 0x8000000000000000.
-fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
+fn fold_expr_at(
+    e: &mut Expr,
+    shift_left_operand: bool,
+    changed: &mut bool,
+    parameter_authority: ParameterAuthority<'_>,
+) {
     // Recurse first — bottom-up folding composes naturally.
     match e {
         Expr::Origin { origins, expr } => {
-            fold_expr_at(expr, shift_left_operand, changed);
+            fold_expr_at(expr, shift_left_operand, changed, parameter_authority);
             if matches!(expr.as_ref(), Expr::Origin { .. }) {
                 let nested = std::mem::replace(expr.as_mut(), Expr::Unknown(String::new()));
                 let (semantic, nested_origins) = nested.into_semantic_with_origins();
@@ -677,12 +743,12 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
         }
         Expr::Bin { op, lhs, rhs } => {
             let shift = matches!(op, BinOp::Shl | BinOp::Shr | BinOp::Sar);
-            fold_expr_at(lhs, shift, changed);
-            fold_expr(rhs, changed);
+            fold_expr_at(lhs, shift, changed, parameter_authority);
+            fold_expr(rhs, changed, parameter_authority);
         }
         Expr::Cmp { lhs, rhs, .. } => {
-            fold_expr(lhs, changed);
-            fold_expr(rhs, changed);
+            fold_expr(lhs, changed, parameter_authority);
+            fold_expr(rhs, changed, parameter_authority);
         }
         Expr::Select {
             cond,
@@ -690,13 +756,13 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
             if_false,
             ..
         } => {
-            fold_expr(cond, changed);
-            fold_expr(if_true, changed);
-            fold_expr(if_false, changed);
+            fold_expr(cond, changed, parameter_authority);
+            fold_expr(if_true, changed, parameter_authority);
+            fold_expr(if_false, changed, parameter_authority);
         }
-        Expr::Un { src, .. } => fold_expr(src, changed),
-        Expr::Cast { expr, .. } => fold_expr(expr, changed),
-        Expr::Deref { addr, .. } => fold_expr(addr, changed),
+        Expr::Un { src, .. } => fold_expr(src, changed, parameter_authority),
+        Expr::Cast { expr, .. } => fold_expr(expr, changed, parameter_authority),
+        Expr::Deref { addr, .. } => fold_expr(addr, changed, parameter_authority),
         _ => {}
     }
 
@@ -712,7 +778,7 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
                 object: crate::ir::types::VReg::Phys(name),
                 size: object_size,
             } if usize::from(*size) == usize::from(*object_size)
-                && crate::ir::ast::parse_arg_index(name).is_some() =>
+                && parameter_authority.owns(name) =>
             {
                 Some(
                     Expr::Reg(crate::ir::types::VReg::phys(name.clone()))
@@ -876,7 +942,7 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
     if let Some(replacement) = subsumed_inner_cast {
         rewrite(e, replacement, changed);
         // Re-run: a chain of three or more collapses one layer per visit.
-        fold_expr_at(e, shift_left_operand, changed);
+        fold_expr_at(e, shift_left_operand, changed, parameter_authority);
         return;
     }
 
@@ -1061,7 +1127,7 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
                 rewrite(e, replacement.with_optional_origins(mask_origins), changed);
                 // The replacement is strictly shallower (one merge or mask
                 // layer disappeared), so finish any newly adjacent identity.
-                fold_expr(e, changed);
+                fold_expr(e, changed, parameter_authority);
                 return;
             }
         }
@@ -4467,6 +4533,55 @@ mod tests {
                 src: Expr::Reg(parameter),
                 ..
             } if parameter == &reg("arg0")
+        ));
+    }
+
+    #[test]
+    fn parameter_address_load_requires_a_typed_parameter_role() {
+        let original = Expr::Deref {
+            addr: Box::new(Expr::StackAddr {
+                object: reg("arg0"),
+                size: 4,
+            }),
+            size: 4,
+        };
+        let mut unowned = one_stmt(original.clone());
+        let identities = crate::ir::value_number::ValueIdentities::default();
+
+        assert!(!fold_constants_with_identities(&mut unowned, &identities));
+        assert!(matches!(
+            &unowned.body[0],
+            Stmt::Assign { src, .. } if src == &original
+        ));
+
+        let parameter = identities.with_role_aliases_and_parameter_slots(
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::from([0]),
+        );
+        let mut owned = one_stmt(original);
+        assert!(fold_constants_with_identities(&mut owned, &parameter));
+        assert!(matches!(
+            &owned.body[0],
+            Stmt::Assign {
+                src: Expr::Reg(value),
+                ..
+            } if value == &reg("arg0")
+        ));
+
+        let mut slot_unowned = one_stmt(Expr::Deref {
+            addr: Box::new(Expr::StackAddr {
+                object: reg("arg0"),
+                size: 4,
+            }),
+            size: 4,
+        });
+        assert!(!fold_constants_with_parameter_slots(
+            &mut slot_unowned,
+            &std::collections::HashSet::new(),
+        ));
+        assert!(fold_constants_with_parameter_slots(
+            &mut slot_unowned,
+            &std::collections::HashSet::from([0]),
         ));
     }
 

@@ -562,7 +562,10 @@ pub(super) fn run_ast_passes(
         crate::ir::vector_copy::recover_wide_copies(f)
     );
     pass!("reconstruct", crate::ir::expr_reconstruct::reconstruct(f));
-    pass!("fold_constants", crate::ir::const_fold::fold_constants(f));
+    pass!(
+        "fold_constants",
+        crate::ir::const_fold::fold_constants_with_parameter_slots(f, param_slots)
+    );
     pass!(
         "fold_boolean_masks",
         crate::ir::select_fold::fold_boolean_masks(f)
