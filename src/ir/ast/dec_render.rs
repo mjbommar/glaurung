@@ -1935,7 +1935,7 @@ fn write_typed_call_arg_dec(parameter_type: &str, arg: &Expr, out: &mut String) 
     }
 
     if let Some(width) = dec_plan(|plan| plan.aggregate_value_width(parameter_type)) {
-        if let Expr::Reg(register) = arg {
+        if let Expr::Reg(register) = arg.semantic() {
             if declared_reg_ctype(register) == parameter_type {
                 write_reg_lvalue_dec(register, out);
                 return;
@@ -2560,7 +2560,7 @@ fn write_representation_value_dec(destination_type: &str, src: &Expr, out: &mut 
     }
 
     if let Some(width) = dec_plan(|plan| plan.aggregate_value_width(destination_type)) {
-        if let Expr::Reg(register) = src {
+        if let Expr::Reg(register) = src.semantic() {
             if declared_reg_ctype(register) == destination_type {
                 write_reg_lvalue_dec(register, out);
                 return;

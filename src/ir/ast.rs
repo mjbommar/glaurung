@@ -7628,7 +7628,7 @@ function f @ 0x1000 {
                 dst: Some(VReg::phys("ret")),
                 call_spec: Some(CallSiteSpec {
                     callee_prototype: Some(aggregate.clone()),
-                    call_prototype: aggregate,
+                    call_prototype: aggregate.clone(),
                 }),
             }],
         };
@@ -7661,7 +7661,7 @@ function f @ 0x1000 {
             None,
             RecoveredOutputKind::Direct,
             None,
-            &[layout],
+            std::slice::from_ref(&layout),
             8,
             &std::collections::HashMap::new(),
         );
@@ -7676,6 +7676,50 @@ function f @ 0x1000 {
             "the call must rebuild the source object without numeric conversion:\n{text}"
         );
         assert_looks_like_c(&text);
+
+        let identity = Function {
+            name: "identity_pair".to_string(),
+            entry_va: 0x3000,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "consume_pair".to_string(),
+                    },
+                    args: vec![Expr::Reg(VReg::phys("arg0")).with_origins(OriginSet::one(0x3000))],
+                    dst: None,
+                    call_spec: Some(CallSiteSpec {
+                        callee_prototype: Some(aggregate.clone()),
+                        call_prototype: aggregate,
+                    }),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys("arg0")).with_origins(OriginSet::one(0x3004))),
+                },
+            ],
+        };
+        let identity_prototype = CallPrototype {
+            return_type: "struct pair".to_string(),
+            parameter_types: vec!["struct pair".to_string()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+        let identity_text = render_decbench_typed_with_output_and_prototype_and_dwarf_types(
+            &identity,
+            None,
+            None,
+            RecoveredOutputKind::Direct,
+            Some(&identity_prototype),
+            std::slice::from_ref(&layout),
+            8,
+            &std::collections::HashMap::new(),
+        );
+
+        assert!(
+            identity_text.contains("consume_pair(arg0);")
+                && identity_text.contains("return arg0;"),
+            "a declared aggregate object should cross aggregate boundaries directly:\n{identity_text}"
+        );
     }
 
     #[test]
