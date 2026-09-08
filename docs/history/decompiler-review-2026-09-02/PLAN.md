@@ -1794,6 +1794,13 @@ provenance through lowering.
   exact effectful branch-call fixture pass after that fixture caught and
   rejected an over-conservative `rsp` prototype. See
   `results/wp3-call-slot-liveness-identities.md`.
+  Commit `79da282c` then migrates stack allocation/cleanup, lowered push/pop
+  pairs, preallocated SysV outgoing areas, phase-sensitive reads, prologue
+  boundaries, and captured outgoing pushes to exact identity classification.
+  Opaque proved stack pointers remain usable; misleading `rsp#version` display
+  names mapped to other storage are rejected. All 134 owning tests and the
+  exact `11_call_shapes:clang:O0:call_into_spill` lane pass; no broad suite or
+  corpus ran. See `results/wp3-call-stack-area-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
@@ -3854,8 +3861,11 @@ relevant ratchet's accepted-regression record.
    closes call-slot liveness and enclosing reaching-state with identity
    candidate sets; its 133 owning tests and exact fixture-189 GCC O2 effectful
    branch-call lane pass. See `results/wp3-call-slot-liveness-identities.md`.
-   Continue through stack-area recovery, loop-carried slot discovery, and the
-   AAPCS/cdecl readers. Keep
+   Commit `79da282c` closes stack-area allocation, cleanup, lowered push/pop,
+   preallocation, phase, and prologue classification using exact identities;
+   its 134 owning tests and exact Clang O0 `call_into_spill` fixture pass. See
+   `results/wp3-call-stack-area-identities.md`. Continue through loop-carried
+   slot discovery and the AAPCS/cdecl readers. Keep
    pre-sidecar tagging internals and explicit no-sidecar compatibility parsers
    classified separately.
    Keep expression ownership behind completion of that audit.
