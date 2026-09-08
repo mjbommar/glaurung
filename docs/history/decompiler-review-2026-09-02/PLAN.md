@@ -1712,6 +1712,14 @@ provenance through lowering.
   one GCC-O2 `nested_carry` round-trip lane, and the isolated 5,188-test census
   pass after a fresh extension rebuild. No broad suite or corpus ran. See
   `results/wp3-phi-coalescing-identities.md`.
+  Commit `37fb9aa7` next gives call-result lifetime splitting a separate typed
+  physical-storage fact. Production result-bank classification no longer
+  reparses value-numbered names, and every fresh scalar, pair, lane, HFA, or
+  split-bank result receives storage provenance in the same transaction.
+  Opaque owned `rax` storage splits correctly while an unowned `rax#...`
+  lookalike fails closed. All 17 splitter tests, all 59 value-number tests, and
+  four focused call-result fixture lanes pass; see
+  `results/wp3-call-result-splitting-storage-identities.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
@@ -2250,6 +2258,11 @@ provenance through lowering.
   lifetime matching, and representative ordering; spelling parsing survives
   only in test-only compatibility helpers. See
   `results/wp3-phi-coalescing-identities.md`.
+  Commit `37fb9aa7` removes the same parsing from production call-result
+  lifetime splitting. A separate physical-storage fact survives coalesced SSA
+  ambiguity, aliases, and renames, while synthesized ABI results publish their
+  provenance explicitly. The identity-free wrapper alone retains compatibility
+  parsing; see `results/wp3-call-result-splitting-storage-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
