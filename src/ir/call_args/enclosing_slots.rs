@@ -138,6 +138,7 @@ impl EnclosingSlots {
         statement: &Stmt,
         arch: CallConv,
     ) {
+        let statement_origins = statement.origins().cloned();
         let statement = statement.semantic();
         if matches!(
             statement,
@@ -166,7 +167,13 @@ impl EnclosingSlots {
                 .flatten()
             {
                 if let Some(reaching) = reaching.get_mut(slot) {
-                    *reaching = name.contains('#').then(|| Expr::Reg(dst.clone()));
+                    *reaching = name.contains('#').then(|| {
+                        let mut value = Expr::Reg(dst.clone());
+                        if let Some(origins) = statement_origins.as_ref() {
+                            value.merge_origins(origins);
+                        }
+                        value
+                    });
                 }
                 return;
             }

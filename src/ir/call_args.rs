@@ -5653,7 +5653,9 @@ mod tests {
 
         EnclosingSlots::advance_reaching(&mut reaching, &definition, CallConv::SysVAmd64);
 
-        assert_eq!(reaching[0], Some(Expr::Reg(reg("rdi#1"))));
+        let value = reaching[0].as_ref().expect("reaching definition");
+        assert!(matches!(value.semantic(), Expr::Reg(reg) if reg == &VReg::phys("rdi#1")));
+        assert_eq!(value.origins(), Some(&OriginSet::one(0x1000)));
     }
 
     #[test]
@@ -6949,15 +6951,22 @@ mod tests {
     #[test]
     fn a_proven_table_call_reads_the_enclosing_reaching_definitions() {
         let mut f = guarded_table_dispatch(&[0x1100, 0x1110]);
+        let first_owner = OriginSet::one(0x1154);
+        let second_owner = OriginSet::one(0x1158);
+        for (index, owner) in [(1, first_owner.clone()), (2, second_owner.clone())] {
+            let statement = std::mem::replace(&mut f.body[index], Stmt::Nop);
+            f.body[index] = statement.with_origins(owner);
+        }
         reconstruct_with_table(
             &mut f,
             &layouts(&[(0x1100, &["rdi", "rsi"]), (0x1110, &["rdi", "rsi"])]),
         );
-        assert_eq!(
-            recovered_table_args(&f),
-            vec![Expr::Reg(reg("rdi#1")), Expr::Reg(reg("rsi#1"))],
-            "the shuffled values, not the function's own entry registers"
-        );
+        let args = recovered_table_args(&f);
+        assert_eq!(args.len(), 2);
+        assert!(matches!(args[0].semantic(), Expr::Reg(value) if value == &reg("rdi#1")));
+        assert!(matches!(args[1].semantic(), Expr::Reg(value) if value == &reg("rsi#1")));
+        assert_eq!(args[0].origins(), Some(&first_owner));
+        assert_eq!(args[1].origins(), Some(&second_owner));
     }
 
     /// The may-use direction. One entry reads two registers and the other reads
