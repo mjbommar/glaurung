@@ -1902,6 +1902,15 @@ provenance through lowering.
   four live-in neighbors, three ARM padding checks, and only the GCC O2
   `call_accumulate_bytes` fixture pass. No broad suite or corpus ran. See
   `results/wp3-live-in-parameter-identities.md`.
+  Commit `ebcd6440` then migrates the separate caller-derived fixed-arity
+  pipeline. It retains identities through caller AST lowering and uses them for
+  outgoing stack pushes, cleanup, padding, and intervening-assignment
+  classification. Opaque exact `rsp` values remain provable and misleading
+  `rsp#version` text backed by `rax` no longer aborts the proof. The exact
+  regression, all four owning caller-arity tests, one adjacent stack-identity
+  test, and only the GCC O0 `sum_arg7` fixture pass. Superseded spelling-only
+  helpers are test-only in release builds. No broad suite or corpus ran. See
+  `results/wp3-caller-stack-arity-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
