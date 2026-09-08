@@ -1339,6 +1339,13 @@ provenance through lowering.
   no-else, stable-prelude, alias-depth, and overwrite refusals are unchanged.
   Its strengthened observed-red test and all 30 loop-form tests pass; see
   `results/wp3-owned-loop-proof-origins.md`.
+  Commit `ca3ff99a` then makes guarded-loop result matching transparent to
+  distinct ownership carriers and transfers the removed early-return value's
+  owner to the surviving final return. Different semantic result values still
+  refuse rotation, and all entry, stable-prelude, carried-latch, overwrite,
+  and trailing-control proofs remain mandatory. Its strengthened observed-red
+  test and all 30 loop-form tests pass; see
+  `results/wp3-guarded-loop-result-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
