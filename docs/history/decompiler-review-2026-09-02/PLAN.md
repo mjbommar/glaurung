@@ -1696,6 +1696,13 @@ provenance through lowering.
   exact contracts, all 13 module tests, and the Clang-O0 linked-list compile
   and runtime round trip pass; see
   `results/wp3-dwarf-field-storage-identities.md`.
+  Commit `925bf81f` then carries the same identity authority into the
+  prepared-AST memory-object model used by pointer high-variable refinement.
+  Opaque promoted cursors retain object origin, stride, and access paths;
+  unowned `local_*` stores remain pointer writes. Both exact contracts, all 11
+  AST-object tests, all 35 high-variable tests, and the stripped aggregate-
+  cursor compile/runtime check pass; see
+  `results/wp3-memory-object-storage-identities.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
