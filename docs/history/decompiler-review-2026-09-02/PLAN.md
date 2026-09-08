@@ -1743,6 +1743,12 @@ provenance through lowering.
   `lr`/`r14`, core, and VFP saves through exact identities. Misleading `sp#0`
   and `lr#0` spellings mapped to `r0` refuse. See
   `results/wp3-arm32-frame-identities.md`.
+  Commit `9e43b52b` migrates packed-vector copy recovery to exact identities
+  for lane grouping, scalar-view bridges, exclusivity checks, and synthesized
+  wide copies. An opaque exact lane is accepted, while a misleading
+  `xmm0_d0#9` spelling mapped to `rax` refuses. The owning nine-test module and
+  one real fixture-188 GCC O2 lane pass; see
+  `results/wp3-vector-copy-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
@@ -3773,8 +3779,14 @@ relevant ratchet's accepted-regression record.
    Commit `5fdb7906` then migrates the ARM32 frame recognizer across its full
    parse, nested-exit, restore, and residual-SP surface. All 10 module tests and
    the exact ARM frame-spill fixture pass; see
-   `results/wp3-arm32-frame-identities.md`. Re-audit remaining production name
-   parsers next.
+   `results/wp3-arm32-frame-identities.md`. Commit `9e43b52b` then migrates the
+   packed-vector consumer's lane grouping, scalar-view bridges, exclusivity
+   checks, and synthesized wide views to exact identities. Its nine module
+   tests and one directly owning fixture-188 GCC O2 lane pass; see
+   `results/wp3-vector-copy-identities.md`. Re-audit remaining production name
+   parsers next, beginning with the value-numbered incoming-argument selection
+   in `src/ir/call_args.rs`; keep pre-sidecar tagging internals and explicit
+   no-sidecar compatibility parsers classified separately.
    Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
