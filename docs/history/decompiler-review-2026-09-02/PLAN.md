@@ -1824,6 +1824,11 @@ provenance through lowering.
   rebasing, and PIC traversal all use exact stack/frame identities. The 27-test
   cdecl filter and exact i386 O0 `call_into_spill` fixture pass; no broad suite
   or corpus ran. See `results/wp3-cdecl-stack-identities.md`.
+  Commit `6ab43e01` then threads the identity sidecar into resolved direct and
+  symbol-backed indirect tail calls. Recursive local argument-setup detection
+  uses complete identity candidates instead of register text. All 14 owning
+  tail-call tests and the exact GCC O2 `forward_sum6` fixture pass; no broad
+  suite or corpus ran. See `results/wp3-tail-call-setup-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
@@ -3904,7 +3909,12 @@ relevant ratchet's accepted-regression record.
    and PIC classifications with exact identities; its 27-test cdecl filter and
    exact i386 O0 eight-argument fixture pass. See
    `results/wp3-cdecl-stack-identities.md`. Audit the remaining call-recovery
-   name readers and migrate only production value-identity consumers. Keep
+   name readers and migrate only production value-identity consumers. Commit
+   `6ab43e01` closes resolved direct/indirect tail-call argument-setup
+   classification with complete identity candidates; its 14 owning tests and
+   exact GCC O2 `forward_sum6` fixture pass. See
+   `results/wp3-tail-call-setup-identities.md`. Continue with proven Rust
+   vtable-tail high-result identity. Keep
    pre-sidecar tagging internals and explicit no-sidecar compatibility parsers
    classified separately.
    Keep expression ownership behind completion of that audit.
