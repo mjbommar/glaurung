@@ -23,7 +23,7 @@ use crate::ir::types_recover::{RecoveredOutputKind, RecoveredPrototype};
 
 /// Project a body-written return register onto every remaining bare return.
 pub(crate) fn materialize_direct_output(function: &mut Function) {
-    materialize_direct_output_with_live_in(function, None);
+    materialize_direct_output_with_live_in(function, None, true);
 }
 
 /// Project a prototype-proven direct output, including identity functions whose
@@ -54,7 +54,9 @@ pub(crate) fn materialize_prototype_output(
     });
     let live_in_result =
         live_in_result.filter(|_| !body_writes_abi_return_storage(&function.body, cc));
-    materialize_direct_output_with_live_in(function, live_in_result);
+    // This pass runs before role naming. A literal `ret` here may be a source
+    // or debug spelling and is not evidence of machine result storage.
+    materialize_direct_output_with_live_in(function, live_in_result, false);
 }
 
 fn body_writes_abi_return_storage(body: &[Stmt], cc: CallConv) -> bool {
@@ -67,7 +69,7 @@ fn body_writes_abi_return_storage(body: &[Stmt], cc: CallConv) -> bool {
         | Stmt::Call {
             dst: Some(VReg::Phys(name)),
             ..
-        } => crate::ir::abi::is_return_register(cc, name) || name == "ret",
+        } => crate::ir::abi::is_return_register(cc, name),
         Stmt::If {
             then_body,
             else_body,
@@ -106,8 +108,12 @@ fn body_writes_abi_return_storage(body: &[Stmt], cc: CallConv) -> bool {
     })
 }
 
-fn materialize_direct_output_with_live_in(function: &mut Function, live_in_result: Option<&VReg>) {
-    let written = find_written_return_reg(&function.body)
+fn materialize_direct_output_with_live_in(
+    function: &mut Function,
+    live_in_result: Option<&VReg>,
+    allow_canonical_role: bool,
+) {
+    let written = find_written_return_reg(&function.body, allow_canonical_role)
         .or_else(|| find_written_float_result_reg(&function.body));
     if let Some(return_register) = written {
         apply_default_return(&mut function.body, &return_register);
@@ -612,24 +618,37 @@ fn clear_body_return_values(body: &mut [Stmt]) {
 /// the first-tier names, so [`is_return_reg`] already covers it. It was also
 /// restated as a second disjunct on both arms below until 2026-08-18, which was
 /// dead in a way that read as load-bearing.
-fn find_written_return_reg(body: &[Stmt]) -> Option<VReg> {
+fn find_written_return_reg(body: &[Stmt], allow_canonical_role: bool) -> Option<VReg> {
+    let is_result = |value: &VReg| {
+        is_return_reg(value)
+            && (allow_canonical_role || !matches!(value, VReg::Phys(name) if name == "ret"))
+    };
     for statement in body {
         let found = match statement.semantic() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
-            Stmt::Assign { dst, .. } if is_return_reg(dst) => Some(dst.clone()),
-            Stmt::Call { dst: Some(dst), .. } if is_return_reg(dst) => Some(dst.clone()),
+            Stmt::Assign { dst, .. } if is_result(dst) => Some(dst.clone()),
+            Stmt::Call { dst: Some(dst), .. } if is_result(dst) => Some(dst.clone()),
             Stmt::If {
                 then_body,
                 else_body,
                 ..
-            } => find_written_return_reg(then_body)
-                .or_else(|| else_body.as_deref().and_then(find_written_return_reg)),
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => find_written_return_reg(body),
-            Stmt::For { body, .. } => find_written_return_reg(body),
+            } => find_written_return_reg(then_body, allow_canonical_role).or_else(|| {
+                else_body
+                    .as_deref()
+                    .and_then(|body| find_written_return_reg(body, allow_canonical_role))
+            }),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                find_written_return_reg(body, allow_canonical_role)
+            }
+            Stmt::For { body, .. } => find_written_return_reg(body, allow_canonical_role),
             Stmt::Switch { cases, default, .. } => cases
                 .iter()
-                .find_map(|(_, body)| find_written_return_reg(body))
-                .or_else(|| default.as_deref().and_then(find_written_return_reg)),
+                .find_map(|(_, body)| find_written_return_reg(body, allow_canonical_role))
+                .or_else(|| {
+                    default
+                        .as_deref()
+                        .and_then(|body| find_written_return_reg(body, allow_canonical_role))
+                }),
             _ => None,
         };
         if found.is_some() {
@@ -891,6 +910,34 @@ mod tests {
             written_version.body.last(),
             Some(&Stmt::Return { value: None }),
             "a versioned output write must block the live-in fallback rather than return stale arg0"
+        );
+    }
+
+    #[test]
+    fn prototype_output_does_not_trust_an_unowned_ret_spelling() {
+        let mut prototype = RecoveredPrototype::default();
+        prototype.apply_locked_parameters(CallConv::Aarch64, &[Some(int32())]);
+        prototype.apply_locked_output(RecoveredOutputKind::Direct, Some(int32()));
+        let mut function = Function {
+            name: "identity_with_ret_local".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("ret"),
+                    src: Expr::Const(7),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        materialize_prototype_output(&mut function, CallConv::Aarch64, Some(&prototype));
+
+        assert_eq!(
+            function.body.last(),
+            Some(&Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("x0"))),
+            }),
+            "a source spelling is not proof that the body overwrote ABI result storage"
         );
     }
 
