@@ -419,7 +419,14 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
         ),
         None => crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned),
     }
-    crate::ir::copy_prop::propagate_adjacent_overwritten_values(&mut owned);
+    match identities {
+        Some(identities) => {
+            crate::ir::copy_prop::propagate_adjacent_overwritten_values_with_identities(
+                &mut owned, identities,
+            )
+        }
+        None => crate::ir::copy_prop::propagate_adjacent_overwritten_values(&mut owned),
+    }
     crate::ir::terminal_loop::recover_terminal_self_loops(&mut owned);
     // Recover shared return epilogues before general forward joins. Otherwise a
     // goto from a loop to `return -1` is faithfully but less clearly rendered

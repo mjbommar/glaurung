@@ -148,7 +148,22 @@ fn propagate_adjacent_guard_values_impl(
 /// is overwritten. Moving a nontrapping, nonselect expression into that RHS is
 /// exact and does not rely on the physical register being globally SSA.
 pub fn propagate_adjacent_overwritten_values(function: &mut Function) {
-    while fold_one_adjacent_overwritten_value(&mut function.body) {}
+    propagate_adjacent_overwritten_values_impl(function, None);
+}
+
+/// Identity-aware production form of [`propagate_adjacent_overwritten_values`].
+pub fn propagate_adjacent_overwritten_values_with_identities(
+    function: &mut Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    propagate_adjacent_overwritten_values_impl(function, Some(identities));
+}
+
+fn propagate_adjacent_overwritten_values_impl(
+    function: &mut Function,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
+    while fold_one_adjacent_overwritten_value(&mut function.body, identities) {}
 }
 
 /// Move one effectful scratch value into its sole adjacent direct consumer.
@@ -293,7 +308,10 @@ fn move_one_adjacent_effectful_scratch_value(
     false
 }
 
-fn fold_one_adjacent_overwritten_value(body: &mut Vec<Stmt>) -> bool {
+fn fold_one_adjacent_overwritten_value(
+    body: &mut Vec<Stmt>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     for statement in body.iter_mut() {
         let changed = match statement.semantic_mut() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
@@ -302,27 +320,27 @@ fn fold_one_adjacent_overwritten_value(body: &mut Vec<Stmt>) -> bool {
                 else_body,
                 ..
             } => {
-                fold_one_adjacent_overwritten_value(then_body)
+                fold_one_adjacent_overwritten_value(then_body, identities)
                     || else_body
                         .as_mut()
-                        .is_some_and(fold_one_adjacent_overwritten_value)
+                        .is_some_and(|body| fold_one_adjacent_overwritten_value(body, identities))
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                fold_one_adjacent_overwritten_value(body)
+                fold_one_adjacent_overwritten_value(body, identities)
             }
             Stmt::Switch { cases, default, .. } => {
                 cases
                     .iter_mut()
-                    .any(|(_, body)| fold_one_adjacent_overwritten_value(body))
+                    .any(|(_, body)| fold_one_adjacent_overwritten_value(body, identities))
                     || default
                         .as_mut()
-                        .is_some_and(fold_one_adjacent_overwritten_value)
+                        .is_some_and(|body| fold_one_adjacent_overwritten_value(body, identities))
             }
             Stmt::TryCatch { try_body, catches } => {
-                fold_one_adjacent_overwritten_value(try_body)
-                    || catches
-                        .iter_mut()
-                        .any(|catch| fold_one_adjacent_overwritten_value(&mut catch.body))
+                fold_one_adjacent_overwritten_value(try_body, identities)
+                    || catches.iter_mut().any(|catch| {
+                        fold_one_adjacent_overwritten_value(&mut catch.body, identities)
+                    })
             }
             _ => false,
         };
@@ -334,8 +352,7 @@ fn fold_one_adjacent_overwritten_value(body: &mut Vec<Stmt>) -> bool {
     for index in 0..body.len().saturating_sub(1) {
         let Some((destination, mut source)) = (match body[index].semantic() {
             Stmt::Assign { dst, src }
-                if is_scratch_reg(dst, None)
-                    && !is_promoted_local_reg(dst)
+                if is_scratch_reg(dst, identities)
                     && !contains_reg(src, dst)
                     && !contains_deref(src)
                     && !contains_unknown(src)
@@ -1470,6 +1487,37 @@ mod tests {
         };
         assert!(matches!(lhs.semantic(), Expr::Const(3)));
         assert_eq!(lhs.origins(), Some(&definition_owner));
+    }
+
+    #[test]
+    fn identity_aware_overwrite_fold_rejects_opaque_stack_destination() {
+        let object_name = "frame_object".to_string();
+        let object = reg(&object_name);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object_name]);
+        let mut function = Function {
+            name: "owned_overwrite".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: object.clone(),
+                    src: Expr::Const(3),
+                },
+                Stmt::Assign {
+                    dst: object.clone(),
+                    src: Expr::Bin {
+                        op: BinOp::Mul,
+                        lhs: Box::new(Expr::Reg(object)),
+                        rhs: Box::new(Expr::Const(4)),
+                    },
+                },
+            ],
+        };
+        let before = function.clone();
+
+        propagate_adjacent_overwritten_values_with_identities(&mut function, &identities);
+
+        assert_eq!(function, before);
     }
 
     #[test]
