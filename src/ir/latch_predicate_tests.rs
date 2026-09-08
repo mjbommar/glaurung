@@ -115,6 +115,23 @@ fn keeps_predicate_when_saved_value_is_overwritten() {
 }
 
 #[test]
+fn keeps_predicate_when_attributed_next_value_is_the_saved_snapshot() {
+    let mut function = candidate(vec![]);
+    let Stmt::DoWhile { body, .. } = &mut function.body[0] else {
+        unreachable!()
+    };
+    let Stmt::Assign { src, .. } = body.last_mut().expect("candidate tail") else {
+        unreachable!()
+    };
+    *src = read("old").with_origins(OriginSet::one(0x1020));
+    let before = function.clone();
+
+    fold_latched_predicates(&mut function);
+
+    assert_eq!(function, before);
+}
+
+#[test]
 fn keeps_predicate_when_control_flow_can_bypass_the_snapshot() {
     let mut function = candidate(vec![Stmt::If {
         cond: read("guard"),

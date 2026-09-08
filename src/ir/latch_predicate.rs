@@ -755,7 +755,7 @@ fn fold_one_latch(body: &mut Vec<Stmt>, cond: &mut Expr) -> Option<crate::ir::as
 }
 
 fn next_value_root(expression: &Expr) -> Option<&VReg> {
-    match expression {
+    match expression.semantic() {
         Expr::Reg(register) => Some(register),
         Expr::Cast { expr, .. } => next_value_root(expr),
         _ => None,
