@@ -1008,7 +1008,11 @@ fn fold_one_recovered_layout_call(body: &mut Vec<Stmt>, call_idx: usize, layout:
                     continue;
                 };
                 if found[slot].is_none() {
-                    found[slot] = Some((index, src.clone(), VReg::Phys(name.clone())));
+                    let mut argument = src.clone();
+                    if let Some(origins) = body[index].origins() {
+                        argument.merge_origins(origins);
+                    }
+                    found[slot] = Some((index, argument, VReg::Phys(name.clone())));
                 }
             }
             Stmt::Nop | Stmt::Comment(_) => {}
@@ -1117,8 +1121,13 @@ fn resolve_recovered_layout_sources(
                 {
                     return false;
                 }
+                let definition_origins = body[index].origins().cloned();
                 for (_, argument, _) in found.iter_mut().flatten() {
-                    let _ = substitute_exact_reg(argument, dst, src);
+                    if substitute_exact_reg(argument, dst, src) {
+                        if let Some(origins) = definition_origins.as_ref() {
+                            argument.merge_origins(origins);
+                        }
+                    }
                 }
             }
             Stmt::Nop | Stmt::Comment(_) => {}
@@ -1158,7 +1167,11 @@ fn fold_one_recovered_layout_call_with_live_ins(
                     continue;
                 };
                 if found[slot].is_none() {
-                    found[slot] = Some((index, src.clone(), VReg::Phys(name.clone())));
+                    let mut argument = src.clone();
+                    if let Some(origins) = body[index].origins() {
+                        argument.merge_origins(origins);
+                    }
+                    found[slot] = Some((index, argument, VReg::Phys(name.clone())));
                 }
             }
             Stmt::Nop | Stmt::Comment(_) => {}
@@ -4958,8 +4971,8 @@ mod tests {
         let setup1 = crate::ir::ast::OriginSet::one(0x1014);
         let call_owner = crate::ir::ast::OriginSet::one(0x1018);
         let mut body = vec![
-            assign("rdi#1", 7).with_origins(setup0),
-            assign("rsi#1", 11).with_origins(setup1),
+            assign("rdi#1", 7).with_origins(setup0.clone()),
+            assign("rsi#1", 11).with_origins(setup1.clone()),
             call_to("mixed_float").with_origins(call_owner),
         ];
 
@@ -4970,10 +4983,14 @@ mod tests {
         ));
 
         assert_eq!(body.len(), 1);
-        assert!(matches!(
-            body[0].semantic(),
-            Stmt::Call { args, .. } if args == &[Expr::Const(7), Expr::Const(11)]
-        ));
+        let Stmt::Call { args, .. } = body[0].semantic() else {
+            panic!("folded statement is not a call: {body:#?}")
+        };
+        assert_eq!(args.len(), 2);
+        assert!(matches!(args[0].semantic(), Expr::Const(7)));
+        assert!(matches!(args[1].semantic(), Expr::Const(11)));
+        assert_eq!(args[0].origins(), Some(&setup0));
+        assert_eq!(args[1].origins(), Some(&setup1));
         assert_eq!(
             body[0].origins().expect("folded call owner").addresses(),
             &[0x1010, 0x1014, 0x1018]
@@ -4999,10 +5016,18 @@ mod tests {
         assert!(fold_one_recovered_layout_call(&mut body, 2, &[reg("rdi")],));
 
         assert_eq!(body.len(), 2, "only the ABI setup is consumed");
-        assert!(matches!(
-            body[1].semantic(),
-            Stmt::Call { args, .. } if args == &[Expr::Reg(reg("arg0"))]
-        ));
+        let Stmt::Call { args, .. } = body[1].semantic() else {
+            panic!("folded statement is not a call: {body:#?}")
+        };
+        assert_eq!(args.len(), 1);
+        assert!(matches!(args[0].semantic(), Expr::Reg(value) if value == &reg("arg0")));
+        assert_eq!(
+            args[0]
+                .origins()
+                .expect("argument expression owner")
+                .addresses(),
+            &[0x1010, 0x1014]
+        );
         assert_eq!(
             body[1].origins().expect("folded call owner").addresses(),
             &[0x1014, 0x1018]
@@ -5058,11 +5083,13 @@ mod tests {
         ));
 
         assert_eq!(body.len(), 1);
-        assert!(matches!(
-            body[0].semantic(),
-            Stmt::Call { args, .. }
-                if args == &[Expr::Const(7), Expr::Reg(reg("rsi"))]
-        ));
+        let Stmt::Call { args, .. } = body[0].semantic() else {
+            panic!("folded statement is not a call: {body:#?}")
+        };
+        assert_eq!(args.len(), 2);
+        assert!(matches!(args[0].semantic(), Expr::Const(7)));
+        assert_eq!(args[0].origins(), Some(&OriginSet::one(0x1020)));
+        assert_eq!(args[1], Expr::Reg(reg("rsi")));
         assert_eq!(
             body[0].origins().expect("folded call owner").addresses(),
             &[0x1020, 0x1024]
