@@ -104,7 +104,10 @@ fn rematerialise_body(body: &mut Vec<Stmt>) {
             } = body[i + 1].semantic()
             {
                 if is_stack_top(slot) {
-                    let value = src.clone();
+                    let mut value = src.clone();
+                    if let Some(origins) = body[i + 1].origins() {
+                        value.merge_origins(origins);
+                    }
                     let origins = origins_of(&body[i..=i + 1]);
                     body.remove(i + 1);
                     body[i] = Stmt::Push { value }
@@ -242,6 +245,8 @@ mod tests {
 
     #[test]
     fn attributed_push_pair_unions_instruction_origins() {
+        let source_owner = OriginSet::one(0x0ffc);
+        let store_owner = OriginSet::one(0x1004);
         let mut f = Function {
             name: "f".into(),
             entry_va: 0,
@@ -249,17 +254,21 @@ mod tests {
                 rsp_sub(8).with_origins(OriginSet::one(0x1000)),
                 Stmt::Store {
                     addr: Expr::Reg(reg("stack_top")),
-                    src: Expr::Reg(reg("rbp")),
+                    src: Expr::Reg(reg("rbp")).with_origins(source_owner.clone()),
                     size: 8,
                 }
-                .with_origins(OriginSet::one(0x1004)),
+                .with_origins(store_owner.clone()),
             ],
         };
 
         rematerialise_stack_ops(&mut f);
 
         assert_eq!(f.body.len(), 1);
-        assert!(matches!(f.body[0].semantic(), Stmt::Push { .. }));
+        let Stmt::Push { value } = f.body[0].semantic() else {
+            panic!("expected attributed push: {:#?}", f.body)
+        };
+        assert!(matches!(value.semantic(), Expr::Reg(register) if register == &reg("rbp")));
+        assert_eq!(value.origins(), Some(&source_owner.union(&store_owner)));
         assert_eq!(
             f.body[0].origins().expect("push origins").addresses(),
             &[0x1000, 0x1004]
