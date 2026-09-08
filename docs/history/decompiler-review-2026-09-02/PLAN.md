@@ -788,14 +788,16 @@ If accepted:
   [indextree](https://github.com/saschagrunert/indextree) is a useful reference:
   one `Vec`-backed arena and numeric node IDs make the tree shareable across
   threads, and its optional Rayon feature provides parallel immutable
-  iteration. It does not by itself make arbitrary shared mutation safe. Any
-  Glaurung version must preserve deterministic output by computing per-node
-  facts in parallel into separate result slots, then applying mutations in
-  stable node-ID order at a pipeline-owned barrier. Benchmark this first on the
-  shadow structurer and dominance/region analyses; do not migrate the recursive
-  AST renderer or add a dependency until wall time, peak RSS, deterministic
-  text, origin sets, and serial/parallel equivalence are measured on the same
-  fixture population.
+  iteration. The intended deliverable is our own implementation of that
+  shared-tree parallelization pattern in Glaurung's existing tree/arena model,
+  not adoption of `indextree` as a dependency. It does not by itself make
+  arbitrary shared mutation safe. Preserve deterministic output by computing
+  per-node facts in parallel into separate result slots, then applying mutations
+  in stable node-ID order at a pipeline-owned barrier. Benchmark this first on
+  the shadow structurer and dominance/region analyses; do not migrate the
+  recursive AST renderer until wall time, peak RSS, deterministic text, origin
+  sets, and serial/parallel equivalence are measured on the same fixture
+  population.
 
 ## 8. WP2 — One pipeline, explicit budgets, and checked pass ordering
 
@@ -1839,6 +1841,14 @@ provenance through lowering.
   field-store rewriting. The existing positive test was observed red before
   the repair; all 13 module tests and the exact PE/PDB regression pass after a
   release rebuild. See `results/wp3-nested-debug-field-recovery.md`.
+  Commit `098e7035` closes two typed signed-comparison render readers. Origin
+  carriers around constants, explicit widening casts, nested declared-width
+  casts, and authoritative unsigned parameters no longer hide the semantic
+  operands from value-preserving cleanup or the exact per-use signed machine
+  interpretation. Both strengthened tests were observed red before the repair
+  and pass afterward with 4,669 unrelated tests filtered out. After a release
+  rebuild, the exact fixture-215 Clang-O2 `wide_selector_high_labels` lane also
+  passes. See `results/wp3-signed-comparison-expression-origin-rendering.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
