@@ -1072,8 +1072,15 @@ provenance through lowering.
   owners remain on the call statement. Both observed-red tests, all 111
   call-argument tests, and the exact four-cell release-built `call_into_spill`
   canary pass; see `results/wp3-sysv-stack-argument-expression-origins.md`.
-  Generic AAPCS stack arguments and the specialized recovered-layout, cdecl32,
-  hard-float, and table-call expression producers remain open.
+  Commit `76753c05` applies the same exact value-store ownership rule to the
+  generic AAPCS outgoing stack area and proves the owner survives
+  scratch-register substitution into the final source-ordered arguments. Its
+  observed-red helper, four AAPCS tests, 111 call-argument tests, and exact
+  four-cell ARM release A/B are neutral; the legacy `armv7:O0` cell is the same
+  pre-existing failure on parent and tip. See
+  `results/wp3-aapcs-stack-argument-expression-origins.md`. Specialized
+  recovered-layout, cdecl32, hard-float, and table-call expression producers
+  remain open.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
