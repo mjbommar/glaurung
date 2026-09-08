@@ -600,7 +600,11 @@ pub(super) fn run_ast_passes(
     });
     pass!("recover_resolved_tail_calls", {
         crate::ir::name_resolve::resolve_names(f, addr_map);
-        crate::ir::function_tables::resolve_function_table_entries(f, function_tables);
+        crate::ir::function_tables::resolve_function_table_entries_with_identities(
+            f,
+            function_tables,
+            value_identities,
+        );
         crate::ir::call_args::recover_resolved_direct_tail_calls_with_identities(
             f,
             cc,
