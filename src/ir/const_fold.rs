@@ -1159,34 +1159,41 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
         // `X == Y` (and likewise for `!=`) in modular machine arithmetic.
         // Recover that relation before merging ZF with CF/SF into inclusive
         // comparisons below.
-        let subtraction_relation = match (&*op, lhs.as_ref(), rhs.as_ref()) {
-            (
-                op @ (CmpOp::Eq | CmpOp::Ne),
-                Expr::Bin {
+        let subtraction_relation = if matches!(op, CmpOp::Eq | CmpOp::Ne) {
+            let operands = if matches!(rhs.semantic(), Expr::Const(0)) {
+                Some((lhs.as_ref(), rhs.as_ref()))
+            } else if matches!(lhs.semantic(), Expr::Const(0)) {
+                Some((rhs.as_ref(), lhs.as_ref()))
+            } else {
+                None
+            };
+            operands.and_then(|(subtraction, zero)| {
+                let Expr::Bin {
                     op: BinOp::Sub,
                     lhs: sub_lhs,
                     rhs: sub_rhs,
-                },
-                Expr::Const(0),
-            ) => Some(Expr::Cmp {
-                op: *op,
-                lhs: sub_lhs.clone(),
-                rhs: sub_rhs.clone(),
-            }),
-            (
-                op @ (CmpOp::Eq | CmpOp::Ne),
-                Expr::Const(0),
-                Expr::Bin {
-                    op: BinOp::Sub,
-                    lhs: sub_lhs,
-                    rhs: sub_rhs,
-                },
-            ) => Some(Expr::Cmp {
-                op: *op,
-                lhs: sub_lhs.clone(),
-                rhs: sub_rhs.clone(),
-            }),
-            _ => None,
+                } = subtraction.semantic()
+                else {
+                    return None;
+                };
+                let origins = subtraction
+                    .origins()
+                    .into_iter()
+                    .chain(zero.origins())
+                    .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+                        owners.union(next)
+                    });
+                Some(
+                    Expr::Cmp {
+                        op: *op,
+                        lhs: sub_lhs.clone(),
+                        rhs: sub_rhs.clone(),
+                    }
+                    .with_optional_origins((!origins.is_empty()).then_some(origins)),
+                )
+            })
+        } else {
+            None
         };
         if let Some(replacement) = subtraction_relation {
             rewrite(e, replacement, changed);
@@ -2156,6 +2163,42 @@ mod tests {
             }
         );
         assert_eq!(src.origins(), Some(&equality_owner.union(&less_owner)));
+    }
+
+    #[test]
+    fn attributed_subtraction_zero_test_recovers_relation_and_unions_origins() {
+        let lhs = Expr::Reg(reg("rax"));
+        let rhs = Expr::Reg(reg("rbx"));
+        let comparison_owner = crate::ir::ast::OriginSet::one(0x1000);
+        let subtraction_owner = crate::ir::ast::OriginSet::one(0x1004);
+        let subtraction =
+            bin(BinOp::Sub, lhs.clone(), rhs.clone()).with_origins(subtraction_owner.clone());
+        let mut function = one_stmt(
+            Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(subtraction),
+                rhs: Box::new(Expr::Const(0)),
+            }
+            .with_origins(comparison_owner.clone()),
+        );
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        assert_eq!(
+            src.semantic(),
+            &Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            }
+        );
+        assert_eq!(
+            src.origins(),
+            Some(&comparison_owner.union(&subtraction_owner))
+        );
     }
 
     #[test]
