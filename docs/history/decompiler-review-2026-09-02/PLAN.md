@@ -428,6 +428,17 @@ real stripped SysV format wrapper returns to its true two-parameter signature
 and forwards `arg1`, while the hardened rule declines to change generic impure
 folding. See `results/wp3-stack-coordinate-phase.md`.
 
+Commit `ef444751` makes the late loop-entry copy coalescer the next
+identity-native AST consumer. The pipeline projects opaque SSA identities
+through the exact raw-to-role naming map while preserving the original
+storage-keyed sidecar for type recovery. Exact opaque identities authorize the
+rewrite, ambiguous role identities fail closed, and values with no identity
+temporarily retain the legacy `varN` fallback for incremental migration. The
+focused contract and all 15 directly related latch-predicate tests pass; no
+broad suite was run for this bounded increment. This advances WP3 but does not
+complete consumer migration or conservative invalidation. See
+`results/wp3-ast-role-identities.md`.
+
 ## Authority and relationship to the roadmaps
 
 `docs/development/roadmap/README.md` remains the canonical roadmap index, and
