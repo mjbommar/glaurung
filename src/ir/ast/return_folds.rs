@@ -404,7 +404,7 @@ fn fold_exhaustive_switch_returns_body(body: &mut Vec<Stmt>) {
 }
 
 fn cast_chain_root_reg(expr: &Expr) -> Option<&VReg> {
-    match expr {
+    match expr.semantic() {
         Expr::Reg(reg) => Some(reg),
         Expr::Cast { expr, .. } => cast_chain_root_reg(expr),
         _ => None,
@@ -413,6 +413,9 @@ fn cast_chain_root_reg(expr: &Expr) -> Option<&VReg> {
 
 fn apply_return_cast_template(template: &Expr, result: &VReg, value: Expr) -> Option<Expr> {
     match template {
+        Expr::Origin { origins, expr } => {
+            Some(apply_return_cast_template(expr, result, value)?.with_origins(origins.clone()))
+        }
         Expr::Reg(reg) if reg == result => Some(value),
         Expr::Cast {
             signed,
@@ -734,6 +737,50 @@ mod tests {
         };
         assert_eq!(then_value.origins(), Some(&OriginSet::one(0x1004)));
         assert_eq!(else_value.origins(), Some(&OriginSet::one(0x1008)));
+    }
+
+    #[test]
+    fn attributed_exhaustive_if_recognizes_return_expression_carrier() {
+        let result = VReg::phys("rax#1");
+        let return_value_owner = OriginSet::one(0x1010);
+        let mut function = Function {
+            name: "classify".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Reg(VReg::phys("arg0")),
+                    then_body: vec![Stmt::Assign {
+                        dst: result.clone(),
+                        src: Expr::Const(1),
+                    }],
+                    else_body: Some(vec![Stmt::Assign {
+                        dst: result.clone(),
+                        src: Expr::Const(2),
+                    }]),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(result).with_origins(return_value_owner.clone())),
+                },
+            ],
+        };
+
+        fold_exhaustive_if_returns(&mut function);
+
+        assert_eq!(function.body.len(), 1, "the shared return must be folded");
+        let Stmt::If {
+            then_body,
+            else_body: Some(else_body),
+            ..
+        } = function.body[0].semantic()
+        else {
+            panic!("expected exhaustive if: {:#?}", function.body)
+        };
+        for arm in [then_body, else_body] {
+            let Stmt::Return { value: Some(value) } = arm[0].semantic() else {
+                panic!("expected folded arm return: {arm:#?}")
+            };
+            assert_eq!(value.origins(), Some(&return_value_owner));
+        }
     }
 
     #[test]
