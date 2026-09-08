@@ -667,6 +667,22 @@ mod tests {
     }
 
     #[test]
+    fn attributed_promoted_store_target_is_not_counted_as_a_read() {
+        let local = reg("local_0");
+        let function = Function {
+            name: "write_local".into(),
+            entry_va: 0,
+            body: vec![Stmt::Store {
+                addr: Expr::Reg(local.clone()).with_origins(crate::ir::ast::OriginSet::one(0x1030)),
+                src: Expr::Const(1),
+                size: 4,
+            }],
+        };
+
+        assert_eq!(register_read_count(&function, &local), 0);
+    }
+
+    #[test]
     fn a_pointer_scratch_store_does_not_become_a_promoted_local_assignment() {
         // Stack promotion overloads a bare promoted-local Store address as an
         // assignment to that local. `address = local_20; *address = value` is

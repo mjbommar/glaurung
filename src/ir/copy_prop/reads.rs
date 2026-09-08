@@ -108,7 +108,7 @@ pub(super) fn visit_stmt_reads<F: FnMut(&VReg) -> bool>(s: &Stmt, visit: &mut F)
         Stmt::Store { addr, src, .. } => {
             // `Store local_x = value` is how promoted scalar assignment is
             // encoded. Its bare local is a destination, not a pointer read.
-            if !matches!(addr, Expr::Reg(dst) if is_promoted_local_reg(dst))
+            if !matches!(addr.semantic(), Expr::Reg(dst) if is_promoted_local_reg(dst))
                 && !visit_expr_reads(addr, visit)
             {
                 return false;
