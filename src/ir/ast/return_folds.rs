@@ -470,13 +470,16 @@ fn turn_terminal_result_into_return(
             last.merge_origins(&return_origins);
             true
         }
-        Stmt::Store {
-            addr: Expr::Reg(dst),
-            src,
-            ..
-        } if dst == result && matches!(&*dst, VReg::Phys(name) if is_promoted_local(name)) => {
+        Stmt::Store { addr, src, .. }
+            if matches!(addr.semantic(), Expr::Reg(dst)
+                if dst == result
+                    && matches!(dst, VReg::Phys(name) if is_promoted_local(name))) =>
+        {
             let mut source = src.clone();
             if let Some(origins) = &value_origins {
+                source.merge_origins(origins);
+            }
+            if let Some(origins) = addr.origins() {
                 source.merge_origins(origins);
             }
             let Some(value) = apply_return_cast_template(return_template, result, source) else {
@@ -790,6 +793,56 @@ mod tests {
                 panic!("expected folded arm return: {arm:#?}")
             };
             assert_eq!(value.origins(), Some(&return_value_owner));
+        }
+    }
+
+    #[test]
+    fn attributed_exhaustive_if_recognizes_promoted_store_target_carriers() {
+        let result = VReg::phys("local_0");
+        let then_target_owner = OriginSet::one(0x1004);
+        let else_target_owner = OriginSet::one(0x1008);
+        let mut function = Function {
+            name: "classify".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Reg(VReg::phys("arg0")),
+                    then_body: vec![Stmt::Store {
+                        addr: Expr::Reg(result.clone()).with_origins(then_target_owner.clone()),
+                        src: Expr::Const(1),
+                        size: 4,
+                    }],
+                    else_body: Some(vec![Stmt::Store {
+                        addr: Expr::Reg(result.clone()).with_origins(else_target_owner.clone()),
+                        src: Expr::Const(2),
+                        size: 4,
+                    }]),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(result)),
+                },
+            ],
+        };
+
+        fold_exhaustive_if_returns(&mut function);
+
+        assert_eq!(function.body.len(), 1, "the shared return must be folded");
+        let Stmt::If {
+            then_body,
+            else_body: Some(else_body),
+            ..
+        } = function.body[0].semantic()
+        else {
+            panic!("expected exhaustive if: {:#?}", function.body)
+        };
+        for (arm, owner) in [
+            (then_body, &then_target_owner),
+            (else_body, &else_target_owner),
+        ] {
+            let Stmt::Return { value: Some(value) } = arm[0].semantic() else {
+                panic!("expected folded arm return: {arm:#?}")
+            };
+            assert_eq!(value.origins(), Some(owner));
         }
     }
 
