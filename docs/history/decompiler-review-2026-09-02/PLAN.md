@@ -1293,6 +1293,12 @@ provenance through lowering.
   and guard dependencies remain refused. Its observed-red test and all 18
   guarded-switch tests pass; see
   `results/wp3-guarded-copy-expression-origins.md`.
+  Commit `af10e4e7` then makes guarded-switch copy elimination compare an
+  attributed temporary discriminator by semantic identity and retain its owner
+  on the replacement discriminant. Exact temporary identity, unsigned-
+  extension proof, and one-use requirements remain mandatory. Its strengthened
+  observed-red test and all 18 guarded-switch tests pass; see
+  `results/wp3-switch-discriminator-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
