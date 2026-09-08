@@ -1652,6 +1652,14 @@ provenance through lowering.
   regression, all 72 copy-propagation tests, and the two-function GCC-O2
   flag/predicate round trip pass; see
   `results/wp3-copy-overwritten-value-identities.md`.
+  Commit `face2852` then migrates the shared read histogram's overloaded
+  promoted-store rule to the same identity authority and wires every production
+  copy consumer that already owns the sidecar. Opaque promoted-store targets
+  now count as writes, not pointer reads, for counted propagation, dead-copy
+  cleanup, adjacent guard/effectful/promoted-value proofs, and `for`-header
+  scratch liveness. Both exact read/write regressions, all 74 copy-propagation
+  tests, and the compiled ARM32 frame-spill fixture pass; see
+  `results/wp3-copy-read-count-identities.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
