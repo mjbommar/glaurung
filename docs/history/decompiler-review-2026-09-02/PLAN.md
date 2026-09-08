@@ -1961,6 +1961,13 @@ provenance through lowering.
   observed red. All three strengthened exact tests and all 25 call-contract
   tests pass, followed by a successful release rebuild. See
   `results/wp3-call-contract-consumer-expression-origins.md`.
+  Commit `c504e5f8` closes the typed-call select reader. An origin around a
+  mixed pointer/integer select no longer moves the authoritative parameter
+  conversion outside the conditional or forces its pointer arm through
+  `long`; attributed and plain forms render byte-identically with the existing
+  per-arm conversions. The exact contract was observed red, both neighboring
+  pointer/select guards pass, and the single guarded-call release test passes.
+  See `results/wp3-typed-call-select-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
