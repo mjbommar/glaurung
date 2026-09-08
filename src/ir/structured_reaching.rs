@@ -92,7 +92,9 @@ fn analyze_statement(
             written |= dst == written_value;
         }
         Stmt::Store { addr, src, .. } => {
-            if !matches!(addr, Expr::Reg(register) if register == read_value) {
+            let semantic_addr = addr.semantic();
+            let semantic_src = src.semantic();
+            if !matches!(semantic_addr, Expr::Reg(register) if register == read_value) {
                 saw_read |= observed(addr, read_value, written);
             }
             saw_read |= observed(src, read_value, written);
@@ -102,9 +104,9 @@ fn analyze_statement(
             // not a mutation; later stores to the same local are mutations
             // whose effect can reach subsequent reads of the original arg.
             let writes_promoted_value =
-                matches!(addr, Expr::Reg(register) if register == written_value);
+                matches!(semantic_addr, Expr::Reg(register) if register == written_value);
             let establishes_home = writes_promoted_value
-                && matches!(src, Expr::Reg(register) if register == read_value);
+                && matches!(semantic_src, Expr::Reg(register) if register == read_value);
             written |= writes_promoted_value && !establishes_home;
         }
         Stmt::Call {
@@ -280,17 +282,19 @@ fn unstructured_has_both_events(body: &[Stmt], read: &VReg, written: &VReg) -> b
                     events.1 |= expression_reads(src, read);
                 }
                 Stmt::Store { addr, src, .. } => {
+                    let semantic_addr = addr.semantic();
+                    let semantic_src = src.semantic();
                     // `home = arg` establishes the alias under consideration;
                     // it is neither a conflicting mutation nor an independent
                     // read. Treating it as both made every goto-containing
                     // parameter home fail closed before any real conflict.
-                    if matches!(addr, Expr::Reg(register) if register == written)
-                        && matches!(src, Expr::Reg(register) if register == read)
+                    if matches!(semantic_addr, Expr::Reg(register) if register == written)
+                        && matches!(semantic_src, Expr::Reg(register) if register == read)
                     {
                         continue;
                     }
-                    events.0 |= matches!(addr, Expr::Reg(register) if register == written);
-                    events.1 |= (!matches!(addr, Expr::Reg(register) if register == read)
+                    events.0 |= matches!(semantic_addr, Expr::Reg(register) if register == written);
+                    events.1 |= (!matches!(semantic_addr, Expr::Reg(register) if register == read)
                         && expression_reads(addr, read))
                         || expression_reads(src, read);
                 }
@@ -518,6 +522,57 @@ mod tests {
 
         assert!(!read_may_observe_prior_write(
             &body,
+            &reg("arg0"),
+            &reg("home")
+        ));
+    }
+
+    #[test]
+    fn expression_origins_preserve_home_initializers_and_mutations() {
+        let origin =
+            |expression: Expr, va| expression.with_origins(crate::ir::ast::OriginSet::one(va));
+        let initializer = Stmt::Store {
+            addr: origin(Expr::Reg(reg("home")), 0x1000),
+            src: origin(Expr::Reg(reg("arg0")), 0x1004),
+            size: 4,
+        };
+        let read = Stmt::Return {
+            value: Some(origin(Expr::Reg(reg("arg0")), 0x1008)),
+        };
+
+        assert!(!read_may_observe_prior_write(
+            &[initializer.clone(), read.clone()],
+            &reg("arg0"),
+            &reg("home")
+        ));
+        assert!(!read_may_observe_prior_write(
+            &[
+                Stmt::Label(0x1000),
+                initializer,
+                Stmt::Goto { target: 0x1000 },
+                read.clone(),
+            ],
+            &reg("arg0"),
+            &reg("home")
+        ));
+
+        let mutation = Stmt::Store {
+            addr: origin(Expr::Reg(reg("home")), 0x1010),
+            src: origin(Expr::Const(7), 0x1014),
+            size: 4,
+        };
+        assert!(read_may_observe_prior_write(
+            &[mutation.clone(), read.clone()],
+            &reg("arg0"),
+            &reg("home")
+        ));
+        assert!(read_may_observe_prior_write(
+            &[
+                Stmt::Label(0x1010),
+                mutation,
+                Stmt::Goto { target: 0x1010 },
+                read,
+            ],
             &reg("arg0"),
             &reg("home")
         ));
