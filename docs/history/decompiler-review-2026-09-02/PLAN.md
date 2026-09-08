@@ -1616,9 +1616,12 @@ provenance through lowering.
   numbering attaches a live ABI parameter slot directly to each exact
   version-zero identity and refuses later register versions or non-live ABI
   registers. This makes parameter ownership available before presentation
-  naming. The production fold has deliberately not switched yet: its
-  `Deref(StackAddr(argN))` rule must first be reconciled with the fact that
-  stack-object promotion occurs after the early fold. See
+  naming. Commit `86a3b39a` then projects pipeline-owned stack parameter slots
+  into the same typed sidecar and switches the production early fold to exact
+  identity authority. The former slot-authority path, which parsed `argN`, is
+  deleted. A focused A/B rebuild proves that the two currently red cdecl tests
+  are unchanged pre-existing regressions; the optimized cdecl execution round
+  trip remains green. See
   `results/wp3-early-parameter-identities.md`.
 - [~] Remove semantic parsing of `ret`, `argN`, `local_`, and `#version` only
   after each consumer has a typed identity replacement.

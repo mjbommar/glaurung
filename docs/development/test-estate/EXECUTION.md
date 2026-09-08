@@ -426,10 +426,10 @@ make, not a thing to silently delete.
 ## Early typed ABI parameter identities
 
 Commit `079e26d5` makes value numbering record a live ABI parameter slot on
-the exact version-zero SSA value itself. A later definition of that register and an
-unused ABI argument register remain unowned. This is a bounded WP3 prerequisite
-for migrating early consumers away from `argN` parsing; constant folding has
-not been switched until its pre-stack-promotion input shape is proven.
+the exact version-zero SSA value itself. A later definition of that register
+and an unused ABI argument register remain unowned. Commit `86a3b39a` projects
+owned stack-parameter slots into the same sidecar, switches the production
+early constant fold to identity authority, and deletes its slot parser.
 
 Focused evidence:
 
@@ -437,7 +437,32 @@ Focused evidence:
 cargo test --lib --features python-ext \
   abi_parameter_slots_attach_only_to_live_version_zero_values
 1 passed; 4,458 filtered out
+
+cargo test --lib --features python-ext \
+  stack_parameter_projection_records_only_owned_slots
+1 passed; 4,460 filtered out
+
+cargo test --lib --features python-ext \
+  early_constant_fold_uses_typed_stack_parameter_roles
+1 passed; 4,460 filtered out
+
+cargo test --lib --features python-ext \
+  parameter_address_load_requires_a_typed_parameter_role
+1 passed; 4,460 filtered out
+
+uv run maturin develop
+success
+
+uv run pytest \
+  python/tests/test_pe32_cdecl_roundtrip.py::test_i386_optimized_cdecl_stack_arguments_round_trip \
+  -q
+1 passed
 ```
+
+The two other cdecl tests remain red, but a one-line A/B rebuild with the old
+caller reproduced both failures unchanged. They are the existing PE32 `_main`
+signature and redundant unoptimized call-cast regressions, not regressions from
+this migration.
 
 No broad Rust or Python suite, fixture matrix, DecBench, or Joern lane ran.
 
