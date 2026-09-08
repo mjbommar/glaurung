@@ -99,6 +99,14 @@ storage rather than every local whose display name happens to match `argN`.
 The same coordinate function now owns both name allocation and typed ownership,
 so their ABI interpretations cannot drift independently.
 
+Commit `bc8c7755` migrates declaration-plan fact admission. Recovered pointer
+pointee width, integer signedness/width, and pre-canonicalization machine width
+now recognize a parameter through `ValueIdentities::parameter_slot` whenever
+the authoritative sidecar is installed. A stray type-map row named `arg0` or
+`arg1` can therefore no longer alter body casts or pointer-index rendering.
+Exact SSA identities and promoted stack locals remain separately eligible, and
+the explicit no-sidecar compatibility path retains legacy spelling.
+
 Focused validation used exact Rust tests only:
 
 ```text
@@ -212,6 +220,13 @@ a_wide_load_over_an_incoming_parameter_slot_is_not_concatenated
 
 stack_arguments
 10 passed; 4,428 filtered out
+
+declaration_facts_do_not_trust_an_unowned_arg_spelling
+RED: unowned arg0 produced Some((false, 4)); 1 failed, 4,438 filtered out
+GREEN: 1 passed; 4,438 filtered out
+
+ir::ast::declaration_plan::identity_tests::
+6 passed; 4,433 filtered out
 ```
 
 Each command was `cargo test --features python-ext --lib

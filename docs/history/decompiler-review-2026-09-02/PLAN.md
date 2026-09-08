@@ -1669,7 +1669,11 @@ provenance through lowering.
   ABI-proved source-parameter slot directly on promoted stack storage. Home-
   slot assignment and adjacent-slot composition consume that typed fact rather
   than reparsing the generated `argN` name; an unowned local merely spelled
-  `arg0` can no longer impersonate parameter storage.
+  `arg0` can no longer impersonate parameter storage. Commit `bc8c7755`
+  migrates the declaration plan's pointer, integer-type, and machine-width
+  fact admission to the same authority rule. With identities installed, an
+  unowned `argN` type-map row cannot influence casts or pointer indexing;
+  exact SSA values and promoted storage retain their independent eligibility.
   See
   `results/wp3-parameter-role-metadata.md`. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
