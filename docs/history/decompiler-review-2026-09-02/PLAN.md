@@ -1950,6 +1950,13 @@ provenance through lowering.
   AArch64 O2 `agr198_five_roundtrip` fixture pass with a fresh extension. No
   broad suite or corpus ran. See
   `results/wp3-indirect-result-canonical-bases.md`.
+  Commit `20f0575c` then closes the enclosing reaching-state variant: a
+  non-canonical `rdi#not_canonical` identity can no longer cross a structured
+  boundary as a proven call argument, while an opaque value with exact `rdi`
+  identity still does. The adversarial test was observed red before the fix;
+  it, two nearest enclosing-state controls, and only the GCC O2
+  `se189_select_call` fixture pass with a fresh extension. No broad suite or
+  corpus ran. See `results/wp3-enclosing-canonical-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
