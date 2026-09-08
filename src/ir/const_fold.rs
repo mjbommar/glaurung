@@ -997,8 +997,20 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
             }
         }
 
-        // Constant-with-anything identities.
-        if let Expr::Const(0) = **rhs {
+        // Constant-with-anything identities. Carrier metadata does not change
+        // the value being matched. A neutral constant contributes its owner to
+        // the surviving value; an annihilated operand does not donate an
+        // unrelated owner to the constant result.
+        let attributed = |replacement: Expr, contributors: &[&Expr]| {
+            let origins = contributors
+                .iter()
+                .filter_map(|contributor| contributor.origins())
+                .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+                    owners.union(next)
+                });
+            replacement.with_optional_origins((!origins.is_empty()).then_some(origins))
+        };
+        let identity_replacement = if matches!(rhs.semantic(), Expr::Const(0)) {
             match op {
                 BinOp::Add
                 | BinOp::Sub
@@ -1006,73 +1018,52 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
                 | BinOp::Xor
                 | BinOp::Shl
                 | BinOp::Shr
-                | BinOp::Sar => {
-                    let x = std::mem::replace(lhs.as_mut(), Expr::Const(0));
-                    rewrite(e, x, changed);
-                    return;
-                }
-                BinOp::Mul | BinOp::And => {
-                    rewrite(e, Expr::Const(0), changed);
-                    return;
-                }
+                | BinOp::Sar => Some(attributed(lhs.semantic().clone(), &[lhs, rhs])),
+                BinOp::Mul | BinOp::And => Some(attributed(Expr::Const(0), &[rhs])),
                 BinOp::LogicalOr if is_exact_boolean(lhs) => {
-                    let x = std::mem::replace(lhs.as_mut(), Expr::Const(0));
-                    rewrite(e, x, changed);
-                    return;
+                    Some(attributed(lhs.semantic().clone(), &[lhs, rhs]))
                 }
-                _ => {}
+                _ => None,
             }
-        }
-        if let Expr::Const(0) = **lhs {
-            if matches!(op, BinOp::Add | BinOp::Or | BinOp::Xor) {
-                let x = std::mem::replace(rhs.as_mut(), Expr::Const(0));
-                rewrite(e, x, changed);
-                return;
+        } else if matches!(lhs.semantic(), Expr::Const(0)) {
+            match op {
+                BinOp::Add | BinOp::Or | BinOp::Xor => {
+                    Some(attributed(rhs.semantic().clone(), &[lhs, rhs]))
+                }
+                BinOp::Mul | BinOp::And => Some(attributed(Expr::Const(0), &[lhs])),
+                BinOp::LogicalOr if is_exact_boolean(rhs) => {
+                    Some(attributed(rhs.semantic().clone(), &[lhs, rhs]))
+                }
+                _ => None,
             }
-            if matches!(op, BinOp::Mul | BinOp::And) {
-                rewrite(e, Expr::Const(0), changed);
-                return;
+        } else if matches!(rhs.semantic(), Expr::Const(1)) {
+            match op {
+                BinOp::Mul => Some(attributed(lhs.semantic().clone(), &[lhs, rhs])),
+                BinOp::LogicalAnd if is_exact_boolean(lhs) => {
+                    Some(attributed(lhs.semantic().clone(), &[lhs, rhs]))
+                }
+                _ => None,
             }
-            if op == BinOp::LogicalOr && is_exact_boolean(rhs) {
-                let x = std::mem::replace(rhs.as_mut(), Expr::Const(0));
-                rewrite(e, x, changed);
-                return;
+        } else if matches!(lhs.semantic(), Expr::Const(1)) {
+            match op {
+                BinOp::Mul => Some(attributed(rhs.semantic().clone(), &[lhs, rhs])),
+                BinOp::LogicalAnd if is_exact_boolean(rhs) => {
+                    Some(attributed(rhs.semantic().clone(), &[lhs, rhs]))
+                }
+                _ => None,
             }
-        }
-        if let Expr::Const(1) = **rhs {
-            if matches!(op, BinOp::Mul) {
-                let x = std::mem::replace(lhs.as_mut(), Expr::Const(0));
-                rewrite(e, x, changed);
-                return;
+        } else if matches!(rhs.semantic(), Expr::Const(-1)) {
+            match op {
+                BinOp::And => Some(attributed(lhs.semantic().clone(), &[lhs, rhs])),
+                BinOp::Or => Some(attributed(Expr::Const(-1), &[rhs])),
+                _ => None,
             }
-            if op == BinOp::LogicalAnd && is_exact_boolean(lhs) {
-                let x = std::mem::replace(lhs.as_mut(), Expr::Const(0));
-                rewrite(e, x, changed);
-                return;
-            }
-        }
-        if let Expr::Const(1) = **lhs {
-            if matches!(op, BinOp::Mul) {
-                let x = std::mem::replace(rhs.as_mut(), Expr::Const(0));
-                rewrite(e, x, changed);
-                return;
-            }
-            if op == BinOp::LogicalAnd && is_exact_boolean(rhs) {
-                let x = std::mem::replace(rhs.as_mut(), Expr::Const(0));
-                rewrite(e, x, changed);
-                return;
-            }
-        }
-        if let Expr::Const(-1) = **rhs {
-            if matches!(op, BinOp::And) {
-                let x = std::mem::replace(lhs.as_mut(), Expr::Const(0));
-                rewrite(e, x, changed);
-                return;
-            }
-            if matches!(op, BinOp::Or) {
-                rewrite(e, Expr::Const(-1), changed);
-                return;
-            }
+        } else {
+            None
+        };
+        if let Some(replacement) = identity_replacement {
+            rewrite(e, replacement, changed);
+            return;
         }
 
         // Addr ± Const fold — how AArch64 and ARM32 name a global at all.
@@ -2299,6 +2290,60 @@ mod tests {
         assert_eq!(
             src.origins(),
             Some(&outer_owner.union(&lhs_owner).union(&rhs_owner))
+        );
+    }
+
+    #[test]
+    fn attributed_constant_identities_keep_only_semantic_contributors() {
+        let neutral_outer = crate::ir::ast::OriginSet::one(0x1030);
+        let neutral_value = crate::ir::ast::OriginSet::one(0x1034);
+        let neutral_zero = crate::ir::ast::OriginSet::one(0x1038);
+        let absorbing_outer = crate::ir::ast::OriginSet::one(0x1040);
+        let discarded_value = crate::ir::ast::OriginSet::one(0x1044);
+        let absorbing_zero = crate::ir::ast::OriginSet::one(0x1048);
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rax"),
+                    src: bin(
+                        BinOp::Add,
+                        Expr::Reg(reg("value")).with_origins(neutral_value.clone()),
+                        Expr::Const(0).with_origins(neutral_zero.clone()),
+                    )
+                    .with_origins(neutral_outer.clone()),
+                },
+                Stmt::Assign {
+                    dst: reg("rbx"),
+                    src: bin(
+                        BinOp::Mul,
+                        Expr::Reg(reg("discarded")).with_origins(discarded_value.clone()),
+                        Expr::Const(0).with_origins(absorbing_zero.clone()),
+                    )
+                    .with_origins(absorbing_outer.clone()),
+                },
+            ],
+        };
+
+        fold_constants(&mut f);
+
+        let Stmt::Assign { src: neutral, .. } = &f.body[0] else {
+            panic!("expected neutral assignment")
+        };
+        assert_eq!(neutral.semantic(), &Expr::Reg(reg("value")));
+        assert_eq!(
+            neutral.origins(),
+            Some(&neutral_outer.union(&neutral_value).union(&neutral_zero))
+        );
+
+        let Stmt::Assign { src: absorbing, .. } = &f.body[1] else {
+            panic!("expected absorbing assignment")
+        };
+        assert_eq!(absorbing.semantic(), &Expr::Const(0));
+        assert_eq!(
+            absorbing.origins(),
+            Some(&absorbing_outer.union(&absorbing_zero))
         );
     }
 
