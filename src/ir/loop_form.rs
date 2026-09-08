@@ -917,13 +917,13 @@ fn seed_exit_value_copies(stmts: &mut Vec<Stmt>) {
 }
 
 fn exit_value_seed_candidate(stmt: &Stmt) -> Option<Vec<Stmt>> {
-    let Stmt::While {
-        cond: Expr::Const(1),
-        body,
-    } = stmt.semantic()
+    let Stmt::While { cond, body } = stmt.semantic()
     else {
         return None;
     };
+    if !matches!(cond.semantic(), Expr::Const(1)) {
+        return None;
+    }
     let mut pairs = Vec::new();
     for stmt in body {
         let Stmt::Assign {
@@ -1370,7 +1370,7 @@ fn recover_body(stmts: &mut [Stmt]) {
             Stmt::While { cond, body } => {
                 recover_body(body);
 
-                if !matches!(cond, crate::ir::ast::Expr::Const(1)) {
+                if !matches!(cond.semantic(), crate::ir::ast::Expr::Const(1)) {
                     continue;
                 }
                 let Some(first) = body.first() else {
@@ -1388,7 +1388,13 @@ fn recover_body(stmts: &mut [Stmt]) {
                 {
                     continue;
                 }
-                *cond = negate_cmp_expr(exit_cond.clone());
+                let consumed_origins = cond.origins().cloned();
+                let (exit_cond, exit_origins) = exit_cond.clone().into_semantic_with_origins();
+                let mut recovered = negate_cmp_expr(exit_cond).with_optional_origins(exit_origins);
+                if let Some(consumed_origins) = consumed_origins {
+                    recovered.merge_origins(&consumed_origins);
+                }
+                *cond = recovered;
                 body.remove(0);
             }
             Stmt::For { body, .. } => recover_body(body),
@@ -2176,14 +2182,14 @@ mod tests {
             name: "seeded_head_test".into(),
             entry_va: 0,
             body: vec![Stmt::While {
-                cond: Expr::Const(1),
+                cond: Expr::Const(1).with_origins(OriginSet::one(0x100c)),
                 body: vec![
                     Stmt::Assign {
                         dst: exit_value.clone(),
                         src: seed_value.clone(),
                     },
                     Stmt::If {
-                        cond: Expr::Reg(reg("done")),
+                        cond: Expr::Reg(reg("done")).with_origins(OriginSet::one(0x1010)),
                         then_body: vec![Stmt::Break],
                         else_body: None,
                     },
@@ -2213,7 +2219,8 @@ mod tests {
                         op: CmpOp::Eq,
                         lhs: Box::new(Expr::Reg(reg("done"))),
                         rhs: Box::new(Expr::Const(0)),
-                    },
+                    }
+                    .with_origins(OriginSet::from_addresses([0x100c, 0x1010])),
                     body: vec![
                         Stmt::Assign {
                             dst: carried,
