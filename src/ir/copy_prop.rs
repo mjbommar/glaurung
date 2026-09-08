@@ -193,7 +193,7 @@ fn propagate_run(stmts: &mut [Stmt], changed: &mut bool) -> Copies {
                 *changed |= subst_store_addr(addr, &copies);
                 *changed |= subst(src, &copies);
                 // A store to a bare promoted local writes that variable.
-                if let Expr::Reg(r) = addr {
+                if let Expr::Reg(r) = addr.semantic() {
                     invalidate(&mut copies, r);
                 }
             }
@@ -328,7 +328,7 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &RegMap<usize>, changed: &mu
             Stmt::Store { addr, src, size } => {
                 *changed |= subst_store_addr(addr, &copies);
                 *changed |= subst(src, &copies);
-                if let Expr::Reg(r) = addr {
+                if let Expr::Reg(r) = addr.semantic() {
                     invalidate(&mut copies, r);
                 }
                 // The store may alias a pending single-use load; folding that
@@ -590,6 +590,43 @@ mod tests {
         assert_eq!(
             cond, &original_guard,
             "the cursor is loop-carried, not arg0"
+        );
+    }
+
+    #[test]
+    fn attributed_store_target_invalidates_an_earlier_snapshot() {
+        let local = reg("local_0");
+        let snapshot = reg("var0");
+        let mut function = Function {
+            name: "snapshot".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: snapshot.clone(),
+                    src: Expr::Reg(local.clone()),
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(local.clone())
+                        .with_origins(crate::ir::ast::OriginSet::one(0x1010)),
+                    src: Expr::Const(1),
+                    size: 4,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(snapshot.clone())),
+                },
+            ],
+        };
+
+        propagate_copies(&mut function);
+
+        let Stmt::Return { value: Some(value) } =
+            function.body.last().expect("retained return").semantic()
+        else {
+            panic!("expected returned snapshot: {:#?}", function.body)
+        };
+        assert!(
+            matches!(value.semantic(), Expr::Reg(register) if register == &snapshot),
+            "the pre-store snapshot must not become the post-store local: {value:#?}"
         );
     }
 
