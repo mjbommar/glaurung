@@ -503,6 +503,14 @@ render-time identity cluster, while the wider WP3 semantic-consumer audit and
 origin-determinism exit criteria remain open. See
 `results/wp3-consumed-extension-identities.md`.
 
+Commit `2ccd8ce1` then removes a separate `varN` dependency from high-bit
+integer-literal refinement. An exact opaque identity can now receive a proven
+unsigned type when all definitions and uses support the positive
+interpretation; ambiguity retains the signed type. Five exact tests cover the
+new positive/negative contracts and the existing origin, signed-use, and
+wide-comparison boundaries, with 4,414 unrelated tests filtered out. See
+`results/wp3-unsigned-literal-identities.md`.
+
 ## Authority and relationship to the roadmaps
 
 `docs/development/roadmap/README.md` remains the canonical roadmap index, and
