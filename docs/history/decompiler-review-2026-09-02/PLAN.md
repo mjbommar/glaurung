@@ -1746,6 +1746,12 @@ provenance through lowering.
   with no attributable addition; its one remaining AArch64 O0 failure is
   byte-identical with the patch reversed. See
   `results/wp3-float-expression-origin-rendering.md`.
+  Commit `56ed8169` closes the adjacent `_Bool` render boundary. An attributed
+  comparison is still known to be exactly zero or one, so the renderer no
+  longer expands it into a redundant byte cast and second zero test. The
+  focused contract was observed red, and all 52 functions in the directly
+  relevant host bool/narrow-return slice remain green after a release rebuild;
+  see `results/wp3-boolean-expression-origin-rendering.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
