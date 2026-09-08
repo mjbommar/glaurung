@@ -1766,6 +1766,14 @@ provenance through lowering.
   red, and all 60 functions in the host shift/narrow-return canary remain green
   after a release rebuild; see
   `results/wp3-shift-width-expression-origin-rendering.md`.
+  Commit `c5a623ad` completes the adjacent logical/right and wide-left shift
+  render helpers. Attributed counts, loads, and declared narrow registers now
+  retain the exact unsigned width or required zero-extension instead of
+  widening silently or emitting undefined narrow C shifts. Both contracts were
+  observed red. The 98/197/198 canary keeps every intended shift producer green;
+  six aggregate round-trip regressions reproduce unchanged with the owned lines
+  reversed and are not attributed. See
+  `results/wp3-shift-operand-expression-origin-rendering.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
