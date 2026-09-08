@@ -1415,6 +1415,11 @@ provenance through lowering.
   mismatched-constant refusal remains unchanged. Its observed-red test and all
   eight return-fold tests pass; see
   `results/wp3-late-return-expression-origins.md`.
+  Commit `de7c13d1` then makes exhaustive branch-return recovery see through
+  an origin carrier on the shared return register/cast template. Each
+  synthesized arm return retains that template's exact expression owner. Its
+  observed-red test and all nine return-fold tests pass; see
+  `results/wp3-shared-return-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
