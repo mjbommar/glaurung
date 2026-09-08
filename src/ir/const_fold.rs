@@ -693,35 +693,49 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
             if_true,
             if_false,
             width,
-        } if repeatable_condition(cond) => match (if_true.as_ref(), if_false.as_ref()) {
-            (
+        } if repeatable_condition(cond) => {
+            let make_replacement = |inner_select: &Expr,
+                                    inner_cond: &Expr,
+                                    inner_true: Box<Expr>,
+                                    inner_false: Box<Expr>| {
+                let origins = inner_select
+                    .origins()
+                    .into_iter()
+                    .chain(inner_cond.origins())
+                    .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+                        owners.union(next)
+                    });
                 Expr::Select {
-                    cond: inner_cond,
+                    cond: cond.clone(),
                     if_true: inner_true,
-                    ..
-                },
-                outer_false,
-            ) if inner_cond.as_ref() == cond.as_ref() => Some(Expr::Select {
-                cond: cond.clone(),
-                if_true: inner_true.clone(),
-                if_false: Box::new(outer_false.clone()),
-                width: *width,
-            }),
-            (
-                outer_true,
-                Expr::Select {
-                    cond: inner_cond,
                     if_false: inner_false,
-                    ..
-                },
-            ) if inner_cond.as_ref() == cond.as_ref() => Some(Expr::Select {
-                cond: cond.clone(),
-                if_true: Box::new(outer_true.clone()),
-                if_false: inner_false.clone(),
-                width: *width,
-            }),
-            _ => None,
-        },
+                    width: *width,
+                }
+                .with_optional_origins((!origins.is_empty()).then_some(origins))
+            };
+
+            if let Expr::Select {
+                cond: inner_cond,
+                if_true: inner_true,
+                ..
+            } = if_true.semantic()
+            {
+                (inner_cond.semantic() == cond.semantic()).then(|| {
+                    make_replacement(if_true, inner_cond, inner_true.clone(), if_false.clone())
+                })
+            } else if let Expr::Select {
+                cond: inner_cond,
+                if_false: inner_false,
+                ..
+            } = if_false.semantic()
+            {
+                (inner_cond.semantic() == cond.semantic()).then(|| {
+                    make_replacement(if_false, inner_cond, if_true.clone(), inner_false.clone())
+                })
+            } else {
+                None
+            }
+        }
         _ => None,
     };
     if let Some(replacement) = dominated_select {
@@ -1828,6 +1842,58 @@ mod tests {
             "{src:#?}"
         );
         assert!(!format!("{src:?}").contains("undefined_prior"));
+    }
+
+    #[test]
+    fn attributed_repeated_select_unions_removed_control_origins() {
+        let condition = || Expr::Cmp {
+            op: CmpOp::Ule,
+            lhs: Box::new(Expr::Reg(reg("count"))),
+            rhs: Box::new(Expr::Const(64)),
+        };
+        let outer_select_owner = crate::ir::ast::OriginSet::one(0x1000);
+        let outer_condition_owner = crate::ir::ast::OriginSet::one(0x1004);
+        let inner_select_owner = crate::ir::ast::OriginSet::one(0x1008);
+        let inner_condition_owner = crate::ir::ast::OriginSet::one(0x100c);
+        let unreachable_owner = crate::ir::ast::OriginSet::one(0x1010);
+        let mut function = one_stmt(
+            Expr::Select {
+                cond: Box::new(condition().with_origins(outer_condition_owner)),
+                if_true: Box::new(
+                    Expr::Select {
+                        cond: Box::new(condition().with_origins(inner_condition_owner.clone())),
+                        if_true: Box::new(Expr::Const(0)),
+                        if_false: Box::new(
+                            Expr::Reg(reg("undefined_prior"))
+                                .with_origins(unreachable_owner.clone()),
+                        ),
+                        width: 4,
+                    }
+                    .with_origins(inner_select_owner.clone()),
+                ),
+                if_false: Box::new(Expr::Const(1)),
+                width: 4,
+            }
+            .with_origins(outer_select_owner.clone()),
+        );
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        assert!(matches!(src.semantic(), Expr::Select { if_true, .. }
+            if if_true.semantic() == &Expr::Const(0)));
+        let expected = outer_select_owner
+            .union(&inner_select_owner)
+            .union(&inner_condition_owner);
+        assert_eq!(src.origins(), Some(&expected));
+        assert!(!format!("{src:?}").contains("undefined_prior"));
+        assert!(!src
+            .origins()
+            .expect("collapsed select must remain attributed")
+            .addresses()
+            .contains(&unreachable_owner.addresses()[0]));
     }
 
     #[test]
