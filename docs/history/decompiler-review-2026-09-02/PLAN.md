@@ -1274,6 +1274,12 @@ provenance through lowering.
   single-discriminant, signed-range, reachability, and control-flow refusals
   remain unchanged. Its strengthened observed-red test and all 28 switch-
   ladder tests pass; see `results/wp3-switch-operand-expression-origins.md`.
+  Commit `57f6c625` next makes x86 scalar-view bridge recognition transparent
+  to attributed bridge, shift, cast, and lane-register nodes. Removing the
+  proven-dead bridge transfers the complete statement/expression origin tree
+  onto the recovered wide load without weakening the dead-view, exact-lane,
+  adjacency, or single-consumer proofs. Its observed-red test and all eight
+  vector-copy tests pass; see `results/wp3-vector-bridge-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
