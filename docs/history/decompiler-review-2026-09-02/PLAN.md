@@ -1648,7 +1648,11 @@ provenance through lowering.
   slot 99 refuses. Commit `4219eee0` migrates optimized DWARF register-local
   merging to pipeline-owned parameter slots: an exact local role merely spelled
   `arg99` can receive its authoritative DWARF name and type, while a role owned
-  by parameter slot 99 remains protected. See
+  by parameter slot 99 remains protected. Commit `0c1d0819` migrates opaque
+  library-call parameter refinement to the AST identity sidecar: only a value
+  carrying an authoritative parameter slot can lend a nominal type such as
+  `FILE *` to the caller prototype, while an unowned `arg0` spelling cannot.
+  See
   `results/wp3-parameter-role-metadata.md`. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
   merge hid the unresolved SysV `al` variadic live-in. That cell is now an

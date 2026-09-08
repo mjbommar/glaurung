@@ -56,6 +56,14 @@ unowned role called `arg99` therefore receives its DWARF name and type, while
 the same role with owned slot 99 remains protected. Existing range, lifetime,
 identifier-safety, ambiguity, and widest-claimant behavior is unchanged.
 
+Commit `0c1d0819` migrates nominal library-call type refinement. The production
+renderer now passes its renamed AST identity sidecar into call-contract
+observation collection. A role receives an observation only when that sidecar
+maps the exact value to a unique source-parameter slot; an ordinary value
+merely spelled `arg0` cannot change the caller's prototype. The explicit
+no-sidecar API retains name parsing for compatibility, and the existing
+compatible and conflicting-use behavior remains pinned there.
+
 Focused validation used exact Rust tests only:
 
 ```text
@@ -124,6 +132,15 @@ python_bindings::ir::tests::dwarf_register_
 
 register_local_role_uses_opaque_identity_not_numbered_spelling
 1 passed; 4,430 filtered out
+
+opaque_parameter_refinement_uses_typed_parameter_roles
+1 passed; 4,431 filtered out
+
+compatible_library_uses_recover_an_opaque_caller_parameter
+1 passed; 4,431 filtered out
+
+conflicting_library_uses_do_not_invent_a_nominal_parameter_type
+1 passed; 4,431 filtered out
 ```
 
 Each command was `cargo test --features python-ext --lib
