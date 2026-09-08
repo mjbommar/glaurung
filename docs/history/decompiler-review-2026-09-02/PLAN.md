@@ -1306,6 +1306,13 @@ provenance through lowering.
   and one-use proofs remain mandatory. Its strengthened observed-red test and
   all 18 guarded-switch tests pass; see
   `results/wp3-promoted-discriminator-expression-origins.md`.
+  Commit `bfeb4974` next makes sentinel-search loop recovery transparent to an
+  attributed sentinel and equality operands. The six-statement rotated machine
+  form recovers its three-statement source-like initialization/`while`/return,
+  and the sentinel owner survives in both reconstructed uses without weakening
+  stable-value, seed, carried-register, exit-shape, or effect refusals. Its
+  observed-red test and all 30 loop-form tests pass; see
+  `results/wp3-sentinel-loop-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
