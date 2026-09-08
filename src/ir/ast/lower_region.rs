@@ -608,7 +608,7 @@ fn lower_region_inner(
         } => {
             let cond_stmts = lower_block(&lf.blocks[*cond], lower_scalar_float, identities);
             let (cond_expr, mut pre, condition_origins) =
-                extract_cond_and_strip(&lf.blocks[*cond], cond_stmts);
+                extract_cond_and_strip(&lf.blocks[*cond], cond_stmts, identities);
             // The raw condition is true when the branch is taken; if `then_r` is
             // the fall-through arm the structurer flagged `invert`, so negate.
             let cond_expr = if *invert {
@@ -643,7 +643,7 @@ fn lower_region_inner(
         } => {
             let cond_stmts = lower_block(&lf.blocks[*cond], lower_scalar_float, identities);
             let (cond_expr, mut pre, condition_origins) =
-                extract_cond_and_strip(&lf.blocks[*cond], cond_stmts);
+                extract_cond_and_strip(&lf.blocks[*cond], cond_stmts, identities);
             let cond_expr = if *invert {
                 negate_cmp_expr(cond_expr)
             } else {
@@ -669,7 +669,7 @@ fn lower_region_inner(
         Region::While { header, body, exit } => {
             let cond_stmts = lower_block(&lf.blocks[*header], lower_scalar_float, identities);
             let (cond_expr, pre, condition_origins) =
-                extract_cond_and_strip(&lf.blocks[*header], cond_stmts);
+                extract_cond_and_strip(&lf.blocks[*header], cond_stmts, identities);
             // `cond_expr` is the branch-TAKEN condition. Whether that is the
             // loop's CONTINUE condition depends on where the taken edge goes, and
             // the two mainstream layouts disagree:
@@ -773,7 +773,7 @@ fn lower_region_inner(
             }
             let cond_stmts = lower_block(&lf.blocks[*cond], lower_scalar_float, identities);
             let (cond_expr, mut latch_stmts, condition_origins) =
-                extract_cond_and_strip(&lf.blocks[*cond], cond_stmts);
+                extract_cond_and_strip(&lf.blocks[*cond], cond_stmts, identities);
             // A shared arm can explicitly jump to the bottom test (source-level
             // `continue`). The condition block is otherwise absorbed into the
             // DoWhile node and never emitted as a region of its own, so retain

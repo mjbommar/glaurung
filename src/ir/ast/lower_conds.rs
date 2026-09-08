@@ -291,7 +291,7 @@ pub(super) fn lower_block(
                 .map(|statement| statement.with_origins(OriginSet::one(ins.va))),
         );
     }
-    hoist_inline_flag_conds(out)
+    hoist_inline_flag_conds(out, identities)
 }
 
 /// Peephole pass: for each control-flow condition or pure select condition whose
@@ -309,7 +309,10 @@ pub(super) fn lower_block(
 /// — and without this hoist the printer emits the opaque `if (%zf) goto L;`.
 /// On real PE binaries (e.g. wkssvc!WsOpenCreateConnectionSpecifyImpersonation)
 /// most conditionals fall through to this path and produce unreadable output.
-pub(super) fn hoist_inline_flag_conds(stmts: Vec<Stmt>) -> Vec<Stmt> {
+pub(super) fn hoist_inline_flag_conds(
+    stmts: Vec<Stmt>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Vec<Stmt> {
     /// Whether `stmt` is one of the four shapes the loop below can rewrite: a
     /// select whose condition is a bare flag, or an `if` on a bare flag, on a
     /// negated bare flag, or on `flag == 0`. Every other statement is pushed
@@ -344,7 +347,11 @@ pub(super) fn hoist_inline_flag_conds(stmts: Vec<Stmt>) -> Vec<Stmt> {
         return stmts;
     }
 
-    fn take_reaching_cmp(out: &mut Vec<Stmt>, flag: &VReg) -> Option<(Expr, OriginSet)> {
+    fn take_reaching_cmp(
+        out: &mut Vec<Stmt>,
+        flag: &VReg,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) -> Option<(Expr, OriginSet)> {
         for i in (0..out.len()).rev() {
             match out[i].semantic() {
                 Stmt::Assign { dst, src } if dst == flag => {
@@ -353,7 +360,9 @@ pub(super) fn hoist_inline_flag_conds(stmts: Vec<Stmt>) -> Vec<Stmt> {
                             .iter()
                             .map(|stmt| count_reg_uses_in_stmt(stmt, flag))
                             .sum();
-                        if reads == 0 && moving_condition_to_end_is_safe(src, &out[i + 1..]) {
+                        if reads == 0
+                            && moving_condition_to_end_is_safe(src, &out[i + 1..], identities)
+                        {
                             if matches!(flag, VReg::FlagValue { .. }) {
                                 // A local scan cannot prove a versioned predicate
                                 // dead: a successor block may read this exact SSA
@@ -402,7 +411,9 @@ pub(super) fn hoist_inline_flag_conds(stmts: Vec<Stmt>) -> Vec<Stmt> {
                     let arm_reads = count_reg_uses_in_expr(&if_true, &flag)
                         + count_reg_uses_in_expr(&if_false, &flag);
                     if arm_reads == 0 {
-                        if let Some((cmp, contributing)) = take_reaching_cmp(&mut out, &flag) {
+                        if let Some((cmp, contributing)) =
+                            take_reaching_cmp(&mut out, &flag, identities)
+                        {
                             cond = Box::new(cmp);
                             origins
                                 .get_or_insert_with(OriginSet::empty)
@@ -486,7 +497,7 @@ pub(super) fn hoist_inline_flag_conds(stmts: Vec<Stmt>) -> Vec<Stmt> {
         };
 
         let flag = flag.expect("Some by match above");
-        let hoisted = take_reaching_cmp(&mut out, &flag);
+        let hoisted = take_reaching_cmp(&mut out, &flag, identities);
         if let Some((_, contributing)) = &hoisted {
             origins
                 .get_or_insert_with(OriginSet::empty)
@@ -631,6 +642,7 @@ pub(super) fn exit_is_taken_branch(lf: &LlirFunction, header: usize, exit: Optio
 pub(super) fn extract_cond_and_strip<'a>(
     block: &LlirBlock,
     mut stmts: Vec<Stmt>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> (Expr, Vec<Stmt>, Option<OriginSet>) {
     if let Some(LlirInstr {
         op: Op::CondJump { cond, inverted, .. },
@@ -689,7 +701,9 @@ pub(super) fn extract_cond_and_strip<'a>(
                             .filter(|(j, _)| *j != i)
                             .map(|(_, s)| count_reg_uses_in_stmt(s, cond))
                             .sum::<usize>();
-                        if usages == 0 && moving_condition_to_end_is_safe(src, &stmts[i + 1..]) {
+                        if usages == 0
+                            && moving_condition_to_end_is_safe(src, &stmts[i + 1..], identities)
+                        {
                             let (removed, origins) = stmts.remove(i).into_semantic_with_origins();
                             if let Stmt::Assign { src, .. } = removed {
                                 if let Some(origins) = origins {
@@ -780,10 +794,14 @@ fn count_reg_uses_in_expr(e: &Expr, target: &VReg) -> usize {
 /// statement changes a register or memory read by that comparison.  This is the
 /// same ordering distinction Ghidra, angr, and Kuna preserve explicitly for
 /// `cmp rax, rcx; mov rdx, rcx; jb ...`.
-fn moving_condition_to_end_is_safe(condition: &Expr, following: &[Stmt]) -> bool {
+fn moving_condition_to_end_is_safe(
+    condition: &Expr,
+    following: &[Stmt],
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     !following
         .iter()
-        .any(|stmt| stmt_may_change_condition_input(stmt, condition))
+        .any(|stmt| stmt_may_change_condition_input(stmt, condition, identities))
 }
 
 fn expr_reads_memory(expr: &Expr) -> bool {
@@ -816,16 +834,22 @@ fn expr_reads_memory(expr: &Expr) -> bool {
     }
 }
 
-fn stmt_may_change_condition_input(stmt: &Stmt, condition: &Expr) -> bool {
+fn stmt_may_change_condition_input(
+    stmt: &Stmt,
+    condition: &Expr,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     let writes_read_register = |dst: &VReg| count_reg_uses_in_expr(condition, dst) > 0;
     match stmt {
-        Stmt::Origin { stmt, .. } => stmt_may_change_condition_input(stmt, condition),
+        Stmt::Origin { stmt, .. } => stmt_may_change_condition_input(stmt, condition, identities),
         Stmt::Assign { dst, .. } => writes_read_register(dst),
         Stmt::Store { addr, .. } => {
             let promoted_local_write = matches!(addr,
-                Expr::Reg(VReg::Phys(name))
-                    if (name.starts_with("local_") || name.starts_with("stack_"))
-                        && count_reg_uses_in_expr(condition, &VReg::phys(name)) > 0
+                Expr::Reg(value)
+                    if identities.map_or_else(
+                        || crate::ir::types::is_promoted_local_reg(value),
+                        |identities| identities.is_promoted_stack_object(value),
+                    ) && count_reg_uses_in_expr(condition, value) > 0
             );
             promoted_local_write || expr_reads_memory(condition)
         }
@@ -839,31 +863,31 @@ fn stmt_may_change_condition_input(stmt: &Stmt, condition: &Expr) -> bool {
         } => {
             then_body
                 .iter()
-                .any(|stmt| stmt_may_change_condition_input(stmt, condition))
+                .any(|stmt| stmt_may_change_condition_input(stmt, condition, identities))
                 || else_body.as_ref().is_some_and(|body| {
                     body.iter()
-                        .any(|stmt| stmt_may_change_condition_input(stmt, condition))
+                        .any(|stmt| stmt_may_change_condition_input(stmt, condition, identities))
                 })
         }
         Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => body
             .iter()
-            .any(|stmt| stmt_may_change_condition_input(stmt, condition)),
+            .any(|stmt| stmt_may_change_condition_input(stmt, condition, identities)),
         Stmt::For {
             init, step, body, ..
         } => {
-            stmt_may_change_condition_input(init, condition)
+            stmt_may_change_condition_input(init, condition, identities)
                 || body
                     .iter()
-                    .any(|stmt| stmt_may_change_condition_input(stmt, condition))
-                || stmt_may_change_condition_input(step, condition)
+                    .any(|stmt| stmt_may_change_condition_input(stmt, condition, identities))
+                || stmt_may_change_condition_input(step, condition, identities)
         }
         Stmt::Switch { cases, default, .. } => {
             cases.iter().any(|(_, body)| {
                 body.iter()
-                    .any(|stmt| stmt_may_change_condition_input(stmt, condition))
+                    .any(|stmt| stmt_may_change_condition_input(stmt, condition, identities))
             }) || default.as_ref().is_some_and(|body| {
                 body.iter()
-                    .any(|stmt| stmt_may_change_condition_input(stmt, condition))
+                    .any(|stmt| stmt_may_change_condition_input(stmt, condition, identities))
             })
         }
         Stmt::IndirectGoto { .. }
@@ -878,12 +902,12 @@ fn stmt_may_change_condition_input(stmt: &Stmt, condition: &Expr) -> bool {
         Stmt::TryCatch { try_body, catches } => {
             try_body
                 .iter()
-                .any(|stmt| stmt_may_change_condition_input(stmt, condition))
+                .any(|stmt| stmt_may_change_condition_input(stmt, condition, identities))
                 || catches.iter().any(|catch| {
                     catch
                         .body
                         .iter()
-                        .any(|stmt| stmt_may_change_condition_input(stmt, condition))
+                        .any(|stmt| stmt_may_change_condition_input(stmt, condition, identities))
                 })
         }
     }

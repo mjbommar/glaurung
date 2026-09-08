@@ -3446,7 +3446,7 @@ function f @ 0x1000 {
             },
         ];
 
-        let lowered = hoist_inline_flag_conds(stmts);
+        let lowered = hoist_inline_flag_conds(stmts, None);
 
         assert!(
             matches!(
@@ -3464,6 +3464,80 @@ function f @ 0x1000 {
                 })
             ),
             "the branch should still receive the inlined comparison: {lowered:#?}"
+        );
+    }
+
+    fn comparison_separated_by_local_store(local: &VReg, flag: &VReg) -> Vec<Stmt> {
+        vec![
+            Stmt::Assign {
+                dst: flag.clone(),
+                src: Expr::Cmp {
+                    op: CmpOp::Eq,
+                    lhs: Box::new(Expr::Reg(local.clone())),
+                    rhs: Box::new(Expr::Const(0)),
+                },
+            },
+            Stmt::Store {
+                addr: Expr::Reg(local.clone()),
+                src: Expr::Const(1),
+                size: 4,
+            },
+            Stmt::If {
+                cond: Expr::Reg(flag.clone()),
+                then_body: vec![],
+                else_body: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn condition_hoist_respects_producer_owned_stack_object_identity() {
+        let local = VReg::phys("opaque_slot");
+        let flag = VReg::Flag(Flag::Z);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        let object = "opaque_slot".to_string();
+        identities.attach_promoted_stack_objects([&object]);
+
+        let lowered = hoist_inline_flag_conds(
+            comparison_separated_by_local_store(&local, &flag),
+            Some(&identities),
+        );
+
+        assert!(
+            matches!(lowered.first(), Some(Stmt::Assign { dst, .. }) if dst == &flag),
+            "an owned stack write must prevent moving its comparison: {lowered:#?}"
+        );
+        assert!(
+            matches!(lowered.last(), Some(Stmt::If { cond: Expr::Reg(value), .. }) if value == &flag),
+            "the blocked condition must retain its flag input: {lowered:#?}"
+        );
+    }
+
+    #[test]
+    fn condition_hoist_ignores_unowned_local_spelling_with_identity_sidecar() {
+        let local = VReg::phys("local_8");
+        let flag = VReg::Flag(Flag::Z);
+        let identities = crate::ir::value_number::ValueIdentities::default();
+
+        let lowered = hoist_inline_flag_conds(
+            comparison_separated_by_local_store(&local, &flag),
+            Some(&identities),
+        );
+
+        assert_eq!(
+            lowered.len(),
+            2,
+            "the comparison definition should be consumed"
+        );
+        assert!(
+            matches!(
+                lowered.last().map(Stmt::semantic),
+                Some(Stmt::If {
+                    cond: Expr::Cmp { .. },
+                    ..
+                })
+            ),
+            "spelling alone must not prevent a safe condition hoist: {lowered:#?}"
         );
     }
 
