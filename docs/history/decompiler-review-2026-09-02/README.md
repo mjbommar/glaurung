@@ -88,6 +88,15 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
+[`results/wp3-verifier-stack-identities.md`](results/wp3-verifier-stack-identities.md):
+the final structured and goto-aware output verifier now classifies promoted
+stack stores by producer-owned identity. Its two exact adversarial tests and
+all 43 owning tests pass. One x86-64 O0 declaration cell remains honestly red
+for undeclared `local_8`, and the four-cell Hello World canary exposes a
+redundant string-literal cast in every cell plus an amd64 O2 `main` return-type
+regression; neither contract was weakened.
+
+The preceding WP3 record is
 [`results/wp3-wp7b-for-loop-stack-identities.md`](results/wp3-wp7b-for-loop-stack-identities.md):
 store-backed counted-loop promotion now requires producer-owned stack identity
 in production. All 31 loop-form tests and the exact GCC O0 `for_sum` fixture

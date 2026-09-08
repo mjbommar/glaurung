@@ -1727,7 +1727,13 @@ provenance through lowering.
   the final definition-before-use verifier, including its structured and goto-
   aware paths. A destination-less call no longer silently defines an unowned
   `ret` spelling in production, while the pipeline-owned role and explicit call
-  destinations remain valid definitions. Commit `c599ac49` migrates direct and
+  destinations remain valid definitions. Commit `bdb1e0eb` extends the same
+  final-verifier boundary to promoted stack stores. Production verification
+  now treats a bare store target as source storage only when stack promotion
+  owns that identity; an unowned `local_` spelling cannot manufacture a
+  definition. The generic rendered-local inventory still parses presentation
+  names and remains a separate WP3 producer-model task. See
+  `results/wp3-verifier-stack-identities.md`. Commit `c599ac49` migrates direct and
   exhaustive return folding in both production preparation stages. An unowned
   `ret = value; return ret;` remains intact, while a pipeline-owned result role
   still folds to `return value;`; exact versioned ABI storage continues to fold

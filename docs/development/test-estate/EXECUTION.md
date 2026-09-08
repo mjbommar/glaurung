@@ -568,6 +568,22 @@ loop-form tests pass with 4,572 unrelated tests filtered out; the census records
 only `03_loop_shapes:gcc:O0:for_sum` ran and reported no scoped regression. No
 broad suite or corpus ran.
 
+## Final-verifier stack identities
+
+Commit `bdb1e0eb` moves promoted-stack store classification in the final
+structured and goto-aware output verifier from `local_` / `stack_` spelling to
+the pipeline-owned identity sidecar. Both exact adversarial tests and all 43
+verifier tests pass with 4,562 unrelated tests filtered out. The regenerated
+census records 5,142 declared Rust tests and zero outside every gate; all six
+census checks pass after the source commit.
+
+A fresh debug extension passes `tools/build_guard.py`. The one owning compiled
+invariant cell, x86-64 O0 declaration/use consistency, remains red for known
+undeclared `local_8` output in two functions. The four-cell canonical Hello
+World canary (amd64/AArch64, Clang O0/O2) is also honestly red: every cell adds
+a redundant `(const char *)` string-literal cast, and amd64 O2 additionally
+uses `unsigned long` for `main`. No broad suite or corpus ran.
+
 ## Ground rules
 
 Verified before any claim of done: `cargo test --features python-ext`,
