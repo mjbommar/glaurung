@@ -1165,18 +1165,27 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
 }
 
 fn strip_integer_casts(mut expression: &Expr) -> &Expr {
-    while let Expr::Cast { expr, .. } = expression {
-        expression = expr;
+    loop {
+        expression = expression.semantic();
+        match expression {
+            Expr::Cast { expr, .. } => expression = expr,
+            _ => return expression,
+        }
     }
-    expression
 }
 
 fn unsigned_range_render_parts(expression: &Expr) -> Option<(&Expr, i64, u8)> {
     let mut narrowest = None;
     let mut current = expression;
-    while let Expr::Cast { width, expr, .. } = current {
-        narrowest = Some(narrowest.map_or(*width, |seen: u8| seen.min(*width)));
-        current = expr;
+    loop {
+        current = current.semantic();
+        match current {
+            Expr::Cast { width, expr, .. } => {
+                narrowest = Some(narrowest.map_or(*width, |seen: u8| seen.min(*width)));
+                current = expr;
+            }
+            _ => break,
+        }
     }
     let (value, low) = match current {
         Expr::Bin {
@@ -1197,7 +1206,7 @@ fn unsigned_range_render_parts(expression: &Expr) -> Option<(&Expr, i64, u8)> {
         },
         _ => return None,
     };
-    let width = narrowest.or_else(|| expr_machine_width(value))?;
+    let width = narrowest.or_else(|| expr_machine_width(value.semantic()))?;
     matches!(width, 1 | 2 | 4 | 8).then_some((value, low, width))
 }
 

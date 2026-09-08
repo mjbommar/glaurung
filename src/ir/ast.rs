@@ -6134,12 +6134,15 @@ function f @ 0x1000 {
             body: vec![Stmt::If {
                 cond: Expr::Cmp {
                     op: CmpOp::Ult,
-                    lhs: Box::new(Expr::Const(15)),
-                    rhs: Box::new(Expr::Bin {
-                        op: BinOp::Add,
-                        lhs: Box::new(Expr::Reg(argument.clone())),
-                        rhs: Box::new(Expr::Const(-1)),
-                    }),
+                    lhs: Box::new(Expr::Const(15).with_origins(OriginSet::one(0x1000))),
+                    rhs: Box::new(
+                        Expr::Bin {
+                            op: BinOp::Add,
+                            lhs: Box::new(Expr::Reg(argument.clone())),
+                            rhs: Box::new(Expr::Const(-1).with_origins(OriginSet::one(0x1004))),
+                        }
+                        .with_origins(OriginSet::one(0x1008)),
+                    ),
                 },
                 then_body: vec![Stmt::Return {
                     value: Some(Expr::Const(-1)),
