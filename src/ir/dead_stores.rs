@@ -32,7 +32,7 @@ use crate::ir::types::{BinOp, VReg};
 pub fn eliminate_dead_stores(f: &mut Function, cc: CallConv) {
     let ret_regs = return_reg_aliases(cc);
     eliminate_body(&mut f.body, &ret_regs);
-    prune_adjacent_overwritten_promoted_stores(f);
+    prune_adjacent_overwritten_promoted_stores(f, None);
 }
 
 /// Run dead-store elimination with pipeline-owned result-role authority.
@@ -46,7 +46,7 @@ pub fn eliminate_dead_stores_with_identities(
         ret_regs.retain(|name| *name != "ret");
     }
     eliminate_body(&mut f.body, &ret_regs);
-    prune_adjacent_overwritten_promoted_stores(f);
+    prune_adjacent_overwritten_promoted_stores(f, Some(identities));
 }
 
 /// Remove a pure promoted-stack write immediately shadowed by an equal-width write.
@@ -58,7 +58,10 @@ pub fn eliminate_dead_stores_with_identities(
 /// local: comments and nops may separate the writes, but control flow, a size
 /// change, a self-dependent overwrite, or an observable first expression all
 /// decline the deletion.
-fn prune_adjacent_overwritten_promoted_stores(function: &mut Function) {
+fn prune_adjacent_overwritten_promoted_stores(
+    function: &mut Function,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     fn discardable_source(expression: &Expr) -> bool {
         match expression {
             Expr::Origin { expr, .. } => discardable_source(expr),
@@ -84,7 +87,10 @@ fn prune_adjacent_overwritten_promoted_stores(function: &mut Function) {
         }
     }
 
-    fn promoted_store(statement: &Stmt) -> Option<(&VReg, &Expr, u8)> {
+    fn promoted_store<'a>(
+        statement: &'a Stmt,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) -> Option<(&'a VReg, &'a Expr, u8)> {
         let Stmt::Store {
             addr: Expr::Reg(slot),
             src,
@@ -93,12 +99,18 @@ fn prune_adjacent_overwritten_promoted_stores(function: &mut Function) {
         else {
             return None;
         };
-        matches!(slot, VReg::Phys(name)
-            if name.starts_with("local_") || name.starts_with("stack_"))
-        .then_some((slot, src, *size))
+        identities
+            .map_or_else(
+                || {
+                    matches!(slot, VReg::Phys(name)
+                        if name.starts_with("local_") || name.starts_with("stack_"))
+                },
+                |identities| identities.is_promoted_stack_object(slot),
+            )
+            .then_some((slot, src, *size))
     }
 
-    fn prune(body: &mut Vec<Stmt>) {
+    fn prune(body: &mut Vec<Stmt>, identities: Option<&crate::ir::value_number::ValueIdentities>) {
         for statement in body.iter_mut() {
             match statement.semantic_mut() {
                 Stmt::Origin { .. } => {
@@ -109,26 +121,26 @@ fn prune_adjacent_overwritten_promoted_stores(function: &mut Function) {
                     else_body,
                     ..
                 } => {
-                    prune(then_body);
+                    prune(then_body, identities);
                     if let Some(else_body) = else_body {
-                        prune(else_body);
+                        prune(else_body, identities);
                     }
                 }
                 Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                    prune(body);
+                    prune(body, identities);
                 }
                 Stmt::Switch { cases, default, .. } => {
                     for (_, case) in cases {
-                        prune(case);
+                        prune(case, identities);
                     }
                     if let Some(default) = default {
-                        prune(default);
+                        prune(default, identities);
                     }
                 }
                 Stmt::TryCatch { try_body, catches } => {
-                    prune(try_body);
+                    prune(try_body, identities);
                     for catch in catches {
-                        prune(&mut catch.body);
+                        prune(&mut catch.body, identities);
                     }
                 }
                 _ => {}
@@ -138,7 +150,7 @@ fn prune_adjacent_overwritten_promoted_stores(function: &mut Function) {
         loop {
             let mut removed = None;
             for first in 0..body.len().saturating_sub(1) {
-                let Some((slot, source, width)) = promoted_store(&body[first]) else {
+                let Some((slot, source, width)) = promoted_store(&body[first], identities) else {
                     continue;
                 };
                 if !discardable_source(source) {
@@ -149,7 +161,8 @@ fn prune_adjacent_overwritten_promoted_stores(function: &mut Function) {
                 else {
                     continue;
                 };
-                let Some((next_slot, next_source, next_width)) = promoted_store(&body[second])
+                let Some((next_slot, next_source, next_width)) =
+                    promoted_store(&body[second], identities)
                 else {
                     continue;
                 };
@@ -165,7 +178,7 @@ fn prune_adjacent_overwritten_promoted_stores(function: &mut Function) {
         }
     }
 
-    prune(&mut function.body);
+    prune(&mut function.body, identities);
 }
 
 /// Discard the destination identity of an effectful call when the function
@@ -2575,7 +2588,7 @@ mod tests {
             ],
         };
 
-        prune_adjacent_overwritten_promoted_stores(&mut function);
+        prune_adjacent_overwritten_promoted_stores(&mut function, None);
 
         assert_eq!(function.body.len(), 3);
         assert!(matches!(
@@ -2585,6 +2598,69 @@ mod tests {
                 ..
             } if source == &VReg::phys("arg0")
         ));
+    }
+
+    #[test]
+    fn opaque_owned_adjacent_store_overwrite_drops_the_unobserved_value() {
+        let slot = VReg::phys("frame_object");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        let owned = "frame_object".to_string();
+        identities.attach_promoted_stack_objects([&owned]);
+        let mut function = Function {
+            name: "record_value".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(slot.clone()),
+                    src: Expr::Reg(VReg::phys("ret")),
+                    size: 8,
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(slot.clone()),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                    size: 8,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(slot)),
+                },
+            ],
+        };
+
+        eliminate_dead_stores_with_identities(&mut function, CallConv::SysVAmd64, &identities);
+
+        assert_eq!(function.body.len(), 2);
+    }
+
+    #[test]
+    fn unowned_local_spelling_does_not_authorize_adjacent_store_deletion() {
+        let slot = VReg::phys("local_8");
+        let mut function = Function {
+            name: "record_value".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(slot.clone()),
+                    src: Expr::Reg(VReg::phys("ret")),
+                    size: 8,
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(slot.clone()),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                    size: 8,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(slot)),
+                },
+            ],
+        };
+
+        eliminate_dead_stores_with_identities(
+            &mut function,
+            CallConv::SysVAmd64,
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
+
+        assert_eq!(function.body.len(), 3);
     }
 
     #[test]
@@ -2620,7 +2696,7 @@ mod tests {
                 ],
             };
 
-            prune_adjacent_overwritten_promoted_stores(&mut function);
+            prune_adjacent_overwritten_promoted_stores(&mut function, None);
 
             assert_eq!(function.body.len(), 2);
         }
@@ -2646,7 +2722,7 @@ mod tests {
             ],
         };
 
-        prune_adjacent_overwritten_promoted_stores(&mut function);
+        prune_adjacent_overwritten_promoted_stores(&mut function, None);
 
         assert_eq!(function.body.len(), 2);
     }
