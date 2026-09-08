@@ -73,6 +73,15 @@ unowned value merely spelled `arg0` remains a dereference. Partial loads remain
 explicit. The no-authority entry point retains its legacy behavior for tests,
 benchmarks, and compatibility callers.
 
+Commit `d5b69f98` migrates parameter-spill coalescing. The identity context now
+flows through both promoted named-slot and frame-array-home discovery,
+including cast stripping, straight-line scratch aliases, repeated-store
+validation, nested control flow, and the final redundant-store conversion. An
+unowned value called `arg0` cannot cause storage deletion or renaming; attaching
+source-parameter slot 0 preserves the established coalescing and origin
+behavior. Compatibility-only preparation still supplies no sidecar and keeps
+the legacy spelling path.
+
 Focused validation used exact Rust tests only:
 
 ```text
@@ -162,6 +171,9 @@ attributed_full_width_parameter_load_unions_address_and_load_origins
 
 partial_load_of_parameter_address_is_not_widened
 1 passed; 4,432 filtered out
+
+ir::ast::param_spills::tests::
+4 passed; 4,431 filtered out
 ```
 
 Each command was `cargo test --features python-ext --lib

@@ -1656,7 +1656,11 @@ provenance through lowering.
   both production phases: the early shared pipeline uses its owned slot set,
   and post-promotion preparation/rendering use projected identities. An
   unowned `StackAddr(arg0)` therefore remains a dereference rather than being
-  rewritten into an unrelated scalar value.
+  rewritten into an unrelated scalar value. Commit `d5b69f98` migrates
+  parameter-spill coalescing across named slots, frame-array homes, casts,
+  scratch aliases, and repeated stores. The pass can delete a spill and rename
+  its storage only when the source value carries an authoritative parameter
+  slot; an unrelated `arg0` spelling leaves both storage and reload intact.
   See
   `results/wp3-parameter-role-metadata.md`. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
