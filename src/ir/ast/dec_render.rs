@@ -1546,7 +1546,7 @@ fn write_call_arg_dec(arg: &Expr, out: &mut String) {
     // `write_reg_dec` casts pointer arguments to integer addresses for machine
     // arithmetic. At a call boundary the recovered pointer declaration is the
     // stronger fact, so pass the pointer itself to the matching prototype.
-    if let Expr::Reg(reg @ VReg::Phys(_)) = arg {
+    if let Expr::Reg(reg @ VReg::Phys(_)) = arg.semantic() {
         if declared_reg_ctype(reg).ends_with('*') {
             write_reg_lvalue_dec(reg, out);
             return;
@@ -1925,7 +1925,7 @@ fn write_typed_call_arg_dec(parameter_type: &str, arg: &Expr, out: &mut String) 
     // width-proved representation wrapper, and only when the inner expression
     // already renders as a pointer compatible with the parameter.
     if parameter_type.ends_with('*') {
-        if let Expr::Cast { width, expr, .. } = arg {
+        if let Expr::Cast { width, expr, .. } = arg.semantic() {
             let pointer_width = DEC_POINTER_WIDTH.with(std::cell::Cell::get);
             if *width == pointer_width && !pointer_parameter_needs_cast(parameter_type, expr) {
                 write_call_arg_dec(expr, out);

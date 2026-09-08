@@ -4413,7 +4413,7 @@ function f @ 0x1000 {
                     va: 0x801d49c,
                     name: "sub_801d49c".to_string(),
                 },
-                args: vec![Expr::Reg(VReg::phys("arg0"))],
+                args: vec![Expr::Reg(VReg::phys("arg0")).with_origins(OriginSet::one(0x801da08))],
                 dst: Some(VReg::phys("var3")),
                 call_spec: Some(crate::ir::call_contracts::CallSiteSpec {
                     callee_prototype: Some(CallPrototype {
@@ -4461,8 +4461,11 @@ function f @ 0x1000 {
                 args: vec![Expr::Cast {
                     signed: true,
                     width: 8,
-                    expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
-                }],
+                    expr: Box::new(
+                        Expr::Reg(VReg::phys("arg0")).with_origins(OriginSet::one(0x1010)),
+                    ),
+                }
+                .with_origins(OriginSet::one(0x1014))],
                 dst: Some(VReg::phys("saved_locale")),
                 call_spec: Some(CallSiteSpec {
                     callee_prototype: Some(callee),
