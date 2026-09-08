@@ -612,7 +612,12 @@ pub(super) fn run_ast_passes(
             cc,
             Some(value_identities),
         );
-        crate::ir::call_args::recover_proven_vtable_tail_calls(f, cc, &callee_facts.prototypes);
+        crate::ir::call_args::recover_proven_vtable_tail_calls_with_identities(
+            f,
+            cc,
+            &callee_facts.prototypes,
+            Some(value_identities),
+        );
     });
     pass!("reconstruct_args", {
         crate::ir::call_args::reconstruct_args_with_layouts_prototypes_strings_and_identities(

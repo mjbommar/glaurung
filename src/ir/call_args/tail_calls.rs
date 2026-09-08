@@ -56,7 +56,16 @@ pub fn recover_proven_vtable_tail_calls(
     arch: CallConv,
     prototypes: &std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>,
 ) {
-    recover_vtable_tail_calls_in_body(&mut f.body, arch, prototypes);
+    recover_proven_vtable_tail_calls_with_identities(f, arch, prototypes, None);
+}
+
+pub(crate) fn recover_proven_vtable_tail_calls_with_identities(
+    f: &mut Function,
+    arch: CallConv,
+    prototypes: &std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>,
+    identities: Option<&ValueIdentities>,
+) {
+    recover_vtable_tail_calls_in_body(&mut f.body, arch, prototypes, identities);
 }
 
 /// Recover a direct jump whose target is a named entry outside the current AST
@@ -366,6 +375,7 @@ fn recover_vtable_tail_calls_in_body(
     body: &mut Vec<Stmt>,
     arch: CallConv,
     prototypes: &std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>,
+    identities: Option<&ValueIdentities>,
 ) {
     for statement in body.iter_mut() {
         match statement.semantic_mut() {
@@ -375,26 +385,31 @@ fn recover_vtable_tail_calls_in_body(
                 else_body,
                 ..
             } => {
-                recover_vtable_tail_calls_in_body(then_body, arch, prototypes);
+                recover_vtable_tail_calls_in_body(then_body, arch, prototypes, identities);
                 if let Some(else_body) = else_body {
-                    recover_vtable_tail_calls_in_body(else_body, arch, prototypes);
+                    recover_vtable_tail_calls_in_body(else_body, arch, prototypes, identities);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                recover_vtable_tail_calls_in_body(body, arch, prototypes)
+                recover_vtable_tail_calls_in_body(body, arch, prototypes, identities)
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, case) in cases {
-                    recover_vtable_tail_calls_in_body(case, arch, prototypes);
+                    recover_vtable_tail_calls_in_body(case, arch, prototypes, identities);
                 }
                 if let Some(default) = default {
-                    recover_vtable_tail_calls_in_body(default, arch, prototypes);
+                    recover_vtable_tail_calls_in_body(default, arch, prototypes, identities);
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                recover_vtable_tail_calls_in_body(try_body, arch, prototypes);
+                recover_vtable_tail_calls_in_body(try_body, arch, prototypes, identities);
                 for catch in catches {
-                    recover_vtable_tail_calls_in_body(&mut catch.body, arch, prototypes);
+                    recover_vtable_tail_calls_in_body(
+                        &mut catch.body,
+                        arch,
+                        prototypes,
+                        identities,
+                    );
                 }
             }
             Stmt::Assign { .. }
@@ -427,13 +442,17 @@ fn recover_vtable_tail_calls_in_body(
         .enumerate()
         .rev()
         .find_map(|(index, statement)| match statement.semantic() {
-            Stmt::Assign { dst, src } if *dst == target_register => Some((index, src.clone())),
+            Stmt::Assign { dst, src }
+                if registers_are_same_value(dst, &target_register, identities) =>
+            {
+                Some((index, src.clone()))
+            }
             _ => None,
         })
     else {
         return;
     };
-    if !is_rust_vtable_slot_load(&target, arch) {
+    if !is_rust_vtable_slot_load(&target, arch, identities) {
         return;
     }
     let Some((call_index, callee_va)) =
@@ -459,7 +478,7 @@ fn recover_vtable_tail_calls_in_body(
         != Some(crate::ir::abi::wide_integer_return_width(arch))
         || body[call_index + 1..definition_index]
             .iter()
-            .any(|statement| statement_writes_high_result(statement, arch))
+            .any(|statement| statement_writes_high_result(statement, arch, identities))
     {
         return;
     }
@@ -481,10 +500,53 @@ fn recover_vtable_tail_calls_in_body(
     );
 }
 
-fn statement_writes_high_result(statement: &Stmt, arch: CallConv) -> bool {
+fn registers_are_same_value(
+    left: &VReg,
+    right: &VReg,
+    identities: Option<&ValueIdentities>,
+) -> bool {
+    match identities {
+        Some(identities) => identities
+            .exact(left)
+            .zip(identities.exact(right))
+            .is_some_and(|(left, right)| left == right),
+        None => left == right,
+    }
+}
+
+fn register_is_wide_result_part(
+    register: &VReg,
+    arch: CallConv,
+    part: usize,
+    identities: Option<&ValueIdentities>,
+) -> bool {
+    match identities {
+        Some(identities) => identities.candidates(register).is_some_and(|candidates| {
+            !candidates.is_empty()
+                && candidates.iter().all(|identity| {
+                    matches!(
+                        &identity.base,
+                        VReg::Phys(name)
+                            if crate::ir::abi::wide_integer_return_part(arch, name) == Some(part)
+                    )
+                })
+        }),
+        None => matches!(
+            register,
+            VReg::Phys(name)
+                if crate::ir::abi::wide_integer_return_part(arch, name) == Some(part)
+        ),
+    }
+}
+
+fn statement_writes_high_result(
+    statement: &Stmt,
+    arch: CallConv,
+    identities: Option<&ValueIdentities>,
+) -> bool {
     match statement.semantic() {
         Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => {
-            matches!(dst, VReg::Phys(name) if crate::ir::abi::wide_integer_return_part(arch, name) == Some(1))
+            register_is_wide_result_part(dst, arch, 1, identities)
         }
         _ => false,
     }
@@ -497,7 +559,11 @@ fn statement_writes_high_result(statement: &Stmt, arch: CallConv) -> bool {
 /// method dispatch is a pointer-sized load at an aligned offset of at least
 /// three words from that extracted high half. Requiring this complete shape and
 /// a terminal statement keeps generic computed jumps explicitly unrecovered.
-fn is_rust_vtable_slot_load(target: &Expr, arch: CallConv) -> bool {
+fn is_rust_vtable_slot_load(
+    target: &Expr,
+    arch: CallConv,
+    identities: Option<&ValueIdentities>,
+) -> bool {
     let word = crate::ir::abi::machine_word_bytes(arch);
     let Expr::Deref { addr, size } = target else {
         return false;
@@ -512,7 +578,7 @@ fn is_rust_vtable_slot_load(target: &Expr, arch: CallConv) -> bool {
             disp,
             ..
         } => (
-            matches!(base, VReg::Phys(name) if crate::ir::abi::wide_integer_return_part(arch, name) == Some(1)),
+            register_is_wide_result_part(base, arch, 1, identities),
             *disp,
         ),
         Expr::Bin {
@@ -986,6 +1052,70 @@ mod tests {
                 },
                 Stmt::Return { .. }
             ]
+        ));
+    }
+
+    #[test]
+    fn vtable_tail_uses_exact_high_result_identity_not_display_spelling() {
+        let set_vtable_base = |function: &mut Function, base: &str| {
+            let Stmt::Assign {
+                src: Expr::Deref { addr, .. },
+                ..
+            } = &mut function.body[1]
+            else {
+                panic!("expected vtable load")
+            };
+            let Expr::Lea {
+                base: load_base, ..
+            } = addr.as_mut()
+            else {
+                panic!("expected vtable address")
+            };
+            *load_base = Some(reg(base));
+        };
+        let mut identities = ValueIdentities::default();
+        identities.record(
+            reg("rcx#method"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rcx"),
+                version: 2,
+            },
+        );
+        identities.record(
+            reg("opaque_high"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdx"),
+                version: 1,
+            },
+        );
+        identities.record(
+            reg("rdx#result"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 1,
+            },
+        );
+
+        let mut exact = vtable_tail_function(24);
+        set_vtable_base(&mut exact, "opaque_high");
+        recover_proven_vtable_tail_calls_with_identities(
+            &mut exact,
+            CallConv::SysVAmd64,
+            &wide_prototypes(),
+            Some(&identities),
+        );
+        assert!(matches!(exact.body.last(), Some(Stmt::Return { .. })));
+
+        let mut misleading = vtable_tail_function(24);
+        recover_proven_vtable_tail_calls_with_identities(
+            &mut misleading,
+            CallConv::SysVAmd64,
+            &wide_prototypes(),
+            Some(&identities),
+        );
+        assert!(matches!(
+            misleading.body.last(),
+            Some(Stmt::IndirectGoto { .. })
         ));
     }
 
