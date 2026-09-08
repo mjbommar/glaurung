@@ -1343,7 +1343,7 @@ fn renderable_field_access(addr: &Expr) -> Option<(&VReg, Option<&VReg>, &PdbFie
         scale,
         hints,
         ..
-    } = addr
+    } = addr.semantic()
     else {
         return None;
     };

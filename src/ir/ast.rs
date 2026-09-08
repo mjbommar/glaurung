@@ -6646,7 +6646,28 @@ function f @ 0x1000 {
                     size: 8,
                 },
                 Stmt::Return {
-                    value: Some(Expr::Reg(local.clone())),
+                    value: Some(Expr::Deref {
+                        addr: Box::new(
+                            Expr::PdbFieldAddr {
+                                base: Some(local.clone()),
+                                index: None,
+                                scale: 1,
+                                disp: 0,
+                                segment: None,
+                                hints: vec![PdbFieldHint {
+                                    type_name: "node".to_string(),
+                                    field_name: "next".to_string(),
+                                    field_type: Some("struct node *".to_string()),
+                                    offset: 0,
+                                    index_signed: None,
+                                    index_width: None,
+                                    renderable: true,
+                                }],
+                            }
+                            .with_origins(OriginSet::one(0x1008)),
+                        ),
+                        size: 8,
+                    }),
                 },
             ],
         };
@@ -6688,6 +6709,7 @@ function f @ 0x1000 {
 
         assert!(text.contains("local_8 = arg0;"), "{text}");
         assert!(!text.contains("(long)local_8 ="), "{text}");
+        assert!(text.contains("return local_8->next;"), "{text}");
     }
 
     #[test]
