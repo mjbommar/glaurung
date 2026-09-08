@@ -1761,6 +1761,35 @@ pub(super) fn register_is_storage(
     }
 }
 
+/// The ABI argument slot represented by one exact value identity.
+///
+/// A coalesced value is accepted only when every candidate denotes the same
+/// slot. The spelling-based branch exists solely for compatibility callers
+/// that do not carry the production identity sidecar.
+pub(super) fn register_argument_slot(
+    arch: CallConv,
+    register: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<usize> {
+    match identities {
+        Some(identities) => {
+            let candidates = identities.candidates(register)?;
+            let mut slots = candidates.iter().map(|identity| match &identity.base {
+                VReg::Phys(name) => crate::ir::abi::argument_slot_of(arch, name),
+                _ => None,
+            });
+            let slot = slots.next()??;
+            slots
+                .all(|candidate| candidate == Some(slot))
+                .then_some(slot)
+        }
+        None => match register {
+            VReg::Phys(name) => crate::ir::abi::argument_slot_of(arch, name),
+            _ => None,
+        },
+    }
+}
+
 /// A captured argument slot that must keep its defining statement: the value is
 /// referenced by name at the call instead of being spliced into it.
 const KEEP_ARG_SETUP: usize = usize::MAX;
@@ -6333,6 +6362,57 @@ mod tests {
             CallConv::SysVAmd64,
             &VReg::phys("rsp#4"),
             Some(&identities),
+        ));
+    }
+
+    #[test]
+    fn argument_slot_uses_exact_identity_not_display_spelling() {
+        let caller = |destination: &str| Function {
+            name: "caller".into(),
+            entry_va: 0x1000,
+            body: vec![assign(destination, 17), call_to("callee")],
+        };
+        let run = |mut function: Function,
+                   identities: &crate::ir::value_number::ValueIdentities| {
+            reconstruct_args_with_layouts_prototypes_strings_and_identities(
+                &mut function,
+                CallConv::SysVAmd64,
+                &mut Default::default(),
+                &Default::default(),
+                &Default::default(),
+                None,
+                &Default::default(),
+                identities,
+            );
+            function
+        };
+
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            reg("opaque_argument"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi"),
+                version: 2,
+            },
+        );
+        identities.record(
+            reg("rdi#looks_versioned"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 2,
+            },
+        );
+
+        let exact = run(caller("opaque_argument"), &identities);
+        assert!(matches!(
+            exact.body.as_slice(),
+            [Stmt::Call { args, .. }] if args == &[Expr::Const(17)]
+        ));
+
+        let misleading = run(caller("rdi#looks_versioned"), &identities);
+        assert!(matches!(
+            misleading.body.as_slice(),
+            [Stmt::Assign { .. }, Stmt::Call { args, .. }] if args.is_empty()
         ));
     }
 
