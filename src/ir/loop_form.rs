@@ -643,7 +643,7 @@ fn sentinel_search_candidate(body: &[Stmt], start: usize) -> Option<SentinelSear
     else {
         return None;
     };
-    if !matches!(sentinel, Expr::Const(_)) {
+    if !matches!(sentinel.semantic(), Expr::Const(_)) {
         return None;
     }
     let initial = equality_other_side(initial_guard, sentinel)?.clone();
@@ -656,7 +656,9 @@ fn sentinel_search_candidate(body: &[Stmt], start: usize) -> Option<SentinelSear
     while let Some(statement) = body.get(cursor) {
         match statement.semantic() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
-            Stmt::Assign { dst, src } if src == &initial => seeds.push((dst, src)),
+            Stmt::Assign { dst, src } if src.semantic() == initial.semantic() => {
+                seeds.push((dst, src))
+            }
             Stmt::Nop => {}
             Stmt::While { .. } => break,
             _ => return None,
@@ -723,7 +725,8 @@ fn sentinel_search_candidate(body: &[Stmt], start: usize) -> Option<SentinelSear
         _ => return None,
     };
     if !matches!(exit_body.as_slice(), [statement]
-        if matches!(statement.semantic(), Stmt::Return { value: Some(value) } if value == sentinel))
+        if matches!(statement.semantic(), Stmt::Return { value: Some(value) }
+            if value.semantic() == sentinel.semantic()))
     {
         return None;
     }
@@ -758,13 +761,13 @@ fn equality_other_side<'a>(expr: &'a Expr, expected: &Expr) -> Option<&'a Expr> 
         op: CmpOp::Eq,
         lhs,
         rhs,
-    } = expr
+    } = expr.semantic()
     else {
         return None;
     };
-    if lhs.as_ref() == expected {
+    if lhs.semantic() == expected.semantic() {
         Some(rhs)
-    } else if rhs.as_ref() == expected {
+    } else if rhs.semantic() == expected.semantic() {
         Some(lhs)
     } else {
         None
@@ -772,10 +775,10 @@ fn equality_other_side<'a>(expr: &'a Expr, expected: &Expr) -> Option<&'a Expr> 
 }
 
 fn reg_through_casts(mut expr: &Expr) -> Option<&VReg> {
-    while let Expr::Cast { expr: inner, .. } = expr {
-        expr = inner;
+    while let Expr::Cast { expr: inner, .. } = expr.semantic() {
+        expr = inner.semantic();
     }
-    match expr {
+    match expr.semantic() {
         Expr::Reg(reg) => Some(reg),
         _ => None,
     }
@@ -1478,7 +1481,7 @@ mod tests {
         let current = reg("current");
         let result = reg("result");
         let initial = Expr::Reg(reg("arg0"));
-        let sentinel = Expr::Const(0);
+        let sentinel = Expr::Const(0).with_origins(OriginSet::one(0x1000));
         let match_continue = Expr::Cmp {
             op: CmpOp::Ne,
             lhs: Box::new(Expr::Deref {
@@ -1571,8 +1574,9 @@ mod tests {
         assert!(matches!(
             cond,
             Expr::Cmp { op: CmpOp::Ne, lhs, rhs }
-                if lhs.as_ref() == &Expr::Reg(reg("current"))
-                    && rhs.as_ref() == &Expr::Const(0)
+                if lhs.semantic() == &Expr::Reg(reg("current"))
+                    && rhs.semantic() == &Expr::Const(0)
+                    && rhs.origins() == Some(&OriginSet::one(0x1000))
         ));
         assert!(matches!(
             body.as_slice(),
@@ -1587,12 +1591,14 @@ mod tests {
                 value: Some(Expr::Reg(reg("current")))
             }] && dst == &reg("current")
         ));
-        assert_eq!(
-            function.body[2],
-            Stmt::Return {
-                value: Some(Expr::Const(0))
-            }
-        );
+        let Stmt::Return {
+            value: Some(final_sentinel),
+        } = &function.body[2]
+        else {
+            panic!("expected final sentinel return: {:#?}", function.body)
+        };
+        assert_eq!(final_sentinel.semantic(), &Expr::Const(0));
+        assert_eq!(final_sentinel.origins(), Some(&OriginSet::one(0x1000)));
     }
 
     #[test]
