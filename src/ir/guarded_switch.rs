@@ -21,17 +21,38 @@ use crate::ir::types_recover::{TypeHint, TypeMap};
 
 /// Remove redundant outer unsigned-range guards around proven switch statements.
 pub fn collapse_range_guards(function: &mut Function) {
-    collapse_body(&mut function.body, None);
+    collapse_body(&mut function.body, None, None);
+}
+
+/// Remove redundant range guards using pipeline-owned stack-object identity.
+pub fn collapse_range_guards_with_identities(
+    function: &mut Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    collapse_body(&mut function.body, None, Some(identities));
 }
 
 /// Typed second chance for range guards whose discriminator explicitly narrows
 /// or widens a register. The recovered width proves whether that cast preserves
 /// the guarded value; without it the untyped pass deliberately leaves the guard.
 pub fn collapse_range_guards_with_types(function: &mut Function, types: &TypeMap) {
-    collapse_body(&mut function.body, Some(types));
+    collapse_body(&mut function.body, Some(types), None);
 }
 
-fn collapse_body(body: &mut Vec<Stmt>, types: Option<&TypeMap>) {
+/// Typed range-guard cleanup using pipeline-owned stack-object identity.
+pub fn collapse_range_guards_with_types_and_identities(
+    function: &mut Function,
+    types: &TypeMap,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    collapse_body(&mut function.body, Some(types), Some(identities));
+}
+
+fn collapse_body(
+    body: &mut Vec<Stmt>,
+    types: Option<&TypeMap>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     for statement in body.iter_mut() {
         match statement.semantic_mut() {
             Stmt::If {
@@ -39,26 +60,26 @@ fn collapse_body(body: &mut Vec<Stmt>, types: Option<&TypeMap>) {
                 else_body,
                 ..
             } => {
-                collapse_body(then_body, types);
+                collapse_body(then_body, types, identities);
                 if let Some(else_body) = else_body {
-                    collapse_body(else_body, types);
+                    collapse_body(else_body, types, identities);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                collapse_body(body, types);
+                collapse_body(body, types, identities);
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, case_body) in cases {
-                    collapse_body(case_body, types);
+                    collapse_body(case_body, types, identities);
                 }
                 if let Some(default) = default {
-                    collapse_body(default, types);
+                    collapse_body(default, types, identities);
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                collapse_body(try_body, types);
+                collapse_body(try_body, types, identities);
                 for catch in catches {
-                    collapse_body(&mut catch.body, types);
+                    collapse_body(&mut catch.body, types, identities);
                 }
             }
             _ => {}
@@ -98,7 +119,7 @@ fn collapse_body(body: &mut Vec<Stmt>, types: Option<&TypeMap>) {
         }
         let Some((temporary, value)) = body
             .get(index - 1)
-            .and_then(|statement| discriminant_copy(statement, types))
+            .and_then(|statement| discriminant_copy(statement, types, identities))
         else {
             index += 1;
             continue;
@@ -468,19 +489,26 @@ fn known_width(expr: &Expr, types: Option<&TypeMap>) -> Option<u8> {
     }
 }
 
-fn discriminant_copy(statement: &Stmt, types: Option<&TypeMap>) -> Option<(VReg, Expr)> {
+fn discriminant_copy(
+    statement: &Stmt,
+    types: Option<&TypeMap>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<(VReg, Expr)> {
     match statement.semantic() {
         Stmt::Assign { dst, src } => Some((dst.clone(), src.clone())),
         // Stack-local promotion represents a write to the recovered object as
         // `Store { addr: Reg(local_*), ... }`; the C renderer already treats it
         // as an assignment. It is a lossless discriminator copy only when the
-        // source's recovered width fits in the destination object. Requiring
-        // the promoted-local prefix prevents a genuine pointer store from ever
-        // being mistaken for a register copy.
+        // source's recovered width fits in the destination object. Production
+        // requires stack-promotion ownership so a genuine pointer store cannot
+        // be mistaken for a register copy; the no-sidecar compatibility path
+        // retains the legacy promoted-local spelling check.
         Stmt::Store { addr, src, size } => match addr.semantic() {
-            Expr::Reg(dst @ VReg::Phys(name))
-                if (name.starts_with("local_") || name.starts_with("stack_"))
-                    && known_width(src, types).is_some_and(|width| width <= *size) =>
+            Expr::Reg(dst)
+                if identities.map_or_else(
+                    || crate::ir::types::is_promoted_local_reg(dst),
+                    |identities| identities.is_promoted_stack_object(dst),
+                ) && known_width(src, types).is_some_and(|width| width <= *size) =>
             {
                 Some((dst.clone(), src.clone()))
             }
@@ -699,9 +727,7 @@ mod tests {
                 Stmt::If {
                     cond: Expr::Cmp {
                         op: CmpOp::Ule,
-                        lhs: Box::new(
-                            guarded_value.with_origins(OriginSet::one(0x1010)),
-                        ),
+                        lhs: Box::new(guarded_value.with_origins(OriginSet::one(0x1010))),
                         rhs: Box::new(Expr::Const(3).with_origins(OriginSet::one(0x1014))),
                     }
                     .with_origins(OriginSet::one(0x100c)),
@@ -1103,9 +1129,7 @@ mod tests {
             src: Expr::Cast {
                 signed: true,
                 width: 8,
-                expr: Box::new(
-                    Expr::Reg(VReg::phys("rhs")).with_origins(OriginSet::one(0x1004)),
-                ),
+                expr: Box::new(Expr::Reg(VReg::phys("rhs")).with_origins(OriginSet::one(0x1004))),
             }
             .with_origins(OriginSet::one(0x1000)),
         }
@@ -1444,5 +1468,78 @@ mod tests {
             function.body[0].origins(),
             Some(&OriginSet::from_addresses([0x1000, 0x1004, 0x1008]))
         );
+    }
+
+    fn typed_stack_discriminant_candidate(source: &VReg, temporary: &VReg) -> Function {
+        Function {
+            name: "identity_owned_stack_state".to_string(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(temporary.clone()),
+                    src: Expr::Reg(source.clone()),
+                    size: 8,
+                },
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Ule,
+                        lhs: Box::new(Expr::Reg(source.clone())),
+                        rhs: Box::new(Expr::Const(3)),
+                    },
+                    then_body: vec![Stmt::Switch {
+                        discriminant: Expr::Reg(temporary.clone()),
+                        cases: (0..=3).map(|case| (Some(case), vec![Stmt::Nop])).collect(),
+                        default: None,
+                    }],
+                    else_body: None,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn typed_guarded_switch_accepts_identity_owned_opaque_stack_copy() {
+        let source = VReg::phys("state");
+        let temporary = VReg::phys("opaque_slot");
+        let mut function = typed_stack_discriminant_candidate(&source, &temporary);
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            source.clone(),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        let object = "opaque_slot".to_string();
+        identities.attach_promoted_stack_objects([&object]);
+
+        collapse_range_guards_with_types_and_identities(&mut function, &types, &identities);
+
+        assert_eq!(function.body.len(), 1);
+        assert!(
+            matches!(function.body[0].semantic(), Stmt::Switch { discriminant: Expr::Reg(value), .. } if value == &source)
+        );
+    }
+
+    #[test]
+    fn typed_guarded_switch_rejects_unowned_local_spelling_with_identity_sidecar() {
+        let source = VReg::phys("state");
+        let temporary = VReg::phys("local_28");
+        let mut function = typed_stack_discriminant_candidate(&source, &temporary);
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            source,
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+        let identities = crate::ir::value_number::ValueIdentities::default();
+
+        collapse_range_guards_with_types_and_identities(&mut function, &types, &identities);
+
+        assert_eq!(function.body.len(), 2);
+        assert!(matches!(function.body[1].semantic(), Stmt::If { .. }));
     }
 }

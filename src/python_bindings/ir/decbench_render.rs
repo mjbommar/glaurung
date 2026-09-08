@@ -402,7 +402,11 @@ fn decbench_text_with_installed_environment(
     if let Some(tm) = refined_decl.as_ref() {
         pass!(
             "collapse_range_guards_with_types",
-            crate::ir::guarded_switch::collapse_range_guards_with_types(&mut prepared, tm)
+            crate::ir::guarded_switch::collapse_range_guards_with_types_and_identities(
+                &mut prepared,
+                tm,
+                &value_identities,
+            )
         );
     }
     // A typed range proof may have synthesized an exhaustive switch default,
