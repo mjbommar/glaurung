@@ -4095,6 +4095,13 @@ relevant ratchet's accepted-regression record.
    explicit no-sidecar compatibility path parses `#version`. Its two exact
    contracts and the motivating GCC O2 loop-call fixture pass; see
    `results/wp3-call-reassignment-identities.md`.
+   Commit `45c12f56` closes the adjacent captured-scratch decision. Production
+   now distinguishes a numbered scratch definition from an entry value using
+   its identity version, not a `#` in its rendered name; this preserves the
+   separate substitution rules for register and removable stack arguments.
+   The explicit no-sidecar path retains its compatibility parser. The exact
+   identity contract and Clang O0 eight-argument spill fixture pass; see
+   `results/wp3-captured-scratch-identities.md`.
    Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
