@@ -593,6 +593,17 @@ Hello World cells—amd64/AArch64, Clang O0/O2—render exact `int main(void)`, 
 plain `puts("Hello, World!")`, and `return 0`. The census records 5,144 declared
 Rust tests and zero outside every gate. No broad suite or corpus ran.
 
+## Renderer-owned local verification
+
+Commit `7d0095af` replaces the production verifier's generic local-name parser
+with the renderer's identity-aware owned-local inventory. Parameters and raw
+machine-state placeholders are excluded by the same census that determines C
+declarations. Both adversarial tests and all 45 verifier tests pass with 4,564
+unrelated tests filtered out. A fresh debug extension passes the exact x86-64
+O0 declaration/use invariant and the exact shadow verification-metadata test.
+The census records 5,146 declared Rust tests and zero outside every gate; all
+six census checks pass. No broad suite or corpus ran.
+
 ## Ground rules
 
 Verified before any claim of done: `cargo test --features python-ext`,

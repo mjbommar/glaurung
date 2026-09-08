@@ -87,6 +87,12 @@ three places. The detailed file now records the reconciled decisions:
 | [PLAN.md](PLAN.md) | Dependency-ordered implementation work packages with exact production/test paths, TDD sequence, gates, measurements, stop conditions, and milestones. |
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
+The latest WP3 record is
+[`results/wp3-renderer-owned-local-inventory.md`](results/wp3-renderer-owned-local-inventory.md):
+production definition verification now consumes the renderer's identity-aware
+owned-local inventory instead of parsing conventional local-name prefixes. All
+45 owning tests and two exact compiled/metadata checks pass.
+
 The latest bounded output-quality record is
 [`results/wp3-wp6-hello-contract.md`](results/wp3-wp6-hello-contract.md):
 attributed string arguments no longer gain redundant pointer casts, and the

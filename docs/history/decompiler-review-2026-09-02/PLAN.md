@@ -1731,8 +1731,11 @@ provenance through lowering.
   final-verifier boundary to promoted stack stores. Production verification
   now treats a bare store target as source storage only when stack promotion
   owns that identity; an unowned `local_` spelling cannot manufacture a
-  definition. The generic rendered-local inventory still parses presentation
-  names and remains a separate WP3 producer-model task. See
+  definition. Commit `7d0095af` closes the generic rendered-local follow-on:
+  production verification consumes the renderer's identity-aware owned-local
+  inventory, excluding parameters and raw machine-state placeholders, instead
+  of parsing `ret`, `local_`, `stack_`, or `varN` prefixes. See
+  `results/wp3-renderer-owned-local-inventory.md` and
   `results/wp3-verifier-stack-identities.md`. Commit `c599ac49` migrates direct and
   exhaustive return folding in both production preparation stages. An unowned
   `ret = value; return ret;` remains intact, while a pipeline-owned result role
