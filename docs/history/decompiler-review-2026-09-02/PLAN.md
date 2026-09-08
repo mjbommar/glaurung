@@ -1762,6 +1762,12 @@ provenance through lowering.
   exact result storage remains visible. All 130 `call_args` tests and the exact
   effect-only/consumed-result C checks pass; see
   `results/wp3-call-result-identities.md`.
+  Commit `5fcd345c` migrates frame-relative type propagation. Production frame
+  bases and spill/reload slots use exact `(base, SSA version)` identities, so
+  pointer evidence cannot cross frame-register lifetimes or a misleading
+  `rbp#version` spelling. All 83 owning type-recovery tests and one production
+  typed-render CLI check pass; see
+  `results/wp3-frame-spill-type-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
@@ -3804,9 +3810,12 @@ relevant ratchet's accepted-regression record.
    result-register read/write attribution across expressions, nested control,
    and the call-fold liveness probe. Its 130 owning tests and two exact C output
    checks pass; see `results/wp3-call-result-identities.md`. Continue the
-   remaining production parser classification in `src/ir/call_args.rs`,
-   `dead_stores.rs`, and `types_recover/tagging.rs`; keep pre-sidecar tagging
-   internals and explicit no-sidecar compatibility parsers classified
+   remaining production parser classification. Commit `5fcd345c` closes the
+   `types_recover/tagging.rs` frame-base and spill/reload surface using complete
+   exact SSA identities; its 83 owning tests and production typed-render smoke
+   check pass. See `results/wp3-frame-spill-type-identities.md`. Continue in
+   `src/ir/call_args.rs` and the remaining type/return readers; keep pre-sidecar
+   tagging internals and explicit no-sidecar compatibility parsers classified
    separately.
    Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
