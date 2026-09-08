@@ -137,3 +137,16 @@ registered post-SSA mutation therefore requires an explicit test update. The
 ratchet and the adjacent changed/no-op mutation contract pass individually with
 4,417 unrelated tests filtered out. Detecting a wholly unregistered raw LLIR
 mutation remains the open enforcement edge.
+
+Commit `2fe827df` closes that edge for the production post-SSA transaction.
+`SsaTrackedLlir` takes the only mutable borrow of the LLIR once SSA is created,
+exposes immutable function access to consumers, and exposes mutation only
+through the classified gateway. A new mutation in this transaction must
+therefore supply an `Invalidate` class, while the ratchet continues to pin two
+registered sites and zero legacy `All` sites.
+
+The focused ratchet, changed/no-op mutation contract, and adjacent pipeline
+compile contract pass individually with 4,417 unrelated tests filtered out. No
+broad suite or external benchmark ran. This establishes the requested
+registration rule for the authoritative LLIR-to-AST pipeline; AST-native
+identity lifecycle and the remaining WP3 consumer/origin criteria remain open.
