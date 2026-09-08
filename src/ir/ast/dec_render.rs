@@ -2004,13 +2004,17 @@ fn declared_global_integer_call_arg_through_views(parameter_type: &str, arg: &Ex
     let parameter_width =
         crate::ir::call_contracts::integer_c_type_width(parameter_type, pointer_width)?;
     let mut current = arg;
-    while let Expr::Cast { width, expr, .. } = current {
+    loop {
+        current = current.semantic();
+        let Expr::Cast { width, expr, .. } = current else {
+            break;
+        };
         if *width < parameter_width {
             return None;
         }
         current = expr;
     }
-    let Expr::Deref { addr, size } = current else {
+    let Expr::Deref { addr, size } = current.semantic() else {
         return None;
     };
     let address = direct_global_address(addr)?;
@@ -2031,13 +2035,17 @@ fn declared_integer_call_arg_through_views<'a>(
     let parameter_width =
         crate::ir::call_contracts::integer_c_type_width(parameter_type, pointer_width)?;
     let mut current = arg;
-    while let Expr::Cast { width, expr, .. } = current {
+    loop {
+        current = current.semantic();
+        let Expr::Cast { width, expr, .. } = current else {
+            break;
+        };
         if *width < parameter_width {
             return None;
         }
         current = expr;
     }
-    let Expr::Reg(register @ VReg::Phys(_)) = current else {
+    let Expr::Reg(register @ VReg::Phys(_)) = current.semantic() else {
         return None;
     };
     (declared_reg_ctype(register) == parameter_type).then_some(register)
@@ -2063,7 +2071,7 @@ fn declared_integer_call_arg_through_views<'a>(
 /// keeps its cast. Being wrong in that direction costs a redundant cast; being
 /// wrong in the other direction silently drops a truncation.
 fn integer_call_arg_cast_is_redundant(parameter_type: &str, arg: &Expr) -> bool {
-    match arg {
+    match arg.semantic() {
         Expr::Reg(register @ VReg::Phys(_)) => declared_reg_ctype(register) == parameter_type,
         Expr::Const(value) => signed_integer_type_represents(parameter_type, *value),
         // A symbolised code address already renders as `(long)(name)`; the call

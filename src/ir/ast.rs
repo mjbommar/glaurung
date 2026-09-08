@@ -4493,6 +4493,85 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn attributed_integer_call_arguments_drop_only_proven_identity_views() {
+        let callee = CallPrototype {
+            return_type: "int".into(),
+            parameter_types: vec!["int".into(), "int".into(), "int".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+        let function = Function {
+            name: "call_integer_views".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "consume_three".into(),
+                },
+                args: vec![
+                    Expr::Cast {
+                        signed: false,
+                        width: 8,
+                        expr: Box::new(
+                            Expr::Cast {
+                                signed: false,
+                                width: 4,
+                                expr: Box::new(
+                                    Expr::Reg(VReg::phys("arg0"))
+                                        .with_origins(OriginSet::one(0x1000)),
+                                ),
+                            }
+                            .with_origins(OriginSet::one(0x1004)),
+                        ),
+                    }
+                    .with_origins(OriginSet::one(0x1008)),
+                    Expr::Const(7).with_origins(OriginSet::one(0x100c)),
+                    Expr::Cast {
+                        signed: false,
+                        width: 1,
+                        expr: Box::new(
+                            Expr::Reg(VReg::phys("arg0")).with_origins(OriginSet::one(0x1010)),
+                        ),
+                    }
+                    .with_origins(OriginSet::one(0x1014)),
+                ],
+                dst: None,
+                call_spec: Some(CallSiteSpec {
+                    callee_prototype: Some(callee.clone()),
+                    call_prototype: callee,
+                }),
+            }],
+        };
+        let prototype = CallPrototype {
+            return_type: "void".into(),
+            parameter_types: vec!["int".into()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            VReg::phys("arg0"),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        let rendered = render_decbench_typed_with_output_and_prototype(
+            &function,
+            Some(&types),
+            None,
+            crate::ir::types_recover::RecoveredOutputKind::Direct,
+            Some(&prototype),
+        );
+
+        assert!(
+            rendered.contains("consume_three(arg0, 7, (int)((unsigned char)(arg0)))"),
+            "non-narrowing views and an exact literal should disappear, while the narrowing view remains:\n{rendered}"
+        );
+    }
+
+    #[test]
     fn pointer_return_strips_integer_transport_but_keeps_real_pointer_conversion() {
         let function = Function {
             name: "return_pointer".into(),
