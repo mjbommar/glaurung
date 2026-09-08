@@ -425,24 +425,33 @@ pub(crate) fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_an
     }
     // `main` is the one C function whose ordinary hosted signature is part of
     // the language/runtime contract even when debug information is absent.
-    // Preserve an explicit source prototype when one exists; otherwise use the
-    // conventional two-argument spelling only when the recovered body proves
-    // exactly two incoming arguments. This turns pointer-sized `argv` slots
-    // into the character-pointer array they semantically are, and gives the
-    // body the same type information needed to render `argv[i]` cleanly.
+    // Preserve an explicit source prototype when one exists; otherwise use one
+    // of the two ordinary hosted forms only when the recovered body proves zero
+    // or exactly two incoming arguments. The two-argument form turns pointer-
+    // sized `argv` slots into the character-pointer array they semantically are,
+    // and gives the body the same type information needed to render `argv[i]`
+    // cleanly. Any other recovered arity remains machine-inferred.
     let conventional_main = (declared_prototype.is_none()
         && name == "main"
-        && arg_count == 2
+        && matches!(arg_count, 0 | 2)
         && output_kind != crate::ir::types_recover::RecoveredOutputKind::Void)
         .then(|| CallPrototype {
             return_type: "int".to_string(),
-            parameter_types: vec!["int".to_string(), "char **".to_string()],
+            parameter_types: if arg_count == 2 {
+                vec!["int".to_string(), "char **".to_string()]
+            } else {
+                vec![]
+            },
             variadic: false,
             authority: CallPrototypeAuthority::Authoritative,
         });
-    let conventional_main_names = conventional_main
-        .as_ref()
-        .map(|_| vec![Some("argc".to_string()), Some("argv".to_string())]);
+    let conventional_main_names = conventional_main.as_ref().map(|_| {
+        if arg_count == 2 {
+            vec![Some("argc".to_string()), Some("argv".to_string())]
+        } else {
+            vec![]
+        }
+    });
     let declared_prototype = declared_prototype.or(conventional_main.as_ref());
     let declared_parameter_names = declared_parameter_names.or(conventional_main_names.as_deref());
     let declared_prototype = declared_prototype.filter(|prototype| {
@@ -1069,6 +1078,33 @@ pub(crate) fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_an
 mod identity_census_tests {
     use super::*;
     use crate::ir::ast::{Expr, Stmt};
+
+    #[test]
+    fn zero_argument_hosted_main_has_the_c_language_return_contract() {
+        let function = Function {
+            name: "main".into(),
+            entry_va: 0,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Const(0)),
+            }],
+        };
+
+        let text = render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types_and_parameter_names_and_identities(
+            &function,
+            None,
+            None,
+            crate::ir::types_recover::RecoveredOutputKind::Direct,
+            None,
+            None,
+            &[],
+            8,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+            Some(&crate::ir::value_number::ValueIdentities::default()),
+        );
+
+        assert!(text.contains("int main(void)"), "{text}");
+    }
 
     fn render_census_identity(
         identities: Option<&crate::ir::value_number::ValueIdentities>,
