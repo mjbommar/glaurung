@@ -5477,6 +5477,77 @@ mod tests {
     }
 
     #[test]
+    fn sysv_sse_pair_clobber_uses_exact_identity_not_display_spelling() {
+        let layouts = std::collections::HashMap::from([
+            (0x2000, vec![reg("rdi")]),
+            (0x3000, vec![reg("xmm0"), reg("xmm1")]),
+        ]);
+        let prototypes = std::collections::HashMap::from([
+            (
+                0x2000,
+                recovered_prototype("struct __glaurung_sse_pair", &["int"]),
+            ),
+            (0x3000, recovered_prototype("int", &["double", "double"])),
+        ]);
+        let run = |destination: &str, identities: &crate::ir::value_number::ValueIdentities| {
+            let mut function = Function {
+                name: "pair".into(),
+                entry_va: 0x1000,
+                body: vec![
+                    call_at(0x2000, "make_pair"),
+                    Stmt::Assign {
+                        dst: reg(destination),
+                        src: Expr::Const(0),
+                    },
+                    call_at(0x3000, "consume_pair"),
+                ],
+            };
+            reconstruct_args_with_layouts_prototypes_strings_and_identities(
+                &mut function,
+                CallConv::SysVAmd64,
+                &mut [0].into_iter().collect(),
+                &layouts,
+                &Default::default(),
+                Some(&prototypes),
+                &Default::default(),
+                identities,
+            );
+            function
+                .body
+                .into_iter()
+                .find_map(|statement| match statement {
+                    Stmt::Call {
+                        target: Expr::Named { va: 0x3000, .. },
+                        args,
+                        ..
+                    } => Some(args),
+                    _ => None,
+                })
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            reg("opaque_high"),
+            crate::ir::ssa::SsaValue {
+                base: reg("xmm1"),
+                version: 2,
+            },
+        );
+        identities.record(
+            reg("xmm1#looks_high"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 2,
+            },
+        );
+
+        assert_eq!(run("opaque_high", &identities), Some(Vec::new()));
+        assert_eq!(
+            run("xmm1#looks_high", &identities),
+            Some(vec![Expr::Reg(reg("xmm0")), Expr::Reg(reg("xmm1"))])
+        );
+    }
+
+    #[test]
     fn arm_hard_float_call_folds_vfp_arguments_and_consumed_result() {
         let mut f = Function {
             name: "hard_float_caller".into(),

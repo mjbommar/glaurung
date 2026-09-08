@@ -122,6 +122,7 @@ pub(super) fn fold_one_call(
             arch,
             layout,
             callee_layouts.direct_prototypes,
+            identities,
         ) {
             return;
         }
@@ -923,6 +924,7 @@ fn forward_proven_sysv_sse_pair(
     arch: CallConv,
     layout: &[VReg],
     prototypes: Option<&std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> bool {
     if arch != CallConv::SysVAmd64
         || layout.len() != 2
@@ -971,12 +973,7 @@ fn forward_proven_sysv_sse_pair(
                 }
                 return false;
             }
-            Stmt::Assign {
-                dst: VReg::Phys(name),
-                ..
-            } if matches!(ssa_base(name), "xmm0" | "xmm1")
-                || crate::ir::abi::sse_pair_result_lane_offset(arch, name).is_some() =>
-            {
+            Stmt::Assign { dst, .. } if register_is_sse_pair_storage(arch, dst, identities) => {
                 return false;
             }
             Stmt::Comment(text) if text.contains("asm:") => return false,
@@ -995,6 +992,29 @@ fn forward_proven_sysv_sse_pair(
         }
     }
     false
+}
+
+fn register_is_sse_pair_storage(
+    arch: CallConv,
+    register: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    let is_pair_storage = |register: &VReg| {
+        let VReg::Phys(name) = register else {
+            return false;
+        };
+        matches!(ssa_base(name), "xmm0" | "xmm1")
+            || crate::ir::abi::sse_pair_result_lane_offset(arch, name).is_some()
+    };
+    match identities {
+        Some(identities) => identities.candidates(register).is_some_and(|candidates| {
+            !candidates.is_empty()
+                && candidates
+                    .iter()
+                    .all(|identity| is_pair_storage(&identity.base))
+        }),
+        None => is_pair_storage(register),
+    }
 }
 
 fn float_parameter_bytes(c_type: &str) -> Option<u8> {
