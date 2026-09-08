@@ -636,11 +636,14 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
             if_true,
             if_false,
             ..
-        } => match cond.as_ref() {
-            Expr::Const(0) => Some(if_false.as_ref().clone()),
-            Expr::Const(_) => Some(if_true.as_ref().clone()),
-            _ => None,
-        },
+        } => {
+            let selected = match cond.semantic() {
+                Expr::Const(0) => Some(if_false.as_ref()),
+                Expr::Const(_) => Some(if_true.as_ref()),
+                _ => None,
+            };
+            selected.map(|arm| arm.clone().with_optional_origins(cond.origins().cloned()))
+        }
         _ => None,
     };
     if let Some(replacement) = selected_arm {
@@ -1758,6 +1761,39 @@ mod tests {
             panic!("fixture assignment disappeared: {:#?}", function.body);
         };
         assert_eq!(src, &Expr::Reg(reg("selected")));
+    }
+
+    #[test]
+    fn attributed_constant_select_hoists_selected_and_control_origins() {
+        let select_owner = crate::ir::ast::OriginSet::one(0x1000);
+        let condition_owner = crate::ir::ast::OriginSet::one(0x1004);
+        let selected_owner = crate::ir::ast::OriginSet::one(0x1008);
+        let unreachable_owner = crate::ir::ast::OriginSet::one(0x100c);
+        let mut function = one_stmt(
+            Expr::Select {
+                cond: Box::new(Expr::Const(1).with_origins(condition_owner.clone())),
+                if_true: Box::new(Expr::Reg(reg("selected")).with_origins(selected_owner.clone())),
+                if_false: Box::new(
+                    Expr::Reg(reg("unreachable")).with_origins(unreachable_owner.clone()),
+                ),
+                width: 8,
+            }
+            .with_origins(select_owner.clone()),
+        );
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        assert_eq!(src.semantic(), &Expr::Reg(reg("selected")));
+        let expected = select_owner.union(&condition_owner).union(&selected_owner);
+        assert_eq!(src.origins(), Some(&expected));
+        assert!(!src
+            .origins()
+            .expect("selected value must remain attributed")
+            .addresses()
+            .contains(&0x100c));
     }
 
     #[test]
