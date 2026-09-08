@@ -38,33 +38,45 @@ use super::env::Copies;
 /// case; substitutions nested inside arithmetic addresses remain safe because
 /// the address expression cannot be mistaken for local storage.
 pub(super) fn subst_store_addr(address: &mut Expr, copies: &Copies) -> bool {
-    if let Expr::Lea {
-        base: Some(register),
-        index: None,
-        scale,
-        disp,
-        ..
-    } = address
-    {
-        if *scale == 1 && *disp == 0 {
-            if let Some(Expr::Reg(replacement)) = copies.get(register) {
+    let trivial_lea_register = match address.semantic() {
+        Expr::Lea {
+            base: Some(register),
+            index: None,
+            scale: 1,
+            disp: 0,
+            ..
+        } => Some(register.clone()),
+        _ => None,
+    };
+    if let Some(register) = trivial_lea_register {
+        if let Some(source) = copies.get(&register) {
+            if let Expr::Reg(replacement) = source.semantic() {
                 if is_promoted_local_reg(replacement) {
+                    let replacement = replacement.clone();
+                    let source_origins = source.origins().cloned();
                     // Preserve the explicit address container while removing
                     // the scratch. General `subst` deliberately collapses a
                     // trivial Lea to its value, which is incorrect only at
                     // this overloaded Store-lvalue boundary.
-                    *register = replacement.clone();
+                    let Expr::Lea { base, .. } = address.semantic_mut() else {
+                        unreachable!("the semantic address was a trivial Lea")
+                    };
+                    *base = Some(replacement);
+                    if let Some(origins) = source_origins {
+                        address.merge_origins(&origins);
+                    }
                     return true;
                 }
             }
         }
     }
-    if matches!(
-        address,
-        Expr::Reg(register)
-            if matches!(copies.get(register), Some(Expr::Reg(replacement)) if is_promoted_local_reg(replacement))
-    ) {
-        return false;
+    if let Expr::Reg(register) = address.semantic() {
+        if matches!(
+            copies.get(register).map(Expr::semantic),
+            Some(Expr::Reg(replacement)) if is_promoted_local_reg(replacement)
+        ) {
+            return false;
+        }
     }
     subst(address, copies)
 }

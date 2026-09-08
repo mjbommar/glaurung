@@ -734,6 +734,56 @@ mod tests {
     }
 
     #[test]
+    fn an_attributed_pointer_scratch_store_stays_indirect() {
+        let address = reg("ret");
+        let local = reg("local_20");
+        let source_owner = crate::ir::ast::OriginSet::one(0x1048);
+        let mut function = Function {
+            name: "write_output".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: address.clone(),
+                    src: Expr::Reg(local).with_origins(source_owner.clone()),
+                },
+                Stmt::Store {
+                    addr: Expr::Lea {
+                        base: Some(address),
+                        index: None,
+                        scale: 1,
+                        disp: 0,
+                        segment: None,
+                    },
+                    src: Expr::Const(7),
+                    size: 4,
+                },
+            ],
+        };
+
+        propagate_copies(&mut function);
+
+        let [Stmt::Store { addr, .. }] = function.body.as_slice() else {
+            panic!(
+                "expected one surviving indirect store: {:#?}",
+                function.body
+            );
+        };
+        assert!(
+            matches!(
+                addr.semantic(),
+                Expr::Lea {
+                    base: Some(store_address),
+                    index: None,
+                    disp: 0,
+                    ..
+                } if store_address == &reg("local_20")
+            ),
+            "provenance must not change an indirect write into a local assignment: {addr:#?}"
+        );
+        assert_eq!(addr.origins(), Some(&source_owner));
+    }
+
+    #[test]
     fn single_use_address_folds_into_deref_inside_loop() {
         // var5 = arg0 + (local_4 * 4); s = s + *var5   (var5 scratch, single-use)
         // Expected: var5 folds into the deref -> s = s + *(arg0 + local_4*4).
