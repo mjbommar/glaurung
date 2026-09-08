@@ -1799,6 +1799,15 @@ provenance through lowering.
   reversing every owned renderer line and rebuilding reproduces the same four;
   they are not attributed to this increment. See
   `results/wp3-declared-cast-expression-origin-rendering.md`.
+  Commit `bb0052d6` closes the adjacent typed field-address reader. An origin
+  around a fully proven `PdbFieldAddr` no longer degrades `local_8->next` into
+  a raw integer-address dereference; all existing single-hint, identifier,
+  layout-emission, scale, and index guards remain unchanged. The strengthened
+  typed-render contract was observed red and is green with 4,669 unrelated
+  tests filtered out. Six focused tests on the committed PE/PDB fixture pass,
+  but its `record_value` body still emits raw offsets, so broader real PDB field
+  promotion remains open. See
+  `results/wp3-field-address-expression-origin-rendering.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
