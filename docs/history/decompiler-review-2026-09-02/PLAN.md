@@ -1642,7 +1642,10 @@ provenance through lowering.
   retaining protection for real parameter prototypes and ordinary local
   narrowing. Commit `f6c9d0ce` migrates high-half ABI-width refinement to typed
   parameter slots when identities are installed; high-bit use widens an owned
-  `arg0` but not an unrelated role spelled `arg99`. See
+  `arg0` but not an unrelated role spelled `arg99`. Commit `f3781342` migrates
+  source-loop scratch eligibility to the same typed
+  roles: an exact unowned `arg99` may coalesce, while a value carrying parameter
+  slot 99 refuses. See
   `results/wp3-parameter-role-metadata.md`. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
   merge hid the unresolved SysV `al` variadic live-in. That cell is now an

@@ -71,3 +71,8 @@ Each case used `cargo test --features python-ext --lib
 ir::latch_predicate::tests::<name> -- --exact`. No broad Rust, Python, fixture,
 DecBench, or Joern suite was run. These are the first three AST-native identity
 mutation contracts, not completion of every renaming/coalescing pass.
+
+Follow-up `f3781342` also makes source-loop scratch eligibility consume typed
+parameter-role metadata. The exact rename transaction now applies even when an
+ordinary scratch happens to be spelled `argN`; a real typed parameter still
+fails closed.

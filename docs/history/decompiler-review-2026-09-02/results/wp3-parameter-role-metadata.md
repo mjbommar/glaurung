@@ -41,6 +41,13 @@ source parameters; the name parser remains solely in the compatibility path.
 Thus a 32-bit `arg0` used above bit 31 becomes 64-bit, while an otherwise
 identical unowned role called `arg99` remains 32-bit.
 
+Commit `f3781342` migrates source-loop update eligibility. The production pass
+now receives the identity sidecar and rejects a scratch only when
+`parameter_slot` identifies it as a source parameter. An exact unowned scratch
+called `arg99` can therefore coalesce normally; attaching slot 99 to the same
+value preserves the parameter refusal. The no-sidecar compatibility path keeps
+the legacy parser.
+
 Focused validation used exact Rust tests only:
 
 ```text
@@ -90,6 +97,15 @@ exact_opaque_identity_authorizes_definition_width_refinement
 1 passed; 4,429 filtered out
 
 ambiguous_opaque_identity_declines_definition_width_refinement
+1 passed; 4,429 filtered out
+
+coalesces_a_typed_loop_update_scratch_into_its_source_carrier
+1 passed; 4,429 filtered out
+
+keeps_a_loop_update_scratch_when_the_old_carrier_is_still_needed
+1 passed; 4,429 filtered out
+
+keeps_a_loop_update_scratch_with_a_different_semantic_width
 1 passed; 4,429 filtered out
 ```
 
