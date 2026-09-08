@@ -1325,6 +1325,13 @@ provenance through lowering.
   prelude, latch, zero-iteration, or trailing-control proof. Its strengthened
   observed-red test and all 30 loop-form tests pass; see
   `results/wp3-guarded-sentinel-composition.md`.
+  Commit `fa8b0656` then composes all four sentinel owners consumed by
+  coalesced sentinel-search recovery: entry comparison, entry return,
+  loop-exit comparison, and loop-exit return. Both reconstructed sentinel uses
+  retain the same deterministic union without weakening stable-value, seed,
+  carried-register, exit-shape, or effect refusals. Its strengthened
+  observed-red test and all 30 loop-form tests pass; see
+  `results/wp3-sentinel-search-composition.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
