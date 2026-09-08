@@ -383,8 +383,13 @@ fn merge_exact_definition_widths(
     definition_widths: &std::collections::HashMap<crate::ir::types::VReg, u8>,
     role_names: &std::collections::HashMap<String, String>,
     cc: crate::ir::call_args::CallConv,
+    param_slots: &std::collections::HashSet<usize>,
 ) {
     let word = machine_word_bytes(cc);
+    let parameter_roles = param_slots
+        .iter()
+        .map(|slot| format!("arg{slot}"))
+        .collect::<std::collections::HashSet<_>>();
     // Collect first, apply second. `role_names` is many-to-one: several machine
     // storages name one rendered role, and `ret` in particular collects every
     // return carrier the naming pass found — an integer `rax#3` and an SSE
@@ -441,7 +446,7 @@ fn merge_exact_definition_widths(
         // Parameter widths come from `RecoveredPrototype`'s exact SSA live-in;
         // this legacy storage-name projection is only valid for non-parameter
         // roles whose definition identity the naming pass retained.
-        if crate::ir::ast::parse_arg_index(role_name).is_some() {
+        if parameter_roles.contains(role_name) {
             continue;
         }
         by_role
@@ -563,7 +568,7 @@ pub(super) fn decbench_type_maps(
     }
     merge_slot_sizes(&mut decl, slot_sizes, cc);
     apply_stack_source_types(&mut decl, source_types, source_names, cc, dwarf_type_env);
-    merge_exact_definition_widths(&mut decl, definition_widths, role_names, cc);
+    merge_exact_definition_widths(&mut decl, definition_widths, role_names, cc, param_slots);
     crate::ir::call_contracts::refine_call_result_types(f, &mut decl);
     refine_float_copy_types(&f.body, &mut decl, max_refinement_rounds);
     for (role, hint) in numbered.iter() {
@@ -605,7 +610,7 @@ pub(super) fn decbench_type_maps(
     }
     merge_slot_sizes(&mut width, slot_sizes, cc);
     apply_stack_source_types(&mut width, source_types, source_names, cc, dwarf_type_env);
-    merge_exact_definition_widths(&mut width, definition_widths, role_names, cc);
+    merge_exact_definition_widths(&mut width, definition_widths, role_names, cc, param_slots);
     crate::ir::call_contracts::refine_call_result_types(f, &mut width);
     refine_float_copy_types(&f.body, &mut width, max_refinement_rounds);
     for (role, hint) in numbered.iter() {
@@ -868,6 +873,30 @@ mod tests {
     }
 
     #[test]
+    fn definition_width_merge_does_not_parse_unowned_arg_spelling() {
+        let role = VReg::phys("arg99");
+        let mut types = TypeMap::default();
+        let definition_widths = HashMap::from([(VReg::phys("eax#1"), 4)]);
+        let role_names = HashMap::from([("eax#1".to_string(), "arg99".to_string())]);
+
+        merge_exact_definition_widths(
+            &mut types,
+            &definition_widths,
+            &role_names,
+            CallConv::SysVAmd64,
+            &std::collections::HashSet::from([0]),
+        );
+
+        assert_eq!(
+            types.get(&role),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            })
+        );
+    }
+
+    #[test]
     fn later_subregister_definition_does_not_narrow_a_parameter_prototype() {
         let argument = VReg::phys("arg1");
         let mut types = TypeMap::default();
@@ -886,6 +915,7 @@ mod tests {
             &definition_widths,
             &role_names,
             CallConv::SysVAmd64,
+            &std::collections::HashSet::from([1]),
         );
 
         assert_eq!(
@@ -938,6 +968,7 @@ mod tests {
                 &definition_widths,
                 &role_names,
                 CallConv::SysVAmd64,
+                &Default::default(),
             );
 
             assert_eq!(
@@ -976,6 +1007,7 @@ mod tests {
             &definition_widths,
             &role_names,
             CallConv::SysVAmd64,
+            &Default::default(),
         );
 
         assert_eq!(
@@ -1001,6 +1033,7 @@ mod tests {
             &definition_widths,
             &role_names,
             CallConv::SysVAmd64,
+            &Default::default(),
         );
 
         assert_eq!(
@@ -1025,6 +1058,7 @@ mod tests {
             &definition_widths,
             &role_names,
             CallConv::ArmHardFloat,
+            &Default::default(),
         );
 
         assert_eq!(
@@ -1100,6 +1134,7 @@ mod tests {
             &definition_widths,
             &role_names,
             CallConv::Cdecl32,
+            &Default::default(),
         );
 
         assert_eq!(types.get(&role), None);
@@ -1118,6 +1153,7 @@ mod tests {
             &definition_widths,
             &role_names,
             CallConv::Cdecl32,
+            &Default::default(),
         );
 
         assert_eq!(
