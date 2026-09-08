@@ -1871,6 +1871,14 @@ provenance through lowering.
   storage does not. The exact regression, all 144 owning tests, and only the
   Clang O2 `complex_multiply` fixture pass. See
   `results/wp3-sse-pair-clobber-identities.md`.
+  Commit `b71cdc92` then migrates the complete AArch64/SysV indirect-result
+  buffer consumer. Pre-promotion frame-coordinate discovery and post-promotion
+  call binding now classify `x8`, `sp`, `x29`, `rsp`, and `rbp` through
+  complete exact identity candidates; the spelling-only entry points remain
+  explicit compatibility wrappers. The exact opaque-versus-misleading
+  regression, all six owning module tests, and only the AArch64 O2
+  `agr198_five_roundtrip` fixture pass. No broad suite or corpus ran. See
+  `results/wp3-indirect-result-storage-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
