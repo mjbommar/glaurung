@@ -74,10 +74,10 @@ pub(crate) fn refine_decbench_abi_widths_with_identities(
             break;
         }
     }
-    for name in required_wide
-        .iter()
-        .filter(|name| parse_arg_index(name).is_some())
-    {
+    for name in required_wide.iter().filter(|name| match identities {
+        Some(identities) => identities.parameter_slot(&VReg::phys(*name)).is_some(),
+        None => parse_arg_index(name).is_some(),
+    }) {
         tm.force_int_width(VReg::phys(name), 8);
     }
 
@@ -524,6 +524,61 @@ mod identity_tests {
 
         assert_eq!(
             types.get(&value),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn high_half_parameter_width_uses_typed_slots_not_arg_spelling() {
+        let function = Function {
+            name: "wide_parameters".into(),
+            entry_va: 0,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Bin {
+                    op: BinOp::Or,
+                    lhs: Box::new(Expr::Bin {
+                        op: BinOp::Shr,
+                        lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        rhs: Box::new(Expr::Const(32)),
+                    }),
+                    rhs: Box::new(Expr::Bin {
+                        op: BinOp::Shr,
+                        lhs: Box::new(Expr::Reg(VReg::phys("arg99"))),
+                        rhs: Box::new(Expr::Const(32)),
+                    }),
+                }),
+            }],
+        };
+        let mut types = TypeMap::default();
+        for name in ["arg0", "arg99"] {
+            types.upsert_public(
+                VReg::phys(name),
+                TypeHint::Int {
+                    signed: true,
+                    width: 4,
+                },
+            );
+        }
+        let identities = crate::ir::value_number::ValueIdentities::default()
+            .with_role_aliases_and_parameter_slots(
+                &std::collections::HashMap::new(),
+                &std::collections::HashSet::from([0]),
+            );
+
+        refine_decbench_abi_widths_with_identities(&function, &mut types, None, Some(&identities));
+
+        assert_eq!(
+            types.get(&VReg::phys("arg0")),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 8,
+            })
+        );
+        assert_eq!(
+            types.get(&VReg::phys("arg99")),
             Some(TypeHint::Int {
                 signed: true,
                 width: 4,
