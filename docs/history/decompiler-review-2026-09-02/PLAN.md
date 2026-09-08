@@ -1801,6 +1801,12 @@ provenance through lowering.
   names mapped to other storage are rejected. All 134 owning tests and the
   exact `11_call_shapes:clang:O0:call_into_spill` lane pass; no broad suite or
   corpus ran. See `results/wp3-call-stack-area-identities.md`.
+  Commit `10325870` then migrates loop-carried call-slot discovery. Pre-loop
+  initializers and back-edge values are joined by exact SSA identity, and the
+  ABI slot comes from authoritative physical storage rather than the displayed
+  name. All 135 owning tests and the exact AArch64 O2 `call_chain_in_loop`
+  fixture pass; no broad suite or corpus ran. See
+  `results/wp3-loop-carried-call-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
@@ -3864,8 +3870,12 @@ relevant ratchet's accepted-regression record.
    Commit `79da282c` closes stack-area allocation, cleanup, lowered push/pop,
    preallocation, phase, and prologue classification using exact identities;
    its 134 owning tests and exact Clang O0 `call_into_spill` fixture pass. See
-   `results/wp3-call-stack-area-identities.md`. Continue through loop-carried
-   slot discovery and the AAPCS/cdecl readers. Keep
+   `results/wp3-call-stack-area-identities.md`. Commit `10325870` closes
+   loop-carried call-slot discovery by joining initializer and back-edge values
+   through exact SSA identity; its 135 owning tests and exact AArch64 O2
+   `call_chain_in_loop` fixture pass. See
+   `results/wp3-loop-carried-call-identities.md`. Continue through the
+   AAPCS/cdecl readers. Keep
    pre-sidecar tagging internals and explicit no-sidecar compatibility parsers
    classified separately.
    Keep expression ownership behind completion of that audit.
