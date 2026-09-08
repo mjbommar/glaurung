@@ -286,8 +286,18 @@ impl SsaInfo {
     /// allocates a `String` per call. The bit-demand fixed point asks this once
     /// per instruction per sweep, which is the only reason this exists.
     pub fn def_value_ref(&self, lf: &LlirFunction, addr: InstrAddr) -> Option<&SsaValue> {
+        self.def_value_ref_at(lf, addr, 0)
+    }
+
+    /// Borrow one output identity from a multi-output definition.
+    pub fn def_value_ref_at(
+        &self,
+        lf: &LlirFunction,
+        addr: InstrAddr,
+        output_index: usize,
+    ) -> Option<&SsaValue> {
         lf.blocks.get(addr.block_idx)?.instrs.get(addr.instr_idx)?;
-        self.def_values_all.get(addr, 0)
+        self.def_values_all.get(addr, output_index)
     }
 
     /// Borrow the SSA value read at source-order use `use_index`. See

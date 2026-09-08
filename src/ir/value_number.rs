@@ -39,9 +39,9 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::ir::call_args::CallConv;
-use crate::ir::ssa::SsaValue;
+use crate::ir::ssa::{ssa_def_width, SsaValue};
 use crate::ir::types::{LlirFunction, LlirInstr, Op, VReg, Value};
-use crate::ir::use_def::{def_mut, def_ref, for_each_use, use_count, InstrAddr};
+use crate::ir::use_def::{def_mut, def_ref, for_each_def, for_each_use, use_count, InstrAddr};
 
 mod architectural_reads;
 mod coalesce;
@@ -257,6 +257,7 @@ pub fn value_number_with_parameter_slots_lifetimes_and_identities(
     let mut identities = ValueIdentities::default();
     // One buffer for every instruction's use versions. The per-instruction
     // `Vec` was a heap allocation for a list that is normally one or two long.
+    let mut def_versions: Vec<u32> = Vec::new();
     let mut use_values: Vec<Option<SsaValue>> = Vec::new();
     for (bi, block) in out.blocks.iter_mut().enumerate() {
         for (ii, ins) in block.instrs.iter_mut().enumerate() {
@@ -267,7 +268,11 @@ pub fn value_number_with_parameter_slots_lifetimes_and_identities(
             // Read out of the indexed SSA tables rather than the
             // address-keyed maps: same answer, no hashing. Keep the base as
             // well as the version so target-qualified aliases stay coherent.
-            let def_ver = ssa.def_version(lf, addr);
+            def_versions.clear();
+            def_versions.extend((0..ssa_def_width(&ins.op)).map(|output_index| {
+                ssa.def_value_ref_at(lf, addr, output_index)
+                    .map_or(0, |value| value.version)
+            }));
             // Only the use ARITY is wanted here; `def_uses` would allocate a
             // vector of cloned register spellings to report it.
             use_values.clear();
@@ -291,12 +296,14 @@ pub fn value_number_with_parameter_slots_lifetimes_and_identities(
                     }
                 }
             }
-            tag_op(&mut ins.op, def_ver, &use_values, &ctx);
-            if let (Some(numbered), Some(identity)) =
-                (def_ref(&ins.op), ssa.def_value_ref(lf, addr))
-            {
-                identities.record(numbered.clone(), identity.clone());
-            }
+            tag_op(&mut ins.op, &def_versions, &use_values, &ctx);
+            let mut output_index = 0usize;
+            for_each_def(&ins.op, |numbered| {
+                if let Some(identity) = ssa.def_value_ref_at(lf, addr, output_index) {
+                    identities.record(numbered.clone(), identity.clone());
+                }
+                output_index += 1;
+            });
             let mut use_index = 0usize;
             for_each_use(&ins.op, |numbered| {
                 if let Some(Some(identity)) = use_values.get(use_index) {
@@ -2499,6 +2506,62 @@ mod tests {
                 reads_mem: false,
                 writes_mem: false,
             }
+        );
+    }
+
+    #[test]
+    fn every_multi_output_intrinsic_definition_keeps_its_ssa_identity() {
+        let lf = mk(vec![
+            Op::Intrinsic {
+                name: "pair.result".into(),
+                ins: Vec::new(),
+                outs: vec![
+                    (VReg::phys("rax"), crate::ir::types::Width::W64),
+                    (VReg::phys("rdx"), crate::ir::types::Width::W64),
+                ],
+                reads_mem: false,
+                writes_mem: false,
+            },
+            Op::Assign {
+                dst: VReg::phys("rcx"),
+                src: Value::Reg(VReg::phys("rdx")),
+            },
+        ]);
+        let ssa = compute_ssa(&lf);
+
+        let (numbered, _, _, identities) =
+            value_number_with_parameter_slots_lifetimes_and_identities(
+                &lf,
+                &ssa,
+                CallConv::SysVAmd64,
+                &[],
+            );
+
+        let Op::Intrinsic { outs, .. } = &numbered.blocks[0].instrs[0].op else {
+            panic!("expected intrinsic");
+        };
+        assert_eq!(outs[0].0, VReg::phys("rax#1"));
+        assert_eq!(outs[1].0, VReg::phys("rdx#1"));
+        assert!(matches!(
+            &numbered.blocks[0].instrs[1].op,
+            Op::Assign {
+                src: Value::Reg(source),
+                ..
+            } if source == &outs[1].0
+        ));
+        assert_eq!(
+            identities.exact(&outs[0].0),
+            Some(&SsaValue {
+                base: VReg::phys("rax"),
+                version: 1,
+            })
+        );
+        assert_eq!(
+            identities.exact(&outs[1].0),
+            Some(&SsaValue {
+                base: VReg::phys("rdx"),
+                version: 1,
+            })
         );
     }
 
