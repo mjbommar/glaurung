@@ -337,7 +337,11 @@ fn decbench_text_with_installed_environment(
         );
         pass!(
             "fold_consumed_extensions",
-            crate::ir::typed_simplify::fold_consumed_extensions(&mut prepared, tm)
+            crate::ir::typed_simplify::fold_consumed_extensions_with_identities(
+                &mut prepared,
+                tm,
+                Some(value_identities),
+            )
         );
         pass!(
             "fold_typed_comparison_extensions",
