@@ -1807,6 +1807,12 @@ provenance through lowering.
   name. All 135 owning tests and the exact AArch64 O2 `call_chain_in_loop`
   fixture pass; no broad suite or corpus ran. See
   `results/wp3-loop-carried-call-identities.md`.
+  Commit `d7dfcf9f` then migrates pure hard-float AAPCS setup. Core, VFP, and
+  unrelated destinations are classified from complete SSA identity candidate
+  sets; cross-bank ambiguity declines instead of trusting `s0#version` text.
+  All five owning AAPCS tests and the exact ARMv7 O0
+  `single_precision_horner` fixture pass; no broad suite or corpus ran. See
+  `results/wp3-aapcs-vfp-setup-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
@@ -3874,8 +3880,11 @@ relevant ratchet's accepted-regression record.
    loop-carried call-slot discovery by joining initializer and back-edge values
    through exact SSA identity; its 135 owning tests and exact AArch64 O2
    `call_chain_in_loop` fixture pass. See
-   `results/wp3-loop-carried-call-identities.md`. Continue through the
-   AAPCS/cdecl readers. Keep
+   `results/wp3-loop-carried-call-identities.md`. Commit `d7dfcf9f` migrates
+   the pure-VFP AAPCS setup reader to complete identity candidate
+   classification; its five owning tests and exact ARMv7 O0 float-call fixture
+   pass. See `results/wp3-aapcs-vfp-setup-identities.md`. Continue through the
+   AAPCS stack-area and cdecl readers. Keep
    pre-sidecar tagging internals and explicit no-sidecar compatibility parsers
    classified separately.
    Keep expression ownership behind completion of that audit.
