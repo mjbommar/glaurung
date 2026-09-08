@@ -88,6 +88,11 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
+[`results/wp3-cdecl32-frame-role-identities.md`](results/wp3-cdecl32-frame-role-identities.md):
+cdecl32 entry-frame recognition now consumes promotion-owned storage and
+parameter-slot facts rather than parsing `stack_top` and `arg0`. Its two exact
+boundaries, all 44 x86 frame tests, one i386 O0 call fixture, and isolated
+census gate pass. The preceding
 [`results/wp3-x86-scalar-frame-storage-identities.md`](results/wp3-x86-scalar-frame-storage-identities.md):
 production x86-64 scalar rbp-frame save/restore cleanup now consumes owned
 storage identity rather than `stack_`/`local_` spelling. Its two exact

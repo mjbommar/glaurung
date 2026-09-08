@@ -2136,6 +2136,15 @@ provenance through lowering.
   from three concurrent uncommitted decoder tests; an archive of the exact tip
   passes all six census checks. No broad suite or corpus ran. See
   `results/wp3-x86-scalar-frame-storage-identities.md`.
+  Commit `26f7fe57` then removes cdecl32 entry-frame dependence on the
+  `stack_top` and `arg0` spellings. Stack promotion publishes its exact
+  parameter-slot bindings into `ValueIdentities`, and production requires both
+  that fact and promoted-object ownership. Two exact boundary tests, all 44
+  x86 frame tests, the isolated census gate, and only the i386 O0
+  `call_into_spill` lane pass. Parent/tip evidence records that the separate
+  PE32 raw-string-address and i386 redundant-cast failures pre-exist this
+  change; the PE signature improves from `main(void)` to two arguments. No
+  broad suite or corpus ran. See `results/wp3-cdecl32-frame-role-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and

@@ -719,6 +719,24 @@ isolated archive of the pushed tip reproduces the baseline and passes all six
 census checks. The recent Hello checkpoint was not repeated. No broad suite or
 corpus ran.
 
+## cdecl32 frame-role identities
+
+Commit `26f7fe57` makes production cdecl32 entry-realignment consume stack
+promotion's owned storage and parameter-slot facts instead of parsing
+`stack_top` and `arg0`. Both exact boundary tests and all 44 x86 frame tests
+pass with 4,589 unrelated library tests filtered out. A fresh extension build
+passes the guard, and only the i386 O0 `call_into_spill` fixture ran, reporting
+no scoped regression.
+
+An isolated archive of the exact pushed commit reproduces 5,166 declared Rust
+tests with zero outside a gate and passes all six census checks. The shared
+checkout's active native-decoder tests were not counted. Narrow PE evidence
+still exposes two pre-existing debts: a raw string address in checked-in PE32
+`main`, and redundant integer casts in a generated cdecl call. Parent/tip A/B
+shows this increment repairs the PE signature from `main(void)` to two
+arguments; it does not claim the unrelated assertions green. The recent Hello
+checkpoint was not repeated. No broad suite or corpus ran.
+
 ## Ground rules
 
 Verified before any claim of done: `cargo test --features python-ext`,
