@@ -1235,6 +1235,12 @@ provenance through lowering.
   test owners without weakening the side-effect, leaf-count, or byte-view
   gates. Its strengthened observed-red test and all 76 constant-fold tests
   pass; see `results/wp3-boolean-mask-expression-origins.md`.
+  Commit `c0e296e7` then makes nested observed-mask proofs transparent to an
+  attributed inner mask tree and constant. The surviving predicate retains the
+  owners that prove the stale high bits irrelevant while excluding the stale
+  value owner itself; mask-disjointness remains mandatory. Its strengthened
+  observed-red test and all 76 constant-fold tests pass; see
+  `results/wp3-disjoint-mask-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
