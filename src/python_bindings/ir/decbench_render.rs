@@ -308,6 +308,7 @@ fn decbench_text_with_installed_environment(
                 &protected_locals,
                 tm,
                 exact_value_widths,
+                Some(&value_identities),
             );
             value_identities.apply_renames(&renames);
         });

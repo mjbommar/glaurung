@@ -556,7 +556,7 @@ fn coalesces_a_typed_loop_update_scratch_into_its_source_carrier() {
             Stmt::DoWhile {
                 body: vec![
                     Stmt::Assign {
-                        dst: reg("ret"),
+                        dst: reg("arg99"),
                         src: Expr::Bin {
                             op: BinOp::Add,
                             lhs: Box::new(read("var4")),
@@ -567,13 +567,13 @@ fn coalesces_a_typed_loop_update_scratch_into_its_source_carrier() {
                         dst: reg("predicate"),
                         src: Expr::Cmp {
                             op: CmpOp::Ult,
-                            lhs: Box::new(read("ret")),
+                            lhs: Box::new(read("arg99")),
                             rhs: Box::new(read("limit")),
                         },
                     },
                     Stmt::Assign {
                         dst: reg("var4"),
-                        src: read("ret").with_origins(OriginSet::one(0x1044)),
+                        src: read("arg99").with_origins(OriginSet::one(0x1044)),
                     }
                     .with_origins(OriginSet::one(0x1040)),
                 ],
@@ -592,13 +592,13 @@ fn coalesces_a_typed_loop_update_scratch_into_its_source_carrier() {
         },
     );
     types.upsert_public(
-        reg("ret"),
+        reg("arg99"),
         crate::ir::types_recover::TypeHint::Int {
             width: 8,
             signed: true,
         },
     );
-    let exact_widths = std::collections::HashMap::from([("ret".to_string(), 4)]);
+    let exact_widths = std::collections::HashMap::from([("arg99".to_string(), 4)]);
     let protected = std::collections::HashSet::from(["var4".to_string()]);
     let mut identities = crate::ir::value_number::ValueIdentities::default();
     identities.record(
@@ -609,23 +609,42 @@ fn coalesces_a_typed_loop_update_scratch_into_its_source_carrier() {
         },
     );
     identities.record(
-        reg("ret"),
+        reg("arg99"),
         crate::ir::ssa::SsaValue {
             base: reg("rax"),
             version: 2,
         },
     );
+    let mut parameter_scratch = function.clone();
+    let parameter_identities = identities.with_role_aliases_and_parameter_slots(
+        &std::collections::HashMap::new(),
+        &std::collections::HashSet::from([99]),
+    );
+    let refused = coalesce_source_loop_updates(
+        &mut parameter_scratch,
+        &protected,
+        &types,
+        Some(&exact_widths),
+        Some(&parameter_identities),
+    );
+    assert_eq!(parameter_scratch, function);
+    assert!(refused.is_empty());
 
-    let renames =
-        coalesce_source_loop_updates(&mut function, &protected, &types, Some(&exact_widths));
+    let renames = coalesce_source_loop_updates(
+        &mut function,
+        &protected,
+        &types,
+        Some(&exact_widths),
+        Some(&identities),
+    );
     identities.apply_renames(&renames);
 
     let text = crate::ir::ast::render(&function);
-    assert!(!text.contains("%ret"), "{text}");
+    assert!(!text.contains("%arg99"), "{text}");
     assert!(text.contains("%var4 = (%var4 + 1)"), "{text}");
     assert!(text.contains("(%var4 u< %limit)"), "{text}");
-    assert_eq!(renames.get(&reg("ret")), Some(&reg("var4")));
-    assert!(identities.candidates(&reg("ret")).is_none());
+    assert_eq!(renames.get(&reg("arg99")), Some(&reg("var4")));
+    assert!(identities.candidates(&reg("arg99")).is_none());
     assert_eq!(
         identities
             .candidates(&reg("var4"))
@@ -682,7 +701,7 @@ fn keeps_a_loop_update_scratch_when_the_old_carrier_is_still_needed() {
     }
     let protected = std::collections::HashSet::from(["source".to_string()]);
 
-    coalesce_source_loop_updates(&mut function, &protected, &types, None);
+    coalesce_source_loop_updates(&mut function, &protected, &types, None, None);
 
     assert_eq!(function, before);
 }
@@ -728,7 +747,7 @@ fn keeps_a_loop_update_scratch_with_a_different_semantic_width() {
     );
     let protected = std::collections::HashSet::from(["source".to_string()]);
 
-    coalesce_source_loop_updates(&mut function, &protected, &types, None);
+    coalesce_source_loop_updates(&mut function, &protected, &types, None, None);
 
     assert_eq!(function, before);
 }
