@@ -1213,6 +1213,11 @@ provenance through lowering.
   nested-XOR, relation, and enclosing-operation owner. Its observed-red test
   and all 74 constant-fold tests pass; see
   `results/wp3-xor-cancellation-expression-origins.md`.
+  Commit `dfa2fa22` then makes the storage-width fold boundary transparent to
+  an enclosing carrier. Store-proved redundant casts and masks still collapse,
+  with the cast/value owners flattened into one canonical set. Its observed-red
+  test and all 75 constant-fold tests pass; see
+  `results/wp3-stored-value-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
