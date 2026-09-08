@@ -810,7 +810,7 @@ fn table_base_and_index(
 
 fn strip_cast(expression: &Expr) -> &Expr {
     match expression {
-        Expr::Cast { expr, .. } => strip_cast(expr),
+        Expr::Origin { expr, .. } | Expr::Cast { expr, .. } => strip_cast(expr),
         _ => expression,
     }
 }
@@ -1101,6 +1101,56 @@ mod tests {
         ));
         assert_eq!(function.body[0].origins(), Some(&base_owner));
         assert_eq!(function.body[1].origins(), Some(&load_owner));
+    }
+
+    #[test]
+    fn expression_origins_do_not_hide_a_scaled_table_index() {
+        let scaled_index = Expr::Bin {
+            op: BinOp::Mul,
+            lhs: Box::new(Expr::Reg(VReg::phys("which"))),
+            rhs: Box::new(Expr::Const(4)),
+        }
+        .with_origins(OriginSet::one(0x11a0));
+        let mut function = Function {
+            name: "dispatch".into(),
+            entry_va: 0x1170,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("scaled"),
+                    src: scaled_index,
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("table"),
+                    src: Expr::Named {
+                        va: 0x4004,
+                        name: "ops".into(),
+                    },
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("entry"),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Lea {
+                            base: Some(VReg::phys("scaled")),
+                            index: Some(VReg::phys("table")),
+                            scale: 1,
+                            disp: 0,
+                            segment: None,
+                        }),
+                        size: 4,
+                    },
+                },
+            ],
+        };
+
+        resolve_function_table_entries(&mut function, &[ops_table()]);
+
+        assert!(matches!(
+            function.body[2].semantic(),
+            Stmt::Assign {
+                src: Expr::FunctionTableEntry { .. },
+                ..
+            }
+        ));
     }
 
     #[test]
