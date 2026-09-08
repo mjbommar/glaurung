@@ -478,7 +478,8 @@ fn guarded_do_while_candidate(body: &[Stmt], start: usize) -> Option<(usize, VRe
     else {
         return None;
     };
-    let latch = not_equal_other_side(latch_guard, sentinel).and_then(reg_through_casts)?;
+    let (latch_expression, latch_sentinel) = not_equal_other_side(latch_guard, sentinel)?;
+    let latch = reg_through_casts(latch_expression)?;
     let Stmt::Assign {
         dst: current,
         src: carried_latch,
@@ -523,22 +524,28 @@ fn guarded_do_while_candidate(body: &[Stmt], start: usize) -> Option<(usize, VRe
     {
         return None;
     }
-    Some((cursor, current.clone(), sentinel.clone()))
+    Some((
+        cursor,
+        current.clone(),
+        sentinel
+            .clone()
+            .with_optional_origins(latch_sentinel.origins().cloned()),
+    ))
 }
 
-fn not_equal_other_side<'a>(expr: &'a Expr, expected: &Expr) -> Option<&'a Expr> {
+fn not_equal_other_side<'a>(expr: &'a Expr, expected: &Expr) -> Option<(&'a Expr, &'a Expr)> {
     let Expr::Cmp {
         op: CmpOp::Ne,
         lhs,
         rhs,
-    } = expr
+    } = expr.semantic()
     else {
         return None;
     };
-    if lhs.as_ref() == expected {
-        Some(rhs)
-    } else if rhs.as_ref() == expected {
-        Some(lhs)
+    if lhs.semantic() == expected.semantic() {
+        Some((rhs, lhs))
+    } else if rhs.semantic() == expected.semantic() {
+        Some((lhs, rhs))
     } else {
         None
     }
@@ -1721,7 +1728,8 @@ mod tests {
     }
 
     fn guarded_do_while_fixture() -> Function {
-        let sentinel = Expr::Const(0).with_origins(OriginSet::one(0x1000));
+        let entry_sentinel = Expr::Const(0).with_origins(OriginSet::one(0x1000));
+        let latch_sentinel = Expr::Const(0).with_origins(OriginSet::one(0x1004));
         Function {
             name: "sum".into(),
             entry_va: 0,
@@ -1734,7 +1742,7 @@ mod tests {
                     cond: Expr::Cmp {
                         op: CmpOp::Eq,
                         lhs: Box::new(Expr::Reg(reg("arg0"))),
-                        rhs: Box::new(sentinel.clone()),
+                        rhs: Box::new(entry_sentinel),
                     },
                     then_body: vec![Stmt::Return {
                         value: Some(Expr::Reg(reg("result"))),
@@ -1771,7 +1779,7 @@ mod tests {
                     cond: Expr::Cmp {
                         op: CmpOp::Ne,
                         lhs: Box::new(Expr::Reg(reg("latch"))),
-                        rhs: Box::new(sentinel),
+                        rhs: Box::new(latch_sentinel),
                     },
                 },
                 Stmt::Return {
@@ -1803,7 +1811,7 @@ mod tests {
                 ..
             } if lhs.as_ref() == &Expr::Reg(reg("current"))
                 && rhs.semantic() == &Expr::Const(0)
-                && rhs.origins() == Some(&OriginSet::one(0x1000))
+                && rhs.origins() == Some(&OriginSet::from_addresses([0x1000, 0x1004]))
         ));
     }
 
