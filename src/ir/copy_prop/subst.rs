@@ -37,7 +37,17 @@ use super::env::Copies;
 /// indirect write into an assignment. Keep the scratch in that one ambiguous
 /// case; substitutions nested inside arithmetic addresses remain safe because
 /// the address expression cannot be mistaken for local storage.
-pub(super) fn subst_store_addr(address: &mut Expr, copies: &Copies) -> bool {
+pub(super) fn subst_store_addr(
+    address: &mut Expr,
+    copies: &Copies,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    let promoted = |value: &VReg| {
+        identities.map_or_else(
+            || is_promoted_local_reg(value),
+            |identities| identities.is_promoted_stack_object(value),
+        )
+    };
     let trivial_lea_register = match address.semantic() {
         Expr::Lea {
             base: Some(register),
@@ -51,7 +61,7 @@ pub(super) fn subst_store_addr(address: &mut Expr, copies: &Copies) -> bool {
     if let Some(register) = trivial_lea_register {
         if let Some(source) = copies.get(&register) {
             if let Expr::Reg(replacement) = source.semantic() {
-                if is_promoted_local_reg(replacement) {
+                if promoted(replacement) {
                     let replacement = replacement.clone();
                     let source_origins = source.origins().cloned();
                     // Preserve the explicit address container while removing
@@ -73,12 +83,46 @@ pub(super) fn subst_store_addr(address: &mut Expr, copies: &Copies) -> bool {
     if let Expr::Reg(register) = address.semantic() {
         if matches!(
             copies.get(register).map(Expr::semantic),
-            Some(Expr::Reg(replacement)) if is_promoted_local_reg(replacement)
+            Some(Expr::Reg(replacement)) if promoted(replacement)
         ) {
             return false;
         }
     }
     subst(address, copies)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reg(name: &str) -> VReg {
+        VReg::phys(name)
+    }
+
+    #[test]
+    fn authoritative_identity_protects_opaque_stack_lvalue() {
+        let scratch = reg("t0");
+        let object_name = "frame_object".to_string();
+        let object = reg(&object_name);
+        let copies = Copies::single(scratch.clone(), Expr::Reg(object.clone()));
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object_name]);
+        let mut address = Expr::Reg(scratch.clone());
+
+        assert!(!subst_store_addr(&mut address, &copies, Some(&identities)));
+        assert_eq!(address, Expr::Reg(scratch));
+    }
+
+    #[test]
+    fn spelling_fallback_protects_legacy_promoted_lvalue() {
+        let scratch = reg("t0");
+        let object = reg("local_8");
+        let copies = Copies::single(scratch.clone(), Expr::Reg(object));
+        let mut address = Expr::Reg(scratch.clone());
+
+        assert!(!subst_store_addr(&mut address, &copies, None));
+        assert_eq!(address, Expr::Reg(scratch));
+    }
 }
 
 /// Substitute every active copy `dst -> src` into `e`.

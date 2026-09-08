@@ -138,7 +138,7 @@ fn propagate_copies_impl(
     let mut reads: RegMap<usize> = RegMap::default();
     count_reads_body(&f.body, &mut reads);
     propagate_run_counted(&mut f.body, &reads, &mut changed, identities);
-    propagate_run(&mut f.body, &mut changed);
+    propagate_run(&mut f.body, &mut changed, identities);
     for _ in 0..8 {
         if !eliminate_dead_copies(&mut f.body, identities) {
             break;
@@ -191,7 +191,11 @@ fn is_exact_return_guard(then_body: &[Stmt], else_body: &Option<Vec<Stmt>>) -> b
         && matches!(then_body, [statement] if matches!(statement.semantic(), Stmt::Return { .. }))
 }
 
-fn propagate_run(stmts: &mut [Stmt], changed: &mut bool) -> Copies {
+fn propagate_run(
+    stmts: &mut [Stmt],
+    changed: &mut bool,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Copies {
     let mut copies = Copies::new();
     for s in stmts.iter_mut() {
         match s.semantic_mut() {
@@ -206,7 +210,7 @@ fn propagate_run(stmts: &mut [Stmt], changed: &mut bool) -> Copies {
                 }
             }
             Stmt::Store { addr, src, .. } => {
-                *changed |= subst_store_addr(addr, &copies);
+                *changed |= subst_store_addr(addr, &copies, identities);
                 *changed |= subst(src, &copies);
                 // A store to a bare promoted local writes that variable.
                 if let Expr::Reg(r) = addr.semantic() {
@@ -235,9 +239,9 @@ fn propagate_run(stmts: &mut [Stmt], changed: &mut bool) -> Copies {
             } => {
                 let return_guard = is_exact_return_guard(then_body, else_body);
                 *changed |= subst(cond, &copies);
-                propagate_run(then_body, changed);
+                propagate_run(then_body, changed, identities);
                 if let Some(eb) = else_body {
-                    propagate_run(eb, changed);
+                    propagate_run(eb, changed, identities);
                 }
                 if !return_guard {
                     copies.clear();
@@ -245,7 +249,7 @@ fn propagate_run(stmts: &mut [Stmt], changed: &mut bool) -> Copies {
             }
             Stmt::While { cond, body } => {
                 *changed |= subst(cond, &copies_stable_across_loop(&copies, body));
-                propagate_run(body, changed);
+                propagate_run(body, changed, identities);
                 copies.clear();
             }
             Stmt::For {
@@ -254,10 +258,10 @@ fn propagate_run(stmts: &mut [Stmt], changed: &mut bool) -> Copies {
                 step,
                 body,
             } => {
-                propagate_run(std::slice::from_mut(init.as_mut()), changed);
+                propagate_run(std::slice::from_mut(init.as_mut()), changed, identities);
                 *changed |= subst(cond, &copies);
-                propagate_run(body, changed);
-                propagate_run(std::slice::from_mut(step.as_mut()), changed);
+                propagate_run(body, changed, identities);
+                propagate_run(std::slice::from_mut(step.as_mut()), changed, identities);
                 copies.clear();
             }
             Stmt::DoWhile { body, cond } => {
@@ -265,7 +269,7 @@ fn propagate_run(stmts: &mut [Stmt], changed: &mut bool) -> Copies {
                 // the body on every iteration.  Carry only the body's final
                 // straight-line copies into it; any branch, call, or other
                 // control-flow boundary clears that set conservatively.
-                let tail_copies = propagate_run(body, changed);
+                let tail_copies = propagate_run(body, changed, identities);
                 *changed |= subst(cond, &tail_copies);
                 copies.clear();
             }
@@ -276,10 +280,10 @@ fn propagate_run(stmts: &mut [Stmt], changed: &mut bool) -> Copies {
             } => {
                 *changed |= subst(discriminant, &copies);
                 for (_, body) in cases.iter_mut() {
-                    propagate_run(body, changed);
+                    propagate_run(body, changed, identities);
                 }
                 if let Some(b) = default {
-                    propagate_run(b, changed);
+                    propagate_run(b, changed, identities);
                 }
                 copies.clear();
             }
@@ -347,7 +351,7 @@ fn propagate_run_counted(
                 }
             }
             Stmt::Store { addr, src, size } => {
-                *changed |= subst_store_addr(addr, &copies);
+                *changed |= subst_store_addr(addr, &copies, identities);
                 *changed |= subst(src, &copies);
                 if let Expr::Reg(r) = addr.semantic() {
                     invalidate(&mut copies, r);

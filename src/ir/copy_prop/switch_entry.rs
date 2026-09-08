@@ -116,7 +116,7 @@ fn propagate_switch_arm(body: &mut [Stmt], incoming: &Copies) {
                 }
             }
             Stmt::Store { addr, src, .. } => {
-                subst_store_addr(addr, &copies);
+                subst_store_addr(addr, &copies, None);
                 subst(src, &copies);
                 copies.clear();
             }
