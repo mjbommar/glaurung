@@ -53,9 +53,24 @@ fn candidate(extra: Vec<Stmt>) -> Function {
 #[test]
 fn folds_predicate_across_final_carried_value_assignment() {
     let mut function = candidate(vec![]);
-    let Stmt::DoWhile { body, .. } = &mut function.body[0] else {
+    let Stmt::DoWhile { body, cond } = &mut function.body[0] else {
         unreachable!()
     };
+    let Stmt::Assign { src: snapshot, .. } = &mut body[0] else {
+        unreachable!()
+    };
+    *snapshot = std::mem::replace(snapshot, Expr::Const(0))
+        .with_origins(OriginSet::one(0x1014));
+    let Stmt::Assign {
+        src: predicate_expression,
+        ..
+    } = &mut body[2]
+    else {
+        unreachable!()
+    };
+    *predicate_expression = std::mem::replace(predicate_expression, Expr::Const(0))
+        .with_origins(OriginSet::one(0x1018));
+    *cond = std::mem::replace(cond, Expr::Const(0)).with_origins(OriginSet::one(0x101c));
     body[2] = std::mem::replace(&mut body[2], Stmt::Nop).with_origins(OriginSet::one(0x1010));
     function.body[0] =
         std::mem::replace(&mut function.body[0], Stmt::Nop).with_origins(OriginSet::one(0x1000));
@@ -73,7 +88,13 @@ fn folds_predicate_across_final_carried_value_assignment() {
             lhs: Box::new(read("next")),
             rhs: Box::new(read("old")),
         }
+        .with_origins(OriginSet::from_addresses([0x1018, 0x101c]))
     );
+    let Stmt::Assign { src: snapshot, .. } = &body[0] else {
+        panic!("expected saved-value copy")
+    };
+    assert_eq!(snapshot.semantic(), &read("current"));
+    assert_eq!(snapshot.origins(), Some(&OriginSet::one(0x1014)));
     assert_eq!(
         function.body[0].origins(),
         Some(&OriginSet::from_addresses([0x1000, 0x1010]))

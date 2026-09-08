@@ -638,7 +638,7 @@ fn fold_body(body: &mut [Stmt]) {
 }
 
 fn fold_one_latch(body: &mut Vec<Stmt>, cond: &mut Expr) -> Option<crate::ir::ast::OriginSet> {
-    let Expr::Reg(predicate) = cond else {
+    let Expr::Reg(predicate) = cond.semantic() else {
         return None;
     };
     let Some((tail, prefix)) = body.split_last() else {
@@ -684,10 +684,12 @@ fn fold_one_latch(body: &mut Vec<Stmt>, cond: &mut Expr) -> Option<crate::ir::as
         .iter()
         .enumerate()
         .filter_map(|(index, statement)| match statement.semantic() {
-            Stmt::Assign {
-                dst,
-                src: Expr::Reg(source),
-            } if source == carried && dst != carried => Some((index, dst)),
+            Stmt::Assign { dst, src }
+                if matches!(src.semantic(), Expr::Reg(source) if source == carried)
+                    && dst != carried =>
+            {
+                Some((index, dst))
+            }
             _ => None,
         })
         .collect();
@@ -716,6 +718,9 @@ fn fold_one_latch(body: &mut Vec<Stmt>, cond: &mut Expr) -> Option<crate::ir::as
     replace_register(&mut rewritten, carried, saved);
     if expression_reads(&rewritten, carried) {
         return None;
+    }
+    if let Some(origins) = cond.origins() {
+        rewritten.merge_origins(origins);
     }
     *cond = rewritten;
     body.remove(body.len() - 2).origins().cloned()
