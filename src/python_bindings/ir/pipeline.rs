@@ -781,7 +781,7 @@ pub(super) fn recognise_machine_frame(
 ) {
     match cc {
         crate::ir::call_args::CallConv::SysVAmd64 | crate::ir::call_args::CallConv::Win64 => {
-            crate::ir::x86_prologue::recognise_x86_prologue(f);
+            crate::ir::x86_prologue::recognise_x86_prologue_with_identities(f, value_identities);
         }
         crate::ir::call_args::CallConv::Cdecl32 => {
             crate::ir::x86_prologue::recognise_cdecl32_call_alignment(f);
