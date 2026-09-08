@@ -1178,16 +1178,30 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
     // negation, not a bitwise operation; invert it into the corresponding
     // relation so it remains readable and type-correct.
     if let Expr::Cmp { op, lhs, rhs } = e {
-        if let (Expr::Const(lhs), Expr::Const(rhs)) = (lhs.as_ref(), rhs.as_ref()) {
+        if let (Expr::Const(lhs_value), Expr::Const(rhs_value)) =
+            (lhs.semantic(), rhs.semantic())
+        {
             let value = match op {
-                CmpOp::Eq => lhs == rhs,
-                CmpOp::Ne => lhs != rhs,
-                CmpOp::Ult => (*lhs as u64) < (*rhs as u64),
-                CmpOp::Ule => (*lhs as u64) <= (*rhs as u64),
-                CmpOp::Slt => lhs < rhs,
-                CmpOp::Sle => lhs <= rhs,
+                CmpOp::Eq => lhs_value == rhs_value,
+                CmpOp::Ne => lhs_value != rhs_value,
+                CmpOp::Ult => (*lhs_value as u64) < (*rhs_value as u64),
+                CmpOp::Ule => (*lhs_value as u64) <= (*rhs_value as u64),
+                CmpOp::Slt => lhs_value < rhs_value,
+                CmpOp::Sle => lhs_value <= rhs_value,
             };
-            rewrite(e, Expr::Const(i64::from(value)), changed);
+            let origins = lhs
+                .origins()
+                .into_iter()
+                .chain(rhs.origins())
+                .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+                    owners.union(next)
+                });
+            rewrite(
+                e,
+                Expr::Const(i64::from(value))
+                    .with_optional_origins((!origins.is_empty()).then_some(origins)),
+                changed,
+            );
             return;
         }
         // Subtraction sets x86's zero flag: `(X - Y) == 0` is exactly
@@ -2094,6 +2108,32 @@ mod tests {
             panic!("expected assignment");
         };
         assert_eq!(src.semantic(), &Expr::Const(42));
+        assert_eq!(
+            src.origins(),
+            Some(&outer_owner.union(&lhs_owner).union(&rhs_owner))
+        );
+    }
+
+    #[test]
+    fn attributed_constant_comparison_folds_and_unions_origins() {
+        let outer_owner = crate::ir::ast::OriginSet::one(0x1010);
+        let lhs_owner = crate::ir::ast::OriginSet::one(0x1014);
+        let rhs_owner = crate::ir::ast::OriginSet::one(0x1018);
+        let mut f = one_stmt(
+            Expr::Cmp {
+                op: CmpOp::Slt,
+                lhs: Box::new(Expr::Const(3).with_origins(lhs_owner.clone())),
+                rhs: Box::new(Expr::Const(5).with_origins(rhs_owner.clone())),
+            }
+            .with_origins(outer_owner.clone()),
+        );
+
+        fold_constants(&mut f);
+
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!("expected assignment");
+        };
+        assert_eq!(src.semantic(), &Expr::Const(1));
         assert_eq!(
             src.origins(),
             Some(&outer_owner.union(&lhs_owner).union(&rhs_owner))
