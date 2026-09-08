@@ -143,7 +143,16 @@ fn declared_machine_register(v: &VReg) -> Option<String> {
 /// The name of a value the decompiler invents and is therefore responsible for
 /// defining, or `None` for parameters, machine registers, and unversioned
 /// architectural flag names (which exist only before SSA value numbering).
-fn checked_name(v: &VReg) -> Option<String> {
+fn checked_name(v: &VReg, authority: VerificationAuthority<'_>) -> Option<String> {
+    if let Some(names) = authority.checked_names {
+        let name = match v {
+            VReg::Phys(name) => crate::ir::ast::sanitize_c_ident(name),
+            VReg::Temp(index) => format!("t{index}"),
+            VReg::Flag(flag) => flag.ident().to_string(),
+            VReg::FlagValue { .. } => v.predicate_ident()?,
+        };
+        return names.contains(&name).then_some(name);
+    }
     match v {
         VReg::Phys(n) => {
             let invented = n == "ret"
@@ -170,6 +179,7 @@ const RETURN_ROLE: &str = "ret";
 struct VerificationAuthority<'a> {
     call_defines_return_role: bool,
     identities: Option<&'a crate::ir::value_number::ValueIdentities>,
+    checked_names: Option<&'a BTreeSet<String>>,
 }
 
 /// A store whose address is a bare promoted stack slot (`local_4`, `stack_0`) is a
@@ -193,10 +203,10 @@ fn stored_slot(addr: &Expr, authority: VerificationAuthority<'_>) -> Option<Stri
     }
 }
 
-fn reads_expr(e: &Expr, out: &mut Vec<String>) {
+fn reads_expr(e: &Expr, out: &mut Vec<String>, authority: VerificationAuthority<'_>) {
     match e {
-        Expr::Origin { expr, .. } => reads_expr(expr, out),
-        Expr::Reg(v) => out.extend(checked_name(v)),
+        Expr::Origin { expr, .. } => reads_expr(expr, out, authority),
+        Expr::Reg(v) => out.extend(checked_name(v, authority)),
         Expr::Const(_)
         | Expr::FloatConst { .. }
         | Expr::Addr(_)
@@ -207,19 +217,19 @@ fn reads_expr(e: &Expr, out: &mut Vec<String>) {
         | Expr::StackAddr { .. }
         | Expr::Unknown(_) => {}
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
-            out.extend(base.as_ref().and_then(checked_name));
-            out.extend(index.as_ref().and_then(checked_name));
+            out.extend(base.as_ref().and_then(|value| checked_name(value, authority)));
+            out.extend(index.as_ref().and_then(|value| checked_name(value, authority)));
         }
-        Expr::Deref { addr, .. } => reads_expr(addr, out),
+        Expr::Deref { addr, .. } => reads_expr(addr, out, authority),
         Expr::Call { target, args, .. } => {
-            reads_expr(target, out);
+            reads_expr(target, out, authority);
             for argument in args {
-                reads_expr(argument, out);
+                reads_expr(argument, out, authority);
             }
         }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-            reads_expr(lhs, out);
-            reads_expr(rhs, out);
+            reads_expr(lhs, out, authority);
+            reads_expr(rhs, out, authority);
         }
         Expr::Select {
             cond,
@@ -227,24 +237,26 @@ fn reads_expr(e: &Expr, out: &mut Vec<String>) {
             if_false,
             ..
         } => {
-            reads_expr(cond, out);
-            reads_expr(if_true, out);
-            reads_expr(if_false, out);
+            reads_expr(cond, out, authority);
+            reads_expr(if_true, out, authority);
+            reads_expr(if_false, out, authority);
         }
-        Expr::Un { src, .. } => reads_expr(src, out),
-        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => reads_expr(expr, out),
-        Expr::FunctionTableEntry { index, .. } => reads_expr(index, out),
+        Expr::Un { src, .. } => reads_expr(src, out, authority),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+            reads_expr(expr, out, authority)
+        }
+        Expr::FunctionTableEntry { index, .. } => reads_expr(index, out, authority),
         Expr::WideArithmetic { args, .. } => {
             for argument in args {
-                reads_expr(argument, out);
+                reads_expr(argument, out, authority);
             }
         }
     }
 }
 
-fn reads_of(e: &Expr) -> Vec<String> {
+fn reads_of(e: &Expr, authority: VerificationAuthority<'_>) -> Vec<String> {
     let mut v = Vec::new();
-    reads_expr(e, &mut v);
+    reads_expr(e, &mut v, authority);
     v
 }
 
@@ -253,14 +265,17 @@ fn defs_in(body: &[Stmt], out: &mut BTreeSet<String>, authority: VerificationAut
     for s in body {
         match s.semantic() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
-            Stmt::Assign { dst, .. } => out.extend(checked_name(dst)),
+            Stmt::Assign { dst, .. } => out.extend(checked_name(dst, authority)),
             Stmt::Store { addr, .. } => out.extend(stored_slot(addr, authority)),
-            Stmt::Pop { target } => out.extend(checked_name(target)),
+            Stmt::Pop { target } => out.extend(checked_name(target, authority)),
             // A call writes the register the ABI returns in — now recorded on the
             // statement itself, so this is the real destination rather than an
             // assumption about which register that is.
             Stmt::Call { dst, .. } => {
-                out.extend(dst.as_ref().and_then(checked_name));
+                out.extend(
+                    dst.as_ref()
+                        .and_then(|value| checked_name(value, authority)),
+                );
                 if authority.call_defines_return_role {
                     out.insert(RETURN_ROLE.to_string());
                 }
@@ -367,7 +382,13 @@ fn goto_aware_undefined_reads(
 
         fn expression_node(&mut self, expression: &Expr) -> usize {
             let mut reads = BTreeSet::new();
-            undefined_reads(expression, &BTreeSet::new(), &mut reads);
+            undefined_reads(
+                expression,
+                &BTreeSet::new(),
+                &mut reads,
+                self.authority
+                    .expect("verification authority is initialized"),
+            );
             self.node(reads, BTreeSet::new())
         }
 
@@ -493,7 +514,11 @@ fn goto_aware_undefined_reads(
                     self.nodes[branch].successors.extend(try_entry);
                     for catch in catches {
                         let mut defs = BTreeSet::new();
-                        defs.extend(checked_name(&catch.binding));
+                        defs.extend(checked_name(
+                            &catch.binding,
+                            self.authority
+                                .expect("verification authority is initialized"),
+                        ));
                         let binding = self.node(BTreeSet::new(), defs);
                         let body_entry = self.sequence(&catch.body, continuation, break_target);
                         self.nodes[binding].successors.extend(body_entry);
@@ -559,8 +584,13 @@ fn goto_aware_undefined_reads(
 }
 
 /// Names an expression reads that are not yet (maybe-)defined.
-fn undefined_reads(e: &Expr, defined: &BTreeSet<String>, found: &mut BTreeSet<String>) {
-    for name in reads_of(e) {
+fn undefined_reads(
+    e: &Expr,
+    defined: &BTreeSet<String>,
+    found: &mut BTreeSet<String>,
+    authority: VerificationAuthority<'_>,
+) {
+    for name in reads_of(e, authority) {
         if !defined.contains(&name) {
             found.insert(name);
         }
@@ -580,50 +610,53 @@ fn walk(
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             // The dispatch READS its target; an undefined read here is as real
             // as any other.
-            Stmt::IndirectGoto { target } => undefined_reads(target, defined, found),
+            Stmt::IndirectGoto { target } => undefined_reads(target, defined, found, authority),
             Stmt::Assign { dst, src } => {
                 // The source is evaluated first: `x = x + 1` reads x before this
                 // definition of it.
-                undefined_reads(src, defined, found);
-                defined.extend(checked_name(dst));
+                undefined_reads(src, defined, found, authority);
+                defined.extend(checked_name(dst, authority));
             }
             Stmt::Store { addr, src, .. } => {
-                undefined_reads(src, defined, found);
+                undefined_reads(src, defined, found, authority);
                 match stored_slot(addr, authority) {
                     // `local_4 = src` — a definition of the slot, not a use of it.
                     Some(slot) => {
                         defined.insert(slot);
                     }
-                    None => undefined_reads(addr, defined, found),
+                    None => undefined_reads(addr, defined, found, authority),
                 }
             }
             Stmt::Call {
                 target, args, dst, ..
             } => {
-                undefined_reads(target, defined, found);
+                undefined_reads(target, defined, found, authority);
                 for a in args {
-                    undefined_reads(a, defined, found);
+                    undefined_reads(a, defined, found, authority);
                 }
-                defined.extend(dst.as_ref().and_then(checked_name));
+                defined.extend(
+                    dst.as_ref()
+                        .and_then(|value| checked_name(value, authority)),
+                );
                 if authority.call_defines_return_role {
                     defined.insert(RETURN_ROLE.to_string());
                 }
             }
             Stmt::Return { value } => {
                 if let Some(v) = value {
-                    undefined_reads(v, defined, found);
+                    undefined_reads(v, defined, found, authority);
                 }
             }
-            Stmt::Push { value } => undefined_reads(value, defined, found),
+            Stmt::Push { value } => undefined_reads(value, defined, found, authority),
             Stmt::Pop { target } => {
-                defined.extend(checked_name(target));
+                defined.extend(checked_name(target, authority));
             }
             Stmt::If {
                 cond,
                 then_body,
                 else_body,
             } => {
-                undefined_reads(cond, defined, found);
+                undefined_reads(cond, defined, found, authority);
                 // Both arms start from the same state; the join takes the UNION
                 // (maybe-defined), so a definition in one arm satisfies a use
                 // after the `if`.
@@ -644,7 +677,7 @@ fn walk(
                 defs_in(body, &mut body_defs, authority);
                 let mut loop_defined = defined.clone();
                 loop_defined.extend(body_defs);
-                undefined_reads(cond, &loop_defined, found);
+                undefined_reads(cond, &loop_defined, found, authority);
                 let mut inner = loop_defined.clone();
                 walk(body, &mut inner, found, authority);
                 defined.extend(loop_defined);
@@ -670,7 +703,7 @@ fn walk(
                 );
                 let mut loop_defined = defined.clone();
                 loop_defined.extend(loop_defs);
-                undefined_reads(cond, &loop_defined, found);
+                undefined_reads(cond, &loop_defined, found, authority);
                 let mut inner = loop_defined.clone();
                 walk(body, &mut inner, found, authority);
                 walk(
@@ -687,14 +720,14 @@ fn walk(
                 // the loop (unlike a pre-tested loop, which may execute zero
                 // times).
                 walk(body, defined, found, authority);
-                undefined_reads(cond, defined, found);
+                undefined_reads(cond, defined, found, authority);
             }
             Stmt::Switch {
                 discriminant,
                 cases,
                 default,
             } => {
-                undefined_reads(discriminant, defined, found);
+                undefined_reads(discriminant, defined, found, authority);
                 let mut joined = defined.clone();
                 for (_, b) in cases {
                     let mut arm = defined.clone();
@@ -715,7 +748,7 @@ fn walk(
             | Stmt::Nop
             | Stmt::Unknown(_)
             | Stmt::Comment(_) => {}
-            Stmt::Throw { value } => undefined_reads(value, defined, found),
+            Stmt::Throw { value } => undefined_reads(value, defined, found, authority),
             Stmt::TryCatch { try_body, catches } => {
                 let incoming = defined.clone();
                 let mut joined = defined.clone();
@@ -724,7 +757,7 @@ fn walk(
                 joined.extend(try_defs);
                 for catch in catches {
                     let mut catch_defs = incoming.clone();
-                    catch_defs.extend(checked_name(&catch.binding));
+                    catch_defs.extend(checked_name(&catch.binding, authority));
                     walk(&catch.body, &mut catch_defs, found, authority);
                     joined.extend(catch_defs);
                 }
@@ -736,50 +769,52 @@ fn walk(
 
 /// Collect every name read anywhere in `body`.
 fn all_reads(body: &[Stmt], out: &mut BTreeSet<String>, authority: VerificationAuthority<'_>) {
-    fn push(e: &Expr, out: &mut BTreeSet<String>) {
-        out.extend(reads_of(e));
+    fn push(e: &Expr, out: &mut BTreeSet<String>, authority: VerificationAuthority<'_>) {
+        out.extend(reads_of(e, authority));
     }
     for s in body {
         match s.semantic() {
-            Stmt::Assign { src, .. } => push(src, out),
+            Stmt::Assign { src, .. } => push(src, out, authority),
             Stmt::Store { addr, src, .. } => {
                 if stored_slot(addr, authority).is_none() {
-                    push(addr, out);
+                    push(addr, out, authority);
                 }
-                push(src, out);
+                push(src, out, authority);
             }
             Stmt::Call { target, args, .. } => {
-                push(target, out);
+                push(target, out, authority);
                 for a in args {
-                    push(a, out);
+                    push(a, out, authority);
                 }
             }
             Stmt::Return { value } => {
                 if let Some(v) = value {
-                    push(v, out);
+                    push(v, out, authority);
                 }
             }
-            Stmt::Throw { value } | Stmt::IndirectGoto { target: value } => push(value, out),
+            Stmt::Throw { value } | Stmt::IndirectGoto { target: value } => {
+                push(value, out, authority)
+            }
             Stmt::TryCatch { try_body, catches } => {
                 all_reads(try_body, out, authority);
                 for catch in catches {
                     all_reads(&catch.body, out, authority);
                 }
             }
-            Stmt::Push { value } => push(value, out),
+            Stmt::Push { value } => push(value, out, authority),
             Stmt::If {
                 cond,
                 then_body,
                 else_body,
             } => {
-                push(cond, out);
+                push(cond, out, authority);
                 all_reads(then_body, out, authority);
                 if let Some(e) = else_body {
                     all_reads(e, out, authority);
                 }
             }
             Stmt::While { cond, body } => {
-                push(cond, out);
+                push(cond, out, authority);
                 all_reads(body, out, authority);
             }
             Stmt::For {
@@ -789,20 +824,20 @@ fn all_reads(body: &[Stmt], out: &mut BTreeSet<String>, authority: VerificationA
                 body,
             } => {
                 all_reads(std::slice::from_ref(init.as_ref()), out, authority);
-                push(cond, out);
+                push(cond, out, authority);
                 all_reads(body, out, authority);
                 all_reads(std::slice::from_ref(step.as_ref()), out, authority);
             }
             Stmt::DoWhile { body, cond } => {
                 all_reads(body, out, authority);
-                push(cond, out);
+                push(cond, out, authority);
             }
             Stmt::Switch {
                 discriminant,
                 cases,
                 default,
             } => {
-                push(discriminant, out);
+                push(discriminant, out, authority);
                 for (_, b) in cases {
                     all_reads(b, out, authority);
                 }
@@ -968,37 +1003,39 @@ fn declared_machine_register_expr(e: &Expr) -> Option<String> {
 }
 
 /// Versioned values whose reaching definition is explicit poison.
-fn poisoned_defs(body: &[Stmt], out: &mut BTreeSet<String>) {
+fn poisoned_defs(body: &[Stmt], out: &mut BTreeSet<String>, authority: VerificationAuthority<'_>) {
     for stmt in body {
         match stmt.semantic() {
             Stmt::Assign {
                 dst,
                 src: Expr::Unknown(reason),
-            } if reason.starts_with("undefined(") => out.extend(checked_name(dst)),
+            } if reason.starts_with("undefined(") => out.extend(checked_name(dst, authority)),
             Stmt::If {
                 then_body,
                 else_body,
                 ..
             } => {
-                poisoned_defs(then_body, out);
+                poisoned_defs(then_body, out, authority);
                 if let Some(else_body) = else_body {
-                    poisoned_defs(else_body, out);
+                    poisoned_defs(else_body, out, authority);
                 }
             }
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => poisoned_defs(body, out),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                poisoned_defs(body, out, authority)
+            }
             Stmt::For {
                 init, step, body, ..
             } => {
-                poisoned_defs(std::slice::from_ref(init.as_ref()), out);
-                poisoned_defs(body, out);
-                poisoned_defs(std::slice::from_ref(step.as_ref()), out);
+                poisoned_defs(std::slice::from_ref(init.as_ref()), out, authority);
+                poisoned_defs(body, out, authority);
+                poisoned_defs(std::slice::from_ref(step.as_ref()), out, authority);
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, case_body) in cases {
-                    poisoned_defs(case_body, out);
+                    poisoned_defs(case_body, out, authority);
                 }
                 if let Some(default_body) = default {
-                    poisoned_defs(default_body, out);
+                    poisoned_defs(default_body, out, authority);
                 }
             }
             _ => {}
@@ -1058,6 +1095,7 @@ pub fn verify_before_render(f: &Function) -> RenderVerification {
         VerificationAuthority {
             call_defines_return_role: true,
             identities: None,
+            checked_names: None,
         },
     )
 }
@@ -1067,11 +1105,13 @@ pub fn verify_before_render_with_identities(
     f: &Function,
     identities: &crate::ir::value_number::ValueIdentities,
 ) -> RenderVerification {
+    let checked_names = crate::ir::ast::verification_local_names(f, identities);
     verify_before_render_where(
         f,
         VerificationAuthority {
             call_defines_return_role: identities.is_result_role(&VReg::phys(RETURN_ROLE)),
             identities: Some(identities),
+            checked_names: Some(&checked_names),
         },
     )
 }
@@ -1096,6 +1136,7 @@ pub fn check(f: &Function) -> Vec<Violation> {
         VerificationAuthority {
             call_defines_return_role: true,
             identities: None,
+            checked_names: None,
         },
     )
 }
@@ -1115,7 +1156,7 @@ fn check_where(f: &Function, authority: VerificationAuthority<'_>) -> Vec<Violat
         .collect();
 
     let mut poisoned = BTreeSet::new();
-    poisoned_defs(&f.body, &mut poisoned);
+    poisoned_defs(&f.body, &mut poisoned, authority);
     for name in reads.intersection(&poisoned) {
         out.push(Violation {
             name: name.clone(),
@@ -1200,6 +1241,7 @@ mod tests {
         VerificationAuthority {
             call_defines_return_role: true,
             identities: None,
+            checked_names: None,
         }
     }
 
@@ -1685,6 +1727,34 @@ mod tests {
         ]);
 
         assert!(verify_before_render_with_identities(&f, &identities).verified());
+    }
+
+    #[test]
+    fn production_verifier_checks_an_opaque_renderer_owned_local() {
+        let f = func(vec![Stmt::Return {
+            value: Some(reg("scratch_value")),
+        }]);
+
+        let verdict = verify_before_render_with_identities(
+            &f,
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
+
+        assert_eq!(names(&verdict.violations), vec!["scratch_value"]);
+        assert_eq!(verdict.violations[0].kind, ViolationKind::NeverDefined);
+    }
+
+    #[test]
+    fn production_verifier_does_not_claim_to_define_plain_machine_state() {
+        let f = func(vec![Stmt::Return {
+            value: Some(reg("rbp")),
+        }]);
+
+        assert!(verify_before_render_with_identities(
+            &f,
+            &crate::ir::value_number::ValueIdentities::default(),
+        )
+        .verified());
     }
 
     #[test]

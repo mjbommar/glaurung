@@ -1616,6 +1616,28 @@ pub(crate) fn health_identifiers(function: &Function) -> HealthIdentifiers {
     }
 }
 
+/// Names the renderer owns as source-level local values for final verification.
+///
+/// Parameters are excluded by the identity-aware census, while raw machine
+/// registers are declared only as honest placeholders for surviving machine
+/// state and therefore are not values the decompiler claims to have produced.
+/// Everything else in the local declaration inventory must have a reaching
+/// definition in the emitted function.
+pub(crate) fn verification_local_names(
+    function: &Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> std::collections::BTreeSet<String> {
+    let mut identifiers = DecIdents::default();
+    for statement in &function.body {
+        collect_idents_stmt(statement, &mut identifiers, Some(identities));
+    }
+    identifiers
+        .locals
+        .difference(&identifiers.physical_registers)
+        .cloned()
+        .collect()
+}
+
 thread_local! {
     /// The declarations selected for the render in progress.
     ///
