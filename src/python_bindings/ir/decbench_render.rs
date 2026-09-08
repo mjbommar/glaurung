@@ -192,7 +192,10 @@ fn decbench_text_with_installed_environment(
         // The renderer below remains formatting-only.
         recognise_machine_frame(&mut prepared, cc);
         crate::ir::ast::fold_exhaustive_if_returns(&mut prepared);
-        crate::ir::ast::remove_redundant_return_constant_assignments(&mut prepared.body);
+        crate::ir::ast::remove_redundant_return_constant_assignments_with_identities(
+            &mut prepared.body,
+            &value_identities,
+        );
         // Preparation is also where a PC-relative address arithmetic sequence
         // finally becomes an absolute address. On AArch64 the stack guard is reached
         // through its GOT slot (`adrp`/`ldr`/`ldr`), so at the earlier

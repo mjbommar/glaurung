@@ -98,8 +98,11 @@ pub(crate) use prepare::{
 pub use prepare::{
     prepare_for_decbench, prepare_for_decbench_with_output, settle_copies_and_constants,
 };
-pub(crate) use return_folds::remove_redundant_return_constant_assignments;
 pub use return_folds::{fold_exhaustive_if_returns, fold_exhaustive_switch_returns};
+pub(crate) use return_folds::{
+    remove_redundant_return_constant_assignments,
+    remove_redundant_return_constant_assignments_with_identities,
+};
 
 #[cfg(test)]
 pub(crate) use abi_widths::refine_decbench_abi_widths;

@@ -117,6 +117,26 @@ pub(super) fn fold_returns(body: &mut Vec<Stmt>) {
 /// assignment may still identify a shared switch destination while the CFG is
 /// being reconstructed, but it is redundant in the final source AST.
 pub(crate) fn remove_redundant_return_constant_assignments(body: &mut Vec<Stmt>) {
+    remove_redundant_return_constant_assignments_where(body, &|dst| {
+        crate::ir::direct_output::is_return_reg(dst)
+    });
+}
+
+/// Identity-aware form used by the production source-preparation path.
+pub(crate) fn remove_redundant_return_constant_assignments_with_identities(
+    body: &mut Vec<Stmt>,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    remove_redundant_return_constant_assignments_where(body, &|dst| {
+        crate::ir::direct_output::is_return_reg(dst)
+            && (!matches!(dst, VReg::Phys(name) if name == "ret") || identities.is_result_role(dst))
+    });
+}
+
+fn remove_redundant_return_constant_assignments_where(
+    body: &mut Vec<Stmt>,
+    is_result: &impl Fn(&VReg) -> bool,
+) {
     for stmt in body.iter_mut() {
         match stmt.semantic_mut() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
@@ -125,20 +145,20 @@ pub(crate) fn remove_redundant_return_constant_assignments(body: &mut Vec<Stmt>)
                 else_body,
                 ..
             } => {
-                remove_redundant_return_constant_assignments(then_body);
+                remove_redundant_return_constant_assignments_where(then_body, is_result);
                 if let Some(else_body) = else_body {
-                    remove_redundant_return_constant_assignments(else_body);
+                    remove_redundant_return_constant_assignments_where(else_body, is_result);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                remove_redundant_return_constant_assignments(body);
+                remove_redundant_return_constant_assignments_where(body, is_result);
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, case_body) in cases {
-                    remove_redundant_return_constant_assignments(case_body);
+                    remove_redundant_return_constant_assignments_where(case_body, is_result);
                 }
                 if let Some(default_body) = default {
-                    remove_redundant_return_constant_assignments(default_body);
+                    remove_redundant_return_constant_assignments_where(default_body, is_result);
                 }
             }
             _ => {}
@@ -148,12 +168,10 @@ pub(crate) fn remove_redundant_return_constant_assignments(body: &mut Vec<Stmt>)
     let mut index = 0;
     while index < body.len() {
         let assigned = match body[index].semantic() {
-            Stmt::Assign { dst, src } if crate::ir::direct_output::is_return_reg(dst) => {
-                match src.semantic() {
-                    Expr::Const(value) => Some((*value, src.origins().cloned())),
-                    _ => None,
-                }
-            }
+            Stmt::Assign { dst, src } if is_result(dst) => match src.semantic() {
+                Expr::Const(value) => Some((*value, src.origins().cloned())),
+                _ => None,
+            },
             _ => None,
         };
         let Some((assigned, expression_origins)) = assigned else {
@@ -528,6 +546,8 @@ fn origins_in_range(body: &[Stmt], start: usize, end: usize) -> OriginSet {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ssa::SsaValue;
+    use std::collections::HashMap;
 
     #[test]
     fn return_fold_collapses_an_exact_ssa_result_carrier() {
@@ -600,6 +620,58 @@ mod tests {
         ];
 
         remove_redundant_return_constant_assignments(&mut body);
+
+        assert_eq!(
+            body,
+            vec![Stmt::Return {
+                value: Some(Expr::Const(-1)),
+            }]
+        );
+    }
+
+    #[test]
+    fn late_return_cleanup_does_not_trust_an_unowned_ret_spelling() {
+        let mut body = vec![
+            Stmt::Assign {
+                dst: VReg::phys("ret"),
+                src: Expr::Const(-1),
+            },
+            Stmt::Return {
+                value: Some(Expr::Const(-1)),
+            },
+        ];
+
+        remove_redundant_return_constant_assignments_with_identities(
+            &mut body,
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
+
+        assert_eq!(body.len(), 2);
+    }
+
+    #[test]
+    fn late_return_cleanup_accepts_a_pipeline_owned_ret_role() {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            VReg::phys("rax"),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 1,
+            },
+        );
+        identities =
+            identities.with_role_aliases(&HashMap::from([("rax".to_string(), "ret".to_string())]));
+        let mut body = vec![
+            Stmt::Assign {
+                dst: VReg::phys("ret"),
+                src: Expr::Const(-1),
+            },
+            Stmt::Return {
+                value: Some(Expr::Const(-1)),
+            },
+        ];
+
+        remove_redundant_return_constant_assignments_with_identities(&mut body, &identities);
 
         assert_eq!(
             body,

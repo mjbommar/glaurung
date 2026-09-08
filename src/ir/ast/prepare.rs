@@ -17,7 +17,8 @@
 use super::param_spills::{coalesce_named_param_spills, coalesce_param_spills, drop_self_stores};
 use super::{
     fold_exhaustive_if_returns, fold_exhaustive_switch_returns, fold_returns,
-    remove_redundant_return_constant_assignments, Function,
+    remove_redundant_return_constant_assignments,
+    remove_redundant_return_constant_assignments_with_identities, Function,
 };
 
 /// Why a bounded semantic fixpoint stopped.
@@ -457,7 +458,13 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
     // gotos to that exact lexical successor carry no control information and
     // only make otherwise structured output look unstructured.
     crate::ir::label_prune::prune_structured_fallthrough_gotos(&mut owned);
-    remove_redundant_return_constant_assignments(&mut owned.body);
+    match identities {
+        Some(identities) => remove_redundant_return_constant_assignments_with_identities(
+            &mut owned.body,
+            identities,
+        ),
+        None => remove_redundant_return_constant_assignments(&mut owned.body),
+    }
     drop_machine_frame_comments(&mut owned.body);
     // A call result consumed exactly once by the immediately following scalar
     // assignment is a source expression, not a standalone temporary. Move the
