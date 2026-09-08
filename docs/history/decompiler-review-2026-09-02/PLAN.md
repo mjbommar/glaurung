@@ -1774,6 +1774,14 @@ provenance through lowering.
   six aggregate round-trip regressions reproduce unchanged with the owned lines
   reversed and are not attributed. See
   `results/wp3-shift-operand-expression-origin-rendering.md`.
+  Commit `c373207f` then moves the typed array-index renderer across the same
+  boundary. Attributed address sums, pointer bases, zero wrappers, multiply/shift
+  scales, constants, and implicit index-extension chains retain the proven
+  `base[index]` form. The strengthened renderer contract was observed red and
+  keeps its exact width-mismatch refusal. A 109/110/207 host canary has no new
+  regressions; its one improvement persists with the owned lines reversed and
+  is recorded as unrelated. See
+  `results/wp3-array-index-expression-origin-rendering.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
