@@ -928,9 +928,12 @@ fn exit_value_seed_candidate(stmt: &Stmt) -> Option<Vec<Stmt>> {
     for stmt in body {
         let Stmt::Assign {
             dst: exit_value,
-            src: Expr::Reg(carried),
+            src,
         } = stmt.semantic()
         else {
+            break;
+        };
+        let Expr::Reg(carried) = src.semantic() else {
             break;
         };
         if exit_value == carried
@@ -970,7 +973,7 @@ fn exit_value_seed_candidate(stmt: &Stmt) -> Option<Vec<Stmt>> {
     for (exit_value, carried) in &pairs {
         let (carried_index, carried_value) = last_assignment(tail, carried)?;
         let (exit_index, exit_tail_value) = last_assignment(tail, exit_value)?;
-        if carried_value != exit_tail_value
+        if carried_value.semantic() != exit_tail_value.semantic()
             || !stable_value_expr(carried_value)
             || all_targets
                 .iter()
@@ -2161,6 +2164,14 @@ mod tests {
             width: 4,
             expr: Box::new(Expr::Reg(next.clone())),
         };
+        let carried_tail_value = tail_value
+            .clone()
+            .with_origins(OriginSet::one(0x1004));
+        let exit_tail_value = tail_value
+            .clone()
+            .with_origins(OriginSet::one(0x1008));
+        let seed_value =
+            Expr::Reg(carried.clone()).with_origins(OriginSet::one(0x1000));
         let mut f = Function {
             name: "seeded_head_test".into(),
             entry_va: 0,
@@ -2169,7 +2180,7 @@ mod tests {
                 body: vec![
                     Stmt::Assign {
                         dst: exit_value.clone(),
-                        src: Expr::Reg(carried.clone()),
+                        src: seed_value.clone(),
                     },
                     Stmt::If {
                         cond: Expr::Reg(reg("done")),
@@ -2178,11 +2189,11 @@ mod tests {
                     },
                     Stmt::Assign {
                         dst: carried.clone(),
-                        src: tail_value.clone(),
+                        src: carried_tail_value.clone(),
                     },
                     Stmt::Assign {
                         dst: exit_value.clone(),
-                        src: tail_value.clone(),
+                        src: exit_tail_value.clone(),
                     },
                 ],
             }],
@@ -2195,7 +2206,7 @@ mod tests {
             vec![
                 Stmt::Assign {
                     dst: exit_value.clone(),
-                    src: Expr::Reg(carried.clone()),
+                    src: seed_value,
                 },
                 Stmt::While {
                     cond: Expr::Cmp {
@@ -2206,11 +2217,11 @@ mod tests {
                     body: vec![
                         Stmt::Assign {
                             dst: carried,
-                            src: tail_value.clone(),
+                            src: carried_tail_value,
                         },
                         Stmt::Assign {
                             dst: exit_value,
-                            src: tail_value,
+                            src: exit_tail_value,
                         },
                     ],
                 },
