@@ -459,6 +459,16 @@ identity contracts, seven adjacent ABI tests, and the two legacy wide/narrow
 boundaries pass. The validation executed 11 relevant tests and filtered out
 the rest. See `results/wp3-abi-width-identities.md`.
 
+Commit `33371b23` migrates function-table reaching-definition retention to the
+same identity authority. Nested calls retain only definitions whose entire SSA
+candidate set consists of explicit non-entry values; missing, entry, and mixed
+sets fail closed instead of trusting a `#version` display suffix. All 12 owning
+module tests pass with 4,495 unrelated tests filtered out. The exact
+`95_function_pointer_table:gcc:O0:dispatch_operation` probe remains red, but an
+A/B rebuild through the old compatibility entry point reproduces identical
+output, so that branch-tip regression is tracked rather than attributed to
+this migration. See `results/wp3-function-table-definition-identities.md`.
+
 Commits `48cf15a0` and `6a7ec0b5` carry those identities through the pipeline-owned render
 entry point into the immutable declaration plan. An exact opaque role now
 receives its recovered local declaration without depending on `varN` spelling;

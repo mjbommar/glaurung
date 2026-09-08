@@ -470,6 +470,23 @@ this migration.
 
 No broad Rust or Python suite, fixture matrix, DecBench, or Joern lane ran.
 
+## Function-table reaching-definition identities
+
+Commit `33371b23` moves nested-call clobber decisions in function-table
+recovery from `#version` display spelling to the pipeline-owned SSA identity
+sidecar. The production path preserves only explicit non-entry values across a
+nested call; missing, entry, or mixed identities fail closed.
+
+Focused evidence: all 12 `ir::function_tables::tests` passed with 4,495 library
+tests filtered out, followed by a fresh native rebuild and build guard. The
+single real fixture probe
+`95_function_pointer_table:gcc:O0:dispatch_operation` is red at this branch
+tip, but restoring the old production caller and rebuilding reproduced the
+same unresolved table and verdict. It remains separately tracked debt rather
+than a claimed green result for this increment. No broad suite ran. Full
+commands and limits are in
+`docs/history/decompiler-review-2026-09-02/results/wp3-function-table-definition-identities.md`.
+
 ## Ground rules
 
 Verified before any claim of done: `cargo test --features python-ext`,
