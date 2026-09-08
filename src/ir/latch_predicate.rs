@@ -78,9 +78,19 @@ pub(crate) fn coalesce_source_loop_updates(
                     replace_statement_register(statement, &scratch, &carrier);
                 }
                 replace_register(condition, &scratch, &carrier);
-                loop_body
+                let removed = loop_body
                     .pop()
-                    .and_then(|removed| removed.origins().cloned())
+                    .expect("candidate requires a scratch-to-carrier tail");
+                let mut origins = crate::ir::ast::OriginSet::empty();
+                if let Some(owner) = removed.origins() {
+                    origins.merge(owner);
+                }
+                if let Stmt::Assign { src, .. } = removed.semantic() {
+                    if let Some(owner) = src.origins() {
+                        origins.merge(owner);
+                    }
+                }
+                (!origins.is_empty()).then_some(origins)
             };
             if let Some(origins) = removed_origins {
                 function.body[index].merge_origins(&origins);
@@ -103,10 +113,14 @@ fn source_loop_update_candidate(
         _ => return None,
     };
     let (carrier, scratch) = match body.last()?.semantic() {
-        Stmt::Assign {
-            dst,
-            src: Expr::Reg(source),
-        } if dst != source => (dst.clone(), source.clone()),
+        Stmt::Assign { dst, src }
+            if matches!(src.semantic(), Expr::Reg(source) if dst != source) =>
+        {
+            let Expr::Reg(source) = src.semantic() else {
+                unreachable!("candidate guard requires a register source")
+            };
+            (dst.clone(), source.clone())
+        }
         _ => return None,
     };
     let compatible_type = types.get(&carrier) == types.get(&scratch)

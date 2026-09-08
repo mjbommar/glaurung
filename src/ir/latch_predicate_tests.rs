@@ -410,7 +410,7 @@ fn coalesces_a_typed_loop_update_scratch_into_its_source_carrier() {
                     },
                     Stmt::Assign {
                         dst: reg("var4"),
-                        src: read("ret"),
+                        src: read("ret").with_origins(OriginSet::one(0x1044)),
                     }
                     .with_origins(OriginSet::one(0x1040)),
                 ],
@@ -446,7 +446,7 @@ fn coalesces_a_typed_loop_update_scratch_into_its_source_carrier() {
     assert!(text.contains("(%var4 u< %limit)"), "{text}");
     assert_eq!(
         function.body[1].origins(),
-        Some(&OriginSet::from_addresses([0x1030, 0x1040]))
+        Some(&OriginSet::from_addresses([0x1030, 0x1040, 0x1044]))
     );
 }
 
