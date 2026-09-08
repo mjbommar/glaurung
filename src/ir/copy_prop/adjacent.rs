@@ -530,7 +530,7 @@ fn fold_one_adjacent_promoted_value(body: &mut Vec<Stmt>, types: Option<&TypeMap
 }
 
 fn promoted_value_width(e: &Expr) -> Option<u8> {
-    match e {
+    match e.semantic() {
         Expr::Const(value) if (0..=127).contains(value) => Some(1),
         Expr::Cmp { .. } => Some(1),
         Expr::Select { width, .. } if *width > 0 => Some(*width),
@@ -834,6 +834,50 @@ mod tests {
                 value: Some(predicate),
             }]
         );
+    }
+
+    #[test]
+    fn attributed_typed_scalar_promoted_store_folds_into_return() {
+        let source_owner = OriginSet::one(0x1180);
+        let predicate = Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs: Box::new(Expr::Reg(reg("state"))),
+            rhs: Box::new(Expr::Const(3)),
+        }
+        .with_origins(source_owner.clone());
+        let mut function = Function {
+            name: "finished".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(reg("local_4")),
+                    src: predicate,
+                    size: 4,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("local_4"))),
+                },
+            ],
+        };
+        let mut types = crate::ir::types_recover::TypeMap::default();
+        types.upsert_public(
+            reg("local_4"),
+            crate::ir::types_recover::TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+
+        propagate_adjacent_typed_promoted_values(&mut function, &types);
+
+        let [Stmt::Return { value: Some(value) }] = function.body.as_slice() else {
+            panic!(
+                "the attributed one-use temporary should fold: {:#?}",
+                function.body
+            );
+        };
+        assert!(matches!(value.semantic(), Expr::Cmp { .. }));
+        assert_eq!(value.origins(), Some(&source_owner));
     }
 
     #[test]
