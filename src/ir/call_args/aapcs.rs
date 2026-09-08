@@ -311,7 +311,11 @@ pub(super) fn outgoing_aapcs_stack_area(
                 if disp < 0 || disp >= expected_bytes || disp % 4 != 0 {
                     return None;
                 }
-                if by_offset.insert(disp, (index, src.clone())).is_some() {
+                let mut value = src.clone();
+                if let Some(origins) = body[index].origins() {
+                    value.merge_origins(origins);
+                }
+                if by_offset.insert(disp, (index, value)).is_some() {
                     return None;
                 }
                 if by_offset.len() == expected_args {
@@ -446,7 +450,13 @@ mod tests {
 
         assert_eq!(
             outgoing_aapcs_stack_area(&body, 2, 2),
-            Some((vec![Expr::Const(5), Expr::Const(6)], vec![1, 0]))
+            Some((
+                vec![
+                    Expr::Const(5).with_origins(OriginSet::one(0x1024)),
+                    Expr::Const(6).with_origins(OriginSet::one(0x1020)),
+                ],
+                vec![1, 0],
+            ))
         );
     }
 

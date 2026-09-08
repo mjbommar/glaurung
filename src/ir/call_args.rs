@@ -5191,20 +5191,23 @@ mod tests {
     /// feed the ordinary core-register prefix.
     #[test]
     fn recovered_aapcs_layout_folds_reused_core_registers_and_stack_suffix() {
-        let stack_store = |disp, source| Stmt::Store {
-            addr: if disp == 0 {
-                Expr::Reg(reg("sp"))
-            } else {
-                Expr::Lea {
-                    base: Some(reg("sp")),
-                    index: None,
-                    scale: 1,
-                    disp,
-                    segment: None,
-                }
-            },
-            src: Expr::Reg(reg(source)),
-            size: 4,
+        let stack_store = |disp, source, va| {
+            Stmt::Store {
+                addr: if disp == 0 {
+                    Expr::Reg(reg("sp"))
+                } else {
+                    Expr::Lea {
+                        base: Some(reg("sp")),
+                        index: None,
+                        scale: 1,
+                        disp,
+                        segment: None,
+                    }
+                },
+                src: Expr::Reg(reg(source)),
+                size: 4,
+            }
+            .with_origins(OriginSet::one(va))
         };
         let mut f = Function {
             name: "call_into_spill_shape".into(),
@@ -5213,12 +5216,12 @@ mod tests {
                 assign("r3#1", 7),
                 assign("r2#1", 8),
                 assign("ip#1", 6),
-                stack_store(8, "r3#1"),
-                stack_store(12, "r2#1"),
+                stack_store(8, "r3#1", 0x120c),
+                stack_store(12, "r2#1", 0x1210),
                 assign("r3#2", 5),
                 assign("r2#2", 3),
-                stack_store(0, "r3#2"),
-                stack_store(4, "ip#1"),
+                stack_store(0, "r3#2", 0x121c),
+                stack_store(4, "ip#1", 0x1220),
                 assign("r3#3", 4),
                 Stmt::Assign {
                     dst: reg("flag_input#1"),
@@ -5256,14 +5259,14 @@ mod tests {
         let call = f
             .body
             .iter()
-            .find(|statement| matches!(statement, Stmt::Call { .. }))
+            .find(|statement| matches!(statement.semantic(), Stmt::Call { .. }))
             .expect("call must survive");
-        let Stmt::Call { args, .. } = call else {
+        let Stmt::Call { args, .. } = call.semantic() else {
             unreachable!()
         };
         assert_eq!(
-            args,
-            &vec![
+            args.iter().map(Expr::semantic).cloned().collect::<Vec<_>>(),
+            vec![
                 Expr::Const(1),
                 Expr::Const(2),
                 Expr::Const(3),
@@ -5276,6 +5279,10 @@ mod tests {
             "AAPCS stack setup was not composed with the core-register prefix: {:#?}",
             f.body
         );
+        assert_eq!(args[4].origins(), Some(&OriginSet::one(0x121c)));
+        assert_eq!(args[5].origins(), Some(&OriginSet::one(0x1220)));
+        assert_eq!(args[6].origins(), Some(&OriginSet::one(0x120c)));
+        assert_eq!(args[7].origins(), Some(&OriginSet::one(0x1210)));
         assert!(
             f.body.iter().any(|statement| matches!(
                 statement,
