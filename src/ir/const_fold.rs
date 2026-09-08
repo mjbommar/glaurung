@@ -1632,12 +1632,15 @@ fn fold_observed_mask(value: &Expr, observed_mask: i64) -> Option<Expr> {
 
     // `(X & A) & B == X & (A & B)`; combining the constants exposes both
     // zero masks and boolean low-bit reads.
-    if let Some((inner, inner_mask)) = and_with_constant(value) {
-        return Some(Expr::Bin {
-            op: BinOp::And,
-            lhs: Box::new(inner.clone()),
-            rhs: Box::new(Expr::Const(inner_mask & observed_mask)),
-        });
+    if let Some((inner, inner_mask, mask_origins)) = and_with_constant(value) {
+        return Some(
+            Expr::Bin {
+                op: BinOp::And,
+                lhs: Box::new(inner.clone()),
+                rhs: Box::new(Expr::Const(inner_mask & observed_mask)),
+            }
+            .with_optional_origins((!mask_origins.is_empty()).then_some(mask_origins)),
+        );
     }
 
     // `((X & KEEP) | Y) & OBSERVED == Y & OBSERVED` when KEEP and OBSERVED
@@ -1648,41 +1651,61 @@ fn fold_observed_mask(value: &Expr, observed_mask: i64) -> Option<Expr> {
         rhs,
     } = value
     {
-        if masked_term_is_disjoint(lhs, observed_mask) {
-            return Some(Expr::Bin {
-                op: BinOp::And,
-                lhs: rhs.clone(),
-                rhs: Box::new(Expr::Const(observed_mask)),
-            });
+        if let Some(mask_origins) = masked_term_disjoint_origins(lhs, observed_mask) {
+            return Some(
+                Expr::Bin {
+                    op: BinOp::And,
+                    lhs: rhs.clone(),
+                    rhs: Box::new(Expr::Const(observed_mask)),
+                }
+                .with_optional_origins((!mask_origins.is_empty()).then_some(mask_origins)),
+            );
         }
-        if masked_term_is_disjoint(rhs, observed_mask) {
-            return Some(Expr::Bin {
-                op: BinOp::And,
-                lhs: lhs.clone(),
-                rhs: Box::new(Expr::Const(observed_mask)),
-            });
+        if let Some(mask_origins) = masked_term_disjoint_origins(rhs, observed_mask) {
+            return Some(
+                Expr::Bin {
+                    op: BinOp::And,
+                    lhs: lhs.clone(),
+                    rhs: Box::new(Expr::Const(observed_mask)),
+                }
+                .with_optional_origins((!mask_origins.is_empty()).then_some(mask_origins)),
+            );
         }
     }
     None
 }
 
-fn and_with_constant(expr: &Expr) -> Option<(&Expr, i64)> {
+fn and_with_constant(expr: &Expr) -> Option<(&Expr, i64, crate::ir::ast::OriginSet)> {
     let Expr::Bin {
         op: BinOp::And,
         lhs,
         rhs,
-    } = expr
+    } = expr.semantic()
     else {
         return None;
     };
-    match (lhs.as_ref(), rhs.as_ref()) {
-        (value, Expr::Const(mask)) | (Expr::Const(mask), value) => Some((value, *mask)),
+    let (value, mask, mask_origins) = match (lhs.semantic(), rhs.semantic()) {
+        (_, Expr::Const(mask)) => Some((lhs.as_ref(), *mask, rhs.origins())),
+        (Expr::Const(mask), _) => Some((rhs.as_ref(), *mask, lhs.origins())),
         _ => None,
-    }
+    }?;
+    let origins = expr
+        .origins()
+        .into_iter()
+        .chain(mask_origins)
+        .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+            owners.union(next)
+        });
+    Some((value, mask, origins))
 }
 
-fn masked_term_is_disjoint(expr: &Expr, observed_mask: i64) -> bool {
-    and_with_constant(expr).is_some_and(|(_, mask)| mask & observed_mask == 0)
+fn masked_term_disjoint_origins(
+    expr: &Expr,
+    observed_mask: i64,
+) -> Option<crate::ir::ast::OriginSet> {
+    and_with_constant(expr)
+        .filter(|(_, mask, _)| mask & observed_mask == 0)
+        .map(|(_, _, origins)| origins)
 }
 
 fn merge_equality_and_less(equality: &Expr, less: &Expr) -> Option<Expr> {
@@ -3061,6 +3084,8 @@ mod tests {
         let predicate_owner = crate::ir::ast::OriginSet::one(0x1008);
         let discarded_owner = crate::ir::ast::OriginSet::one(0x100c);
         let mask_owner = crate::ir::ast::OriginSet::one(0x1010);
+        let discarded_mask_tree_owner = crate::ir::ast::OriginSet::one(0x1014);
+        let discarded_mask_owner = crate::ir::ast::OriginSet::one(0x1018);
         let old = Expr::Reg(reg("old_parent")).with_origins(discarded_owner.clone());
         let predicate = Expr::Cmp {
             op: CmpOp::Eq,
@@ -3070,7 +3095,12 @@ mod tests {
         .with_origins(predicate_owner.clone());
         let merged = bin(
             BinOp::Or,
-            bin(BinOp::And, old, Expr::Const(-256)),
+            bin(
+                BinOp::And,
+                old,
+                Expr::Const(-256).with_origins(discarded_mask_owner.clone()),
+            )
+            .with_origins(discarded_mask_tree_owner.clone()),
             bin(
                 BinOp::And,
                 bin(BinOp::And, predicate, Expr::Const(255)),
@@ -3096,7 +3126,9 @@ mod tests {
         let expected = observed_owner
             .union(&merge_owner)
             .union(&predicate_owner)
-            .union(&mask_owner);
+            .union(&mask_owner)
+            .union(&discarded_mask_tree_owner)
+            .union(&discarded_mask_owner);
         assert_eq!(src.origins(), Some(&expected));
         assert!(!src
             .origins()
