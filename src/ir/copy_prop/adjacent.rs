@@ -167,33 +167,28 @@ fn move_one_adjacent_effectful_scratch_value(body: &mut Vec<Stmt>, reads: &RegMa
         else {
             continue;
         };
-        let consumed = match body[consumer_index].semantic_mut() {
-            Stmt::Assign { src, .. } => {
-                if !matches!(&*src, Expr::Reg(register) if register == &destination) {
-                    false
-                } else {
-                    *src = source;
-                    true
-                }
-            }
+        let direct_use = match body[consumer_index].semantic_mut() {
+            Stmt::Assign { src, .. } => Some(src),
             // A bare promoted-local address denotes the recovered stack object
             // itself, not an indirect pointer evaluation. Moving into a
             // general Store would be unsound: C does not sequence evaluation
             // of the store address and source expression.
-            Stmt::Store {
-                addr: Expr::Reg(address),
-                src,
-                ..
-            } if is_promoted_local_reg(address) => {
-                if !matches!(&*src, Expr::Reg(register) if register == &destination) {
-                    false
-                } else {
-                    *src = source;
-                    true
-                }
+            Stmt::Store { addr, src, .. } if matches!(addr.semantic(), Expr::Reg(address) if is_promoted_local_reg(address)) => {
+                Some(src)
             }
-            _ => false,
+            _ => None,
         };
+        let consumed = direct_use.is_some_and(|use_expression| {
+            if !matches!(use_expression.semantic(), Expr::Reg(register) if register == &destination)
+            {
+                return false;
+            }
+            if let Some(use_origins) = use_expression.origins() {
+                source.merge_origins(use_origins);
+            }
+            *use_expression = source;
+            true
+        });
         if consumed {
             body.remove(index);
             if let Some(origins) = origins {
@@ -648,6 +643,59 @@ mod tests {
         };
         assert!(matches!(src.semantic(), Expr::Call { .. }));
         assert_eq!(src.origins(), Some(&definition_owner));
+    }
+
+    #[test]
+    fn attributed_effectful_use_moves_with_a_canonical_origin_union() {
+        let definition_owner = OriginSet::one(0x1010);
+        let use_owner = OriginSet::one(0x1014);
+        let consumer_owner = OriginSet::one(0x1018);
+        let mut function = Function {
+            name: "effectful_use_origin".into(),
+            entry_va: 0x1010,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("var14"),
+                    src: Expr::Call {
+                        target: Box::new(Expr::Named {
+                            va: 0x2000,
+                            name: "read_once".into(),
+                        }),
+                        args: Vec::new(),
+                        call_spec: None,
+                        result_width: Some(8),
+                    },
+                }
+                .with_origins(definition_owner.clone()),
+                Stmt::Assign {
+                    dst: reg("local_10"),
+                    src: Expr::Reg(reg("var14")).with_origins(use_owner.clone()),
+                }
+                .with_origins(consumer_owner.clone()),
+            ],
+        };
+
+        move_adjacent_effectful_scratch_values(&mut function);
+
+        let [statement] = function.body.as_slice() else {
+            panic!(
+                "the one-use call temporary should move: {:#?}",
+                function.body
+            )
+        };
+        assert_eq!(
+            statement.origins(),
+            Some(&definition_owner.union(&consumer_owner))
+        );
+        let Stmt::Assign { src, .. } = statement.semantic() else {
+            panic!("expected the moved call: {statement:#?}")
+        };
+        assert!(matches!(src.semantic(), Expr::Call { .. }));
+        assert_eq!(src.origins(), Some(&definition_owner.union(&use_owner)));
+        let Expr::Origin { expr, .. } = src else {
+            panic!("expected one ownership carrier: {src:#?}")
+        };
+        assert!(!matches!(expr.as_ref(), Expr::Origin { .. }));
     }
 
     #[test]
