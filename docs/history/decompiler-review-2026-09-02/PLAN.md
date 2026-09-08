@@ -1612,6 +1612,14 @@ provenance through lowering.
   consumption before AST lowering.
 - [ ] Move constant folding, dead-store elimination, and DCE in bounded
   increments, one pass at a time.
+  Commit `079e26d5` implements the next constant-fold prerequisite: value
+  numbering attaches a live ABI parameter slot directly to each exact
+  version-zero identity and refuses later register versions or non-live ABI
+  registers. This makes parameter ownership available before presentation
+  naming. The production fold has deliberately not switched yet: its
+  `Deref(StackAddr(argN))` rule must first be reconciled with the fact that
+  stack-object promotion occurs after the early fold. See
+  `results/wp3-early-parameter-identities.md`.
 - [~] Remove semantic parsing of `ret`, `argN`, `local_`, and `#version` only
   after each consumer has a typed identity replacement.
   `f05c9a5d` removes `#version` parsing from production float-role projection;

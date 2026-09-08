@@ -423,6 +423,24 @@ make, not a thing to silently delete.
 `tests/fixtures/msvc-pdb/` binaries that nothing fetches (estate 1.7), 7 on
 `GLAURUNG_IOCTL_FIXTURES`, 4 on live-LLM opt-in.
 
+## Early typed ABI parameter identities
+
+Commit `079e26d5` makes value numbering record a live ABI parameter slot on
+the exact version-zero SSA value itself. A later definition of that register and an
+unused ABI argument register remain unowned. This is a bounded WP3 prerequisite
+for migrating early consumers away from `argN` parsing; constant folding has
+not been switched until its pre-stack-promotion input shape is proven.
+
+Focused evidence:
+
+```text
+cargo test --lib --features python-ext \
+  abi_parameter_slots_attach_only_to_live_version_zero_values
+1 passed; 4,458 filtered out
+```
+
+No broad Rust or Python suite, fixture matrix, DecBench, or Joern lane ran.
+
 ## Ground rules
 
 Verified before any claim of done: `cargo test --features python-ext`,
