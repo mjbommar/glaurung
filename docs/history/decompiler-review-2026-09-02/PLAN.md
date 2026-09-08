@@ -1365,6 +1365,12 @@ provenance through lowering.
   width-cast, and iterator-bypass proofs remain mandatory. Its strengthened
   observed-red test and all 30 loop-form tests pass; see
   `results/wp3-counted-loop-step-origins.md`.
+  Commit `f7a3afe9` then makes loop-exit seeding recognize an attributed header
+  register copy and compare differently attributed tail values semantically.
+  All three assignments survive or move intact; exact-copy, stable-value,
+  dependency-write, and control-bypass proofs remain mandatory. Its
+  strengthened observed-red test and all 30 loop-form tests pass; see
+  `results/wp3-loop-exit-copy-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
