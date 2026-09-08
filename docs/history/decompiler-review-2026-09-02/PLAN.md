@@ -1891,6 +1891,16 @@ provenance through lowering.
   four fixture-207 `word_at_index` compiler/optimization cells remain green
   after a release rebuild. See
   `results/wp3-scaled-pointer-expression-origin-rendering.md`.
+  Commit `6d8a252b` closes the aggregate direct-object boundary on both calls
+  and destinations. An attributed by-value object whose declaration exactly
+  matches the aggregate parameter or return type now crosses directly as
+  `consume_pair(arg0); return arg0;` instead of a redundant
+  object-to-bits-to-object union round trip. Non-object machine carriers retain
+  the representation-preserving reconstruction. All three focused aggregate
+  contracts pass; four fixture-197 tagged-return cells pass and four
+  aggregate-argument cells retain their prior structural-only verdict, with no
+  scoped regression. See
+  `results/wp3-aggregate-boundary-expression-origin-rendering.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
