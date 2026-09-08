@@ -1737,6 +1737,15 @@ provenance through lowering.
   three renderer census tests, and the 16-lane ARMv7 vector/float set show one
   regression removed and none added; see
   `results/wp3-mixed-parameter-source-slots.md`.
+  Commit `c2c7f36a` then makes the typed decimal float renderer transparent to
+  expression-origin carriers. Attributed float arithmetic now keeps its proven
+  `float` or `double` width instead of falling back to integer union-bit
+  spelling. Its observed-red unit test passes, and the exact ARMv7 O2
+  `negate_binary32` and `compensation_of_step` fixture regressions both move to
+  pass. A 32-lane ARMv7/AArch64 vector-float check removes those two failures
+  with no attributable addition; its one remaining AArch64 O0 failure is
+  byte-identical with the patch reversed. See
+  `results/wp3-float-expression-origin-rendering.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
