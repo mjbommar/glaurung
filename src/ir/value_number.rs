@@ -105,6 +105,27 @@ impl ValueIdentities {
             .insert(identity);
     }
 
+    /// Attach ABI parameter slots to exact version-zero values.
+    fn attach_abi_parameter_slots(&mut self, cc: CallConv, live_slots: &HashSet<usize>) {
+        for (numbered, candidates) in &self.by_numbered_value {
+            let slots = candidates
+                .iter()
+                .filter(|identity| identity.version == 0)
+                .filter_map(|identity| match &identity.base {
+                    VReg::Phys(name) => crate::ir::abi::argument_slot_of(cc, name),
+                    _ => None,
+                })
+                .filter(|slot| live_slots.contains(slot))
+                .collect::<BTreeSet<_>>();
+            if !slots.is_empty() {
+                self.parameter_slots_by_value
+                    .entry(numbered.clone())
+                    .or_default()
+                    .extend(slots);
+            }
+        }
+    }
+
     /// Clone this sidecar into the AST's presentation-name key space.
     ///
     /// `aliases` is the exact raw-name to role-name map returned by naming.
@@ -427,6 +448,7 @@ pub fn value_number_with_parameter_slots_lifetimes_and_identities(
         source_lifetimes,
     );
     identities.apply_renames(&renames);
+    identities.attach_abi_parameter_slots(cc, &parameter_slots);
     (out, definition_widths, parameter_slots, identities)
 }
 
@@ -776,6 +798,33 @@ mod tests {
 
         assert_eq!(projected.parameter_slot(&VReg::phys("arg0")), Some(0));
         assert_eq!(projected.parameter_slot(&VReg::phys("arg99")), None);
+    }
+
+    #[test]
+    fn abi_parameter_slots_attach_only_to_live_version_zero_values() {
+        let function = mk(vec![
+            Op::Assign {
+                dst: VReg::phys("rbx"),
+                src: Value::Reg(VReg::phys("rdi")),
+            },
+            Op::Assign {
+                dst: VReg::phys("rdi"),
+                src: Value::Const(5),
+            },
+        ]);
+        let ssa = compute_ssa(&function);
+        let (_, _, live_slots, identities) =
+            value_number_with_parameter_slots_lifetimes_and_identities(
+                &function,
+                &ssa,
+                CallConv::SysVAmd64,
+                &[],
+            );
+
+        assert_eq!(live_slots, HashSet::from([0]));
+        assert_eq!(identities.parameter_slot(&VReg::phys("rdi")), Some(0));
+        assert_eq!(identities.parameter_slot(&VReg::phys("rdi#1")), None);
+        assert_eq!(identities.parameter_slot(&VReg::phys("rsi")), None);
     }
 
     #[test]
