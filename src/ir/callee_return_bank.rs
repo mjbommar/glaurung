@@ -116,10 +116,20 @@ pub fn compose_bank_returns(
     cc: CallConv,
     prototype: Option<&RecoveredPrototype>,
 ) -> bool {
+    compose_bank_returns_with_identities(function, cc, prototype, None)
+}
+
+/// Rewrite banked returns using promoted-object identity when available.
+pub fn compose_bank_returns_with_identities(
+    function: &mut Function,
+    cc: CallConv,
+    prototype: Option<&RecoveredPrototype>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     let Some(contract) = prototype.and_then(|p| bank_contract(cc, p.return_class())) else {
         return false;
     };
-    let Some((object, size)) = returned_stack_object(&function.body) else {
+    let Some((object, size)) = returned_stack_object(&function.body, identities) else {
         return false;
     };
     if size != contract.bytes {
@@ -631,7 +641,10 @@ fn every_return_loads_one_object(body: &[Stmt], seen: &mut Option<(VReg, u16)>) 
 
 /// The one stack object every `return` in `body` takes its value from, with
 /// that object's recovered extent, or `None` when they do not agree on one.
-fn returned_stack_object(body: &[Stmt]) -> Option<(VReg, u16)> {
+fn returned_stack_object(
+    body: &[Stmt],
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<(VReg, u16)> {
     let mut found: Option<(VReg, u16)> = None;
     let mut any = false;
     if !scan_returns(
@@ -639,6 +652,7 @@ fn returned_stack_object(body: &[Stmt]) -> Option<(VReg, u16)> {
         &mut std::collections::HashMap::new(),
         &mut found,
         &mut any,
+        identities,
     ) {
         return None;
     }
@@ -658,6 +672,7 @@ fn scan_returns(
     locals: &mut std::collections::HashMap<VReg, (VReg, u16)>,
     found: &mut Option<(VReg, u16)>,
     any: &mut bool,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> bool {
     for statement in body {
         match statement.semantic() {
@@ -679,13 +694,19 @@ fn scan_returns(
                 addr: Expr::Reg(destination),
                 src,
                 ..
-            } if crate::ir::types::is_promoted_local_reg(destination) => {
-                match stack_object_load(src) {
-                    Some(object) => {
-                        locals.insert(destination.clone(), object);
-                    }
-                    None => {
-                        locals.remove(destination);
+            } => {
+                let promoted = identities.map_or_else(
+                    || crate::ir::types::is_promoted_local_reg(destination),
+                    |identities| identities.is_promoted_stack_object(destination),
+                );
+                if promoted {
+                    match stack_object_load(src) {
+                        Some(object) => {
+                            locals.insert(destination.clone(), object);
+                        }
+                        None => {
+                            locals.remove(destination);
+                        }
                     }
                 }
             }
@@ -712,7 +733,7 @@ fn scan_returns(
             Stmt::Label(_) => locals.clear(),
             _ => {
                 for nested in nested_bodies(statement) {
-                    if !scan_returns(nested, &mut locals.clone(), found, any) {
+                    if !scan_returns(nested, &mut locals.clone(), found, any, identities) {
                         return false;
                     }
                 }
@@ -1024,6 +1045,62 @@ mod tests {
             bank_return_c_type(&f.body, CallConv::SysVAmd64, Some(&declared)),
             Some("struct __glaurung_sse_pair_half")
         );
+    }
+
+    #[test]
+    fn an_opaque_promoted_return_copy_is_composed_by_identity() {
+        let object_name = "return_copy".to_string();
+        let copy = VReg::phys(&object_name);
+        let mut f = function(vec![
+            store(0, 16),
+            store(8, 16),
+            Stmt::Store {
+                addr: Expr::Reg(copy.clone()),
+                src: load(0, 16),
+                size: 8,
+            },
+            Stmt::Return {
+                value: Some(Expr::Reg(copy)),
+            },
+        ]);
+        let declared = prototype(ReturnClass::SsePair { high_bytes: 8 });
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object_name]);
+
+        assert!(compose_bank_returns_with_identities(
+            &mut f,
+            CallConv::SysVAmd64,
+            Some(&declared),
+            Some(&identities),
+        ));
+    }
+
+    #[test]
+    fn an_unowned_local_spelling_is_not_a_return_copy() {
+        let copy = VReg::phys("local_looks_promoted");
+        let mut f = function(vec![
+            store(0, 16),
+            store(8, 16),
+            Stmt::Store {
+                addr: Expr::Reg(copy.clone()),
+                src: load(0, 16),
+                size: 8,
+            },
+            Stmt::Return {
+                value: Some(Expr::Reg(copy)),
+            },
+        ]);
+        let before = f.clone();
+        let declared = prototype(ReturnClass::SsePair { high_bytes: 8 });
+        let identities = crate::ir::value_number::ValueIdentities::default();
+
+        assert!(!compose_bank_returns_with_identities(
+            &mut f,
+            CallConv::SysVAmd64,
+            Some(&declared),
+            Some(&identities),
+        ));
+        assert_eq!(f, before);
     }
 
     #[test]

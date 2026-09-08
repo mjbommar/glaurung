@@ -587,10 +587,11 @@ fn decbench_text_with_installed_environment(
     if output_kind == crate::ir::types_recover::RecoveredOutputKind::Direct {
         pass!(
             "compose_bank_returns",
-            crate::ir::callee_return_bank::compose_bank_returns(
+            crate::ir::callee_return_bank::compose_bank_returns_with_identities(
                 &mut prepared,
                 cc,
-                recovered_prototype
+                recovered_prototype,
+                Some(&value_identities),
             )
         );
     }
