@@ -371,14 +371,26 @@ fn op_dst_reg(op: &Op) -> Option<&VReg> {
 /// view, we overwrite every return-register alias with that concrete integer
 /// width, clearing any spurious pointer classification. A genuine pointer
 /// return writes the full 64-bit register and is left untouched.
-fn refine_return_type(lf: &LlirFunction, tm: &mut TypeMap, cc: crate::ir::call_args::CallConv) {
+fn refine_return_type(
+    lf: &LlirFunction,
+    tm: &mut TypeMap,
+    cc: crate::ir::call_args::CallConv,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    definition_widths: Option<&std::collections::HashMap<VReg, u8>>,
+) {
     let ret_names = return_reg_names(cc);
     let mut last_dst: Option<VReg> = None;
     for block in &lf.blocks {
         for ins in &block.instrs {
-            if let Some(VReg::Phys(n)) = op_dst_reg(&ins.op) {
-                if ret_names.contains(&n.as_str()) {
-                    last_dst = Some(VReg::phys(n));
+            if let Some(dst) = op_dst_reg(&ins.op) {
+                let is_result = match identities {
+                    Some(identities) => identities.exact(dst).is_some_and(|identity| {
+                        matches!(&identity.base, VReg::Phys(base) if ret_names.contains(&base.as_str()))
+                    }),
+                    None => matches!(dst, VReg::Phys(name) if ret_names.contains(&name.as_str())),
+                };
+                if is_result {
+                    last_dst = Some(dst.clone());
                 }
             }
         }
@@ -386,7 +398,9 @@ fn refine_return_type(lf: &LlirFunction, tm: &mut TypeMap, cc: crate::ir::call_a
     let Some(dst) = last_dst else {
         return;
     };
-    let w = reg_width_bytes(&dst);
+    let w = definition_widths
+        .and_then(|widths| widths.get(&dst).copied())
+        .unwrap_or_else(|| reg_width_bytes(&dst));
     if w == 0 || w >= 8 {
         // Full-width (or unknown) last definition: could legitimately be a
         // pointer or a `long`; leave the recovered classification alone.
@@ -397,10 +411,17 @@ fn refine_return_type(lf: &LlirFunction, tm: &mut TypeMap, cc: crate::ir::call_a
         _ => true,
     };
     let hint = TypeHint::Int { signed, width: w };
-    for n in ret_names {
-        let key = VReg::phys(*n);
-        if tm.inner.contains_key(&key) {
-            tm.inner.insert(key, hint);
+    match identities {
+        Some(_) => {
+            tm.inner.insert(dst, hint);
+        }
+        None => {
+            for n in ret_names {
+                let key = VReg::phys(*n);
+                if tm.inner.contains_key(&key) {
+                    tm.inner.insert(key, hint);
+                }
+            }
         }
     }
 }
@@ -410,7 +431,7 @@ fn refine_return_type(lf: &LlirFunction, tm: &mut TypeMap, cc: crate::ir::call_a
 /// should prefer this over the bare [`recover_types`].
 pub fn recover_types_for(lf: &LlirFunction, cc: crate::ir::call_args::CallConv) -> TypeMap {
     let mut tm = recover_types(lf);
-    refine_return_type(lf, &mut tm, cc);
+    refine_return_type(lf, &mut tm, cc, None, None);
     tm
 }
 
@@ -419,9 +440,10 @@ pub fn recover_types_for_with_identities(
     lf: &LlirFunction,
     cc: crate::ir::call_args::CallConv,
     identities: &crate::ir::value_number::ValueIdentities,
+    definition_widths: &std::collections::HashMap<VReg, u8>,
 ) -> TypeMap {
     let mut tm = recover_types_with_identities(lf, identities);
-    refine_return_type(lf, &mut tm, cc);
+    refine_return_type(lf, &mut tm, cc, Some(identities), Some(definition_widths));
     tm
 }
 

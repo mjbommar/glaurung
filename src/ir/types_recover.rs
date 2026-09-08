@@ -4962,6 +4962,60 @@ int never_returns(void) { for (;;) {} }
     }
 
     #[test]
+    fn return_refinement_uses_identity_and_definition_width() {
+        use crate::ir::call_args::CallConv;
+
+        let exact = mk_block(vec![Op::Assign {
+            dst: VReg::phys("opaque_result"),
+            src: Value::Const(1),
+        }]);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            VReg::phys("opaque_result"),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 1,
+            },
+        );
+        let widths = HashMap::from([(VReg::phys("opaque_result"), 4)]);
+        let types =
+            recover_types_for_with_identities(&exact, CallConv::SysVAmd64, &identities, &widths);
+        assert_eq!(
+            types.get(&VReg::phys("opaque_result")),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            })
+        );
+
+        let misleading = mk_block(vec![Op::Assign {
+            dst: VReg::phys("rax#9"),
+            src: Value::Const(1),
+        }]);
+        identities.record(
+            VReg::phys("rax#9"),
+            SsaValue {
+                base: VReg::phys("rdi"),
+                version: 9,
+            },
+        );
+        let widths = HashMap::from([(VReg::phys("rax#9"), 4)]);
+        let types = recover_types_for_with_identities(
+            &misleading,
+            CallConv::SysVAmd64,
+            &identities,
+            &widths,
+        );
+        assert_eq!(
+            types.get(&VReg::phys("rax#9")),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 8,
+            })
+        );
+    }
+
+    #[test]
     fn arm_return_load_keeps_input_pointer_and_output_scalar_separate() {
         use crate::ir::call_args::CallConv;
 
