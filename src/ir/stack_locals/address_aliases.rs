@@ -27,7 +27,16 @@ const MAX_AFFINE_COMPONENT_NODES: usize = 32;
 /// single linear control-flow run. Stack-pointer writes and every control
 /// boundary clear the map, so an address can never move into a different frame
 /// phase or predecessor.
+#[cfg(test)]
 pub(super) fn expand(body: &mut [Stmt], ctx: StackContext) {
+    expand_with_identities(body, ctx, None);
+}
+
+pub(super) fn expand_with_identities(
+    body: &mut [Stmt],
+    ctx: StackContext,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     if !matches!(ctx.cc, Some(CallConv::Arm | CallConv::ArmHardFloat)) {
         return;
     }
@@ -38,6 +47,7 @@ pub(super) fn expand(body: &mut [Stmt], ctx: StackContext) {
         &mut HashMap::new(),
         &mut HashMap::new(),
         &mut HashMap::new(),
+        identities,
     );
 }
 
@@ -101,8 +111,19 @@ fn affine_component_size(expr: &Expr) -> Option<usize> {
     (size <= MAX_AFFINE_COMPONENT_NODES).then_some(size)
 }
 
-fn is_versioned_local_value(register: &VReg) -> bool {
-    matches!(register, VReg::Phys(name) if name.contains('#')) || matches!(register, VReg::Temp(_))
+fn is_versioned_local_value(
+    register: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    if matches!(register, VReg::Temp(_)) {
+        return true;
+    }
+    match identities {
+        Some(identities) => identities
+            .candidates(register)
+            .is_some_and(|values| values.iter().any(|value| value.version > 0)),
+        None => matches!(register, VReg::Phys(name) if name.contains('#')),
+    }
 }
 
 fn contains_active_stack_base(expr: &Expr, ctx: StackContext) -> bool {
@@ -493,6 +514,7 @@ fn walk(
     aliases: &mut HashMap<VReg, Expr>,
     components: &mut HashMap<VReg, Expr>,
     snapshots: &mut HashMap<VReg, VReg>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
     for statement in body {
         match statement.semantic_mut() {
@@ -513,7 +535,7 @@ fn walk(
                     aliases.clear();
                     components.clear();
                     snapshots.clear();
-                } else if is_versioned_local_value(dst)
+                } else if is_versioned_local_value(dst, identities)
                     && !contains_register(&expanded_definition, dst)
                 {
                     if components.len() < MAX_AFFINE_COMPONENTS
@@ -573,6 +595,7 @@ fn walk(
                     &mut branch_aliases,
                     &mut branch_components,
                     &mut branch_snapshots,
+                    identities,
                 );
                 if let Some(else_body) = else_body {
                     let mut branch_aliases = aliases.clone();
@@ -584,6 +607,7 @@ fn walk(
                         &mut branch_aliases,
                         &mut branch_components,
                         &mut branch_snapshots,
+                        identities,
                     );
                 }
                 aliases.clear();
@@ -608,6 +632,7 @@ fn walk(
                     &mut loop_aliases,
                     &mut loop_components,
                     &mut loop_snapshots,
+                    identities,
                 );
                 aliases.clear();
                 components.clear();
@@ -625,6 +650,7 @@ fn walk(
                     aliases,
                     components,
                     snapshots,
+                    identities,
                 );
                 expand_expr(cond, aliases);
                 let mut loop_aliases = aliases.clone();
@@ -636,6 +662,7 @@ fn walk(
                     &mut loop_aliases,
                     &mut loop_components,
                     &mut loop_snapshots,
+                    identities,
                 );
                 walk(
                     std::slice::from_mut(step.as_mut()),
@@ -643,6 +670,7 @@ fn walk(
                     &mut loop_aliases,
                     &mut loop_components,
                     &mut loop_snapshots,
+                    identities,
                 );
                 aliases.clear();
                 components.clear();
@@ -664,6 +692,7 @@ fn walk(
                         &mut case_aliases,
                         &mut case_components,
                         &mut case_snapshots,
+                        identities,
                     );
                 }
                 if let Some(default) = default {
@@ -676,6 +705,7 @@ fn walk(
                         &mut default_aliases,
                         &mut default_components,
                         &mut default_snapshots,
+                        identities,
                     );
                 }
                 aliases.clear();

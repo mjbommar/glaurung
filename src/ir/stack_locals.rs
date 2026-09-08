@@ -596,7 +596,7 @@ fn promote_stack_locals_with_optional_identities(
         arm_frame_register: arm_frame_register(&f.body, cc, identities),
         parameter_count,
     };
-    address_aliases::expand(&mut f.body, ctx);
+    address_aliases::expand_with_identities(&mut f.body, ctx, identities);
     for hint in object_hints {
         let Some((hint_base, hint_disp)) = rebased_hint_coordinate(hint, ctx) else {
             continue;
