@@ -283,7 +283,11 @@ fn decbench_text_with_installed_environment(
                 tm,
                 exact_value_widths,
             );
-            crate::ir::high_variables::refine_pointer_high_variables(&prepared, tm);
+            crate::ir::high_variables::refine_pointer_high_variables_with_identities(
+                &prepared,
+                tm,
+                Some(value_identities),
+            );
         });
     }
     if let Some(tm) = refined_decl.as_mut() {

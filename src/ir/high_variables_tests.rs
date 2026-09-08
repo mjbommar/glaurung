@@ -1,4 +1,4 @@
-use super::refine_pointer_high_variables;
+use super::{refine_pointer_high_variables, refine_pointer_high_variables_with_identities};
 use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority, CallSiteSpec};
 use crate::ir::types::{BinOp, CmpOp, VReg};
@@ -9,6 +9,64 @@ fn pointer_width(types: &TypeMap, name: &str) -> Option<u8> {
         Some(TypeHint::Pointer { pointee_width }) => Some(pointee_width),
         _ => None,
     }
+}
+
+#[test]
+fn exact_opaque_identity_is_eligible_for_pointer_refinement() {
+    let value = VReg::phys("opaque-value");
+    let function = Function {
+        name: "opaque_pointer".into(),
+        entry_va: 0,
+        body: vec![Stmt::Assign {
+            dst: value.clone(),
+            src: Expr::StringLit {
+                value: "identity".into(),
+            },
+        }],
+    };
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
+    identities.record(
+        value,
+        crate::ir::ssa::SsaValue {
+            base: VReg::phys("rax"),
+            version: 1,
+        },
+    );
+    let mut types = TypeMap::default();
+
+    refine_pointer_high_variables_with_identities(&function, &mut types, Some(&identities));
+
+    assert_eq!(pointer_width(&types, "opaque-value"), Some(1));
+}
+
+#[test]
+fn ambiguous_opaque_identity_is_not_eligible_for_pointer_refinement() {
+    let value = VReg::phys("opaque-value");
+    let function = Function {
+        name: "ambiguous_pointer".into(),
+        entry_va: 0,
+        body: vec![Stmt::Assign {
+            dst: value.clone(),
+            src: Expr::StringLit {
+                value: "ambiguous".into(),
+            },
+        }],
+    };
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
+    for (base, version) in [("rax", 1), ("rbx", 2)] {
+        identities.record(
+            value.clone(),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys(base),
+                version,
+            },
+        );
+    }
+    let mut types = TypeMap::default();
+
+    refine_pointer_high_variables_with_identities(&function, &mut types, Some(&identities));
+
+    assert_eq!(pointer_width(&types, "opaque-value"), None);
 }
 
 #[test]

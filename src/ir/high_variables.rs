@@ -31,6 +31,18 @@ enum ValueClass {
 /// definitions is a strict convergence bound. Scalar facts remain the job of
 /// width-aware LLIR recovery, which has stronger signedness evidence.
 pub(crate) fn refine_pointer_high_variables(function: &Function, types: &mut TypeMap) {
+    refine_pointer_high_variables_with_identities(function, types, None);
+}
+
+/// Refine source-value pointers using opaque SSA identity when available.
+///
+/// Exact identities let the pass recognize values independently of their
+/// presentation spelling. Ambiguous identities remain ineligible.
+pub(crate) fn refine_pointer_high_variables_with_identities(
+    function: &Function,
+    types: &mut TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     let mut definitions: HashMap<String, Vec<Definition>> = HashMap::new();
     collect_definitions(&function.body, &mut definitions);
     refine_exact_unsigned_constants(&function.body, &definitions, types);
@@ -73,6 +85,7 @@ pub(crate) fn refine_pointer_high_variables(function: &Function, types: &mut Typ
         &unsafe_uses,
         &object_model,
         types,
+        identities,
     );
     // Add/sub can be either integer arithmetic or valid C pointer arithmetic.
     // Resolve the candidate pointer classes first, then reject any additive use
@@ -90,6 +103,7 @@ pub(crate) fn refine_pointer_high_variables(function: &Function, types: &mut Typ
             &validated_unsafe_uses,
             &object_model,
             types,
+            identities,
         );
     }
 }
@@ -149,6 +163,7 @@ fn refine_pointer_facts(
     unsafe_uses: &HashSet<String>,
     object_model: &MemoryObjectModel,
     types: &mut TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
     refine_authoritative_pointer_values(body, definitions, unsafe_uses, types);
 
@@ -157,7 +172,7 @@ fn refine_pointer_facts(
             refine_object_cursor_values(definitions, unsafe_uses, object_model, types);
         let mut learned = Vec::new();
         for (name, defs) in definitions {
-            if !is_source_value_local(name)
+            if !is_source_value_local_with_identities(name, identities)
                 || unsafe_uses.contains(name)
                 || defs
                     .iter()
@@ -767,14 +782,9 @@ fn expr_uses_preserve_positive_value(
     uses: &mut usize,
 ) -> bool {
     match expression {
-        Expr::Origin { expr, .. } => expr_uses_preserve_positive_value(
-            expr,
-            name,
-            width,
-            types,
-            unsigned_context,
-            uses,
-        ),
+        Expr::Origin { expr, .. } => {
+            expr_uses_preserve_positive_value(expr, name, width, types, unsigned_context, uses)
+        }
         Expr::Reg(VReg::Phys(found)) if found == name => {
             *uses += 1;
             unsigned_context
@@ -1054,6 +1064,16 @@ fn pointer_width_from_c_type(c_type: &str) -> Option<u8> {
 
 fn is_source_value_local(name: &str) -> bool {
     is_high_variable(name) || is_promoted_local(name)
+}
+
+fn is_source_value_local_with_identities(
+    name: &str,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    if is_source_value_local(name) {
+        return true;
+    }
+    identities.is_some_and(|identities| identities.exact(&VReg::phys(name)).is_some())
 }
 
 fn is_high_variable(name: &str) -> bool {
