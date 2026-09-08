@@ -184,7 +184,7 @@ pub(super) fn invalidate_loads_for_store(copies: &mut Copies, addr: &Expr, size:
 /// `None` unless every term between the root and `e` is a literal constant, so
 /// an indexed access never produces an offset a caller could reason with.
 fn stack_offset(e: &Expr) -> Option<(&VReg, i64)> {
-    match e {
+    match e.semantic() {
         Expr::StackAddr { object, .. } => Some((object, 0)),
         Expr::Bin { op, lhs, rhs } => {
             let sign: i64 = match op {
@@ -192,11 +192,11 @@ fn stack_offset(e: &Expr) -> Option<(&VReg, i64)> {
                 BinOp::Sub => -1,
                 _ => return None,
             };
-            if let (Some((object, base)), Expr::Const(k)) = (stack_offset(lhs), rhs.as_ref()) {
+            if let (Some((object, base)), Expr::Const(k)) = (stack_offset(lhs), rhs.semantic()) {
                 return base.checked_add(sign.checked_mul(*k)?).map(|d| (object, d));
             }
             // `const + &obj` only commutes for addition.
-            match (lhs.as_ref(), stack_offset(rhs)) {
+            match (lhs.semantic(), stack_offset(rhs)) {
                 (Expr::Const(k), Some((object, base))) if sign == 1 => {
                     base.checked_add(*k).map(|d| (object, d))
                 }
@@ -213,10 +213,10 @@ fn stack_offset(e: &Expr) -> Option<(&VReg, i64)> {
 /// the register is unbounded here, so "inside the image" is an assumption about
 /// the index, not a proof about the address.
 fn is_image_address(e: &Expr) -> bool {
-    match e {
+    match e.semantic() {
         Expr::Addr(_) | Expr::Named { .. } => true,
         Expr::Bin { op, lhs, rhs } if matches!(op, BinOp::Add | BinOp::Sub) => {
-            match (lhs.as_ref(), rhs.as_ref()) {
+            match (lhs.semantic(), rhs.semantic()) {
                 (base, Expr::Const(_)) => is_image_address(base),
                 (Expr::Const(_), base) => matches!(op, BinOp::Add) && is_image_address(base),
                 _ => false,

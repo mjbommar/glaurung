@@ -1341,6 +1341,19 @@ mod tests {
     }
 
     #[test]
+    fn attributed_disjoint_frame_slots_still_fold_the_pending_load() {
+        let load_addr =
+            frame_slot("local_10", 8).with_origins(crate::ir::ast::OriginSet::one(0x1040));
+        let store_addr =
+            frame_slot("local_10", 0).with_origins(crate::ir::ast::OriginSet::one(0x1044));
+
+        assert!(
+            load_folds_across_store(load_addr, store_addr),
+            "provenance must not hide disjoint constant offsets"
+        );
+    }
+
+    #[test]
     fn single_use_load_not_folded_across_overlapping_frame_slot() {
         // 4 bytes at +8 and 4 bytes at +10 share two bytes.
         assert!(
