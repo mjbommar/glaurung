@@ -28,7 +28,7 @@ pub(crate) fn coalesce_loop_entry_copies(
     protected: &std::collections::HashSet<String>,
     types: &mut crate::ir::types_recover::TypeMap,
 ) {
-    coalesce_loop_entry_copies_with_identities(function, protected, types, None);
+    let _ = coalesce_loop_entry_copies_with_identities(function, protected, types, None);
 }
 
 /// As [`coalesce_loop_entry_copies`], with opaque SSA identities projected
@@ -38,16 +38,24 @@ pub(crate) fn coalesce_loop_entry_copies_with_identities(
     protected: &std::collections::HashSet<String>,
     types: &mut crate::ir::types_recover::TypeMap,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
-) {
+) -> std::collections::HashMap<VReg, VReg> {
     // Lexical nesting is not a region boundary when a goto can enter a sibling
     // body or an indirect transfer can target any surviving label. A recursive
     // local scan would otherwise rewrite the destination before seeing the
     // incoming edge. Stay fail closed until this query is backed by a real CFG
     // reaching-definitions oracle.
     if function.body.iter().any(statement_contains_goto) {
-        return;
+        return std::collections::HashMap::new();
     }
-    coalesce_body(&mut function.body, protected, types, identities);
+    let mut renames = std::collections::HashMap::new();
+    coalesce_body(
+        &mut function.body,
+        protected,
+        types,
+        identities,
+        &mut renames,
+    );
+    renames
 }
 
 /// Fold a typed machine scratch used only to install the next value of a
@@ -219,6 +227,7 @@ fn coalesce_body(
     protected: &std::collections::HashSet<String>,
     types: &mut crate::ir::types_recover::TypeMap,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
+    renames: &mut std::collections::HashMap<VReg, VReg>,
 ) {
     for statement in body.iter_mut() {
         match statement.semantic_mut() {
@@ -228,27 +237,27 @@ fn coalesce_body(
                 else_body,
                 ..
             } => {
-                coalesce_body(then_body, protected, types, identities);
+                coalesce_body(then_body, protected, types, identities, renames);
                 if let Some(else_body) = else_body {
-                    coalesce_body(else_body, protected, types, identities);
+                    coalesce_body(else_body, protected, types, identities, renames);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                coalesce_body(body, protected, types, identities)
+                coalesce_body(body, protected, types, identities, renames)
             }
-            Stmt::For { body, .. } => coalesce_body(body, protected, types, identities),
+            Stmt::For { body, .. } => coalesce_body(body, protected, types, identities, renames),
             Stmt::Switch { cases, default, .. } => {
                 for (_, case_body) in cases {
-                    coalesce_body(case_body, protected, types, identities);
+                    coalesce_body(case_body, protected, types, identities, renames);
                 }
                 if let Some(default_body) = default {
-                    coalesce_body(default_body, protected, types, identities);
+                    coalesce_body(default_body, protected, types, identities, renames);
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                coalesce_body(try_body, protected, types, identities);
+                coalesce_body(try_body, protected, types, identities, renames);
                 for catch in catches {
-                    coalesce_body(&mut catch.body, protected, types, identities);
+                    coalesce_body(&mut catch.body, protected, types, identities, renames);
                 }
             }
             _ => {}
@@ -315,8 +324,9 @@ fn coalesce_body(
             replace_statement_register(statement, &seed, &carrier);
         }
         if types.get(&carrier).is_none() {
-            types.upsert_public(carrier, seed_type);
+            types.upsert_public(carrier.clone(), seed_type);
         }
+        renames.insert(seed.clone(), carrier);
         let mut removed_origins = crate::ir::ast::OriginSet::empty();
         if let Some(origins) = body[index].origins() {
             removed_origins.merge(origins);

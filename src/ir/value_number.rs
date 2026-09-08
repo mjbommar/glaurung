@@ -116,7 +116,7 @@ impl ValueIdentities {
         projected
     }
 
-    fn apply_renames(&mut self, renames: &HashMap<VReg, VReg>) {
+    pub(crate) fn apply_renames(&mut self, renames: &HashMap<VReg, VReg>) {
         if renames.is_empty() {
             return;
         }

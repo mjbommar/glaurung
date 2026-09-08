@@ -164,6 +164,7 @@ fn decbench_text_with_installed_environment(
     cc: crate::ir::call_args::CallConv,
     addr_map: &std::collections::HashMap<u64, String>,
 ) -> String {
+    let mut value_identities = value_identities.clone();
     let output_kind = recovered_prototype.map_or(
         crate::ir::types_recover::RecoveredOutputKind::Unknown,
         crate::ir::types_recover::RecoveredPrototype::output_kind,
@@ -282,25 +283,25 @@ fn decbench_text_with_installed_environment(
                 &prepared,
                 tm,
                 exact_value_widths,
-                Some(value_identities),
+                Some(&value_identities),
             );
             crate::ir::high_variables::refine_pointer_high_variables_with_identities(
                 &prepared,
                 tm,
-                Some(value_identities),
+                Some(&value_identities),
             );
         });
     }
     if let Some(tm) = refined_decl.as_mut() {
-        pass!(
-            "coalesce_loop_entry_copies",
-            crate::ir::latch_predicate::coalesce_loop_entry_copies_with_identities(
+        pass!("coalesce_loop_entry_copies", {
+            let renames = crate::ir::latch_predicate::coalesce_loop_entry_copies_with_identities(
                 &mut prepared,
                 &protected_locals,
                 tm,
-                Some(value_identities),
-            )
-        );
+                Some(&value_identities),
+            );
+            value_identities.apply_renames(&renames);
+        });
         pass!(
             "coalesce_source_loop_updates",
             crate::ir::latch_predicate::coalesce_source_loop_updates(
@@ -318,7 +319,7 @@ fn decbench_text_with_installed_environment(
                 &prepared,
                 tm,
                 exact_value_widths,
-                Some(value_identities),
+                Some(&value_identities),
             )
         );
     }
@@ -332,7 +333,7 @@ fn decbench_text_with_installed_environment(
             crate::ir::const_fold::fold_typed_declared_views_with_identities(
                 &mut prepared,
                 tm,
-                Some(value_identities),
+                Some(&value_identities),
             )
         );
         pass!(
@@ -340,7 +341,7 @@ fn decbench_text_with_installed_environment(
             crate::ir::typed_simplify::fold_consumed_extensions_with_identities(
                 &mut prepared,
                 tm,
-                Some(value_identities),
+                Some(&value_identities),
             )
         );
         pass!(
@@ -348,7 +349,7 @@ fn decbench_text_with_installed_environment(
             crate::ir::const_fold::fold_typed_comparison_extensions_with_identities(
                 &mut prepared,
                 tm,
-                Some(value_identities),
+                Some(&value_identities),
             )
         );
         // After the typed comparison folds, so both halves of a two-comparison
@@ -415,7 +416,7 @@ fn decbench_text_with_installed_environment(
                 &mut prepared,
                 tm,
                 machine_word_bytes(cc),
-                Some(value_identities),
+                Some(&value_identities),
             )
         );
         // The subtract-and-unsigned-compare range idiom is deliberately
@@ -722,7 +723,7 @@ fn decbench_text_with_installed_environment(
             calling_convention_pointer_width(cc),
             &dwarf_pointer_types,
             &rendered_local_types,
-            Some(value_identities),
+            Some(&value_identities),
         )
     });
     if violations.is_empty() {

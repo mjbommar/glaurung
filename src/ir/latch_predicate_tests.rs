@@ -259,7 +259,7 @@ fn opaque_exact_identities_authorize_loop_entry_coalescing() {
     );
     let mut identities = crate::ir::value_number::ValueIdentities::default();
     identities.record(
-        seed,
+        seed.clone(),
         crate::ir::ssa::SsaValue {
             base: reg("rax"),
             version: 1,
@@ -273,18 +273,28 @@ fn opaque_exact_identities_authorize_loop_entry_coalescing() {
         },
     );
 
-    coalesce_loop_entry_copies_with_identities(
+    let renames = coalesce_loop_entry_copies_with_identities(
         &mut function,
         &std::collections::HashSet::new(),
         &mut types,
         Some(&identities),
     );
+    identities.apply_renames(&renames);
 
     assert_eq!(
         function.body.len(),
         3,
         "exact opaque values should coalesce"
     );
+    assert_eq!(renames.get(&seed), Some(&carrier));
+    assert!(identities.candidates(&seed).is_none());
+    assert_eq!(
+        identities
+            .candidates(&carrier)
+            .map(std::collections::BTreeSet::len),
+        Some(2)
+    );
+    assert!(identities.exact(&carrier).is_none());
     assert!(types.get(&carrier).is_some());
 }
 
@@ -323,7 +333,7 @@ fn ambiguous_opaque_identity_keeps_loop_entry_copy() {
         },
     );
 
-    coalesce_loop_entry_copies_with_identities(
+    let renames = coalesce_loop_entry_copies_with_identities(
         &mut function,
         &std::collections::HashSet::new(),
         &mut types,
@@ -331,6 +341,10 @@ fn ambiguous_opaque_identity_keeps_loop_entry_copy() {
     );
 
     assert_eq!(function, before, "ambiguous values must fail closed");
+    assert!(
+        renames.is_empty(),
+        "a refused rewrite must not move identities"
+    );
 }
 
 #[test]
