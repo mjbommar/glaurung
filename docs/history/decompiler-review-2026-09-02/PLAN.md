@@ -1403,6 +1403,12 @@ provenance through lowering.
   coalescible-role, protected-identity, and whole-function-goto refusals remain
   mandatory. Its strengthened observed-red test and all 12 latch-predicate
   tests pass; see `results/wp3-loop-entry-source-expression-origins.md`.
+  Commit `c6795d65` then closes the adjacent fail-open boundary: an attributed
+  installed next value that aliases the saved snapshot still triggers the
+  existing refusal. The negative regression was observed red when provenance
+  hid that identity and the pass incorrectly folded; it now remains byte-for-
+  byte unchanged, and all 13 latch-predicate tests pass. See
+  `results/wp3-latch-next-value-refusal.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
