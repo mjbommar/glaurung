@@ -466,7 +466,7 @@ fn write_aggregate_carrier_dec(c_type: &str, width: u8, value: &VReg, out: &mut 
 /// would change the recovered program.  Keep ordinary pointer values intact at
 /// calls and memory boundaries; cross to the integer representation only here.
 fn write_machine_arithmetic_operand_dec(expr: &Expr, out: &mut String) {
-    if let Expr::Reg(reg @ VReg::Phys(_)) = expr {
+    if let Expr::Reg(reg @ VReg::Phys(_)) = expr.semantic() {
         if declared_reg_ctype(reg).ends_with('*') {
             out.push_str("(long)");
             write_reg_lvalue_dec(reg, out);
@@ -477,7 +477,7 @@ fn write_machine_arithmetic_operand_dec(expr: &Expr, out: &mut String) {
     // operation is byte arithmetic, so cross back to an integer address before
     // adding a dynamic byte offset; otherwise C scales that offset a second
     // time (`(p + 1) + i*4` advances by `i*16` for `int *`).
-    if let Expr::Bin { op, lhs, rhs } = expr {
+    if let Expr::Bin { op, lhs, rhs } = expr.semantic() {
         if scaled_pointer_offset(*op, lhs, rhs).is_some() {
             out.push_str("(long)(");
             write_expr_dec(expr, out);
@@ -492,10 +492,10 @@ fn scaled_pointer_offset<'a>(op: BinOp, lhs: &'a Expr, rhs: &Expr) -> Option<(&'
     if !matches!(op, BinOp::Add | BinOp::Sub) {
         return None;
     }
-    let Expr::Reg(reg @ VReg::Phys(_)) = lhs else {
+    let Expr::Reg(reg @ VReg::Phys(_)) = lhs.semantic() else {
         return None;
     };
-    let displacement = match rhs {
+    let displacement = match rhs.semantic() {
         Expr::Const(displacement) => *displacement,
         // Address symbolisation can retain a small arithmetic literal as an
         // `Addr` even when it occupies the displacement side of a pointer

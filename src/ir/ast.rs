@@ -6998,11 +6998,16 @@ function f @ 0x1000 {
                 dst: VReg::phys("result"),
                 src: Expr::Bin {
                     op: BinOp::Add,
-                    lhs: Box::new(Expr::Bin {
-                        op: BinOp::Add,
-                        lhs: Box::new(Expr::Reg(VReg::phys("p"))),
-                        rhs: Box::new(Expr::Const(8)),
-                    }),
+                    lhs: Box::new(
+                        Expr::Bin {
+                            op: BinOp::Add,
+                            lhs: Box::new(
+                                Expr::Reg(VReg::phys("p")).with_origins(OriginSet::one(0x1000)),
+                            ),
+                            rhs: Box::new(Expr::Const(8).with_origins(OriginSet::one(0x1004))),
+                        }
+                        .with_origins(OriginSet::one(0x1008)),
+                    ),
                     rhs: Box::new(Expr::Bin {
                         op: BinOp::Mul,
                         lhs: Box::new(Expr::Reg(VReg::phys("i"))),
