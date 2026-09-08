@@ -511,6 +511,13 @@ new positive/negative contracts and the existing origin, signed-use, and
 wide-comparison boundaries, with 4,414 unrelated tests filtered out. See
 `results/wp3-unsigned-literal-identities.md`.
 
+Follow-up `f889e200` removes the neighboring `varN` fallback from the
+wide-signed comparison-domain proof. It now consults the authoritative rendered
+integer declaration, allowing an opaque machine-word bound without duplicating
+name syntax. The observed-red opaque-bound case and three adjacent refusal and
+legacy contracts pass exactly, with 4,415 unrelated tests filtered out. See the
+follow-up in `results/wp3-unsigned-literal-identities.md`.
+
 ## Authority and relationship to the roadmaps
 
 `docs/development/roadmap/README.md` remains the canonical roadmap index, and
