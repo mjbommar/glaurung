@@ -263,9 +263,22 @@ pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
 /// declaration as a machine-register zero-extension. Mismatched signedness or
 /// width is left untouched as well.
 pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
-    fn expression(expr: &mut Expr, tm: &TypeMap) {
+    fold_typed_declared_views_with_identities(f, tm, None);
+}
+
+/// Remove redundant declared views using exact opaque SSA identities.
+pub fn fold_typed_declared_views_with_identities(
+    f: &mut Function,
+    tm: &TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
+    fn expression(
+        expr: &mut Expr,
+        tm: &TypeMap,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) {
         if let Expr::Origin { origins, expr } = expr {
-            expression(expr, tm);
+            expression(expr, tm, identities);
             if matches!(expr.as_ref(), Expr::Origin { .. }) {
                 let nested = std::mem::replace(expr.as_mut(), Expr::Unknown(String::new()));
                 let (semantic, nested_origins) = nested.into_semantic_with_origins();
@@ -278,33 +291,35 @@ pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
         }
         match expr {
             Expr::Origin { .. } => unreachable!("origin carrier returned above"),
-            Expr::Deref { addr, .. } => expression(addr, tm),
+            Expr::Deref { addr, .. } => expression(addr, tm, identities),
             Expr::Call { target, args, .. } => {
-                expression(target, tm);
+                expression(target, tm, identities);
                 for argument in args {
-                    expression(argument, tm);
+                    expression(argument, tm, identities);
                 }
             }
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-                expression(lhs, tm);
-                expression(rhs, tm);
+                expression(lhs, tm, identities);
+                expression(rhs, tm, identities);
             }
-            Expr::Un { src, .. } => expression(src, tm),
+            Expr::Un { src, .. } => expression(src, tm, identities),
             Expr::Select {
                 cond,
                 if_true,
                 if_false,
                 ..
             } => {
-                expression(cond, tm);
-                expression(if_true, tm);
-                expression(if_false, tm);
+                expression(cond, tm, identities);
+                expression(if_true, tm, identities);
+                expression(if_false, tm, identities);
             }
-            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => expression(expr, tm),
-            Expr::FunctionTableEntry { index, .. } => expression(index, tm),
+            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+                expression(expr, tm, identities)
+            }
+            Expr::FunctionTableEntry { index, .. } => expression(index, tm, identities),
             Expr::WideArithmetic { args, .. } => {
                 for argument in args {
-                    expression(argument, tm);
+                    expression(argument, tm, identities);
                 }
             }
             Expr::Reg(_)
@@ -319,78 +334,80 @@ pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
             | Expr::Unknown(_) => {}
         }
 
-        let replacement = match expr {
-            Expr::Cast {
-                signed: outer_signed,
-                width: outer_width,
-                expr: inner,
-            } => match inner.semantic() {
+        let replacement =
+            match expr {
                 Expr::Cast {
-                    signed: inner_signed,
-                    width: inner_width,
-                    expr: source,
-                } if inner_width < outer_width && !*outer_signed && !*inner_signed => {
-                    match source.semantic() {
-                        Expr::Reg(crate::ir::types::VReg::Phys(name))
-                            if crate::ir::ast::declared_int_type(name, Some(tm))
-                                == Some((*inner_signed, *inner_width)) =>
-                        {
-                            let origins = inner
-                                .origins()
-                                .into_iter()
-                                .chain(source.origins())
-                                .fold(
-                                    crate::ir::ast::OriginSet::empty(),
-                                    |owners, next| owners.union(next),
-                                );
-                            Some(
-                                source
-                                    .semantic()
-                                    .clone()
-                                    .with_optional_origins(
-                                        (!origins.is_empty()).then_some(origins),
-                                    ),
-                            )
+                    signed: outer_signed,
+                    width: outer_width,
+                    expr: inner,
+                } => match inner.semantic() {
+                    Expr::Cast {
+                        signed: inner_signed,
+                        width: inner_width,
+                        expr: source,
+                    } if inner_width < outer_width && !*outer_signed && !*inner_signed => {
+                        match source.semantic() {
+                            Expr::Reg(crate::ir::types::VReg::Phys(name))
+                                if crate::ir::ast::declared_int_type_with_identities(
+                                    name,
+                                    Some(tm),
+                                    identities,
+                                ) == Some((*inner_signed, *inner_width)) =>
+                            {
+                                let origins =
+                                    inner.origins().into_iter().chain(source.origins()).fold(
+                                        crate::ir::ast::OriginSet::empty(),
+                                        |owners, next| owners.union(next),
+                                    );
+                                Some(source.semantic().clone().with_optional_origins(
+                                    (!origins.is_empty()).then_some(origins),
+                                ))
+                            }
+                            _ => None,
                         }
-                        _ => None,
                     }
-                }
+                    _ => None,
+                },
                 _ => None,
-            },
-            _ => None,
-        };
+            };
         if let Some(replacement) = replacement {
             *expr = replacement;
         }
     }
 
-    fn body(statements: &mut [Stmt], tm: &TypeMap) {
+    fn body(
+        statements: &mut [Stmt],
+        tm: &TypeMap,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) {
         for statement in statements {
             match statement {
-                Stmt::Origin { stmt, .. } => body(std::slice::from_mut(stmt.as_mut()), tm),
-                Stmt::Assign { src, .. } => expression(src, tm),
+                Stmt::Origin { stmt, .. } => {
+                    body(std::slice::from_mut(stmt.as_mut()), tm, identities)
+                }
+                Stmt::Assign { src, .. } => expression(src, tm, identities),
                 Stmt::Store { addr, src, .. } => {
-                    expression(addr, tm);
-                    expression(src, tm);
+                    expression(addr, tm, identities);
+                    expression(src, tm, identities);
                 }
                 Stmt::Call { target, args, .. } => {
-                    expression(target, tm);
+                    expression(target, tm, identities);
                     for arg in args {
-                        expression(arg, tm);
+                        expression(arg, tm, identities);
                     }
                 }
                 Stmt::IndirectGoto { target } | Stmt::Push { value: target } => {
-                    expression(target, tm);
+                    expression(target, tm, identities);
                 }
                 Stmt::If {
                     cond,
                     then_body,
                     else_body,
                 } => {
-                    expression(cond, tm);
-                    body(then_body, tm);
+                    expression(cond, tm, identities);
+                    body(then_body, tm, identities);
                     if let Some(else_body) = else_body {
-                        body(else_body, tm);
+                        body(else_body, tm, identities);
                     }
                 }
                 Stmt::While {
@@ -401,8 +418,8 @@ pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
                     cond,
                     body: loop_body,
                 } => {
-                    expression(cond, tm);
-                    body(loop_body, tm);
+                    expression(cond, tm, identities);
+                    body(loop_body, tm, identities);
                 }
                 Stmt::For {
                     init,
@@ -410,22 +427,22 @@ pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
                     step,
                     body: loop_body,
                 } => {
-                    body(std::slice::from_mut(init.as_mut()), tm);
-                    expression(cond, tm);
-                    body(std::slice::from_mut(step.as_mut()), tm);
-                    body(loop_body, tm);
+                    body(std::slice::from_mut(init.as_mut()), tm, identities);
+                    expression(cond, tm, identities);
+                    body(std::slice::from_mut(step.as_mut()), tm, identities);
+                    body(loop_body, tm, identities);
                 }
                 Stmt::Switch {
                     discriminant,
                     cases,
                     default,
                 } => {
-                    expression(discriminant, tm);
+                    expression(discriminant, tm, identities);
                     for (_, case_body) in cases {
-                        body(case_body, tm);
+                        body(case_body, tm, identities);
                     }
                     if let Some(default) = default {
-                        body(default, tm);
+                        body(default, tm, identities);
                     }
                 }
                 // A root return extension also carries the source-level return
@@ -447,7 +464,7 @@ pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
         }
     }
 
-    body(&mut f.body, tm);
+    body(&mut f.body, tm, identities);
 }
 
 fn fold_body(body: &mut [Stmt], changed: &mut bool) {
@@ -1010,11 +1027,7 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
                 _ => None,
             };
             if let Some((replacement, mask_origins)) = masked {
-                rewrite(
-                    e,
-                    replacement.with_optional_origins(mask_origins),
-                    changed,
-                );
+                rewrite(e, replacement.with_optional_origins(mask_origins), changed);
                 // The replacement is strictly shallower (one merge or mask
                 // layer disappeared), so finish any newly adjacent identity.
                 fold_expr(e, changed);
@@ -1040,8 +1053,7 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
             if let Some(replacement) = replacement {
                 rewrite(
                     e,
-                    replacement
-                        .with_optional_origins((!origins.is_empty()).then_some(origins)),
+                    replacement.with_optional_origins((!origins.is_empty()).then_some(origins)),
                     changed,
                 );
                 return;
@@ -1230,8 +1242,7 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
                 });
             rewrite(
                 e,
-                Expr::Const(folded)
-                    .with_optional_origins((!origins.is_empty()).then_some(origins)),
+                Expr::Const(folded).with_optional_origins((!origins.is_empty()).then_some(origins)),
                 changed,
             );
         }
@@ -1241,9 +1252,7 @@ fn fold_expr_at(e: &mut Expr, shift_left_operand: bool, changed: &mut bool) {
     // negation, not a bitwise operation; invert it into the corresponding
     // relation so it remains readable and type-correct.
     if let Expr::Cmp { op, lhs, rhs } = e {
-        if let (Expr::Const(lhs_value), Expr::Const(rhs_value)) =
-            (lhs.semantic(), rhs.semantic())
-        {
+        if let (Expr::Const(lhs_value), Expr::Const(rhs_value)) = (lhs.semantic(), rhs.semantic()) {
             let value = match op {
                 CmpOp::Eq => lhs_value == rhs_value,
                 CmpOp::Ne => lhs_value != rhs_value,
@@ -2825,10 +2834,7 @@ mod tests {
         let less_constant_owner = crate::ir::ast::OriginSet::one(0x1018);
         let equality_value_owner = crate::ir::ast::OriginSet::one(0x101c);
         let less_value_owner = crate::ir::ast::OriginSet::one(0x1020);
-        let signed_value = view(
-            true,
-            value.clone().with_origins(less_value_owner.clone()),
-        );
+        let signed_value = view(true, value.clone().with_origins(less_value_owner.clone()));
         let relation = bin(
             BinOp::Or,
             Expr::Cmp {
@@ -2837,9 +2843,7 @@ mod tests {
                     false,
                     value.with_origins(equality_value_owner.clone()),
                 )),
-                rhs: Box::new(
-                    Expr::Const(100).with_origins(equality_constant_owner.clone()),
-                ),
+                rhs: Box::new(Expr::Const(100).with_origins(equality_constant_owner.clone())),
             }
             .with_origins(equality_owner.clone()),
             Expr::Cmp {
@@ -3345,6 +3349,87 @@ mod tests {
     }
 
     #[test]
+    fn exact_opaque_identity_removes_its_redundant_unsigned_view() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let value = reg("opaque_value");
+        let mut function = one_stmt(Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: false,
+                width: 4,
+                expr: Box::new(Expr::Reg(value.clone())),
+            }),
+        });
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            value.clone(),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            value.clone(),
+            crate::ir::ssa::SsaValue {
+                base: reg("eax"),
+                version: 1,
+            },
+        );
+
+        fold_typed_declared_views_with_identities(&mut function, &types, Some(&identities));
+
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Assign { src: Expr::Reg(source), .. } if source == &value
+        ));
+    }
+
+    #[test]
+    fn ambiguous_opaque_identity_keeps_its_unsigned_view() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let value = reg("opaque_value");
+        let view = Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: Box::new(Expr::Cast {
+                signed: false,
+                width: 4,
+                expr: Box::new(Expr::Reg(value.clone())),
+            }),
+        };
+        let mut function = one_stmt(view.clone());
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            value.clone(),
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        );
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for (base, version) in [("eax", 1), ("ebx", 2)] {
+            identities.record(
+                value.clone(),
+                crate::ir::ssa::SsaValue {
+                    base: reg(base),
+                    version,
+                },
+            );
+        }
+
+        fold_typed_declared_views_with_identities(&mut function, &types, Some(&identities));
+
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Assign { src, .. } if src == &view
+        ));
+    }
+
+    #[test]
     fn attributed_typed_register_view_unions_both_cast_and_source_origins() {
         use crate::ir::types_recover::{TypeHint, TypeMap};
 
@@ -3359,9 +3444,7 @@ mod tests {
                     Expr::Cast {
                         signed: false,
                         width: 4,
-                        expr: Box::new(
-                            Expr::Reg(reg("arg0")).with_origins(source_owner.clone()),
-                        ),
+                        expr: Box::new(Expr::Reg(reg("arg0")).with_origins(source_owner.clone())),
                     }
                     .with_origins(inner_owner.clone()),
                 ),
@@ -3739,9 +3822,7 @@ mod tests {
                 src: Expr::Cast {
                     signed: false,
                     width: 4,
-                    expr: Box::new(
-                        Expr::Reg(reg("value")).with_origins(value_owner.clone()),
-                    ),
+                    expr: Box::new(Expr::Reg(reg("value")).with_origins(value_owner.clone())),
                 }
                 .with_origins(cast_owner.clone()),
                 size: 1,

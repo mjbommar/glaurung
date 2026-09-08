@@ -329,7 +329,11 @@ fn decbench_text_with_installed_environment(
         );
         pass!(
             "fold_typed_declared_views",
-            crate::ir::const_fold::fold_typed_declared_views(&mut prepared, tm)
+            crate::ir::const_fold::fold_typed_declared_views_with_identities(
+                &mut prepared,
+                tm,
+                Some(value_identities),
+            )
         );
         pass!(
             "fold_consumed_extensions",

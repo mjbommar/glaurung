@@ -31,8 +31,20 @@ use super::{
 /// unless the prepared high-variable proof classifies them as pointers. Other
 /// raw machine registers and temps are also declared `long`.
 pub(crate) fn declared_int_type(ident: &str, tm: Option<&TypeMap>) -> Option<(bool, u8)> {
-    if is_high_variable(ident) {
-        return match tm.and_then(|types| types.get(&VReg::Phys(ident.to_string()))) {
+    declared_int_type_with_identities(ident, tm, None)
+}
+
+/// The declared integer type, recognizing exact opaque SSA identities.
+pub(crate) fn declared_int_type_with_identities(
+    ident: &str,
+    tm: Option<&TypeMap>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<(bool, u8)> {
+    let value = VReg::Phys(ident.to_string());
+    if is_high_variable(ident)
+        || identities.is_some_and(|identities| identities.exact(&value).is_some())
+    {
+        return match tm.and_then(|types| types.get(&value)) {
             Some(TypeHint::Int { signed, width }) => Some((signed, width)),
             Some(TypeHint::Pointer { .. } | TypeHint::CodePointer | TypeHint::Float { .. }) => None,
             _ => Some((true, 8)),
@@ -42,7 +54,7 @@ pub(crate) fn declared_int_type(ident: &str, tm: Option<&TypeMap>) -> Option<(bo
         // Declared `long`: already machine-wide, never narrowed.
         return Some((true, 8));
     }
-    match tm?.get(&VReg::Phys(ident.to_string()))? {
+    match tm?.get(&value)? {
         TypeHint::Int { signed, width } => Some((signed, width)),
         _ => None,
     }
