@@ -126,7 +126,15 @@ pub(super) fn subst(e: &mut Expr, copies: &Copies) -> bool {
         return true;
     }
     match e {
-        Expr::Origin { expr, .. } => subst(expr, copies),
+        Expr::Origin { expr, .. } => {
+            let changed = subst(expr, copies);
+            if changed {
+                let attributed = std::mem::replace(e, Expr::Unknown(String::new()));
+                let (semantic, origins) = attributed.into_semantic_with_origins();
+                *e = semantic.with_optional_origins(origins);
+            }
+            changed
+        }
         Expr::Reg(r) => {
             if let Some(src) = copies.get(r) {
                 *e = src.clone();

@@ -462,6 +462,34 @@ mod tests {
     }
 
     #[test]
+    fn substitution_unions_attributed_use_and_definition() {
+        let destination = reg("var0");
+        let definition_owner = OriginSet::one(0x1000);
+        let use_owner = OriginSet::one(0x1004);
+        let copies = Copies::single(
+            destination.clone(),
+            Expr::Const(7).with_origins(definition_owner.clone()),
+        );
+        let mut use_expression = Expr::Reg(destination).with_origins(use_owner.clone());
+
+        assert!(subst(&mut use_expression, &copies));
+
+        assert!(matches!(use_expression.semantic(), Expr::Const(7)));
+        assert_eq!(
+            use_expression.origins(),
+            Some(&definition_owner.union(&use_owner)),
+            "the replacement must have one canonical carrier for both contributors"
+        );
+        let Expr::Origin { expr, .. } = &use_expression else {
+            panic!("expected one ownership carrier: {use_expression:#?}")
+        };
+        assert!(
+            !matches!(expr.as_ref(), Expr::Origin { .. }),
+            "copy substitution must not create nested origin carriers"
+        );
+    }
+
+    #[test]
     fn an_unobserved_call_expression_remains_an_effect_root() {
         let mut function = Function {
             name: "effectful_call_result".into(),
