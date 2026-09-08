@@ -1865,6 +1865,12 @@ provenance through lowering.
   untouched. The strengthened exact regression, all 143 owning tests, and the
   single Clang O0 `call_into_spill` canary pass. See
   `results/wp3-bare-call-result-identities.md`.
+  Commit `094c1055` then migrates the SysV SSE-pair forwarding proof's
+  intervening-clobber classification. Opaque exact `xmm0:xmm1` or lane storage
+  blocks forwarding, while misleading `xmm1#version` text mapped to integer
+  storage does not. The exact regression, all 144 owning tests, and only the
+  Clang O2 `complex_multiply` fixture pass. See
+  `results/wp3-sse-pair-clobber-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
