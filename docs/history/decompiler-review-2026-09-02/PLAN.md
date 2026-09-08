@@ -1674,6 +1674,13 @@ provenance through lowering.
   regression, all 127 call-argument tests, and the compiled GCC-O2 transitive
   callee-contract fixture pass; see
   `results/wp3-recovered-call-spill-identities.md`.
+  Commit `84c33d9e` next migrates promoted-store classification in typed
+  consumed-extension cleanup and its shared declared-width query. Opaque owned
+  stack objects now retain their narrow integer declaration and lose redundant
+  machine-parent casts, while deceptive `local_*` spelling without ownership
+  fails closed. The two observed-red contracts, both owning five-test modules,
+  a narrow-local fixture lane, and the four-cell x86-64/AArch64 Hello canary
+  pass; see `results/wp3-promoted-store-type-identities.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
