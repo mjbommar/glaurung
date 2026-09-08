@@ -1230,7 +1230,8 @@ fn for_candidate(init: &Stmt, loop_stmt: &Stmt) -> Option<Stmt> {
         return None;
     };
 
-    let (loop_cond, loop_body) = if matches!(cond, Expr::Const(1)) {
+    let (loop_cond, loop_body, consumed_cond_origins) = if matches!(cond.semantic(), Expr::Const(1))
+    {
         let Stmt::If {
             cond: exit_cond,
             then_body,
@@ -1243,9 +1244,14 @@ fn for_candidate(init: &Stmt, loop_stmt: &Stmt) -> Option<Stmt> {
         {
             return None;
         }
-        (negate_cmp_expr(exit_cond.clone()), &body[1..])
+        let (exit_cond, exit_origins) = exit_cond.clone().into_semantic_with_origins();
+        (
+            negate_cmp_expr(exit_cond).with_optional_origins(exit_origins),
+            &body[1..],
+            cond.origins().cloned(),
+        )
     } else {
-        (cond.clone(), body.as_slice())
+        (cond.clone(), body.as_slice(), None)
     };
 
     let (step, core_body) = loop_body.split_last()?;
@@ -1258,11 +1264,17 @@ fn for_candidate(init: &Stmt, loop_stmt: &Stmt) -> Option<Stmt> {
         return None;
     }
 
-    let origins = match (init.origins(), loop_stmt.origins()) {
+    let mut origins = match (init.origins(), loop_stmt.origins()) {
         (Some(left), Some(right)) => Some(left.union(right)),
         (Some(origins), None) | (None, Some(origins)) => Some(origins.clone()),
         (None, None) => None,
     };
+    if let Some(consumed) = consumed_cond_origins {
+        match &mut origins {
+            Some(origins) => origins.merge(&consumed),
+            None => origins = Some(consumed),
+        }
+    }
     Some(
         Stmt::For {
             init: Box::new(init.clone()),
@@ -2492,14 +2504,15 @@ mod tests {
             body: vec![
                 init.clone(),
                 Stmt::While {
-                    cond: Expr::Const(1),
+                    cond: Expr::Const(1).with_origins(OriginSet::one(0x1000)),
                     body: vec![
                         Stmt::If {
                             cond: Expr::Cmp {
                                 op: CmpOp::Sle,
                                 lhs: Box::new(Expr::Reg(reg("n"))),
                                 rhs: Box::new(Expr::Reg(induction.clone())),
-                            },
+                            }
+                            .with_origins(OriginSet::one(0x1004)),
                             then_body: vec![Stmt::Break],
                             else_body: None,
                         },
@@ -2520,10 +2533,12 @@ mod tests {
                     op: CmpOp::Slt,
                     lhs: Box::new(Expr::Reg(induction)),
                     rhs: Box::new(Expr::Reg(reg("n"))),
-                },
+                }
+                .with_origins(OriginSet::one(0x1004)),
                 step: Box::new(step),
                 body: vec![work],
-            }]
+            }
+            .with_origins(OriginSet::one(0x1000))]
         );
     }
 
