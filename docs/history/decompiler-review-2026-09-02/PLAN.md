@@ -1117,6 +1117,13 @@ provenance through lowering.
   store union. Its observed-red test, all 11 stack-idiom tests, and four exact
   release-built flag-roundtrip cells pass; see
   `results/wp3-stack-idiom-expression-origins.md`.
+  Commit `97aef0c3` then begins the bounded constant-fold migration. Inclusive
+  comparison recovery now sees attributed equality and strict-less children
+  and places their deterministic origin union on the surviving `<=`
+  comparison, without weakening operand, signedness, or relation checks. Its
+  observed-red test and all 59 constant-fold tests pass, including the
+  module's checked-in real-binary end-to-end canary; see
+  `results/wp3-inclusive-comparison-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
