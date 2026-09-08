@@ -476,6 +476,15 @@ widening and origin-union regressions; all pass with 4,405 unrelated tests
 filtered out. The adjacent typed-comparison and contextual-widening consumers
 remain open. See `results/wp3-typed-view-identities.md`.
 
+Commit `49a78f31` applies the same exact-or-ambiguous identity contract to
+signed relational-comparison extension cleanup. Both opaque operands must have
+one exact identity and matching recovered declarations before their machine
+extensions disappear; ambiguity on either side preserves both extensions.
+Five exact tests cover the positive and negative contracts, legacy arguments,
+origin unions, and equality behavior, with 4,407 unrelated tests filtered out.
+Contextual widening and typed consumed-extension cleanup remain open. See
+`results/wp3-typed-comparison-identities.md`.
+
 ## Authority and relationship to the roadmaps
 
 `docs/development/roadmap/README.md` remains the canonical roadmap index, and
