@@ -318,8 +318,8 @@ fn propagate_run_counted(stmts: &mut [Stmt], reads: &RegMap<usize>, changed: &mu
                             // materialize a full-width temporary and preserve
                             // load-before-store ordering across sibling XMM
                             // moves.
-                            && !matches!(src, Expr::Deref { size: 16, .. })
-                            && !matches!(src, Expr::Unknown(_)));
+                            && !matches!(src.semantic(), Expr::Deref { size: 16, .. })
+                            && !matches!(src.semantic(), Expr::Unknown(_)));
                     if record {
                         copies.insert(dst.clone(), src.clone());
                     }
@@ -628,6 +628,42 @@ mod tests {
             matches!(value.semantic(), Expr::Reg(register) if register == &snapshot),
             "the pre-store snapshot must not become the post-store local: {value:#?}"
         );
+    }
+
+    #[test]
+    fn attributed_wide_load_is_not_scalarized_at_its_single_use() {
+        let loaded = reg("var0");
+        let wide_load = Expr::Deref {
+            addr: Box::new(Expr::Reg(reg("arg0"))),
+            size: 16,
+        }
+        .with_origins(crate::ir::ast::OriginSet::one(0x1020));
+        let mut function = Function {
+            name: "wide_load".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: loaded.clone(),
+                    src: wide_load.clone(),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(loaded.clone())),
+                },
+            ],
+        };
+
+        propagate_copies(&mut function);
+
+        assert_eq!(function.body.len(), 2, "the wide definition must remain");
+        assert!(matches!(
+            function.body[0].semantic(),
+            Stmt::Assign { dst, src } if dst == &loaded && src == &wide_load
+        ));
+        assert!(matches!(
+            function.body[1].semantic(),
+            Stmt::Return { value: Some(value) }
+                if matches!(value.semantic(), Expr::Reg(register) if register == &loaded)
+        ));
     }
 
     #[test]
