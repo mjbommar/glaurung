@@ -1479,6 +1479,12 @@ provenance through lowering.
   normalization occurs only after a real substitution, preserving exact change
   reporting. Its observed-red test and all 61 copy-propagation tests pass; see
   `results/wp3-copy-substitution-origin-union.md`.
+  Commit `129a5277` then makes the adjacent effectful-value mover recognize an
+  attributed direct register use. A one-use call temporary still disappears,
+  the call remains evaluated exactly once, and its expression receives the
+  canonical definition/use owner union while all prior adjacency and sequencing
+  refusals remain. Its observed-red test and all 21 adjacent-copy tests pass;
+  see `results/wp3-copy-effectful-use-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
