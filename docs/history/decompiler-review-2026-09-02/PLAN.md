@@ -1287,6 +1287,12 @@ provenance through lowering.
   domain, exhaustiveness, width, one-use, or control-flow proofs. Its observed-
   red test and all 18 guarded-switch tests pass; see
   `results/wp3-guarded-switch-expression-origins.md`.
+  Commit `7ff9bdc2` closes the adjacent speculation proof: attributed total
+  register/constant/cast copies remain safe to hoist between a terminating
+  guard and exhaustive switch, while loads, calls, arithmetic, memory effects,
+  and guard dependencies remain refused. Its observed-red test and all 18
+  guarded-switch tests pass; see
+  `results/wp3-guarded-copy-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
