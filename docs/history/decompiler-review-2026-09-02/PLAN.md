@@ -1149,6 +1149,11 @@ provenance through lowering.
   parameter refusal remains unchanged. Its observed-red test and all 63
   constant-fold tests pass; see
   `results/wp3-parameter-load-expression-origins.md`.
+  Commit `3b1f34ca` then makes repeated-condition select collapse compare
+  semantic predicates through their carriers and preserves the removed inner
+  select/condition owner union while excluding the unreachable prior value.
+  Its observed-red test and all 64 constant-fold tests pass; see
+  `results/wp3-repeated-select-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
