@@ -1383,6 +1383,13 @@ provenance through lowering.
   unit-step, and iterator-bypass proofs remain mandatory. Its strengthened
   observed-red test and all 30 loop-form tests pass; see
   `results/wp3-loop-store-target-origins.md`.
+  Commit `ab046385` moves the audit to final latch-predicate folding. An
+  attributed predicate register and saved-value copy remain recognizable; the
+  replacement predicate keeps its expression owner and receives the consumed
+  latch-condition owner. Single-snapshot, exact-update, straight-line, and
+  no-intervening-write proofs remain mandatory. Its strengthened observed-red
+  test and all 12 latch-predicate tests pass; see
+  `results/wp3-latch-predicate-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
