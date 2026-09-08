@@ -1865,6 +1865,14 @@ provenance through lowering.
   argument and passes afterward; the exact ARM mixed hard-float
   compile/decompile/recompile/execute round trip also passes after a release
   rebuild. See `results/wp3-integer-call-expression-origin-rendering.md`.
+  Commit `0cd9dcaf` begins the destination-side typed-render audit. Origin
+  carriers around a pointer-width transport cast and its declared pointer value
+  no longer turn a direct pointer return into an integer round trip. Same-type
+  returns recover `return arg0;`; an incompatible destination still recovers
+  `return (int *)arg0;`. The strengthened contract was observed red, both
+  pointer cases pass afterward, and the exact nullable-locale compile/runtime
+  round trip remains green after a release rebuild. See
+  `results/wp3-pointer-destination-expression-origin-rendering.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
