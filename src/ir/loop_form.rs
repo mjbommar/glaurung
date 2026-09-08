@@ -307,12 +307,25 @@ fn recover_guarded_do_while_body(body: &mut Vec<Stmt>) {
 
     let mut start = 0;
     while start < body.len() {
-        let Some((do_index, return_index, current, sentinel, result_origins)) =
-            guarded_do_while_candidate(body, start)
+        let Some((
+            do_index,
+            return_index,
+            seed_index,
+            current,
+            sentinel,
+            seed_origins,
+            result_origins,
+        )) = guarded_do_while_candidate(body, start)
         else {
             start += 1;
             continue;
         };
+        if let Some(seed_origins) = seed_origins {
+            let Stmt::Assign { src, .. } = body[seed_index].semantic_mut() else {
+                unreachable!("guarded do-while candidate points at its current seed")
+            };
+            src.merge_origins(&seed_origins);
+        }
         let (loop_statement, loop_origins) = body.remove(do_index).into_semantic_with_origins();
         let Stmt::DoWhile {
             body: loop_body, ..
@@ -449,8 +462,10 @@ fn guarded_do_while_candidate(
 ) -> Option<(
     usize,
     usize,
+    usize,
     VReg,
     Expr,
+    Option<crate::ir::ast::OriginSet>,
     Option<crate::ir::ast::OriginSet>,
 )> {
     let Stmt::If {
@@ -511,19 +526,20 @@ fn guarded_do_while_candidate(
         return None;
     };
     let pre_loop = &body[start + 1..cursor];
-    let current_seed = pre_loop
+    let (current_seed_index, current_seed) = pre_loop
         .iter()
+        .enumerate()
         .rev()
-        .find_map(|statement| match statement.semantic() {
-            Stmt::Assign { dst, src } if dst == current => Some(src),
+        .find_map(|(index, statement)| match statement.semantic() {
+            Stmt::Assign { dst, src } if dst == current => Some((start + 1 + index, src)),
             _ => None,
-        });
+        })?;
     let mut result_inputs = Vec::new();
     if let Some(result) = guard_result {
         collect_expr_regs(result, &mut result_inputs);
     }
     if reg_through_casts(carried_latch) != Some(latch)
-        || current_seed != Some(initial)
+        || current_seed.semantic() != initial.semantic()
         || pre_loop.iter().any(|statement| {
             result_inputs
                 .iter()
@@ -555,10 +571,12 @@ fn guarded_do_while_candidate(
     Some((
         cursor,
         return_index,
+        current_seed_index,
         current.clone(),
         sentinel
             .clone()
             .with_optional_origins(latch_sentinel.origins().cloned()),
+        initial.origins().cloned(),
         guard_result
             .as_ref()
             .and_then(|result| result.origins())
@@ -1807,7 +1825,9 @@ mod tests {
                 Stmt::If {
                     cond: Expr::Cmp {
                         op: CmpOp::Eq,
-                        lhs: Box::new(Expr::Reg(reg("arg0"))),
+                        lhs: Box::new(
+                            Expr::Reg(reg("arg0")).with_origins(OriginSet::one(0x1010)),
+                        ),
                         rhs: Box::new(entry_sentinel),
                     },
                     then_body: vec![Stmt::Return {
@@ -1820,7 +1840,7 @@ mod tests {
                 Stmt::Nop,
                 Stmt::Assign {
                     dst: reg("current"),
-                    src: Expr::Reg(reg("arg0")),
+                    src: Expr::Reg(reg("arg0")).with_origins(OriginSet::one(0x1014)),
                 },
                 Stmt::DoWhile {
                     body: vec![
@@ -1893,6 +1913,15 @@ mod tests {
         assert_eq!(
             result.origins(),
             Some(&OriginSet::from_addresses([0x1008, 0x100c]))
+        );
+        let Stmt::Assign { dst, src } = &function.body[2] else {
+            panic!("expected surviving current seed: {:#?}", function.body)
+        };
+        assert_eq!(dst, &reg("current"));
+        assert_eq!(src.semantic(), &Expr::Reg(reg("arg0")));
+        assert_eq!(
+            src.origins(),
+            Some(&OriginSet::from_addresses([0x1010, 0x1014]))
         );
     }
 
