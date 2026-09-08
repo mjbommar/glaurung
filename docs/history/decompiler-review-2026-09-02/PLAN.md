@@ -456,6 +456,14 @@ identity contracts, seven adjacent ABI tests, and the two legacy wide/narrow
 boundaries pass. The validation executed 11 relevant tests and filtered out
 the rest. See `results/wp3-abi-width-identities.md`.
 
+Commit `48cf15a0` carries those identities through the pipeline-owned render
+entry point into the immutable declaration plan. An exact opaque role now
+receives its recovered local declaration without depending on `varN` spelling;
+an ambiguous role remains the conservative machine-word `long`. Compatibility
+render APIs still pass no sidecar, and existing source-local/legacy behavior is
+unchanged. Four focused declaration contracts and two adjacent legacy render
+contracts pass. See `results/wp3-declaration-identities.md`.
+
 ## Authority and relationship to the roadmaps
 
 `docs/development/roadmap/README.md` remains the canonical roadmap index, and
