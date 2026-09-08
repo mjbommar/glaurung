@@ -1998,6 +1998,16 @@ provenance through lowering.
   corpus ran. Uses without definition-width evidence still depend on raw
   operand views, so this does not yet make `tag_phys` removable. See
   `results/wp3-exact-typed-local-widths.md`.
+  Commit `c591c7e5` also moves unread promoted-stack-object cleanup onto
+  producer-owned identities. Stack promotion publishes the exact objects it
+  minted through `ValueIdentities`; the production cleanup no longer decides
+  that a value is stack storage because its rendered name begins with
+  `local_` or `stack_`. Missing ownership now fails closed, while the explicit
+  no-sidecar compatibility entry point retains the legacy spelling rule. Both
+  adversarial exact tests, all 18 owning direct-output tests, and one real
+  Clang O0 executable `main` pass after a fresh extension rebuild. No broad
+  suite or corpus ran. See
+  `results/wp3-promoted-stack-object-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and

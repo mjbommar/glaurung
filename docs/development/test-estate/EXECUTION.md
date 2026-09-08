@@ -486,6 +486,21 @@ now pass, and `95_function_pointer_table:gcc:O0:dispatch_operation` is green
 after a fresh native rebuild. No broad suite ran. Full commands and limits are in
 `docs/history/decompiler-review-2026-09-02/results/wp3-function-table-definition-identities.md`.
 
+## Promoted stack-object identities
+
+Commit `c591c7e5` makes stack promotion publish every object it minted through
+the pipeline-owned `ValueIdentities` sidecar. Production cleanup of unread
+stack bookkeeping now consumes that typed ownership instead of parsing
+`local_` or `stack_` display spelling; the no-sidecar compatibility wrapper is
+unchanged.
+
+Focused evidence: the two exact positive/adversarial tests and all 18
+`ir::direct_output::tests` pass. The regenerated census records 5,127 declared
+Rust tests and zero outside every gate; all six census checks pass after the
+commit. A fresh debug extension passes `tools/build_guard.py`, and a real
+Clang O0 executable built from `link_configuration_shapes.c` renders `main`
+without an invented return-slot local. No broad suite or corpus ran.
+
 ## Ground rules
 
 Verified before any claim of done: `cargo test --features python-ext`,
