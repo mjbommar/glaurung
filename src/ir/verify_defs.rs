@@ -166,6 +166,12 @@ fn checked_name(v: &VReg) -> Option<String> {
 /// value lands there), so `foo(); return ret;` is not a use before definition.
 const RETURN_ROLE: &str = "ret";
 
+#[derive(Clone, Copy)]
+struct VerificationAuthority<'a> {
+    call_defines_return_role: bool,
+    identities: Option<&'a crate::ir::value_number::ValueIdentities>,
+}
+
 /// A store whose address is a bare promoted stack slot (`local_4`, `stack_0`) is a
 /// DEFINITION of that slot, not a pointer store through it: the renderer prints it
 /// as `local_4 = ...` (see `write_stmt_dec`'s `is_promoted_local` arm). Reading it
@@ -173,9 +179,14 @@ const RETURN_ROLE: &str = "ret";
 /// to flag half the corpus — including functions whose decompilation executes
 /// correctly. The name must be a promoted slot: after parameter coalescing the
 /// address can be an `argN`, and `*arg0 = x` really is a store through a pointer.
-fn stored_slot(addr: &Expr) -> Option<String> {
+fn stored_slot(addr: &Expr, authority: VerificationAuthority<'_>) -> Option<String> {
     match addr {
-        Expr::Reg(VReg::Phys(n)) if n.starts_with("local_") || n.starts_with("stack_") => {
+        Expr::Reg(value @ VReg::Phys(n))
+            if authority.identities.map_or_else(
+                || n.starts_with("local_") || n.starts_with("stack_"),
+                |identities| identities.is_promoted_stack_object(value),
+            ) =>
+        {
             Some(n.clone())
         }
         _ => None,
@@ -238,19 +249,19 @@ fn reads_of(e: &Expr) -> Vec<String> {
 }
 
 /// Every name defined anywhere in `body`, including nested bodies.
-fn defs_in(body: &[Stmt], out: &mut BTreeSet<String>, call_defines_return_role: bool) {
+fn defs_in(body: &[Stmt], out: &mut BTreeSet<String>, authority: VerificationAuthority<'_>) {
     for s in body {
         match s.semantic() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, .. } => out.extend(checked_name(dst)),
-            Stmt::Store { addr, .. } => out.extend(stored_slot(addr)),
+            Stmt::Store { addr, .. } => out.extend(stored_slot(addr, authority)),
             Stmt::Pop { target } => out.extend(checked_name(target)),
             // A call writes the register the ABI returns in — now recorded on the
             // statement itself, so this is the real destination rather than an
             // assumption about which register that is.
             Stmt::Call { dst, .. } => {
                 out.extend(dst.as_ref().and_then(checked_name));
-                if call_defines_return_role {
+                if authority.call_defines_return_role {
                     out.insert(RETURN_ROLE.to_string());
                 }
             }
@@ -259,35 +270,25 @@ fn defs_in(body: &[Stmt], out: &mut BTreeSet<String>, call_defines_return_role: 
                 else_body,
                 ..
             } => {
-                defs_in(then_body, out, call_defines_return_role);
+                defs_in(then_body, out, authority);
                 if let Some(e) = else_body {
-                    defs_in(e, out, call_defines_return_role);
+                    defs_in(e, out, authority);
                 }
             }
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                defs_in(body, out, call_defines_return_role)
-            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => defs_in(body, out, authority),
             Stmt::For {
                 init, step, body, ..
             } => {
-                defs_in(
-                    std::slice::from_ref(init.as_ref()),
-                    out,
-                    call_defines_return_role,
-                );
-                defs_in(body, out, call_defines_return_role);
-                defs_in(
-                    std::slice::from_ref(step.as_ref()),
-                    out,
-                    call_defines_return_role,
-                );
+                defs_in(std::slice::from_ref(init.as_ref()), out, authority);
+                defs_in(body, out, authority);
+                defs_in(std::slice::from_ref(step.as_ref()), out, authority);
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, b) in cases {
-                    defs_in(b, out, call_defines_return_role);
+                    defs_in(b, out, authority);
                 }
                 if let Some(d) = default {
-                    defs_in(d, out, call_defines_return_role);
+                    defs_in(d, out, authority);
                 }
             }
             _ => {}
@@ -335,7 +336,7 @@ fn has_unstructured_flow(body: &[Stmt]) -> bool {
 /// `NeverDefined` result and declines this stronger finding rather than guessing.
 fn goto_aware_undefined_reads(
     body: &[Stmt],
-    call_defines_return_role: bool,
+    authority: VerificationAuthority<'_>,
 ) -> Option<BTreeSet<String>> {
     #[derive(Default)]
     struct Node {
@@ -345,15 +346,15 @@ fn goto_aware_undefined_reads(
     }
 
     #[derive(Default)]
-    struct Builder {
+    struct Builder<'a> {
         nodes: Vec<Node>,
         labels: BTreeMap<u64, usize>,
         pending_gotos: Vec<(usize, u64)>,
         invalid: bool,
-        call_defines_return_role: bool,
+        authority: Option<VerificationAuthority<'a>>,
     }
 
-    impl Builder {
+    impl Builder<'_> {
         fn node(&mut self, reads: BTreeSet<String>, defs: BTreeSet<String>) -> usize {
             let index = self.nodes.len();
             self.nodes.push(Node {
@@ -377,7 +378,8 @@ fn goto_aware_undefined_reads(
                 std::slice::from_ref(statement),
                 &mut defs,
                 &mut reads,
-                self.call_defines_return_role,
+                self.authority
+                    .expect("verification authority is initialized"),
             );
             self.node(reads, defs)
         }
@@ -514,7 +516,7 @@ fn goto_aware_undefined_reads(
     }
 
     let mut builder = Builder {
-        call_defines_return_role,
+        authority: Some(authority),
         ..Builder::default()
     };
     let Some(entry) = builder.sequence(body, None, None) else {
@@ -571,7 +573,7 @@ fn walk(
     body: &[Stmt],
     defined: &mut BTreeSet<String>,
     found: &mut BTreeSet<String>,
-    call_defines_return_role: bool,
+    authority: VerificationAuthority<'_>,
 ) {
     for s in body {
         match s.semantic() {
@@ -587,7 +589,7 @@ fn walk(
             }
             Stmt::Store { addr, src, .. } => {
                 undefined_reads(src, defined, found);
-                match stored_slot(addr) {
+                match stored_slot(addr, authority) {
                     // `local_4 = src` — a definition of the slot, not a use of it.
                     Some(slot) => {
                         defined.insert(slot);
@@ -603,7 +605,7 @@ fn walk(
                     undefined_reads(a, defined, found);
                 }
                 defined.extend(dst.as_ref().and_then(checked_name));
-                if call_defines_return_role {
+                if authority.call_defines_return_role {
                     defined.insert(RETURN_ROLE.to_string());
                 }
             }
@@ -626,15 +628,10 @@ fn walk(
                 // (maybe-defined), so a definition in one arm satisfies a use
                 // after the `if`.
                 let mut then_defined = defined.clone();
-                walk(
-                    then_body,
-                    &mut then_defined,
-                    found,
-                    call_defines_return_role,
-                );
+                walk(then_body, &mut then_defined, found, authority);
                 let mut else_defined = defined.clone();
                 if let Some(e) = else_body {
-                    walk(e, &mut else_defined, found, call_defines_return_role);
+                    walk(e, &mut else_defined, found, authority);
                 }
                 defined.extend(then_defined);
                 defined.extend(else_defined);
@@ -644,12 +641,12 @@ fn walk(
                 // the body itself on every iteration after the first, so seed
                 // both with the body's definitions.
                 let mut body_defs = BTreeSet::new();
-                defs_in(body, &mut body_defs, call_defines_return_role);
+                defs_in(body, &mut body_defs, authority);
                 let mut loop_defined = defined.clone();
                 loop_defined.extend(body_defs);
                 undefined_reads(cond, &loop_defined, found);
                 let mut inner = loop_defined.clone();
-                walk(body, &mut inner, found, call_defines_return_role);
+                walk(body, &mut inner, found, authority);
                 defined.extend(loop_defined);
             }
             Stmt::For {
@@ -662,25 +659,25 @@ fn walk(
                     std::slice::from_ref(init.as_ref()),
                     defined,
                     found,
-                    call_defines_return_role,
+                    authority,
                 );
                 let mut loop_defs = BTreeSet::new();
-                defs_in(body, &mut loop_defs, call_defines_return_role);
+                defs_in(body, &mut loop_defs, authority);
                 defs_in(
                     std::slice::from_ref(step.as_ref()),
                     &mut loop_defs,
-                    call_defines_return_role,
+                    authority,
                 );
                 let mut loop_defined = defined.clone();
                 loop_defined.extend(loop_defs);
                 undefined_reads(cond, &loop_defined, found);
                 let mut inner = loop_defined.clone();
-                walk(body, &mut inner, found, call_defines_return_role);
+                walk(body, &mut inner, found, authority);
                 walk(
                     std::slice::from_ref(step.as_ref()),
                     &mut inner,
                     found,
-                    call_defines_return_role,
+                    authority,
                 );
                 defined.extend(loop_defined);
             }
@@ -689,7 +686,7 @@ fn walk(
                 // definitions are genuinely available to the latch and after
                 // the loop (unlike a pre-tested loop, which may execute zero
                 // times).
-                walk(body, defined, found, call_defines_return_role);
+                walk(body, defined, found, authority);
                 undefined_reads(cond, defined, found);
             }
             Stmt::Switch {
@@ -701,12 +698,12 @@ fn walk(
                 let mut joined = defined.clone();
                 for (_, b) in cases {
                     let mut arm = defined.clone();
-                    walk(b, &mut arm, found, call_defines_return_role);
+                    walk(b, &mut arm, found, authority);
                     joined.extend(arm);
                 }
                 if let Some(d) = default {
                     let mut arm = defined.clone();
-                    walk(d, &mut arm, found, call_defines_return_role);
+                    walk(d, &mut arm, found, authority);
                     joined.extend(arm);
                 }
                 *defined = joined;
@@ -723,17 +720,12 @@ fn walk(
                 let incoming = defined.clone();
                 let mut joined = defined.clone();
                 let mut try_defs = incoming.clone();
-                walk(try_body, &mut try_defs, found, call_defines_return_role);
+                walk(try_body, &mut try_defs, found, authority);
                 joined.extend(try_defs);
                 for catch in catches {
                     let mut catch_defs = incoming.clone();
                     catch_defs.extend(checked_name(&catch.binding));
-                    walk(
-                        &catch.body,
-                        &mut catch_defs,
-                        found,
-                        call_defines_return_role,
-                    );
+                    walk(&catch.body, &mut catch_defs, found, authority);
                     joined.extend(catch_defs);
                 }
                 *defined = joined;
@@ -743,7 +735,7 @@ fn walk(
 }
 
 /// Collect every name read anywhere in `body`.
-fn all_reads(body: &[Stmt], out: &mut BTreeSet<String>) {
+fn all_reads(body: &[Stmt], out: &mut BTreeSet<String>, authority: VerificationAuthority<'_>) {
     fn push(e: &Expr, out: &mut BTreeSet<String>) {
         out.extend(reads_of(e));
     }
@@ -751,7 +743,7 @@ fn all_reads(body: &[Stmt], out: &mut BTreeSet<String>) {
         match s.semantic() {
             Stmt::Assign { src, .. } => push(src, out),
             Stmt::Store { addr, src, .. } => {
-                if stored_slot(addr).is_none() {
+                if stored_slot(addr, authority).is_none() {
                     push(addr, out);
                 }
                 push(src, out);
@@ -769,9 +761,9 @@ fn all_reads(body: &[Stmt], out: &mut BTreeSet<String>) {
             }
             Stmt::Throw { value } | Stmt::IndirectGoto { target: value } => push(value, out),
             Stmt::TryCatch { try_body, catches } => {
-                all_reads(try_body, out);
+                all_reads(try_body, out, authority);
                 for catch in catches {
-                    all_reads(&catch.body, out);
+                    all_reads(&catch.body, out, authority);
                 }
             }
             Stmt::Push { value } => push(value, out),
@@ -781,14 +773,14 @@ fn all_reads(body: &[Stmt], out: &mut BTreeSet<String>) {
                 else_body,
             } => {
                 push(cond, out);
-                all_reads(then_body, out);
+                all_reads(then_body, out, authority);
                 if let Some(e) = else_body {
-                    all_reads(e, out);
+                    all_reads(e, out, authority);
                 }
             }
             Stmt::While { cond, body } => {
                 push(cond, out);
-                all_reads(body, out);
+                all_reads(body, out, authority);
             }
             Stmt::For {
                 init,
@@ -796,13 +788,13 @@ fn all_reads(body: &[Stmt], out: &mut BTreeSet<String>) {
                 step,
                 body,
             } => {
-                all_reads(std::slice::from_ref(init.as_ref()), out);
+                all_reads(std::slice::from_ref(init.as_ref()), out, authority);
                 push(cond, out);
-                all_reads(body, out);
-                all_reads(std::slice::from_ref(step.as_ref()), out);
+                all_reads(body, out, authority);
+                all_reads(std::slice::from_ref(step.as_ref()), out, authority);
             }
             Stmt::DoWhile { body, cond } => {
-                all_reads(body, out);
+                all_reads(body, out, authority);
                 push(cond, out);
             }
             Stmt::Switch {
@@ -812,10 +804,10 @@ fn all_reads(body: &[Stmt], out: &mut BTreeSet<String>) {
             } => {
                 push(discriminant, out);
                 for (_, b) in cases {
-                    all_reads(b, out);
+                    all_reads(b, out, authority);
                 }
                 if let Some(d) = default {
-                    all_reads(d, out);
+                    all_reads(d, out, authority);
                 }
             }
             _ => {}
@@ -1061,7 +1053,13 @@ impl RenderVerification {
 #[must_use = "a definition-before-use verdict that is dropped is a failed proof \
               nobody hears about; record it via ir::health::record_render_verification"]
 pub fn verify_before_render(f: &Function) -> RenderVerification {
-    verify_before_render_where(f, true)
+    verify_before_render_where(
+        f,
+        VerificationAuthority {
+            call_defines_return_role: true,
+            identities: None,
+        },
+    )
 }
 
 /// Verify production output using pipeline-owned result-role authority.
@@ -1069,14 +1067,23 @@ pub fn verify_before_render_with_identities(
     f: &Function,
     identities: &crate::ir::value_number::ValueIdentities,
 ) -> RenderVerification {
-    verify_before_render_where(f, identities.is_result_role(&VReg::phys(RETURN_ROLE)))
+    verify_before_render_where(
+        f,
+        VerificationAuthority {
+            call_defines_return_role: identities.is_result_role(&VReg::phys(RETURN_ROLE)),
+            identities: Some(identities),
+        },
+    )
 }
 
-fn verify_before_render_where(f: &Function, call_defines_return_role: bool) -> RenderVerification {
+fn verify_before_render_where(
+    f: &Function,
+    authority: VerificationAuthority<'_>,
+) -> RenderVerification {
     RenderVerification {
         function: f.name.clone(),
         entry_va: f.entry_va,
-        violations: check_where(f, call_defines_return_role),
+        violations: check_where(f, authority),
     }
 }
 
@@ -1084,14 +1091,20 @@ fn verify_before_render_where(f: &Function, call_defines_return_role: bool) -> R
 /// kind). An empty result means every invented value the function reads has a
 /// definition that reaches it.
 pub fn check(f: &Function) -> Vec<Violation> {
-    check_where(f, true)
+    check_where(
+        f,
+        VerificationAuthority {
+            call_defines_return_role: true,
+            identities: None,
+        },
+    )
 }
 
-fn check_where(f: &Function, call_defines_return_role: bool) -> Vec<Violation> {
+fn check_where(f: &Function, authority: VerificationAuthority<'_>) -> Vec<Violation> {
     let mut defined = BTreeSet::new();
-    defs_in(&f.body, &mut defined, call_defines_return_role);
+    defs_in(&f.body, &mut defined, authority);
     let mut reads = BTreeSet::new();
-    all_reads(&f.body, &mut reads);
+    all_reads(&f.body, &mut reads, authority);
 
     let mut out: Vec<Violation> = reads
         .difference(&defined)
@@ -1125,16 +1138,11 @@ fn check_where(f: &Function, call_defines_return_role: bool) -> Vec<Violation> {
     }
 
     let flow_findings = if has_unstructured_flow(&f.body) {
-        goto_aware_undefined_reads(&f.body, call_defines_return_role)
+        goto_aware_undefined_reads(&f.body, authority)
     } else {
         let mut flow_defined = BTreeSet::new();
         let mut found = BTreeSet::new();
-        walk(
-            &f.body,
-            &mut flow_defined,
-            &mut found,
-            call_defines_return_role,
-        );
+        walk(&f.body, &mut flow_defined, &mut found, authority);
         Some(found)
     };
     if let Some(found) = flow_findings {
@@ -1186,6 +1194,13 @@ mod tests {
 
     fn names(v: &[Violation]) -> Vec<String> {
         v.iter().map(|x| x.name.clone()).collect()
+    }
+
+    fn legacy_authority() -> VerificationAuthority<'static> {
+        VerificationAuthority {
+            call_defines_return_role: true,
+            identities: None,
+        }
     }
 
     #[test]
@@ -1778,11 +1793,14 @@ mod tests {
     #[test]
     fn malformed_label_graphs_decline_the_flow_sensitive_claim() {
         assert_eq!(
-            goto_aware_undefined_reads(&[Stmt::Goto { target: 0xdead }], true),
+            goto_aware_undefined_reads(&[Stmt::Goto { target: 0xdead }], legacy_authority()),
             None
         );
         assert_eq!(
-            goto_aware_undefined_reads(&[Stmt::Label(0x1010), Stmt::Label(0x1010)], true),
+            goto_aware_undefined_reads(
+                &[Stmt::Label(0x1010), Stmt::Label(0x1010)],
+                legacy_authority(),
+            ),
             None
         );
     }
@@ -1838,6 +1856,46 @@ mod tests {
             vec![],
             "a slot store is a definition of the slot"
         );
+    }
+
+    #[test]
+    fn production_verifier_uses_owned_stack_identity_for_an_opaque_slot_name() {
+        let object = "var7".to_string();
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object]);
+        let f = func(vec![
+            Stmt::Store {
+                addr: reg(&object),
+                src: Expr::Const(7),
+                size: 4,
+            },
+            Stmt::Return {
+                value: Some(reg(&object)),
+            },
+        ]);
+
+        assert!(verify_before_render_with_identities(&f, &identities).verified());
+    }
+
+    #[test]
+    fn production_verifier_rejects_an_unowned_local_spelling_as_a_stack_definition() {
+        let f = func(vec![
+            Stmt::Store {
+                addr: reg("local_4"),
+                src: Expr::Const(7),
+                size: 4,
+            },
+            Stmt::Return {
+                value: Some(reg("local_4")),
+            },
+        ]);
+
+        let verdict = verify_before_render_with_identities(
+            &f,
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
+        assert_eq!(names(&verdict.violations), vec!["local_4"]);
+        assert_eq!(verdict.violations[0].kind, ViolationKind::NeverDefined);
     }
 
     #[test]
