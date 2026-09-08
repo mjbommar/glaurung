@@ -2427,6 +2427,7 @@ fn is_bool_ctype(c_type: &str) -> bool {
 /// exactly that case, already passing.
 fn is_normalised_boolean(e: &Expr) -> bool {
     match e {
+        Expr::Origin { expr, .. } => is_normalised_boolean(expr),
         Expr::Cmp { .. } => true,
         Expr::Const(value) => matches!(value, 0 | 1),
         // An INTEGER cast (which `Expr::Cast` is by construction) cannot turn
@@ -2435,6 +2436,25 @@ fn is_normalised_boolean(e: &Expr) -> bool {
         // does not qualify — `(int)3.5` is 3.
         Expr::Cast { expr, .. } => is_normalised_boolean(expr),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod boolean_origin_tests {
+    use super::*;
+
+    #[test]
+    fn attributed_comparison_remains_a_normalised_boolean() {
+        let comparison = Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
+            rhs: Box::new(Expr::Const(0)),
+        }
+        .with_origins(super::super::OriginSet::one(0x4010));
+
+        let mut rendered = String::new();
+        write_representation_value_dec("_Bool", &comparison, &mut rendered);
+        assert_eq!(rendered, "(arg0 == 0)");
     }
 }
 
