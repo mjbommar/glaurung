@@ -1332,6 +1332,13 @@ provenance through lowering.
   carried-register, exit-shape, or effect refusals. Its strengthened
   observed-red test and all 30 loop-form tests pass; see
   `results/wp3-sentinel-search-composition.md`.
+  Commit `c4e3f4b3` next makes the entry-owned loop proof transparent to
+  attributed entry/latch predicates, their operands, and the intervening
+  stable alias. The proof compares origin-free semantic projections while the
+  retained outer guard and original attributed latch predicate remain intact;
+  no-else, stable-prelude, alias-depth, and overwrite refusals are unchanged.
+  Its strengthened observed-red test and all 30 loop-form tests pass; see
+  `results/wp3-owned-loop-proof-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
