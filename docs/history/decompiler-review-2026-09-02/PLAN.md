@@ -4102,6 +4102,12 @@ relevant ratchet's accepted-regression record.
    The explicit no-sidecar path retains its compatibility parser. The exact
    identity contract and Clang O0 eight-argument spill fixture pass; see
    `results/wp3-captured-scratch-identities.md`.
+   Commit `6ac46be4` then migrates ARM stack-address alias expansion. The
+   production pass admits bounded affine components from non-entry SSA
+   identities rather than requiring `#version` in their presentation names;
+   explicit no-sidecar tests retain the compatibility rule. Opaque chained
+   components and a misleading-spelling refusal pass, along with the exact A32
+   O0 KMP fixture; see `results/wp3-stack-address-alias-identities.md`.
    Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
