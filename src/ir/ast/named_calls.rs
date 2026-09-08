@@ -289,6 +289,7 @@ fn record_named_call_observation(
     authoritative: &mut std::collections::BTreeMap<String, CallPrototype>,
     conflicts: &mut std::collections::BTreeSet<String>,
 ) {
+    let target = target.semantic();
     let Expr::Named { name, .. } = target else {
         return;
     };

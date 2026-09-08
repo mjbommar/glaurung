@@ -2173,6 +2173,7 @@ fn call_prototype_for_render(
     dst: Option<&VReg>,
     call_spec: Option<&CallSiteSpec>,
 ) -> (CallSiteSpec, Option<CallPrototype>, bool) {
+    let target = target.semantic();
     let mut call_spec = effective_call_site_spec(target, args, dst, call_spec);
     call_spec.call_prototype = c_language_prototype(&call_spec.call_prototype);
     call_spec.callee_prototype = call_spec
@@ -2217,7 +2218,7 @@ fn write_call_dec(
 ) {
     let (call_spec, declaration, requires_cast) =
         call_prototype_for_render(target, args, dst, call_spec);
-    match target {
+    match target.semantic() {
         Expr::Named { name, .. } => {
             let displayed = sanitize_c_ident(callee_display_name(name));
             if requires_cast {
@@ -2242,7 +2243,7 @@ fn write_call_dec(
     // below. Only a directly-named call can be looked up: an indirect call
     // through a pointer is not known to be `mprotect` just because it might
     // be.
-    let annotated_callee = match target {
+    let annotated_callee = match target.semantic() {
         Expr::Named { name, .. } => Some(sanitize_c_ident(callee_display_name(name))),
         _ => None,
     };
@@ -2334,7 +2335,7 @@ fn write_call_dec(
 /// variadic conversions receive types. Integer formats narrower than `int`
 /// consume promoted `int`/`unsigned int` values at the ABI boundary.
 fn printf_variadic_parameter_types(target: &Expr, args: &[Expr]) -> Option<Vec<Option<String>>> {
-    let Expr::Named { name, .. } = target else {
+    let Expr::Named { name, .. } = target.semantic() else {
         return None;
     };
     let clean = callee_display_name(name);
@@ -2346,7 +2347,7 @@ fn printf_variadic_parameter_types(target: &Expr, args: &[Expr]) -> Option<Vec<O
         "error" => (2, 3),
         _ => return None,
     };
-    let Expr::StringLit { value } = args.get(format_index)? else {
+    let Expr::StringLit { value } = args.get(format_index)?.semantic() else {
         return None;
     };
     let pointer_width = DEC_POINTER_WIDTH.with(std::cell::Cell::get);

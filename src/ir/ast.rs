@@ -8621,11 +8621,13 @@ function f @ 0x1000 {
                 target: Expr::Named {
                     va: 0x2000,
                     name: "printf".to_string(),
-                },
+                }
+                .with_origins(OriginSet::one(0x1004)),
                 args: vec![
                     Expr::StringLit {
                         value: "value: %d\n".to_string(),
-                    },
+                    }
+                    .with_origins(OriginSet::one(0x1008)),
                     Expr::Cast {
                         signed: false,
                         width: 8,
