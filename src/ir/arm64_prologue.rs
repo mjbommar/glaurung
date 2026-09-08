@@ -29,11 +29,29 @@ use crate::ir::types::{BinOp, VReg};
 /// Run the pass over `f`'s body. Nested arms are currently left alone —
 /// prologue stmts always sit at the top-level entry to a function.
 pub fn recognise_arm64_prologue(f: &mut Function) {
-    collapse_prologue(&mut f.body);
-    collapse_epilogue(&mut f.body);
+    recognise_arm64_prologue_impl(f, None);
 }
 
-fn collapse_prologue(body: &mut Vec<Stmt>) {
+/// Identity-aware production form of [`recognise_arm64_prologue`].
+pub fn recognise_arm64_prologue_with_identities(
+    f: &mut Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    recognise_arm64_prologue_impl(f, Some(identities));
+}
+
+fn recognise_arm64_prologue_impl(
+    f: &mut Function,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
+    collapse_prologue(&mut f.body, identities);
+    collapse_epilogue(&mut f.body, identities);
+}
+
+fn collapse_prologue(
+    body: &mut Vec<Stmt>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     // Stack-object recovery can fold the pre-indexed STP and its writeback
     // before this pass runs.  The same frame record then has this stronger,
     // address-explicit spelling:
@@ -78,10 +96,10 @@ fn collapse_prologue(body: &mut Vec<Stmt>) {
     for (i, s) in body.iter().enumerate() {
         match s.semantic() {
             Stmt::Store {
-                addr: Expr::Reg(VReg::Phys(slot)),
+                addr: Expr::Reg(slot @ VReg::Phys(_)),
                 src: Expr::Reg(VReg::Phys(reg)),
                 ..
-            } if slot.starts_with("stack_") => {
+            } if is_promoted_stack_object(slot, identities) => {
                 if reg == "fp" || reg == "x29" {
                     saw_fp_save = true;
                 } else if reg == "lr" || reg == "x30" {
@@ -168,7 +186,10 @@ fn collapse_prologue(body: &mut Vec<Stmt>) {
     }
 }
 
-fn collapse_epilogue(body: &mut Vec<Stmt>) {
+fn collapse_epilogue(
+    body: &mut Vec<Stmt>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     // Find every Return and, for each, drop the immediately preceding
     // ABI bookkeeping: a `sp += K` adjust and/or a run of `%fp = %stack_*`
     // / `%lr = %stack_*` / `%varN = %stack_*` restore assigns. Back-to-
@@ -200,7 +221,7 @@ fn collapse_epilogue(body: &mut Vec<Stmt>) {
         }
         // 2. Walk back over a contiguous run of stack-restore assigns.
         let mut run_start = ret_idx;
-        while run_start > 0 && is_stack_restore(&body[run_start - 1]) {
+        while run_start > 0 && is_stack_restore(&body[run_start - 1], identities) {
             run_start -= 1;
         }
         let run = &body[run_start..ret_idx];
@@ -266,19 +287,32 @@ fn frame_record_store<'a>(statement: &'a Stmt, register: &str, offset: i64) -> O
     }
 }
 
-fn is_stack_restore(statement: &Stmt) -> bool {
+fn is_stack_restore(
+    statement: &Stmt,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     matches!(
         statement.semantic(),
         Stmt::Assign {
             dst: VReg::Phys(_),
-            src: Expr::Reg(VReg::Phys(source)),
-        } if source.starts_with("stack_")
+            src: Expr::Reg(source),
+        } if is_promoted_stack_object(source, identities)
     ) || matches!(
         statement.semantic(),
         Stmt::Assign {
             dst: VReg::Phys(_),
             src: Expr::Deref { addr, size: 8 },
         } if stack_object_at(addr, 0).is_some() || stack_object_at(addr, 8).is_some()
+    )
+}
+
+fn is_promoted_stack_object(
+    value: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    identities.map_or_else(
+        || matches!(value, VReg::Phys(name) if name.starts_with("stack_")),
+        |identities| identities.is_promoted_stack_object(value),
     )
 }
 
@@ -357,6 +391,51 @@ mod tests {
         // The stmts after the prologue must be preserved.
         assert!(matches!(&f.body[1], Stmt::Nop));
         assert!(matches!(&f.body[2], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn identity_aware_prologue_accepts_owned_opaque_frame_slots() {
+        let fp_slot_name = "frame_fp_save".to_string();
+        let lr_slot_name = "frame_lr_save".to_string();
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&fp_slot_name, &lr_slot_name]);
+        let mut f = Function {
+            name: "main".into(),
+            entry_va: 0,
+            body: vec![
+                store(&fp_slot_name, "fp"),
+                store(&lr_slot_name, "lr"),
+                sp_sub(48),
+                Stmt::Return { value: None },
+            ],
+        };
+
+        recognise_arm64_prologue_with_identities(&mut f, &identities);
+
+        assert_eq!(f.body.len(), 2, "owned frame saves leaked: {:#?}", f.body);
+        assert!(matches!(&f.body[0], Stmt::Comment(text) if text.contains("prologue")));
+    }
+
+    #[test]
+    fn identity_aware_prologue_rejects_unowned_stack_spelling() {
+        let mut f = Function {
+            name: "main".into(),
+            entry_va: 0,
+            body: vec![
+                store("stack_0", "fp"),
+                store("stack_1", "lr"),
+                sp_sub(48),
+                Stmt::Return { value: None },
+            ],
+        };
+        let original = f.clone();
+
+        recognise_arm64_prologue_with_identities(
+            &mut f,
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
+
+        assert_eq!(f, original);
     }
 
     #[test]
@@ -531,6 +610,66 @@ mod tests {
             Stmt::Comment(s) if s.contains("epilogue")
         ));
         assert!(matches!(&f.body[1], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn identity_aware_epilogue_accepts_owned_opaque_frame_slots() {
+        let fp_slot_name = "frame_fp_save".to_string();
+        let lr_slot_name = "frame_lr_save".to_string();
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&fp_slot_name, &lr_slot_name]);
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("fp"),
+                    src: Expr::Reg(reg(&fp_slot_name)),
+                },
+                Stmt::Assign {
+                    dst: reg("lr"),
+                    src: Expr::Reg(reg(&lr_slot_name)),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        recognise_arm64_prologue_with_identities(&mut f, &identities);
+
+        assert_eq!(
+            f.body.len(),
+            2,
+            "owned frame restores leaked: {:#?}",
+            f.body
+        );
+        assert!(matches!(&f.body[0], Stmt::Comment(text) if text.contains("epilogue")));
+    }
+
+    #[test]
+    fn identity_aware_epilogue_rejects_unowned_stack_spelling() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("fp"),
+                    src: Expr::Reg(reg("stack_0")),
+                },
+                Stmt::Assign {
+                    dst: reg("lr"),
+                    src: Expr::Reg(reg("stack_1")),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+        let original = f.clone();
+
+        recognise_arm64_prologue_with_identities(
+            &mut f,
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
+
+        assert_eq!(f, original);
     }
 
     #[test]

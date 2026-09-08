@@ -797,7 +797,10 @@ pub(super) fn run_ast_passes(
     pass!("eliminate_dead_stores", {
         crate::ir::canary::collapse_canary_save_with_identities(f, &named_value_identities);
         if matches!(cc, crate::ir::call_args::CallConv::Aarch64) {
-            crate::ir::arm64_prologue::recognise_arm64_prologue(f);
+            crate::ir::arm64_prologue::recognise_arm64_prologue_with_identities(
+                f,
+                &named_value_identities,
+            );
         }
         crate::ir::dead_stores::eliminate_dead_stores_with_identities(
             f,
@@ -833,7 +836,10 @@ pub(super) fn recognise_machine_frame(
             crate::ir::arm32_prologue::recognise_arm32_frame_with_identities(f, value_identities);
         }
         crate::ir::call_args::CallConv::Aarch64 => {
-            crate::ir::arm64_prologue::recognise_arm64_prologue(f);
+            crate::ir::arm64_prologue::recognise_arm64_prologue_with_identities(
+                f,
+                value_identities,
+            );
         }
     }
     if matches!(
