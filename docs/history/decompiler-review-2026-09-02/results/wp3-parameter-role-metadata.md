@@ -408,6 +408,41 @@ cargo test --features python-ext --lib ir::dead_stores::tests -- --nocapture
 The three cached commands completed in 0.38 seconds total. No broad
 Rust/Python suite, fixture matrix, DecBench, or Joern lane ran.
 
+## Typed stacked-parameter naming
+
+Commit `b3210392` makes stack promotion retain the source-parameter slot it
+already proves for promoted incoming stack storage. Production canonical naming
+consumes that typed map instead of preserving every identifier whose text can
+be parsed as `argN`. An unowned `arg99` now receives an ordinary stable `varN`
+name; a genuine promoted `arg6` remains the sixth source parameter. The public
+compatibility path keeps its legacy spelling fallback when no typed stack facts
+are supplied.
+
+Focused evidence:
+
+```text
+cargo test --features python-ext --lib \
+  production_naming_does_not_trust_an_unowned_arg_spelling -- --nocapture
+1 passed; 4,456 filtered out
+
+cargo test --features python-ext --lib \
+  production_naming_preserves_a_proven_stack_parameter_role -- --nocapture
+1 passed; 4,456 filtered out
+
+cargo test --features python-ext --lib \
+  a_full_width_write_to_a_sysv_stacked_argument_slot_assigns_the_parameter \
+  -- --nocapture
+1 passed; 4,456 filtered out
+
+cargo test --features python-ext --lib stack_argument -- --nocapture
+13 passed; 4,444 filtered out
+
+cargo test --features python-ext --lib ir::naming::tests -- --nocapture
+20 passed; 4,437 filtered out
+```
+
+No broad Rust/Python suite, fixture matrix, DecBench, or Joern lane ran.
+
 ## Typed direct and exhaustive return folding
 
 Commit `c599ac49` migrates the production `result = value; return result;`

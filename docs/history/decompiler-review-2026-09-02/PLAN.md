@@ -1706,7 +1706,12 @@ provenance through lowering.
   independently of presentation spelling. Commit `fbb7f596` migrates the
   post-naming dead-store pass to the same typed result-role authority. A call
   no longer kills an unrelated local merely spelled `ret`, while a
-  pipeline-owned result role retains the ABI-clobber behavior.
+  pipeline-owned result role retains the ABI-clobber behavior. Commit
+  `b3210392` removes the remaining production `argN` parser from canonical
+  register naming. Stack promotion now publishes its proven parameter-slot
+  bindings as typed facts; naming preserves those bindings but treats an
+  unowned `argN` spelling as ordinary storage. Compatibility-only naming keeps
+  the legacy spelling fallback.
   See
   `results/wp3-parameter-role-metadata.md`. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
@@ -3717,7 +3722,12 @@ relevant ratchet's accepted-regression record.
    production dead-store elimination: calls clobber canonical `ret` only when
    the identity sidecar owns the result role. Both exact regressions and all 42
    dead-store module tests pass; no broad suite or corpus ran for this bounded
-   increment. Continue the remaining semantic-reader audit;
+   increment. Commit `b3210392` then makes stack promotion publish typed
+   parameter-slot bindings and makes production canonical naming consume them.
+   A fabricated `arg99` no longer survives merely because its spelling looks
+   like a parameter, while a proven stacked `arg6` remains intact. The two
+   exact naming regressions, the exact stack-fact test, all 20 naming tests,
+   and 13 stack-argument neighbors pass. Continue the remaining semantic-reader audit;
    keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
