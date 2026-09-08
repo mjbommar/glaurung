@@ -1774,6 +1774,13 @@ provenance through lowering.
   to `rdi` cannot alter the return. All 84 owning type-recovery tests and one
   production typed-output check pass; see
   `results/wp3-return-width-identities.md`.
+  Commit `42f9c5e0` migrates the call-fold frame-coordinate guard. Opaque exact
+  stack/frame values remain rooted, while a misleading `rsp#version` spelling
+  mapped to scratch storage cannot block substitution. All 131 `call_args`
+  tests and the exact ARM hard-float stack-coordinate check pass; the selected
+  fixture-11 lane's unrelated `const_fold` invariant reproduces with the patch
+  removed and is not evidence. See
+  `results/wp3-call-frame-coordinate-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
@@ -3824,8 +3831,13 @@ relevant ratchet's accepted-regression record.
    `a86966f1` closes the typed renderer's final integer return-width reader by
    joining exact result identity to authoritative definition width; its 84
    owning tests and production typed-output smoke check pass. See
-   `results/wp3-return-width-identities.md`. Keep pre-sidecar tagging internals
-   and explicit no-sidecar compatibility parsers classified separately.
+   `results/wp3-return-width-identities.md`. Commit `42f9c5e0` then closes the
+   call-fold frame-coordinate guard using exact stack/frame identities; its 131
+   owning tests and exact ARM end-to-end check pass. See
+   `results/wp3-call-frame-coordinate-identities.md`. Continue through
+   stack-area recovery, slot marking, captured-definition aliasing, and the
+   AAPCS/cdecl readers. Keep pre-sidecar tagging internals and explicit
+   no-sidecar compatibility parsers classified separately.
    Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
