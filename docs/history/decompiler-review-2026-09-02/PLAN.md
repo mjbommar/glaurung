@@ -1971,6 +1971,17 @@ provenance through lowering.
   the fix; it, two nearest authority controls, and only the GCC O0 `sum_arg7`
   fixture pass with a fresh extension. No broad suite or corpus ran. See
   `results/wp3-canonical-parameter-authority.md`.
+  Commit `13fd396c` then begins the final typed `tag_phys` migration by applying
+  the authoritative definition-width map to every identity-owned numbered
+  definition, not only the return value. An opaque four-byte local no longer
+  widens to eight bytes merely because its display name has no register-width
+  clue; role classification remains identity-owned and stronger pointer/float
+  facts remain intact. The exact regression was observed red before the fix;
+  it, two nearest width/identity controls, and only the GCC O2
+  `sign_bit_of_binary32` fixture pass with a fresh extension. No broad suite or
+  corpus ran. Uses without definition-width evidence still depend on raw
+  operand views, so this does not yet make `tag_phys` removable. See
+  `results/wp3-exact-typed-local-widths.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
