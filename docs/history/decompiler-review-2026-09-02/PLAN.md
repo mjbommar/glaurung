@@ -1813,6 +1813,12 @@ provenance through lowering.
   All five owning AAPCS tests and the exact ARMv7 O0
   `single_precision_horner` fixture pass; no broad suite or corpus ran. See
   `results/wp3-aapcs-vfp-setup-identities.md`.
+  Commit `06b6f429` then migrates preallocated AAPCS outgoing stack areas.
+  Address bases and intervening stack writes must carry complete `sp` identity;
+  misleading `sp#version` text is rejected. All six owning AAPCS tests and the
+  exact ARMv7 O2 `call_into_spill` fixture pass. The adjacent O0 failure
+  reproduces unchanged with the patch removed and is baseline debt. No broad
+  suite or corpus ran. See `results/wp3-aapcs-stack-area-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
@@ -3883,8 +3889,13 @@ relevant ratchet's accepted-regression record.
    `results/wp3-loop-carried-call-identities.md`. Commit `d7dfcf9f` migrates
    the pure-VFP AAPCS setup reader to complete identity candidate
    classification; its five owning tests and exact ARMv7 O0 float-call fixture
-   pass. See `results/wp3-aapcs-vfp-setup-identities.md`. Continue through the
-   AAPCS stack-area and cdecl readers. Keep
+   pass. See `results/wp3-aapcs-vfp-setup-identities.md`. Commit `06b6f429`
+   closes the AAPCS stack-area reader with
+   complete `sp` identity classification; its six owning tests and exact ARMv7
+   O2 eight-argument fixture pass, while the O0 canary's unchanged parent/tip
+   failure is recorded as baseline debt. See
+   `results/wp3-aapcs-stack-area-identities.md`. Continue through the cdecl
+   readers. Keep
    pre-sidecar tagging internals and explicit no-sidecar compatibility parsers
    classified separately.
    Keep expression ownership behind completion of that audit.
