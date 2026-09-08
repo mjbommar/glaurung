@@ -377,7 +377,12 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
     crate::ir::dce::prune_overwritten_flags(&mut owned);
     crate::ir::dce::prune_dead_flags(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned);
-    crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned);
+    match identities {
+        Some(identities) => crate::ir::copy_prop::propagate_adjacent_guard_values_with_identities(
+            &mut owned, identities,
+        ),
+        None => crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned),
+    }
     // The run-local propagators above clear their environment at every
     // control-flow boundary, so an ABI copy made in the entry block and read
     // inside a loop survives as a declared local no matter how few reads it
@@ -408,7 +413,12 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
     // decided `C`. Dominance, not definedness: the arm being dropped may well be
     // a defined value, it simply cannot be selected.
     crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned);
-    crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned);
+    match identities {
+        Some(identities) => crate::ir::copy_prop::propagate_adjacent_guard_values_with_identities(
+            &mut owned, identities,
+        ),
+        None => crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned),
+    }
     crate::ir::copy_prop::propagate_adjacent_overwritten_values(&mut owned);
     crate::ir::terminal_loop::recover_terminal_self_loops(&mut owned);
     // Recover shared return epilogues before general forward joins. Otherwise a

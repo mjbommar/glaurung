@@ -115,10 +115,25 @@ pub fn propagate_adjacent_typed_promoted_values_with_identities(
 /// the expression stays at the same observable evaluation point while the
 /// loop-form pass gets the source-level guard back.
 pub fn propagate_adjacent_guard_values(f: &mut Function) {
+    propagate_adjacent_guard_values_impl(f, None);
+}
+
+/// Identity-aware production form of [`propagate_adjacent_guard_values`].
+pub fn propagate_adjacent_guard_values_with_identities(
+    f: &mut Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    propagate_adjacent_guard_values_impl(f, Some(identities));
+}
+
+fn propagate_adjacent_guard_values_impl(
+    f: &mut Function,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     loop {
         let mut reads = RegMap::default();
         count_reads_body(&f.body, &mut reads);
-        if !fold_one_adjacent_guard_value(&mut f.body, &reads) {
+        if !fold_one_adjacent_guard_value(&mut f.body, &reads, identities) {
             break;
         }
     }
@@ -361,7 +376,11 @@ fn fold_one_adjacent_overwritten_value(body: &mut Vec<Stmt>) -> bool {
     false
 }
 
-fn fold_one_adjacent_guard_value(body: &mut Vec<Stmt>, reads: &RegMap<usize>) -> bool {
+fn fold_one_adjacent_guard_value(
+    body: &mut Vec<Stmt>,
+    reads: &RegMap<usize>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     for statement in body.iter_mut() {
         let changed = match statement.semantic_mut() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
@@ -370,21 +389,21 @@ fn fold_one_adjacent_guard_value(body: &mut Vec<Stmt>, reads: &RegMap<usize>) ->
                 else_body,
                 ..
             } => {
-                fold_one_adjacent_guard_value(then_body, reads)
+                fold_one_adjacent_guard_value(then_body, reads, identities)
                     || else_body
                         .as_mut()
-                        .is_some_and(|body| fold_one_adjacent_guard_value(body, reads))
+                        .is_some_and(|body| fold_one_adjacent_guard_value(body, reads, identities))
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                fold_one_adjacent_guard_value(body, reads)
+                fold_one_adjacent_guard_value(body, reads, identities)
             }
             Stmt::Switch { cases, default, .. } => {
                 cases
                     .iter_mut()
-                    .any(|(_, body)| fold_one_adjacent_guard_value(body, reads))
+                    .any(|(_, body)| fold_one_adjacent_guard_value(body, reads, identities))
                     || default
                         .as_mut()
-                        .is_some_and(|body| fold_one_adjacent_guard_value(body, reads))
+                        .is_some_and(|body| fold_one_adjacent_guard_value(body, reads, identities))
             }
             _ => false,
         };
@@ -396,8 +415,7 @@ fn fold_one_adjacent_guard_value(body: &mut Vec<Stmt>, reads: &RegMap<usize>) ->
     for index in 0..body.len().saturating_sub(1) {
         let Some((dst, mut source)) = (match body[index].semantic() {
             Stmt::Assign { dst, src }
-                if is_scratch_reg(dst, None)
-                    && !is_promoted_local_reg(dst)
+                if is_scratch_reg(dst, identities)
                     && reads.get(dst).copied() == Some(1)
                     && !contains_reg(src, dst)
                     && !contains_unknown(src)
@@ -1505,6 +1523,33 @@ mod tests {
             multiply_read, expected_multiple,
             "a value used twice must not be duplicated"
         );
+    }
+
+    #[test]
+    fn identity_aware_guard_fold_rejects_opaque_stack_destination() {
+        let object_name = "frame_object".to_string();
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object_name]);
+        let mut function = Function {
+            name: "owned_guard".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg(&object_name),
+                    src: Expr::Const(1),
+                },
+                Stmt::If {
+                    cond: Expr::Reg(reg(&object_name)),
+                    then_body: vec![Stmt::Return { value: None }],
+                    else_body: None,
+                },
+            ],
+        };
+        let before = function.clone();
+
+        propagate_adjacent_guard_values_with_identities(&mut function, &identities);
+
+        assert_eq!(function, before);
     }
 
     #[test]
