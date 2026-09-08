@@ -1205,6 +1205,12 @@ provenance through lowering.
   non-additive, reversed-subtraction, or stale-name refusals. Its observed-red
   test and all 73 constant-fold tests pass; see
   `results/wp3-address-reconstruction-expression-origins.md`.
+  Commit `072412ce` next makes the common x86 associative XOR-cancellation
+  shape transparent to carriers. Repeated semantic flags cancel despite
+  distinct owners, and the surviving relation retains every consumed flag,
+  nested-XOR, relation, and enclosing-operation owner. Its observed-red test
+  and all 74 constant-fold tests pass; see
+  `results/wp3-xor-cancellation-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
