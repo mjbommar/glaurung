@@ -307,7 +307,9 @@ fn recover_guarded_do_while_body(body: &mut Vec<Stmt>) {
 
     let mut start = 0;
     while start < body.len() {
-        let Some((do_index, current, sentinel)) = guarded_do_while_candidate(body, start) else {
+        let Some((do_index, return_index, current, sentinel, result_origins)) =
+            guarded_do_while_candidate(body, start)
+        else {
             start += 1;
             continue;
         };
@@ -336,6 +338,15 @@ fn recover_guarded_do_while_body(body: &mut Vec<Stmt>) {
             }
             .with_optional_origins(origins),
         );
+        if let Some(result_origins) = result_origins {
+            let Stmt::Return {
+                value: Some(result),
+            } = body[return_index - 1].semantic_mut()
+            else {
+                unreachable!("guarded do-while candidate points at its final return")
+            };
+            result.merge_origins(&result_origins);
+        }
         crate::ir::pass_stats::fire("recover_guarded_do_whiles");
         start = do_index;
     }
@@ -432,7 +443,16 @@ fn resolve_entry_aliases(expr: &Expr, aliases: &HashMap<VReg, Expr>, depth: usiz
     }
 }
 
-fn guarded_do_while_candidate(body: &[Stmt], start: usize) -> Option<(usize, VReg, Expr)> {
+fn guarded_do_while_candidate(
+    body: &[Stmt],
+    start: usize,
+) -> Option<(
+    usize,
+    usize,
+    VReg,
+    Expr,
+    Option<crate::ir::ast::OriginSet>,
+)> {
     let Stmt::If {
         cond: entry_guard,
         then_body,
@@ -520,7 +540,12 @@ fn guarded_do_while_candidate(body: &[Stmt], start: usize) -> Option<(usize, VRe
     else {
         return None;
     };
-    if guard_result != final_result
+    let same_result = match (guard_result, final_result) {
+        (None, None) => true,
+        (Some(guard), Some(final_result)) => guard.semantic() == final_result.semantic(),
+        _ => false,
+    };
+    if !same_result
         || body[return_index + 1..]
             .iter()
             .any(|statement| !matches!(statement.semantic(), Stmt::Nop | Stmt::Comment(_)))
@@ -529,10 +554,15 @@ fn guarded_do_while_candidate(body: &[Stmt], start: usize) -> Option<(usize, VRe
     }
     Some((
         cursor,
+        return_index,
         current.clone(),
         sentinel
             .clone()
             .with_optional_origins(latch_sentinel.origins().cloned()),
+        guard_result
+            .as_ref()
+            .and_then(|result| result.origins())
+            .cloned(),
     ))
 }
 
@@ -1781,7 +1811,9 @@ mod tests {
                         rhs: Box::new(entry_sentinel),
                     },
                     then_body: vec![Stmt::Return {
-                        value: Some(Expr::Reg(reg("result"))),
+                        value: Some(
+                            Expr::Reg(reg("result")).with_origins(OriginSet::one(0x1008)),
+                        ),
                     }],
                     else_body: None,
                 },
@@ -1819,7 +1851,9 @@ mod tests {
                     },
                 },
                 Stmt::Return {
-                    value: Some(Expr::Reg(reg("result"))),
+                    value: Some(
+                        Expr::Reg(reg("result")).with_origins(OriginSet::one(0x100c)),
+                    ),
                 },
             ],
         }
@@ -1849,6 +1883,17 @@ mod tests {
                 && rhs.semantic() == &Expr::Const(0)
                 && rhs.origins() == Some(&OriginSet::from_addresses([0x1000, 0x1004]))
         ));
+        let Stmt::Return {
+            value: Some(result),
+        } = &function.body[4]
+        else {
+            panic!("expected surviving result return: {:#?}", function.body)
+        };
+        assert_eq!(result.semantic(), &Expr::Reg(reg("result")));
+        assert_eq!(
+            result.origins(),
+            Some(&OriginSet::from_addresses([0x1008, 0x100c]))
+        );
     }
 
     #[test]
