@@ -71,6 +71,10 @@ fn remap_type_map_impl(
     value_identities: Option<&crate::ir::value_number::ValueIdentities>,
     exact_integer_roles: bool,
 ) -> crate::ir::types_recover::TypeMap {
+    let parameter_roles = param_slots
+        .iter()
+        .map(|slot| format!("arg{slot}"))
+        .collect::<std::collections::HashSet<_>>();
     // Reconstruct the alias table the naming pass used for arg/ret slots;
     // `varN` aliases are assigned by first-appearance order and we can't
     // trivially recover them here, so those keys survive untouched.
@@ -158,8 +162,7 @@ fn remap_type_map_impl(
                                 },
                             );
                             if same_storage
-                                && (include_parameters
-                                    || crate::ir::ast::parse_arg_index(role).is_none())
+                                && (include_parameters || !parameter_roles.contains(role))
                             {
                                 out.upsert_public(
                                     crate::ir::types::VReg::Phys(role.clone()),
@@ -186,9 +189,7 @@ fn remap_type_map_impl(
                     ))
                 .then(|| exact_roles.and_then(|roles| roles.get(n)))
                 .flatten()
-                .filter(|role| {
-                    include_parameters || crate::ir::ast::parse_arg_index(role).is_none()
-                })
+                .filter(|role| include_parameters || !parameter_roles.contains(*role))
                 .cloned();
                 let new_name = exact
                     .or_else(|| alias.get(n).cloned())
@@ -750,6 +751,48 @@ mod tests {
             projected.get(&VReg::phys("var0")),
             Some(TypeHint::Float { width: 4 })
         );
+    }
+
+    #[test]
+    fn exact_role_projection_uses_parameter_slots_instead_of_arg_spelling() {
+        let storage = VReg::phys("eax#1");
+        let mut raw = TypeMap::default();
+        raw.upsert_public(
+            storage,
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+        let slots = std::collections::HashSet::from([0]);
+
+        let unowned = remap_type_map_impl(
+            &raw,
+            CallConv::SysVAmd64,
+            &slots,
+            false,
+            Some(&HashMap::from([("eax#1".to_string(), "arg99".to_string())])),
+            None,
+            true,
+        );
+        let owned = remap_type_map_impl(
+            &raw,
+            CallConv::SysVAmd64,
+            &slots,
+            false,
+            Some(&HashMap::from([("eax#1".to_string(), "arg0".to_string())])),
+            None,
+            true,
+        );
+
+        assert_eq!(
+            unowned.get(&VReg::phys("arg99")),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            })
+        );
+        assert_eq!(owned.get(&VReg::phys("arg0")), None);
     }
 
     #[test]
