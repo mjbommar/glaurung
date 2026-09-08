@@ -307,6 +307,24 @@ impl ValueIdentities {
         projected
     }
 
+    /// Replace projected ABI-bank slots with authoritative source-role slots.
+    ///
+    /// In a mixed-bank ABI, machine slot zero is not necessarily source slot
+    /// zero: AAPCS hard-float may place source `arg0` in `s0` and source
+    /// `arg1` in core register `r0`. Naming has already established the source
+    /// roles when this is called, so each `argN` row is authoritative and must
+    /// replace a stale machine-bank slot rather than become ambiguous with it.
+    pub(crate) fn with_source_parameter_slots(
+        mut self,
+        parameter_slots: impl IntoIterator<Item = usize>,
+    ) -> Self {
+        for slot in parameter_slots {
+            self.parameter_slots_by_value
+                .insert(VReg::Phys(format!("arg{slot}")), BTreeSet::from([slot]));
+        }
+        self
+    }
+
     pub(crate) fn apply_renames(&mut self, renames: &HashMap<VReg, VReg>) {
         if renames.is_empty() {
             return;
@@ -968,6 +986,22 @@ mod tests {
 
         assert_eq!(projected.parameter_slot(&VReg::phys("arg0")), Some(0));
         assert_eq!(projected.parameter_slot(&VReg::phys("arg99")), None);
+    }
+
+    #[test]
+    fn source_parameter_slots_override_machine_bank_slots_after_role_projection() {
+        let mut identities = ValueIdentities::default();
+        identities
+            .parameter_slots_by_value
+            .insert(VReg::phys("r0"), BTreeSet::from([0]));
+        let aliases = HashMap::from([("r0".to_string(), "arg1".to_string())]);
+
+        let projected = identities
+            .with_role_aliases(&aliases)
+            .with_source_parameter_slots([1]);
+
+        assert_eq!(projected.parameter_slot(&VReg::phys("r0")), Some(0));
+        assert_eq!(projected.parameter_slot(&VReg::phys("arg1")), Some(1));
     }
 
     #[test]

@@ -794,8 +794,9 @@ pub(super) fn run_ast_passes(
             &stack_facts.parameter_slots,
         )
     );
-    let named_value_identities =
-        value_identities.with_role_aliases_and_parameter_slots(&role_names, param_slots);
+    let named_value_identities = value_identities
+        .with_role_aliases_and_parameter_slots(&role_names, param_slots)
+        .with_source_parameter_slots(parameter_roles.values().copied());
     // Dead-store elimination runs *after* naming so it sees the aliased return register
     // (`ret` / `arg0`) rather than the raw physical one; that removes the common pre-call
     // `%ret = 0` idiom entirely.
@@ -1660,8 +1661,14 @@ pub(super) fn lower_and_run_ast_passes(
         got_targets,
         &mut value_identities,
     )?;
-    let ast_value_identities =
-        value_identities.with_role_aliases_and_parameter_slots(&role_names, &param_slots);
+    let ast_value_identities = value_identities
+        .with_role_aliases_and_parameter_slots(&role_names, &param_slots)
+        .with_source_parameter_slots(
+            prototype
+                .iter()
+                .flat_map(|prototype| prototype.parameters())
+                .map(|parameter| parameter.slot),
+        );
 
     Ok(PreparedAst {
         function,
