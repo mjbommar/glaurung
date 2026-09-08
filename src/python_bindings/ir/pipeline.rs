@@ -601,8 +601,17 @@ pub(super) fn run_ast_passes(
     pass!("recover_resolved_tail_calls", {
         crate::ir::name_resolve::resolve_names(f, addr_map);
         crate::ir::function_tables::resolve_function_table_entries(f, function_tables);
-        crate::ir::call_args::recover_resolved_direct_tail_calls(f, cc, addr_map);
-        crate::ir::call_args::recover_resolved_tail_calls(f, cc);
+        crate::ir::call_args::recover_resolved_direct_tail_calls_with_identities(
+            f,
+            cc,
+            addr_map,
+            Some(value_identities),
+        );
+        crate::ir::call_args::recover_resolved_tail_calls_with_identities(
+            f,
+            cc,
+            Some(value_identities),
+        );
         crate::ir::call_args::recover_proven_vtable_tail_calls(f, cc, &callee_facts.prototypes);
     });
     pass!("reconstruct_args", {

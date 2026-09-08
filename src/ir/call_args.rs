@@ -63,6 +63,9 @@ pub use tail_calls::{
     recover_proven_vtable_tail_calls, recover_resolved_direct_tail_calls,
     recover_resolved_tail_calls,
 };
+pub(crate) use tail_calls::{
+    recover_resolved_direct_tail_calls_with_identities, recover_resolved_tail_calls_with_identities,
+};
 
 /// Compatibility export while ABI consumers migrate to `crate::target`.
 pub use crate::target::abi::CallConv;

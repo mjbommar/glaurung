@@ -19,8 +19,9 @@
 
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::types::{BinOp, VReg};
+use crate::ir::value_number::ValueIdentities;
 
-use super::{arg_slots, return_reg, slot_of, CallConv};
+use super::{arg_slots, mark_slot_write_with_identities, return_reg, CallConv};
 
 /// Recover a terminal jump through a resolved import slot as the source-level
 /// tail call it implements.
@@ -37,7 +38,15 @@ use super::{arg_slots, return_reg, slot_of, CallConv};
 /// complete ABI register state. Logical `argN` names record that fact without
 /// guessing a source prototype or a callee arity.
 pub fn recover_resolved_tail_calls(f: &mut Function, arch: CallConv) {
-    recover_tail_calls_in_body(&mut f.body, arch);
+    recover_resolved_tail_calls_with_identities(f, arch, None);
+}
+
+pub(crate) fn recover_resolved_tail_calls_with_identities(
+    f: &mut Function,
+    arch: CallConv,
+    identities: Option<&ValueIdentities>,
+) {
+    recover_tail_calls_in_body(&mut f.body, arch, identities);
 }
 
 /// Recover a Rust trait-object terminal dispatch backed by a proven fat-pointer
@@ -64,9 +73,18 @@ pub fn recover_resolved_direct_tail_calls(
     arch: CallConv,
     names: &std::collections::HashMap<u64, String>,
 ) {
+    recover_resolved_direct_tail_calls_with_identities(f, arch, names, None);
+}
+
+pub(crate) fn recover_resolved_direct_tail_calls_with_identities(
+    f: &mut Function,
+    arch: CallConv,
+    names: &std::collections::HashMap<u64, String>,
+    identities: Option<&ValueIdentities>,
+) {
     let mut local_labels = std::collections::HashSet::new();
     collect_labels(&f.body, &mut local_labels);
-    recover_direct_tail_calls_in_body(&mut f.body, arch, names, &local_labels);
+    recover_direct_tail_calls_in_body(&mut f.body, arch, names, &local_labels, identities);
 }
 
 fn collect_labels(body: &[Stmt], labels: &mut std::collections::HashSet<u64>) {
@@ -126,6 +144,7 @@ fn recover_direct_tail_calls_in_body(
     arch: CallConv,
     names: &std::collections::HashMap<u64, String>,
     local_labels: &std::collections::HashSet<u64>,
+    identities: Option<&ValueIdentities>,
 ) {
     for statement in body.iter_mut() {
         match statement.semantic_mut() {
@@ -135,29 +154,47 @@ fn recover_direct_tail_calls_in_body(
                 else_body,
                 ..
             } => {
-                recover_direct_tail_calls_in_body(then_body, arch, names, local_labels);
+                recover_direct_tail_calls_in_body(then_body, arch, names, local_labels, identities);
                 if let Some(else_body) = else_body {
-                    recover_direct_tail_calls_in_body(else_body, arch, names, local_labels);
+                    recover_direct_tail_calls_in_body(
+                        else_body,
+                        arch,
+                        names,
+                        local_labels,
+                        identities,
+                    );
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                recover_direct_tail_calls_in_body(body, arch, names, local_labels)
+                recover_direct_tail_calls_in_body(body, arch, names, local_labels, identities)
             }
             Stmt::For { body, .. } => {
-                recover_direct_tail_calls_in_body(body, arch, names, local_labels)
+                recover_direct_tail_calls_in_body(body, arch, names, local_labels, identities)
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, case) in cases {
-                    recover_direct_tail_calls_in_body(case, arch, names, local_labels);
+                    recover_direct_tail_calls_in_body(case, arch, names, local_labels, identities);
                 }
                 if let Some(default) = default {
-                    recover_direct_tail_calls_in_body(default, arch, names, local_labels);
+                    recover_direct_tail_calls_in_body(
+                        default,
+                        arch,
+                        names,
+                        local_labels,
+                        identities,
+                    );
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                recover_direct_tail_calls_in_body(try_body, arch, names, local_labels);
+                recover_direct_tail_calls_in_body(try_body, arch, names, local_labels, identities);
                 for catch in catches {
-                    recover_direct_tail_calls_in_body(&mut catch.body, arch, names, local_labels);
+                    recover_direct_tail_calls_in_body(
+                        &mut catch.body,
+                        arch,
+                        names,
+                        local_labels,
+                        identities,
+                    );
                 }
             }
             Stmt::Assign { .. }
@@ -196,7 +233,7 @@ fn recover_direct_tail_calls_in_body(
 
         let has_local_setup = body[..index]
             .iter()
-            .any(|statement| statement_writes_argument_slot(statement, arch));
+            .any(|statement| statement_writes_argument_slot(statement, arch, identities));
         let args = if has_local_setup {
             Vec::new()
         } else {
@@ -223,7 +260,11 @@ fn recover_direct_tail_calls_in_body(
     }
 }
 
-fn recover_tail_calls_in_body(body: &mut Vec<Stmt>, arch: CallConv) {
+fn recover_tail_calls_in_body(
+    body: &mut Vec<Stmt>,
+    arch: CallConv,
+    identities: Option<&ValueIdentities>,
+) {
     for stmt in body.iter_mut() {
         match stmt.semantic_mut() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
@@ -232,27 +273,27 @@ fn recover_tail_calls_in_body(body: &mut Vec<Stmt>, arch: CallConv) {
                 else_body,
                 ..
             } => {
-                recover_tail_calls_in_body(then_body, arch);
+                recover_tail_calls_in_body(then_body, arch, identities);
                 if let Some(else_body) = else_body {
-                    recover_tail_calls_in_body(else_body, arch);
+                    recover_tail_calls_in_body(else_body, arch, identities);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                recover_tail_calls_in_body(body, arch)
+                recover_tail_calls_in_body(body, arch, identities)
             }
-            Stmt::For { body, .. } => recover_tail_calls_in_body(body, arch),
+            Stmt::For { body, .. } => recover_tail_calls_in_body(body, arch, identities),
             Stmt::Switch { cases, default, .. } => {
                 for (_, case) in cases {
-                    recover_tail_calls_in_body(case, arch);
+                    recover_tail_calls_in_body(case, arch, identities);
                 }
                 if let Some(default) = default {
-                    recover_tail_calls_in_body(default, arch);
+                    recover_tail_calls_in_body(default, arch, identities);
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                recover_tail_calls_in_body(try_body, arch);
+                recover_tail_calls_in_body(try_body, arch, identities);
                 for catch in catches {
-                    recover_tail_calls_in_body(&mut catch.body, arch);
+                    recover_tail_calls_in_body(&mut catch.body, arch, identities);
                 }
             }
             Stmt::Assign { .. }
@@ -294,7 +335,7 @@ fn recover_tail_calls_in_body(body: &mut Vec<Stmt>, arch: CallConv) {
 
         let has_local_setup = body[..index]
             .iter()
-            .any(|stmt| statement_writes_argument_slot(stmt, arch));
+            .any(|stmt| statement_writes_argument_slot(stmt, arch, identities));
         let args = if has_local_setup {
             Vec::new()
         } else {
@@ -514,10 +555,16 @@ fn contains_high_word_extract(expr: &Expr, word_bits: u32) -> bool {
     }
 }
 
-fn statement_writes_argument_slot(stmt: &Stmt, arch: CallConv) -> bool {
+fn statement_writes_argument_slot(
+    stmt: &Stmt,
+    arch: CallConv,
+    identities: Option<&ValueIdentities>,
+) -> bool {
     match stmt.semantic() {
         Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => {
-            matches!(dst, VReg::Phys(name) if slot_of(arch, name).is_some())
+            let mut written = vec![false; arg_slots(arch).len()];
+            mark_slot_write_with_identities(dst, arch, &mut written, identities);
+            written.into_iter().any(|slot| slot)
         }
         Stmt::If {
             then_body,
@@ -526,33 +573,33 @@ fn statement_writes_argument_slot(stmt: &Stmt, arch: CallConv) -> bool {
         } => {
             then_body
                 .iter()
-                .any(|stmt| statement_writes_argument_slot(stmt, arch))
+                .any(|stmt| statement_writes_argument_slot(stmt, arch, identities))
                 || else_body.as_ref().is_some_and(|body| {
                     body.iter()
-                        .any(|stmt| statement_writes_argument_slot(stmt, arch))
+                        .any(|stmt| statement_writes_argument_slot(stmt, arch, identities))
                 })
         }
         Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => body
             .iter()
-            .any(|stmt| statement_writes_argument_slot(stmt, arch)),
+            .any(|stmt| statement_writes_argument_slot(stmt, arch, identities)),
         Stmt::Switch { cases, default, .. } => {
             cases.iter().any(|(_, body)| {
                 body.iter()
-                    .any(|stmt| statement_writes_argument_slot(stmt, arch))
+                    .any(|stmt| statement_writes_argument_slot(stmt, arch, identities))
             }) || default.as_ref().is_some_and(|body| {
                 body.iter()
-                    .any(|stmt| statement_writes_argument_slot(stmt, arch))
+                    .any(|stmt| statement_writes_argument_slot(stmt, arch, identities))
             })
         }
         Stmt::TryCatch { try_body, catches } => {
             try_body
                 .iter()
-                .any(|stmt| statement_writes_argument_slot(stmt, arch))
+                .any(|stmt| statement_writes_argument_slot(stmt, arch, identities))
                 || catches.iter().any(|catch| {
                     catch
                         .body
                         .iter()
-                        .any(|stmt| statement_writes_argument_slot(stmt, arch))
+                        .any(|stmt| statement_writes_argument_slot(stmt, arch, identities))
                 })
         }
         Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
@@ -760,6 +807,55 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert!(matches!(f.body[1], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn tail_setup_uses_exact_identity_not_display_spelling() {
+        let caller = |dst: &str| Function {
+            name: "forward".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg(dst),
+                    src: Expr::Const(7),
+                },
+                Stmt::Goto { target: 0x1070 },
+            ],
+        };
+        let names = [(0x1070, "sum_arg6@plt".to_string())].into_iter().collect();
+        let mut identities = ValueIdentities::default();
+        identities.record(
+            reg("opaque_arg"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi"),
+                version: 1,
+            },
+        );
+        identities.record(
+            reg("rdi#1"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 1,
+            },
+        );
+
+        let mut exact = caller("opaque_arg");
+        recover_resolved_direct_tail_calls_with_identities(
+            &mut exact,
+            CallConv::SysVAmd64,
+            &names,
+            Some(&identities),
+        );
+        assert!(matches!(&exact.body[1], Stmt::Call { args, .. } if args.is_empty()));
+
+        let mut misleading = caller("rdi#1");
+        recover_resolved_direct_tail_calls_with_identities(
+            &mut misleading,
+            CallConv::SysVAmd64,
+            &names,
+            Some(&identities),
+        );
+        assert!(matches!(&misleading.body[1], Stmt::Call { args, .. } if args.len() == 6));
     }
 
     #[test]
