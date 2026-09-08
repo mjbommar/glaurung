@@ -112,3 +112,19 @@ captured log is
 classified from pytest's failure report rather than the pipeline status.
 
 No DecBench run or upstream interaction was performed.
+
+## Follow-up: classify mutations at their call sites
+
+Commit `bac6cef8` adds `VersionedSsa::apply_mutation`, whose API requires an
+explicit `Invalidate` class and a changed/no-op result. Both current LLIR
+mutations after SSA construction now use it: dead masked-input erasure and
+prototype-driven return materialization each declare `Invalidate::Uses` at the
+mutation call. A no-op retains the current artifact; an actual use mutation
+makes consumption fail until `ensure` reconstructs SSA.
+
+The new contract test was observed red before the API existed. It and the three
+adjacent default-invalidation, rebuild, and non-semantic-change tests pass
+individually with 4,416 unrelated tests filtered out. No broad suite or external
+benchmark ran. This closes migration of the currently active pipeline mutation
+sites, but compile-time enforcement for future mutating passes and a durable
+legacy-`All` count ratchet remain open.
