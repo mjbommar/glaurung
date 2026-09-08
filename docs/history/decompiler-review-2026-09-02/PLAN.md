@@ -1280,6 +1280,13 @@ provenance through lowering.
   onto the recovered wide load without weakening the dead-view, exact-lane,
   adjacency, or single-consumer proofs. Its observed-red test and all eight
   vector-copy tests pass; see `results/wp3-vector-bridge-expression-origins.md`.
+  Commit `0a8ba2bb` then makes guarded-switch recovery transparent to
+  attributed guard comparisons, bounds, discriminants, and unsigned cast
+  chains. The replacement switch receives the complete origin union from each
+  consumed guard/copy statement and expression tree without weakening case-
+  domain, exhaustiveness, width, one-use, or control-flow proofs. Its observed-
+  red test and all 18 guarded-switch tests pass; see
+  `results/wp3-guarded-switch-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
