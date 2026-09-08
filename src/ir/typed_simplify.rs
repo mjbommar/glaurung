@@ -97,9 +97,15 @@ fn fold_body(
                 addr: Expr::Reg(destination),
                 src,
                 ..
-            } if is_promoted_local_reg(destination) => {
-                if let Some(width) = destination_width(destination, types, identities) {
-                    fold_modular_expression(src, width);
+            } => {
+                let promoted = identities.map_or_else(
+                    || is_promoted_local_reg(destination),
+                    |identities| identities.is_promoted_stack_object(destination),
+                );
+                if promoted {
+                    if let Some(width) = destination_width(destination, types, identities) {
+                        fold_modular_expression(src, width);
+                    }
                 }
             }
             Stmt::Store { .. }
@@ -186,6 +192,82 @@ mod tests {
                 },
             }],
         }
+    }
+
+    fn extended_store(destination: VReg) -> Function {
+        Function {
+            name: "sum".into(),
+            entry_va: 0,
+            body: vec![Stmt::Store {
+                addr: Expr::Reg(destination.clone()),
+                src: Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 8,
+                        expr: Box::new(Expr::Cast {
+                            signed: false,
+                            width: 4,
+                            expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        }),
+                    }),
+                    rhs: Box::new(Expr::Reg(destination)),
+                },
+                size: 8,
+            }],
+        }
+    }
+
+    fn int32_type(types: &mut TypeMap, destination: VReg) {
+        types.upsert_public(
+            destination,
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+    }
+
+    #[test]
+    fn identity_owned_opaque_promoted_store_consumes_machine_extension() {
+        let object_name = "frame_object".to_string();
+        let destination = VReg::phys(&object_name);
+        let mut function = extended_store(destination.clone());
+        let mut types = TypeMap::default();
+        int32_type(&mut types, destination.clone());
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object_name]);
+
+        fold_consumed_extensions_with_identities(&mut function, &types, Some(&identities));
+
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Store {
+                src: Expr::Bin { lhs, .. },
+                ..
+            } if matches!(lhs.as_ref(), Expr::Cast { width: 4, .. })
+        ));
+    }
+
+    #[test]
+    fn identity_unowned_local_spelling_keeps_machine_extension() {
+        let destination = VReg::phys("local_looks_promoted");
+        let mut function = extended_store(destination.clone());
+        let before = function.clone();
+        let mut types = TypeMap::default();
+        int32_type(&mut types, destination.clone());
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            destination,
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rax"),
+                version: 3,
+            },
+        );
+
+        fold_consumed_extensions_with_identities(&mut function, &types, Some(&identities));
+
+        assert_eq!(function, before);
     }
 
     #[test]

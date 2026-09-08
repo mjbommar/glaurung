@@ -54,7 +54,11 @@ pub(crate) fn declared_int_type_with_identities(
         Some(identities) => identities.parameter_slot(&value).is_some(),
         None => parse_arg_index(ident).is_some(),
     };
-    if !is_parameter && !is_promoted_local(ident) {
+    let is_promoted = identities.map_or_else(
+        || is_promoted_local(ident),
+        |identities| identities.is_promoted_stack_object(&value),
+    );
+    if !is_parameter && !is_promoted {
         // Declared `long`: already machine-wide, never narrowed.
         return Some((true, 8));
     }
