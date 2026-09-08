@@ -6140,7 +6140,7 @@ function f @ 0x1000 {
             body: vec![
                 Stmt::Assign {
                     dst: result.clone(),
-                    src: Expr::Const(0xffff_ffff),
+                    src: Expr::Const(0xffff_ffff).with_origins(OriginSet::one(0x1000)),
                 },
                 Stmt::Return {
                     value: Some(Expr::Reg(result.clone())),

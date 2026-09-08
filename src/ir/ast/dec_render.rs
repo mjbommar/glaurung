@@ -2591,7 +2591,7 @@ fn write_representation_value_dec(destination_type: &str, src: &Expr, out: &mut 
         return;
     }
 
-    if let Expr::Const(value) = src {
+    if let Expr::Const(value) = src.semantic() {
         let pointer_width = DEC_POINTER_WIDTH.with(std::cell::Cell::get);
         if let Some(signed_value) =
             signed_destination_literal(destination_type, *value, pointer_width)
