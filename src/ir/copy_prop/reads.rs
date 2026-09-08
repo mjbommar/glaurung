@@ -100,15 +100,37 @@ pub(super) fn visit_expr_reads<F: FnMut(&VReg) -> bool>(e: &Expr, visit: &mut F)
 
 /// [`visit_expr_reads`] over one statement, including any nested body.
 pub(super) fn visit_stmt_reads<F: FnMut(&VReg) -> bool>(s: &Stmt, visit: &mut F) -> bool {
+    visit_stmt_reads_impl(s, visit, None)
+}
+
+pub(super) fn visit_stmt_reads_with_identities<F: FnMut(&VReg) -> bool>(
+    s: &Stmt,
+    visit: &mut F,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> bool {
+    visit_stmt_reads_impl(s, visit, Some(identities))
+}
+
+fn visit_stmt_reads_impl<F: FnMut(&VReg) -> bool>(
+    s: &Stmt,
+    visit: &mut F,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     match s {
-        Stmt::Origin { stmt, .. } => visit_stmt_reads(stmt, visit),
+        Stmt::Origin { stmt, .. } => visit_stmt_reads_impl(stmt, visit, identities),
         Stmt::IndirectGoto { target } => visit_expr_reads(target, visit),
         // The destination of an Assign is a WRITE, not a read.
         Stmt::Assign { src, .. } => visit_expr_reads(src, visit),
         Stmt::Store { addr, src, .. } => {
             // `Store local_x = value` is how promoted scalar assignment is
             // encoded. Its bare local is a destination, not a pointer read.
-            if !matches!(addr.semantic(), Expr::Reg(dst) if is_promoted_local_reg(dst))
+            let promoted = |value: &VReg| {
+                identities.map_or_else(
+                    || is_promoted_local_reg(value),
+                    |identities| identities.is_promoted_stack_object(value),
+                )
+            };
+            if !matches!(addr.semantic(), Expr::Reg(dst) if promoted(dst))
                 && !visit_expr_reads(addr, visit)
             {
                 return false;
@@ -136,16 +158,18 @@ pub(super) fn visit_stmt_reads<F: FnMut(&VReg) -> bool>(s: &Stmt, visit: &mut F)
             then_body,
             else_body,
         } => {
-            if !visit_expr_reads(cond, visit) || !visit_body_reads(then_body, visit) {
+            if !visit_expr_reads(cond, visit)
+                || !visit_body_reads_impl(then_body, visit, identities)
+            {
                 return false;
             }
             match else_body {
-                Some(eb) => visit_body_reads(eb, visit),
+                Some(eb) => visit_body_reads_impl(eb, visit, identities),
                 None => true,
             }
         }
         Stmt::While { cond, body } => {
-            visit_expr_reads(cond, visit) && visit_body_reads(body, visit)
+            visit_expr_reads(cond, visit) && visit_body_reads_impl(body, visit, identities)
         }
         Stmt::For {
             init,
@@ -153,13 +177,13 @@ pub(super) fn visit_stmt_reads<F: FnMut(&VReg) -> bool>(s: &Stmt, visit: &mut F)
             step,
             body,
         } => {
-            visit_stmt_reads(init, visit)
+            visit_stmt_reads_impl(init, visit, identities)
                 && visit_expr_reads(cond, visit)
-                && visit_body_reads(body, visit)
-                && visit_stmt_reads(step, visit)
+                && visit_body_reads_impl(body, visit, identities)
+                && visit_stmt_reads_impl(step, visit, identities)
         }
         Stmt::DoWhile { body, cond } => {
-            visit_body_reads(body, visit) && visit_expr_reads(cond, visit)
+            visit_body_reads_impl(body, visit, identities) && visit_expr_reads(cond, visit)
         }
         Stmt::Switch {
             discriminant,
@@ -170,12 +194,12 @@ pub(super) fn visit_stmt_reads<F: FnMut(&VReg) -> bool>(s: &Stmt, visit: &mut F)
                 return false;
             }
             for (_, b) in cases {
-                if !visit_body_reads(b, visit) {
+                if !visit_body_reads_impl(b, visit, identities) {
                     return false;
                 }
             }
             match default {
-                Some(b) => visit_body_reads(b, visit),
+                Some(b) => visit_body_reads_impl(b, visit, identities),
                 None => true,
             }
         }
@@ -194,8 +218,16 @@ pub(super) fn visit_stmt_reads<F: FnMut(&VReg) -> bool>(s: &Stmt, visit: &mut F)
 
 /// [`visit_stmt_reads`] over a statement list.
 pub(super) fn visit_body_reads<F: FnMut(&VReg) -> bool>(body: &[Stmt], visit: &mut F) -> bool {
+    visit_body_reads_impl(body, visit, None)
+}
+
+fn visit_body_reads_impl<F: FnMut(&VReg) -> bool>(
+    body: &[Stmt],
+    visit: &mut F,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     for s in body {
-        if !visit_stmt_reads(s, visit) {
+        if !visit_stmt_reads_impl(s, visit, identities) {
             return false;
         }
     }
@@ -245,9 +277,81 @@ pub(super) fn count_reads_stmt(s: &Stmt, reads: &mut RegMap<usize>) {
     });
 }
 
+pub(super) fn count_reads_stmt_with_identities(
+    s: &Stmt,
+    reads: &mut RegMap<usize>,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    visit_stmt_reads_with_identities(
+        s,
+        &mut |r| {
+            bump(reads, r);
+            true
+        },
+        identities,
+    );
+}
+
 pub(super) fn count_reads_body(body: &[Stmt], reads: &mut RegMap<usize>) {
     visit_body_reads(body, &mut |r| {
         bump(reads, r);
         true
     });
+}
+
+pub(super) fn count_reads_body_with_identities(
+    body: &[Stmt],
+    reads: &mut RegMap<usize>,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    visit_body_reads_impl(
+        body,
+        &mut |r| {
+            bump(reads, r);
+            true
+        },
+        Some(identities),
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reg(name: &str) -> VReg {
+        VReg::phys(name)
+    }
+
+    #[test]
+    fn authoritative_identity_counts_opaque_store_target_as_write() {
+        let object_name = "frame_object".to_string();
+        let object = reg(&object_name);
+        let body = vec![Stmt::Store {
+            addr: Expr::Reg(object.clone()),
+            src: Expr::Const(7),
+            size: 4,
+        }];
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object_name]);
+        let mut reads = RegMap::default();
+
+        count_reads_body_with_identities(&body, &mut reads, &identities);
+
+        assert_eq!(reads.get(&object), None);
+    }
+
+    #[test]
+    fn spelling_fallback_counts_legacy_local_store_target_as_write() {
+        let object = reg("local_8");
+        let body = vec![Stmt::Store {
+            addr: Expr::Reg(object.clone()),
+            src: Expr::Const(7),
+            size: 4,
+        }];
+        let mut reads = RegMap::default();
+
+        count_reads_body(&body, &mut reads);
+
+        assert_eq!(reads.get(&object), None);
+    }
 }

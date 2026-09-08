@@ -29,7 +29,7 @@ use crate::ir::types::VReg;
 
 use super::alias::is_scratch_reg;
 use super::hash::{RegMap, RegSet};
-use super::reads::{visit_expr_reads, visit_stmt_reads};
+use super::reads::{visit_expr_reads, visit_stmt_reads, visit_stmt_reads_with_identities};
 
 /// Remove closed scratch-value graphs that cannot influence observable output.
 ///
@@ -149,8 +149,16 @@ pub(super) fn prune_unobservable_scratch_dataflow(
                         }
                         true
                     };
-                    visit_stmt_reads(init, &mut add_root);
-                    visit_stmt_reads(step, &mut add_root);
+                    match identities {
+                        Some(identities) => {
+                            visit_stmt_reads_with_identities(init, &mut add_root, identities);
+                            visit_stmt_reads_with_identities(step, &mut add_root, identities);
+                        }
+                        None => {
+                            visit_stmt_reads(init, &mut add_root);
+                            visit_stmt_reads(step, &mut add_root);
+                        }
+                    }
                     if let Stmt::Assign { dst, .. } = init.semantic() {
                         roots.insert(dst.clone());
                     }

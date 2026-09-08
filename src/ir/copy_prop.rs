@@ -70,7 +70,7 @@ use env::{
     is_self_ref, Copies,
 };
 use hash::RegMap;
-use reads::count_reads_body;
+use reads::{count_reads_body, count_reads_body_with_identities};
 use scratch_liveness::prune_unobservable_scratch_dataflow;
 use subst::{subst, subst_store_addr};
 
@@ -137,7 +137,10 @@ fn propagate_copies_impl(
     // contract as ordinary SSA simplification, bounded here to keep it cheap.
     let mut changed = false;
     let mut reads: RegMap<usize> = RegMap::default();
-    count_reads_body(&f.body, &mut reads);
+    match identities {
+        Some(identities) => count_reads_body_with_identities(&f.body, &mut reads, identities),
+        None => count_reads_body(&f.body, &mut reads),
+    }
     propagate_run_counted(&mut f.body, &reads, &mut changed, identities);
     propagate_run(&mut f.body, &mut changed, identities);
     for _ in 0..8 {
@@ -146,7 +149,10 @@ fn propagate_copies_impl(
         }
         changed = true;
         let mut reads: RegMap<usize> = RegMap::default();
-        count_reads_body(&f.body, &mut reads);
+        match identities {
+            Some(identities) => count_reads_body_with_identities(&f.body, &mut reads, identities),
+            None => count_reads_body(&f.body, &mut reads),
+        }
         propagate_run_counted(&mut f.body, &reads, &mut changed, identities);
     }
     // Copy propagation exposes local dead stores (`ret = local_c; ret =

@@ -46,8 +46,33 @@ use super::alias::{
 };
 use super::env::Copies;
 use super::hash::RegMap;
-use super::reads::{count_reads_body, count_reads_stmt, count_reg_uses};
+use super::reads::{
+    count_reads_body, count_reads_body_with_identities, count_reads_stmt,
+    count_reads_stmt_with_identities, count_reg_uses,
+};
 use super::subst::subst;
+
+fn count_body_reads(
+    body: &[Stmt],
+    reads: &mut RegMap<usize>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
+    match identities {
+        Some(identities) => count_reads_body_with_identities(body, reads, identities),
+        None => count_reads_body(body, reads),
+    }
+}
+
+fn count_statement_reads(
+    statement: &Stmt,
+    reads: &mut RegMap<usize>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
+    match identities {
+        Some(identities) => count_reads_stmt_with_identities(statement, reads, identities),
+        None => count_reads_stmt(statement, reads),
+    }
+}
 
 /// Inline an adjacent, one-use promoted-stack value temporary represented as
 /// an explicit assignment.
@@ -132,7 +157,7 @@ fn propagate_adjacent_guard_values_impl(
 ) {
     loop {
         let mut reads = RegMap::default();
-        count_reads_body(&f.body, &mut reads);
+        count_body_reads(&f.body, &mut reads, identities);
         if !fold_one_adjacent_guard_value(&mut f.body, &reads, identities) {
             break;
         }
@@ -193,7 +218,7 @@ fn move_adjacent_effectful_scratch_values_impl(
 ) {
     loop {
         let mut reads = RegMap::default();
-        count_reads_body(&function.body, &mut reads);
+        count_body_reads(&function.body, &mut reads, identities);
         if !move_one_adjacent_effectful_scratch_value(&mut function.body, &reads, identities) {
             break;
         }
@@ -465,11 +490,11 @@ fn fold_one_adjacent_guard_value(
             continue;
         }
         let mut other_reads = RegMap::default();
-        count_reads_body(then_body, &mut other_reads);
+        count_body_reads(then_body, &mut other_reads, identities);
         if let Some(else_body) = else_body {
-            count_reads_body(else_body, &mut other_reads);
+            count_body_reads(else_body, &mut other_reads, identities);
         }
-        count_reads_body(&body[guard_index + 1..], &mut other_reads);
+        count_body_reads(&body[guard_index + 1..], &mut other_reads, identities);
         if other_reads.get(&dst).copied().unwrap_or(0) != 0 {
             continue;
         }
@@ -543,12 +568,12 @@ fn fold_one_adjacent_promoted_value(
         };
 
         let mut next_reads = RegMap::default();
-        count_reads_stmt(&body[next_index], &mut next_reads);
+        count_statement_reads(&body[next_index], &mut next_reads, identities);
         if next_reads.get(&dst).copied().unwrap_or(0) != 1 {
             continue;
         }
         let mut later_reads = RegMap::default();
-        count_reads_body(&body[next_index + 1..], &mut later_reads);
+        count_body_reads(&body[next_index + 1..], &mut later_reads, identities);
         if later_reads.get(&dst).copied().unwrap_or(0) != 0 {
             // Another use in this same structured run still observes the
             // definition. Other cases/arms live in a different Vec and do not

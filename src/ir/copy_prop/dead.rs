@@ -23,7 +23,7 @@ use crate::ir::ast::Stmt;
 use super::alias::is_scratch_reg;
 use super::env::{is_pure_copyable, is_self_ref};
 use super::hash::RegMap;
-use super::reads::{count_reads_body, visit_expr_reads};
+use super::reads::{count_reads_body, count_reads_body_with_identities, visit_expr_reads};
 
 /// Within each straight-line run, drop a scratch-register write that is
 /// overwritten by a later write before any intervening read (a dead store).
@@ -133,7 +133,10 @@ pub(super) fn eliminate_dead_copies(
 ) -> bool {
     // Count reads of every register across the whole (nested) body.
     let mut reads: RegMap<usize> = RegMap::default();
-    count_reads_body(body, &mut reads);
+    match identities {
+        Some(identities) => count_reads_body_with_identities(body, &mut reads, identities),
+        None => count_reads_body(body, &mut reads),
+    }
     remove_dead(body, &reads, identities)
 }
 
