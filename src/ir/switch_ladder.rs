@@ -587,6 +587,7 @@ impl Range {
 /// range tracked in unsigned space, and mixing the two in one ladder is not a
 /// shape we can reason about — better to leave those trees alone.
 fn classify(cond: &Expr, disc: &mut Option<VReg>) -> Option<Test> {
+    let cond = cond.semantic();
     // x86 `jg` is reconstructed from flags as `!(ZF || SF^OF)`. Once the flag
     // expressions are folded, the exact AST is:
     //
@@ -653,7 +654,7 @@ fn signed_i32_view(expr: &Expr) -> Option<&VReg> {
         signed: true,
         width: 8,
         expr,
-    } = expr
+    } = expr.semantic()
     else {
         return None;
     };
@@ -661,11 +662,11 @@ fn signed_i32_view(expr: &Expr) -> Option<&VReg> {
         signed: true,
         width: 4,
         expr,
-    } = expr.as_ref()
+    } = expr.semantic()
     else {
         return None;
     };
-    let Expr::Reg(register) = expr.as_ref() else {
+    let Expr::Reg(register) = expr.semantic() else {
         return None;
     };
     Some(register)
@@ -679,7 +680,7 @@ fn unsigned_i32_view(expr: &Expr) -> Option<&VReg> {
         signed: false,
         width: 8,
         expr,
-    } = expr
+    } = expr.semantic()
     else {
         return None;
     };
@@ -687,11 +688,11 @@ fn unsigned_i32_view(expr: &Expr) -> Option<&VReg> {
         signed: false,
         width: 4,
         expr,
-    } = expr.as_ref()
+    } = expr.semantic()
     else {
         return None;
     };
-    let Expr::Reg(register) = expr.as_ref() else {
+    let Expr::Reg(register) = expr.semantic() else {
         return None;
     };
     Some(register)
@@ -702,11 +703,11 @@ fn equality_on_reg(expr: &Expr) -> Option<(&VReg, i64)> {
         op: CmpOp::Eq,
         lhs,
         rhs,
-    } = expr
+    } = expr.semantic()
     else {
         return None;
     };
-    match (lhs.as_ref(), rhs.as_ref()) {
+    match (lhs.semantic(), rhs.semantic()) {
         (Expr::Reg(register), Expr::Const(value)) | (Expr::Const(value), Expr::Reg(register)) => {
             Some((register, *value))
         }
@@ -724,11 +725,11 @@ fn inequality_on_reg(expr: &Expr, disc: &mut Option<VReg>) -> Option<i64> {
         op: CmpOp::Ne,
         lhs,
         rhs,
-    } = expr
+    } = expr.semantic()
     else {
         return None;
     };
-    let (register, value) = match (lhs.as_ref(), rhs.as_ref()) {
+    let (register, value) = match (lhs.semantic(), rhs.semantic()) {
         (Expr::Reg(register), Expr::Const(value)) | (Expr::Const(value), Expr::Reg(register)) => {
             (register, *value)
         }
@@ -752,11 +753,11 @@ fn signed_less_on_same_reg(expr: &Expr, register: &VReg, value: i64) -> bool {
         op: CmpOp::Slt,
         lhs,
         rhs,
-    } = expr
+    } = expr.semantic()
     else {
         return false;
     };
-    matches!(rhs.as_ref(), Expr::Const(k) if *k == value)
+    matches!(rhs.semantic(), Expr::Const(k) if *k == value)
         && signed_i32_view(lhs).is_some_and(|seen| seen == register)
 }
 
@@ -765,11 +766,11 @@ fn lifted_signed_greater(cond: &Expr) -> Option<(VReg, i64)> {
         op: CmpOp::Eq,
         lhs,
         rhs,
-    } = cond
+    } = cond.semantic()
     else {
         return None;
     };
-    let inner = match (lhs.as_ref(), rhs.as_ref()) {
+    let inner = match (lhs.semantic(), rhs.semantic()) {
         (inner, Expr::Const(0)) | (Expr::Const(0), inner) => inner,
         _ => return None,
     };
@@ -777,7 +778,7 @@ fn lifted_signed_greater(cond: &Expr) -> Option<(VReg, i64)> {
         op: BinOp::Or,
         lhs,
         rhs,
-    } = inner
+    } = inner.semantic()
     else {
         return None;
     };
@@ -1086,10 +1087,11 @@ fn statement_tree_origins(statement: &Stmt) -> Option<OriginSet> {
         match statement.semantic() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
+                cond,
                 then_body,
                 else_body,
-                ..
             } => {
+                merge(out, cond.origins());
                 for child in then_body {
                     walk(child, out);
                 }
@@ -1242,9 +1244,9 @@ mod tests {
         match statement.semantic_mut() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::If {
+                cond,
                 then_body,
                 else_body,
-                ..
             } => {
                 for child in then_body {
                     attribute_control_tree(child, next);
@@ -1254,6 +1256,10 @@ mod tests {
                         attribute_control_tree(child, next);
                     }
                 }
+                let origin = OriginSet::one(*next);
+                *next += 4;
+                let owned = std::mem::replace(cond, Expr::Const(0));
+                *cond = owned.with_origins(origin);
             }
             _ => {}
         }
@@ -1273,11 +1279,14 @@ mod tests {
             out.merge(origins);
         }
         if let Stmt::If {
+            cond,
             then_body,
             else_body,
-            ..
         } = statement.semantic()
         {
+            if let Some(origins) = cond.origins() {
+                out.merge(origins);
+            }
             for child in then_body {
                 collect_origins(child, out);
             }
