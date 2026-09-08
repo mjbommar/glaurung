@@ -1124,6 +1124,13 @@ provenance through lowering.
   observed-red test and all 59 constant-fold tests pass, including the
   module's checked-in real-binary end-to-end canary; see
   `results/wp3-inclusive-comparison-expression-origins.md`.
+  Commit `65162531` follows through the adjacent width-proved terminal
+  mixed-view relation. Attributed terminal test, relation, equality, and
+  signed-less nodes now recover the same readable `K < signed(x)` expression,
+  and nested carriers created by an inner fold flatten into their canonical
+  four-owner union. Its two observed-red states, focused test, and all 60
+  constant-fold tests pass; see
+  `results/wp3-terminal-relation-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 

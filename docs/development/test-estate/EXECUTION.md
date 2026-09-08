@@ -74,7 +74,7 @@ Both have since landed, so they are links again.
 | [x] Bounded AST fixpoints report rounds, firings, and termination | review WP2 | `5f7df194` |
 | [x] First versioned-SSA lifecycle: conservative invalidation across definedness and return materialization | review WP3 | `925dc002`, `09522773`, census `4bfee20c` |
 | [x] Opaque SSA identity sidecar through AST lowering and first two product consumers | review WP3 | `f05c9a5d`, `af65c260` |
-| [x] First production expression-origin attachments with exact fixture A/B | review WP3 | `9b10f06e`, `3c5c74b9`, `f30167f7`, `b269a3f2`, `86ac95a6`, `fb878925`, `5f8dec01`, `76753c05`, `bb98a3a9`, `e68ff86f`, `a756a6d5`, `f2e69784`, `4c19cb2e`, `97aef0c3` |
+| [x] First production expression-origin attachments with exact fixture A/B | review WP3 | `9b10f06e`, `3c5c74b9`, `f30167f7`, `b269a3f2`, `86ac95a6`, `fb878925`, `5f8dec01`, `76753c05`, `bb98a3a9`, `e68ff86f`, `a756a6d5`, `f2e69784`, `4c19cb2e`, `97aef0c3`, `65162531` |
 | [x] Determinism: same bytes in-process and cross-process | estate 2.3 | `b4d23221` |
 | [x] Nightly fuzz runner + "is it run" invariant | estate 3.4 | `665fe25d` |
 | [x] 74 unreachable entries classified into 5 buckets | — | `1f819d63` |
