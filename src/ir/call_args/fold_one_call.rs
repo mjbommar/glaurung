@@ -26,10 +26,11 @@ use super::{
     aapcs_core_register_arity, aapcs_integer_stack_suffix, arg_slots, direct_call_target_va,
     fold_one_arm_hard_float_call, fold_one_cdecl32_call, fold_one_recovered_layout_call,
     fold_one_recovered_layout_call_with_live_ins, fold_one_table_call, is_frame_coordinate_storage,
-    is_pure_arg_normalisation, is_stable_frame_arg_definition, known_arm_core_register_arity,
-    known_arm_hard_float_layout, layout_matches_abi_allocation_order, mark_arg_reads_in_expr,
-    mark_arg_reads_in_stmt, mark_arg_writes_in_stmt, outgoing_aapcs_stack_area,
-    outgoing_stack_cleanup, outgoing_sysv_stack_area, outgoing_sysv_stack_push, reads_reg_in_expr,
+    is_pure_arg_normalisation, is_stable_frame_arg_definition_with_identities,
+    known_arm_core_register_arity, known_arm_hard_float_layout,
+    layout_matches_abi_allocation_order, mark_arg_reads_in_expr, mark_arg_reads_in_stmt,
+    mark_arg_writes_in_stmt, outgoing_aapcs_stack_area, outgoing_stack_cleanup,
+    outgoing_sysv_stack_area, outgoing_sysv_stack_push, reads_reg_in_expr,
     resolve_captured_definition, resolve_captured_definition_in, return_reg, slot_of, ssa_base,
     stack_pointer_sub_width, substitute_exact_reg, table_call_may_use_layout,
     versioned_operand_is_reassigned, CallConv, CalleeLayouts, EnclosingSlots, KEEP_ARG_SETUP,
@@ -290,7 +291,9 @@ pub(super) fn fold_one_call(
                         // one does, folding this assignment would leave a
                         // dangling reference in the higher slot's expr.
                         let substitutable = (is_pure_arg_normalisation(src)
-                            || is_stable_frame_arg_definition(src, body, i, call_idx))
+                            || is_stable_frame_arg_definition_with_identities(
+                                src, body, i, call_idx, identities,
+                            ))
                             && !versioned_operand_is_reassigned(src, body, i, call_idx);
                         let feeds_captured_register_argument = found
                             .iter()
@@ -372,7 +375,9 @@ pub(super) fn fold_one_call(
                         continue;
                     }
                     let substitutable = (is_pure_arg_normalisation(src)
-                        || is_stable_frame_arg_definition(src, body, i, call_idx))
+                        || is_stable_frame_arg_definition_with_identities(
+                            src, body, i, call_idx, identities,
+                        ))
                         && !versioned_operand_is_reassigned(src, body, i, call_idx);
                     let feeds_captured_argument = resolve_captured_definition(
                         &mut found,
@@ -455,7 +460,9 @@ pub(super) fn fold_one_call(
                         continue;
                     }
                     let substitutable = (is_pure_arg_normalisation(src)
-                        || is_stable_frame_arg_definition(src, body, i, call_idx))
+                        || is_stable_frame_arg_definition_with_identities(
+                            src, body, i, call_idx, identities,
+                        ))
                         && !versioned_operand_is_reassigned(src, body, i, call_idx);
                     if resolve_captured_definition_in(
                         &mut found,

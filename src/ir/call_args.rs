@@ -47,8 +47,8 @@ use aapcs::{
     known_arm_core_register_arity, known_arm_hard_float_layout, outgoing_aapcs_stack_area,
 };
 use captured_defs::{
-    is_stable_frame_arg_definition, resolve_captured_definition, resolve_captured_definition_in,
-    substitute_exact_reg,
+    is_stable_frame_arg_definition_with_identities, resolve_captured_definition,
+    resolve_captured_definition_in, substitute_exact_reg,
 };
 use cdecl32::fold_one_cdecl32_call;
 use enclosing_slots::EnclosingSlots;
@@ -5987,6 +5987,80 @@ mod tests {
         assert!(!is_frame_coordinate_storage(
             CallConv::SysVAmd64,
             &VReg::phys("rsp#4"),
+            Some(&identities),
+        ));
+    }
+
+    #[test]
+    fn stable_frame_load_uses_exact_identity_not_display_spelling() {
+        let frame_load = |base| Expr::Deref {
+            addr: Box::new(Expr::Lea {
+                base: Some(VReg::phys(base)),
+                index: None,
+                scale: 1,
+                disp: -8,
+                segment: None,
+            }),
+            size: 4,
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            VReg::phys("opaque_frame"),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rbp"),
+                version: 3,
+            },
+        );
+        identities.record(
+            VReg::phys("rbp#3"),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rax"),
+                version: 3,
+            },
+        );
+        identities.record(
+            VReg::phys("opaque_reframe"),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rbp"),
+                version: 4,
+            },
+        );
+
+        let body = vec![assign("rax", 1), call_to("callee")];
+
+        assert!(is_stable_frame_arg_definition_with_identities(
+            &frame_load("opaque_frame"),
+            &body,
+            0,
+            0,
+            Some(&identities),
+        ));
+        assert!(!is_stable_frame_arg_definition_with_identities(
+            &frame_load("rbp#3"),
+            &body,
+            0,
+            0,
+            Some(&identities),
+        ));
+
+        let fake_frame_write = vec![assign("rax", 1), assign("rbp#3", 2), call_to("callee")];
+        assert!(is_stable_frame_arg_definition_with_identities(
+            &frame_load("opaque_frame"),
+            &fake_frame_write,
+            0,
+            2,
+            Some(&identities),
+        ));
+        let real_frame_write = vec![
+            assign("rax", 1),
+            assign("opaque_reframe", 2),
+            call_to("callee"),
+        ];
+        assert!(!is_stable_frame_arg_definition_with_identities(
+            &frame_load("opaque_frame"),
+            &real_frame_write,
+            0,
+            2,
             Some(&identities),
         ));
     }
