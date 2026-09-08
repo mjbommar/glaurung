@@ -1137,6 +1137,12 @@ provenance through lowering.
   consumed subtraction/zero owners. Its observed-red test and all 61
   constant-fold tests pass; see
   `results/wp3-subtraction-relation-expression-origins.md`.
+  Commit `5e04d66a` then applies the normative hoisting contract to literal
+  selects: an attributed constant predicate is recognized, the chosen arm
+  keeps its owner and receives the consumed condition/select owners, and the
+  unreachable arm's owner is excluded. Its observed-red four-owner test and
+  all 62 constant-fold tests pass; see
+  `results/wp3-constant-select-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
