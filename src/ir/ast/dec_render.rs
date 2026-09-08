@@ -1658,6 +1658,7 @@ mod pointer_parameter_tests {
 fn write_float_expr_dec(expr: &Expr, width: u8, out: &mut String) {
     let float_type = if width == 4 { "float" } else { "double" };
     match expr {
+        Expr::Origin { expr, .. } => write_float_expr_dec(expr, width, out),
         Expr::FloatConst {
             width: literal_width,
             bits,
@@ -1789,6 +1790,7 @@ fn write_float_expr_dec(expr: &Expr, width: u8, out: &mut String) {
 /// verified here.
 fn float_rendered_width(expr: &Expr) -> Option<u8> {
     match expr {
+        Expr::Origin { expr, .. } => float_rendered_width(expr),
         Expr::Reg(register @ VReg::Phys(_)) => match declared_reg_ctype(register).as_str() {
             "float" => Some(4),
             "double" => Some(8),
@@ -1821,6 +1823,28 @@ fn float_rendered_width(expr: &Expr) -> Option<u8> {
         }
         Expr::Un { op: UnOp::Neg, src } => float_rendered_width(src),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod float_origin_tests {
+    use super::*;
+
+    #[test]
+    fn attributed_float_arithmetic_remains_a_numeric_value() {
+        let expression = Expr::Un {
+            op: UnOp::Neg,
+            src: Box::new(Expr::FloatConst {
+                width: 4,
+                bits: (1.0_f32).to_bits() as u64,
+            }),
+        }
+        .with_origins(super::super::OriginSet::one(0x4010));
+
+        assert_eq!(float_rendered_width(&expression), Some(4));
+        let mut rendered = String::new();
+        write_float_expr_dec(&expression, 4, &mut rendered);
+        assert_eq!(rendered, "(-1.0f)");
     }
 }
 
