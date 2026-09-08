@@ -1440,6 +1440,11 @@ provenance through lowering.
   longer admitted to ordinary, switch-entry, or dead-copy environments. Its
   observed-red invariant and all 54 copy-propagation tests pass; see
   `results/wp3-copy-self-reference-origins.md`.
+  Commit `82d7f3db` then makes both linear propagation walkers invalidate
+  aliases at attributed register stores. A pre-write snapshot can no longer be
+  silently replaced by its source's post-write value. Its end-to-end AST test
+  was observed red and all 55 copy-propagation tests pass; see
+  `results/wp3-copy-linear-store-invalidation.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
