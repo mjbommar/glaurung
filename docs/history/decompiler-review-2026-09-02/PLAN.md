@@ -1175,6 +1175,11 @@ provenance through lowering.
   enclosing operation plus both operand owners; division-by-zero and invalid-
   shift refusals are unchanged. Its observed-red test and all 68 constant-fold
   tests pass; see `results/wp3-constant-arithmetic-expression-origins.md`.
+  Commit `e2df3e60` next makes signed and unsigned constant comparisons
+  transparent to operand carriers. The folded boolean retains the enclosing
+  comparison plus both operand owners. Its observed-red test and all 69
+  constant-fold tests pass; see
+  `results/wp3-constant-comparison-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
