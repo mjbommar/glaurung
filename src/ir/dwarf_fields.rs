@@ -152,11 +152,15 @@ fn visit_definitions<'a>(
         match statement.semantic() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } if dst == target => visitor(Some(src)),
-            Stmt::Store {
-                addr: Expr::Reg(dst),
-                src,
-                ..
-            } if dst == target && is_promoted_stack_object(dst, identities) => visitor(Some(src)),
+            Stmt::Store { addr, src, .. }
+                if matches!(
+                    addr.semantic(),
+                    Expr::Reg(dst)
+                        if dst == target && is_promoted_stack_object(dst, identities)
+                ) =>
+            {
+                visitor(Some(src))
+            }
             Stmt::Call { dst: Some(dst), .. } if dst == target => visitor(None),
             Stmt::Pop { target: dst } if dst == target => visitor(None),
             Stmt::If {
@@ -251,11 +255,15 @@ fn infer_body(
                     }
                 }
             }
-            Stmt::Store {
-                addr: Expr::Reg(dst),
-                src,
-                ..
-            } if is_promoted_stack_object(dst, identities) => {
+            Stmt::Store { addr, src, .. }
+                if matches!(
+                    addr.semantic(),
+                    Expr::Reg(dst) if is_promoted_stack_object(dst, identities)
+                ) =>
+            {
+                let Expr::Reg(dst) = addr.semantic() else {
+                    unreachable!("store guard requires a semantic register")
+                };
                 if let Some(name) = pointer_source_type(src, layouts, pointer_width, pointer_types)
                 {
                     if pointer_types.get(dst) != Some(&name) {
@@ -437,8 +445,10 @@ fn annotate_body(
                 // type propagation proves the slot contains `struct T *`,
                 // annotating offset zero here would turn `local = value` into
                 // the unrelated field store `local->first_field = value`.
-                if !matches!(addr, Expr::Reg(register) if is_promoted_stack_object(register, identities))
-                {
+                if !matches!(
+                    addr.semantic(),
+                    Expr::Reg(register) if is_promoted_stack_object(register, identities)
+                ) {
                     annotate_address(
                         addr,
                         *size,
@@ -1276,13 +1286,13 @@ mod tests {
             entry_va: 0x1000,
             body: vec![
                 Stmt::Store {
-                    addr: Expr::Reg(local.clone()),
-                    src: Expr::Reg(VReg::phys("arg0")),
+                    addr: Expr::Reg(local.clone()).with_origins(OriginSet::one(0x1000)),
+                    src: Expr::Reg(VReg::phys("arg0")).with_origins(OriginSet::one(0x1004)),
                     size: 8,
                 },
                 Stmt::Store {
-                    addr: Expr::Reg(local.clone()),
-                    src: Expr::Const(0),
+                    addr: Expr::Reg(local.clone()).with_origins(OriginSet::one(0x1008)),
+                    src: Expr::Const(0).with_origins(OriginSet::one(0x100c)),
                     size: 8,
                 },
                 Stmt::Return {
@@ -1296,18 +1306,18 @@ mod tests {
 
         assert_eq!(pointer_types.get(&local).map(String::as_str), Some("node"));
         assert!(matches!(
-            &function.body[0],
+            function.body[0].semantic(),
             Stmt::Store {
-                addr: Expr::Reg(dst),
+                addr,
                 ..
-            } if dst == &local
+            } if matches!(addr.semantic(), Expr::Reg(dst) if dst == &local)
         ));
         assert!(matches!(
-            &function.body[1],
+            function.body[1].semantic(),
             Stmt::Store {
-                addr: Expr::Reg(dst),
+                addr,
                 ..
-            } if dst == &local
+            } if matches!(addr.semantic(), Expr::Reg(dst) if dst == &local)
         ));
     }
 
@@ -1320,8 +1330,8 @@ mod tests {
             entry_va: 0x1000,
             body: vec![
                 Stmt::Store {
-                    addr: Expr::Reg(local.clone()),
-                    src: Expr::Reg(VReg::phys("arg0")),
+                    addr: Expr::Reg(local.clone()).with_origins(OriginSet::one(0x1000)),
+                    src: Expr::Reg(VReg::phys("arg0")).with_origins(OriginSet::one(0x1004)),
                     size: 8,
                 },
                 Stmt::Return {
@@ -1342,11 +1352,11 @@ mod tests {
 
         assert_eq!(pointer_types.get(&local).map(String::as_str), Some("node"));
         assert!(matches!(
-            &function.body[0],
+            function.body[0].semantic(),
             Stmt::Store {
-                addr: Expr::Reg(dst),
+                addr,
                 ..
-            } if dst == &local
+            } if matches!(addr.semantic(), Expr::Reg(dst) if dst == &local)
         ));
     }
 
@@ -1357,8 +1367,8 @@ mod tests {
             name: "list_find".to_string(),
             entry_va: 0x1000,
             body: vec![Stmt::Store {
-                addr: Expr::Reg(local.clone()),
-                src: Expr::Reg(VReg::phys("arg0")),
+                addr: Expr::Reg(local.clone()).with_origins(OriginSet::one(0x1000)),
+                src: Expr::Reg(VReg::phys("arg0")).with_origins(OriginSet::one(0x1004)),
                 size: 8,
             }],
         };
