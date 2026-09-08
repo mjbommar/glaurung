@@ -26,17 +26,18 @@ use super::{
     aapcs_core_register_arity, aapcs_integer_stack_suffix, arg_slots, direct_call_target_va,
     fold_one_arm_hard_float_call_with_identities, fold_one_cdecl32_call,
     fold_one_recovered_layout_call, fold_one_recovered_layout_call_with_live_ins,
-    fold_one_table_call, is_frame_coordinate_storage, is_pure_arg_normalisation,
-    is_stable_frame_arg_definition_with_identities, known_arm_core_register_arity,
-    known_arm_hard_float_layout, layout_matches_abi_allocation_order,
-    mark_arg_reads_in_expr_with_identities, mark_arg_reads_in_stmt_with_identities,
-    mark_arg_writes_in_stmt_with_identities, outgoing_aapcs_stack_area_with_identities,
-    outgoing_stack_cleanup_with_identities, outgoing_sysv_stack_area,
-    outgoing_sysv_stack_push_with_identities, reads_reg_in_expr, register_argument_slot,
-    register_is_entry_return_storage, register_is_return_storage, register_is_storage,
-    resolve_captured_definition, resolve_captured_definition_in, return_reg, ssa_base,
-    stack_pointer_sub_width_with_identities, substitute_exact_reg, table_call_may_use_layout,
-    versioned_operand_is_reassigned, CallConv, CalleeLayouts, EnclosingSlots, KEEP_ARG_SETUP,
+    fold_one_table_call, has_numbered_identity, is_frame_coordinate_storage,
+    is_pure_arg_normalisation, is_stable_frame_arg_definition_with_identities,
+    known_arm_core_register_arity, known_arm_hard_float_layout,
+    layout_matches_abi_allocation_order, mark_arg_reads_in_expr_with_identities,
+    mark_arg_reads_in_stmt_with_identities, mark_arg_writes_in_stmt_with_identities,
+    outgoing_aapcs_stack_area_with_identities, outgoing_stack_cleanup_with_identities,
+    outgoing_sysv_stack_area, outgoing_sysv_stack_push_with_identities, reads_reg_in_expr,
+    register_argument_slot, register_is_entry_return_storage, register_is_return_storage,
+    register_is_storage, resolve_captured_definition, resolve_captured_definition_in, return_reg,
+    ssa_base, stack_pointer_sub_width_with_identities, substitute_exact_reg,
+    table_call_may_use_layout, versioned_operand_is_reassigned, CallConv, CalleeLayouts,
+    EnclosingSlots, KEEP_ARG_SETUP,
 };
 
 pub(super) fn fold_one_call(
@@ -301,7 +302,7 @@ pub(super) fn fold_one_call(
             if let Some(origins) = &statement_origins {
                 attributed_source.merge_origins(origins);
             }
-            if let VReg::Phys(name) = dst {
+            if matches!(dst, VReg::Phys(_)) {
                 if let Some(slot) = register_argument_slot(arch, dst, identities) {
                     if known_arm_core_arity.is_some_and(|arity| slot >= arity) {
                         // The fixed declaration proves this is caller-local
@@ -507,9 +508,10 @@ pub(super) fn fold_one_call(
                 // AAPCS resolves stack coordinates against a live `sp`, and
                 // folding a definition into one rewrites `sp + 12` into the
                 // whole frame-adjust chain.
-                let versioned_stack_capture =
-                    name.contains('#') && matches!(arch, CallConv::SysVAmd64 | CallConv::Win64);
-                if (!name.contains('#') || versioned_stack_capture)
+                let numbered = has_numbered_identity(dst, identities);
+                let numbered_stack_capture =
+                    numbered && matches!(arch, CallConv::SysVAmd64 | CallConv::Win64);
+                if (!numbered || numbered_stack_capture)
                     && !is_frame_coordinate_storage(arch, dst, identities)
                 {
                     if opaque_reaching_defs.contains(dst) {
@@ -526,7 +528,7 @@ pub(super) fn fold_one_call(
                         dst,
                         &attributed_source,
                         substitutable,
-                        !name.contains('#'),
+                        !numbered,
                     ) {
                         if !substitutable {
                             opaque_reaching_defs.insert(dst.clone());

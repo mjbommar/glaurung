@@ -1875,11 +1875,7 @@ fn versioned_operand_is_reassigned(
         identities: Option<&crate::ir::value_number::ValueIdentities>,
     ) {
         let mut record = |register: &VReg| {
-            let is_numbered = identities.map_or_else(
-                || matches!(register, VReg::Phys(name) if name.contains('#')),
-                |identities| identities.candidates(register).is_some(),
-            );
-            if is_numbered {
+            if has_numbered_identity(register, identities) {
                 out.push(register.clone());
             }
         };
@@ -1932,6 +1928,18 @@ fn versioned_operand_is_reassigned(
             |identities| expr_reads_identity_candidate(expr, register, identities),
         )
     })
+}
+
+pub(super) fn has_numbered_identity(
+    register: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    match identities {
+        Some(identities) => identities
+            .candidates(register)
+            .is_some_and(|values| values.iter().any(|value| value.version > 0)),
+        None => matches!(register, VReg::Phys(name) if name.contains('#')),
+    }
 }
 
 fn expr_reads_identity_candidate(
@@ -2072,6 +2080,31 @@ mod tests {
             2,
             Some(&identities),
         ));
+    }
+
+    #[test]
+    fn captured_scratch_numbering_comes_from_identity_not_spelling() {
+        let opaque = reg("opaque_scratch");
+        let misleading = reg("rax#99");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            opaque.clone(),
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 3,
+            },
+        );
+        identities.record(
+            misleading.clone(),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi"),
+                version: 0,
+            },
+        );
+
+        assert!(has_numbered_identity(&opaque, Some(&identities)));
+        assert!(!has_numbered_identity(&misleading, Some(&identities)));
+        assert!(has_numbered_identity(&misleading, None));
     }
 
     #[test]
