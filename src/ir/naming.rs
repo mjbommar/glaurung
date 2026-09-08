@@ -106,6 +106,34 @@ pub fn apply_role_names_with_parameter_roles(
     param_slots: &std::collections::HashSet<usize>,
     parameter_roles: &HashMap<String, usize>,
 ) -> HashMap<String, String> {
+    apply_role_names_impl(f, cc, param_slots, parameter_roles, None)
+}
+
+/// Apply role names while trusting only stack-parameter identities published
+/// by stack promotion, rather than parsing an arbitrary `argN` spelling.
+pub(crate) fn apply_role_names_with_parameter_roles_and_stack_parameters(
+    f: &mut Function,
+    cc: CallConv,
+    param_slots: &std::collections::HashSet<usize>,
+    parameter_roles: &HashMap<String, usize>,
+    stack_parameter_roles: &HashMap<String, usize>,
+) -> HashMap<String, String> {
+    apply_role_names_impl(
+        f,
+        cc,
+        param_slots,
+        parameter_roles,
+        Some(stack_parameter_roles),
+    )
+}
+
+fn apply_role_names_impl(
+    f: &mut Function,
+    cc: CallConv,
+    param_slots: &std::collections::HashSet<usize>,
+    parameter_roles: &HashMap<String, usize>,
+    stack_parameter_roles: Option<&HashMap<String, usize>>,
+) -> HashMap<String, String> {
     // Build the role map: raw name → friendly name. We build it up-front so
     // that every substitution is consistent across the function.
     let mut role: HashMap<String, String> = HashMap::new();
@@ -180,7 +208,11 @@ pub fn apply_role_names_with_parameter_roles(
         // function's own seventh argument into an undefined scratch local — the
         // signature would still grow (arity comes from the highest `argN`), so the
         // parameter would be declared and then never read.
-        if parse_arg_index(name).is_some() {
+        let is_stack_parameter = match stack_parameter_roles {
+            Some(roles) => roles.contains_key(name),
+            None => parse_arg_index(name).is_some(),
+        };
+        if is_stack_parameter {
             return;
         }
         if role.contains_key(name) {
@@ -1177,6 +1209,58 @@ mod tests {
                 src: Expr::Const(1)
             }
         );
+    }
+
+    #[test]
+    fn production_naming_does_not_trust_an_unowned_arg_spelling() {
+        let mut function = Function {
+            name: "unowned_arg_spelling".into(),
+            entry_va: 0,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Reg(reg("arg99"))),
+            }],
+        };
+
+        apply_role_names_with_parameter_roles_and_stack_parameters(
+            &mut function,
+            CallConv::SysVAmd64,
+            &std::collections::HashSet::from([99]),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Return {
+                value: Some(Expr::Reg(value)),
+            } if value == &reg("var0")
+        ));
+    }
+
+    #[test]
+    fn production_naming_preserves_a_proven_stack_parameter_role() {
+        let mut function = Function {
+            name: "owned_stack_parameter".into(),
+            entry_va: 0,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Reg(reg("arg6"))),
+            }],
+        };
+
+        apply_role_names_with_parameter_roles_and_stack_parameters(
+            &mut function,
+            CallConv::SysVAmd64,
+            &std::collections::HashSet::from([6]),
+            &HashMap::new(),
+            &HashMap::from([("arg6".to_string(), 6)]),
+        );
+
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Return {
+                value: Some(Expr::Reg(value)),
+            } if value == &reg("arg6")
+        ));
     }
 
     #[test]

@@ -159,6 +159,8 @@ pub struct StackLocalFacts {
     pub sizes: HashMap<String, u8>,
     pub source_types: HashMap<String, String>,
     pub source_names: HashMap<String, String>,
+    /// Source-parameter slot proven for each promoted stack identity.
+    pub parameter_slots: HashMap<String, usize>,
     /// Frame coordinate `(base, disp)` each promoted name was minted from.
     ///
     /// This is the join MIR evidence needs. MIR memory objects are keyed by
@@ -602,6 +604,8 @@ pub fn promote_stack_locals_with_facts(
     // reached them; see the field's documentation.
     let mut ambiguous_coordinates: std::collections::HashSet<String> =
         std::collections::HashSet::new();
+    let mut ambiguous_parameter_slots: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     for (key, slot) in map {
         let name = slot.name;
         match facts.frame_coordinates.entry(name.clone()) {
@@ -617,6 +621,22 @@ pub fn promote_stack_locals_with_facts(
                 ambiguous_coordinates.insert(name.clone());
             }
             std::collections::hash_map::Entry::Occupied(_) => {}
+        }
+        if let Some(parameter_slot) = slot.parameter_slot {
+            match facts.parameter_slots.entry(name.clone()) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    if !ambiguous_parameter_slots.contains(&name) {
+                        entry.insert(parameter_slot);
+                    }
+                }
+                std::collections::hash_map::Entry::Occupied(entry)
+                    if entry.get() != &parameter_slot =>
+                {
+                    entry.remove();
+                    ambiguous_parameter_slots.insert(name.clone());
+                }
+                std::collections::hash_map::Entry::Occupied(_) => {}
+            }
         }
         facts
             .sizes
@@ -1403,7 +1423,7 @@ mod tests {
             }],
         };
 
-        promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+        let facts = promote_stack_locals_with_facts(&mut f, Some(CallConv::SysVAmd64), None, &[]);
 
         assert!(
             matches!(
@@ -1413,6 +1433,7 @@ mod tests {
             "expected an assignment to arg6, got {:?}",
             f.body[0]
         );
+        assert_eq!(facts.parameter_slots.get("arg6"), Some(&6));
     }
 
     #[test]
