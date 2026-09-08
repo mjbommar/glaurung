@@ -1626,7 +1626,12 @@ provenance through lowering.
   consumers remain. Commit `3e302824` removes an `argN` spelling decision from
   DWARF aggregate-field recovery: only roles seeded from the authoritative
   prototype are exempt from definition validation, so stale or fabricated
-  argument spellings cannot impersonate parameters. The latter migration also
+  argument spellings cannot impersonate parameters. Commit `7eeb84ca` then
+  carries pipeline-owned parameter slots beside opaque identities during AST
+  role projection, without parsing aliases. Commit `53eb97ec` migrates callee-
+  contract pointer back-propagation to that typed role: owned parameters still
+  refine and an unowned `arg99` refuses. See
+  `results/wp3-parameter-role-metadata.md`. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
   merge hid the unresolved SysV `al` variadic live-in. That cell is now an
   honest strict xfail rather than a semantic identity exception.
