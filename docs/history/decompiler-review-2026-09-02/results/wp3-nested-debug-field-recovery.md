@@ -94,6 +94,29 @@ No broad fixture, Python, or DecBench suite was run for this bounded increment.
 Concurrent decoder and source-analysis work remained unstaged and is not part
 of the commit.
 
+## Promoted-storage follow-up
+
+Commit `27f68614` makes the three promoted-stack storage-lvalue readers in the
+same pass transparent to an expression-origin carrier. The strengthened
+`promoted_stack_result_preserves_authoritative_struct_pointer_type` test was
+observed red before the production change because the attributed slot failed
+to inherit the authoritative `node *` type. After the change:
+
+```text
+cargo test --features python-ext --lib ir::dwarf_fields::tests::
+13 passed; 0 failed; 4,657 filtered out
+
+uv run maturin develop --release
+Finished `release` profile [optimized]
+
+uv run pytest -q \
+  python/tests/test_pdb_type_recovery.py::test_overwritten_win64_push_value_does_not_become_an_undefined_local
+1 passed
+```
+
+The unowned `local_*` lookalike remains rejected, and the real `record_value`
+output remains `arg0->value + arg0->origin.x` under its existing ABI casts.
+
 ## Remaining boundary
 
 The outer return still carries redundant unsigned widening casts. General

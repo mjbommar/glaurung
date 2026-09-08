@@ -1833,7 +1833,12 @@ provenance through lowering.
   offsets to `arg0->value` and `arg0->origin.x`. All 13 DWARF-field tests, all
   12 PE/PDB tests, and a `cc -std=c11 -Werror` compile of the release-built
   output pass. Cyclic, conflicting, width-mismatched, and ambiguous layouts
-  remain raw. See `results/wp3-nested-debug-field-recovery.md`.
+  remain raw. Follow-up `27f68614` closes the remaining promoted-stack storage
+  seam in the same pass: attributed slot addresses now participate in pointer
+  inference and definition compatibility, and remain protected from accidental
+  field-store rewriting. The existing positive test was observed red before
+  the repair; all 13 module tests and the exact PE/PDB regression pass after a
+  release rebuild. See `results/wp3-nested-debug-field-recovery.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
