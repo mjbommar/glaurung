@@ -1732,6 +1732,11 @@ provenance through lowering.
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
   merge hid the unresolved SysV `al` variadic live-in. That cell is now an
   honest strict xfail rather than a semantic identity exception.
+  Commit `a7762f05` migrates the x86-64 omit-frame-pointer recognizer to exact
+  value identities for entry-save classification and save/restore matching. An
+  opaque exact `r15` value is accepted, a misleading `r15#0` spelling mapped to
+  `rax` is rejected, and missing identity fails closed in production. See
+  `results/wp3-x86-frame-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
@@ -3756,7 +3761,12 @@ relevant ratchet's accepted-regression record.
    unowned pointer self-store. Fifteen callee-save tests, the exact self-store
    unit, and the x86/ARM real-binary checks pass; see
    `results/wp3-typed-callee-save-ownership.md`.
-   keep expression ownership behind completion of that audit.
+   Commit `a7762f05` then removes the adjacent x86 frame recognizer's production
+   `#version` parsing. All 40 x86-prologue tests and the exact compiled/stripped
+   stack-clash execution check pass; see `results/wp3-x86-frame-identities.md`.
+   Continue with ARM32 frame identity, then re-audit remaining production name
+   parsers.
+   Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
