@@ -781,6 +781,22 @@ If accepted:
 - [ ] Define MIR as the sole owner of the query and remove the structured
   verifier's overlapping implementation rather than maintaining two answers.
 
+### Shared-tree parallel analysis design note
+
+- [ ] Prototype stable arena-owned syntax/region node IDs for read-mostly
+  analyses after the remaining identity migration establishes ownership.
+  [indextree](https://github.com/saschagrunert/indextree) is a useful reference:
+  one `Vec`-backed arena and numeric node IDs make the tree shareable across
+  threads, and its optional Rayon feature provides parallel immutable
+  iteration. It does not by itself make arbitrary shared mutation safe. Any
+  Glaurung version must preserve deterministic output by computing per-node
+  facts in parallel into separate result slots, then applying mutations in
+  stable node-ID order at a pipeline-owned barrier. Benchmark this first on the
+  shadow structurer and dominance/region analyses; do not migrate the recursive
+  AST renderer or add a dependency until wall time, peak RSS, deterministic
+  text, origin sets, and serial/parallel equivalence are measured on the same
+  fixture population.
+
 ## 8. WP2 — One pipeline, explicit budgets, and checked pass ordering
 
 Purpose: remove semantic differences caused solely by the Python entry point
@@ -1808,6 +1824,16 @@ provenance through lowering.
   but its `record_value` body still emits raw offsets, so broader real PDB field
   promotion remains open. See
   `results/wp3-field-address-expression-origin-rendering.md`.
+  Commit `99d7a68e` then closes the real PE/PDB boundary that the prior unit
+  slice left open. PDB typedef pointers now select only layouts confirmed by
+  the matching PDB; CodeView scalar spellings become standalone C; complete
+  by-value aggregate dependencies are validated recursively and emitted before
+  their parents; and exact nested offsets recover one unambiguous dotted member
+  path. The committed `record_value` fixture improves from two raw integer
+  offsets to `arg0->value` and `arg0->origin.x`. All 13 DWARF-field tests, all
+  12 PE/PDB tests, and a `cc -std=c11 -Werror` compile of the release-built
+  output pass. Cyclic, conflicting, width-mismatched, and ambiguous layouts
+  remain raw. See `results/wp3-nested-debug-field-recovery.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
