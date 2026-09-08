@@ -1,6 +1,6 @@
 {
  "note": "Declared #[test] attributes per module. A declaration count, not an execution count -- see never_executed.",
- "total_declared": 5167,
+ "total_declared": 5164,
  "never_executed_total": 0,
  "never_executed": {},
  "solver_gated_estimate": 92,
@@ -11,7 +11,7 @@
   "debug": 11,
   "decompile": 4,
   "demangle": 1,
-  "disasm": 24,
+  "disasm": 21,
   "entropy": 20,
   "error": 3,
   "exec": 76,
