@@ -1953,6 +1953,14 @@ provenance through lowering.
   `printf`/format/stack-address contract was observed red; it and all 25 owning
   call-contract tests pass after the repair, followed by a successful release
   rebuild. See `results/wp3-call-contract-expression-origins.md`.
+  Commit `6bb026a1` closes the three remaining direct call-contract consumers:
+  catalog application now removes impossible results and caps fixed arity
+  through an attributed target; recovered local-callee prototypes still attach
+  through that target; and opaque nominal parameter refinement sees attributed
+  direct callees and register arguments. The catalog void-result contract was
+  observed red. All three strengthened exact tests and all 25 call-contract
+  tests pass, followed by a successful release rebuild. See
+  `results/wp3-call-contract-consumer-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
