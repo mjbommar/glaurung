@@ -698,7 +698,7 @@ fn decbench_text_with_installed_environment(
         .or(single_render_prototype.as_ref())
         .or(render_prototype);
     let body = profiler.measure("render_decbench", || {
-        crate::ir::ast::render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types_and_parameter_names(
+        crate::ir::ast::render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types_and_parameter_names_and_identities(
             &prepared,
             decl,
             width,
@@ -709,6 +709,7 @@ fn decbench_text_with_installed_environment(
             calling_convention_pointer_width(cc),
             &dwarf_pointer_types,
             &rendered_local_types,
+            Some(value_identities),
         )
     });
     if violations.is_empty() {

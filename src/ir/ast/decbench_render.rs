@@ -304,6 +304,36 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
     dwarf_pointer_types: &std::collections::HashMap<VReg, String>,
     dwarf_local_types: &std::collections::HashMap<String, String>,
 ) -> String {
+    render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types_and_parameter_names_and_identities(
+        f,
+        tm,
+        width_tm,
+        output_kind,
+        declared_prototype,
+        declared_parameter_names,
+        dwarf_types,
+        pointer_width,
+        dwarf_pointer_types,
+        dwarf_local_types,
+        None,
+    )
+}
+
+/// Pipeline-owned typed renderer with opaque SSA identity evidence.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types_and_parameter_names_and_identities(
+    f: &Function,
+    tm: Option<&TypeMap>,
+    width_tm: Option<&TypeMap>,
+    output_kind: crate::ir::types_recover::RecoveredOutputKind,
+    declared_prototype: Option<&CallPrototype>,
+    declared_parameter_names: Option<&[Option<String>]>,
+    dwarf_types: &[crate::debug::dwarf::DwarfType],
+    pointer_width: u8,
+    dwarf_pointer_types: &std::collections::HashMap<VReg, String>,
+    dwarf_local_types: &std::collections::HashMap<String, String>,
+    value_identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> String {
     let source_locals = dwarf_local_types
         .keys()
         .cloned()
@@ -700,6 +730,7 @@ pub fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local
         ids: &ids,
         body: &f.body,
         tm,
+        value_identities,
         width_tm,
         output_kind,
         declared_prototype,

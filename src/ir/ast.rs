@@ -74,6 +74,7 @@ pub use c_render::render_c;
 pub use ctx_render::{render, render_with_types};
 // The DecBench front door keeps its `ast::render_decbench*` paths: `mod tests`,
 // the `ast_tests/` files and `python_bindings::ir` all name it there.
+pub(crate) use decbench_render::render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types_and_parameter_names_and_identities;
 pub use decbench_render::{
     render_decbench, render_decbench_typed, render_decbench_typed_with_output,
     render_decbench_typed_with_output_and_prototype,
