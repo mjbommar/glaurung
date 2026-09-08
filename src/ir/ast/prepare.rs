@@ -328,7 +328,7 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
     } else {
         crate::ir::direct_output::materialize_direct_output(&mut owned);
     }
-    coalesce_param_spills(&mut owned.body, protected_locals);
+    coalesce_param_spills(&mut owned.body, protected_locals, identities);
     crate::ir::label_prune::prune_unreachable_tails(&mut owned);
     // Copy propagation exposes algebraic flag identities, while folding those
     // identities changes use counts and exposes new one-use copies. Iterate the
@@ -338,7 +338,7 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
     // exactly its incoming argument (`(arg & ~255) | (arg & 255) == arg`). Run
     // the same guarded home analysis again so byte/halfword parameter spills
     // exposed only at the fixpoint do not survive as fake source locals.
-    coalesce_named_param_spills(&mut owned.body, protected_locals);
+    coalesce_named_param_spills(&mut owned.body, protected_locals, identities);
     // A spill carried through a scratch can become `arg0 = arg0` only after
     // the copy fixpoint. The earlier coalescing cleanup cannot see it yet.
     drop_self_stores(&mut owned.body);
