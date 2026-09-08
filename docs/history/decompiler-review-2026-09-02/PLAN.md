@@ -1667,6 +1667,13 @@ provenance through lowering.
   assignment. Its exact lvalue regression, all four switch-entry tests, all 75
   copy-propagation tests, and the compiled GCC-O0 state-dispatch switch round
   trip pass; see `results/wp3-switch-entry-copy-identities.md`.
+  Commit `316697e7` then migrates the recovered-callee-layout spill resolver
+  from `local_*` / `stack_*` spelling to the promoted-object identity sidecar.
+  An opaque promoted spill can now carry its source into an adjacent recovered
+  call without turning presentation naming into semantic authority. Its exact
+  regression, all 127 call-argument tests, and the compiled GCC-O2 transitive
+  callee-contract fixture pass; see
+  `results/wp3-recovered-call-spill-identities.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
