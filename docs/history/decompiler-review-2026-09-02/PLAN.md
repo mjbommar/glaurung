@@ -1819,6 +1819,11 @@ provenance through lowering.
   exact ARMv7 O2 `call_into_spill` fixture pass. The adjacent O0 failure
   reproduces unchanged with the patch removed and is baseline debt. No broad
   suite or corpus ran. See `results/wp3-aapcs-stack-area-identities.md`.
+  Commit `75c95f4b` then migrates the complete cdecl stack reader: stores,
+  pushes, frame refusal, caller cleanup, stack-mention safety, displacement
+  rebasing, and PIC traversal all use exact stack/frame identities. The 27-test
+  cdecl filter and exact i386 O0 `call_into_spill` fixture pass; no broad suite
+  or corpus ran. See `results/wp3-cdecl-stack-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
@@ -3894,8 +3899,12 @@ relevant ratchet's accepted-regression record.
    complete `sp` identity classification; its six owning tests and exact ARMv7
    O2 eight-argument fixture pass, while the O0 canary's unchanged parent/tip
    failure is recorded as baseline debt. See
-   `results/wp3-aapcs-stack-area-identities.md`. Continue through the cdecl
-   readers. Keep
+   `results/wp3-aapcs-stack-area-identities.md`. Commit `75c95f4b` closes the
+   cdecl stack reader's store, push, prologue, cleanup, stack-mention, rebasing,
+   and PIC classifications with exact identities; its 27-test cdecl filter and
+   exact i386 O0 eight-argument fixture pass. See
+   `results/wp3-cdecl-stack-identities.md`. Audit the remaining call-recovery
+   name readers and migrate only production value-identity consumers. Keep
    pre-sidecar tagging internals and explicit no-sidecar compatibility parsers
    classified separately.
    Keep expression ownership behind completion of that audit.
