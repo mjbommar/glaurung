@@ -224,7 +224,7 @@ fn decbench_text_with_installed_environment(
         // sequence into a direct comparison of the promoted canary slot. Re-run
         // the idempotent canary pass here so the earlier collapsed save cannot
         // leave that now-recognisable check reading an uninitialised C local.
-        crate::ir::canary::collapse_canary_save(&mut prepared);
+        crate::ir::canary::collapse_canary_save_with_identities(&mut prepared, &value_identities);
         (prepared, fixpoints)
     });
     profiler.record_fixpoint(

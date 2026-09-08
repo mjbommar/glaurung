@@ -795,7 +795,7 @@ pub(super) fn run_ast_passes(
     // (`ret` / `arg0`) rather than the raw physical one; that removes the common pre-call
     // `%ret = 0` idiom entirely.
     pass!("eliminate_dead_stores", {
-        crate::ir::canary::collapse_canary_save(f);
+        crate::ir::canary::collapse_canary_save_with_identities(f, &named_value_identities);
         if matches!(cc, crate::ir::call_args::CallConv::Aarch64) {
             crate::ir::arm64_prologue::recognise_arm64_prologue(f);
         }

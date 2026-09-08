@@ -72,7 +72,22 @@ pub fn recognise_canary(f: &mut Function) {
 /// `// stack canary: save guard to %stack_N` comment and, when the
 /// matching exit-check shape is present, collapse that too.
 pub fn collapse_canary_save(f: &mut Function) {
-    collapse_body(&mut f.body);
+    collapse_canary_save_impl(f, None);
+}
+
+/// Identity-aware production form of [`collapse_canary_save`].
+pub fn collapse_canary_save_with_identities(
+    f: &mut Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    collapse_canary_save_impl(f, Some(identities));
+}
+
+fn collapse_canary_save_impl(
+    f: &mut Function,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
+    collapse_body(&mut f.body, identities);
     // If the prologue save comment is now present, try to collapse the
     // corresponding exit check shape(s).
     if let Some(slot) = find_canary_slot(&f.body) {
@@ -368,7 +383,16 @@ fn expr_mentions_guard(e: &Expr) -> bool {
     }
 }
 
-fn collapse_body(body: &mut Vec<Stmt>) {
+fn collapse_body(
+    body: &mut Vec<Stmt>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
+    let promoted = |value: &crate::ir::types::VReg| {
+        identities.map_or_else(
+            || matches!(value, crate::ir::types::VReg::Phys(name) if name.starts_with("stack_")),
+            |identities| identities.is_promoted_stack_object(value),
+        )
+    };
     // Recurse into structured arms so nested prologue shapes collapse too
     // (unlikely in practice, but symmetric with the ARM64 pass).
     for s in body.iter_mut() {
@@ -379,13 +403,15 @@ fn collapse_body(body: &mut Vec<Stmt>) {
                 else_body,
                 ..
             } => {
-                collapse_body(then_body);
+                collapse_body(then_body, identities);
                 if let Some(eb) = else_body {
-                    collapse_body(eb);
+                    collapse_body(eb, identities);
                 }
             }
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => collapse_body(body),
-            Stmt::For { body, .. } => collapse_body(body),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                collapse_body(body, identities)
+            }
+            Stmt::For { body, .. } => collapse_body(body, identities),
             _ => {}
         }
     }
@@ -423,17 +449,15 @@ fn collapse_body(body: &mut Vec<Stmt>) {
             while j < body.len() {
                 let slot = match body[j].semantic() {
                     Stmt::Store {
-                        addr: Expr::Reg(crate::ir::types::VReg::Phys(slot)),
+                        addr: Expr::Reg(slot @ crate::ir::types::VReg::Phys(slot_name)),
                         src:
                             Expr::Deref {
                                 addr: saved_addr,
                                 size: 8,
                             },
                         size: 8,
-                    } if slot.starts_with("stack_")
-                        && is_identity_address(saved_addr, got_addr) =>
-                    {
-                        Some(slot.clone())
+                    } if promoted(slot) && is_identity_address(saved_addr, got_addr) => {
+                        Some(slot_name.clone())
                     }
                     _ => None,
                 };
@@ -489,10 +513,10 @@ fn collapse_body(body: &mut Vec<Stmt>) {
         // Next stmt must store that register to a %stack_* slot.
         let store_match = match body[i + 1].semantic() {
             Stmt::Store {
-                addr: Expr::Reg(crate::ir::types::VReg::Phys(slot)),
+                addr: Expr::Reg(slot @ crate::ir::types::VReg::Phys(slot_name)),
                 src: Expr::Reg(src),
                 ..
-            } if slot.starts_with("stack_") && src == &load_dst => Some(slot.clone()),
+            } if promoted(slot) && src == &load_dst => Some(slot_name.clone()),
             _ => None,
         };
         if let Some(slot) = store_match {
@@ -1118,6 +1142,70 @@ mod tests {
             &f.body[0],
             Stmt::Comment(s) if s.contains("stack canary") && s.contains("stack_0")
         ));
+    }
+
+    #[test]
+    fn identity_aware_canary_save_accepts_an_owned_opaque_stack_object() {
+        let object_name = "frame_canary".to_string();
+        let object = VReg::phys(&object_name);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object_name]);
+        let mut f = Function {
+            name: "main".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("rax"),
+                    src: Expr::Named {
+                        va: 0x28,
+                        name: CANARY_NAME.into(),
+                    },
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(object),
+                    src: Expr::Reg(VReg::phys("rax")),
+                    size: 8,
+                },
+            ],
+        };
+
+        collapse_canary_save_with_identities(&mut f, &identities);
+
+        assert_eq!(f.body.len(), 1);
+        assert!(matches!(
+            &f.body[0],
+            Stmt::Comment(text) if text.contains("stack canary") && text.contains("frame_canary")
+        ));
+    }
+
+    #[test]
+    fn identity_aware_canary_save_rejects_unowned_stack_spelling() {
+        let original = vec![
+            Stmt::Assign {
+                dst: VReg::phys("rax"),
+                src: Expr::Named {
+                    va: 0x28,
+                    name: CANARY_NAME.into(),
+                },
+            },
+            Stmt::Store {
+                addr: Expr::Reg(VReg::phys("stack_4")),
+                src: Expr::Reg(VReg::phys("rax")),
+                size: 8,
+            },
+        ];
+        let mut f = Function {
+            name: "main".into(),
+            entry_va: 0,
+            body: original.clone(),
+        };
+
+        collapse_canary_save_with_identities(
+            &mut f,
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
+
+        assert_eq!(f.body, original);
     }
 
     #[test]
