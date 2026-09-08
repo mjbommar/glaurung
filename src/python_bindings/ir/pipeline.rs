@@ -645,7 +645,11 @@ pub(super) fn run_ast_passes(
     });
     pass!(
         "split_call_result_lifetimes",
-        crate::ir::call_result_split::split_call_result_lifetimes(f, cc)
+        crate::ir::call_result_split::split_call_result_lifetimes_with_identities(
+            f,
+            cc,
+            value_identities,
+        )
     );
     pass!("canary+strings", {
         crate::ir::strings_fold::fold_string_literals(f, str_pool);

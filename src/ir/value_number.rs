@@ -69,6 +69,7 @@ use temp_remap::build_temp_remap;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ValueIdentities {
     by_numbered_value: HashMap<VReg, BTreeSet<SsaValue>>,
+    physical_bases_by_value: HashMap<VReg, BTreeSet<String>>,
     parameter_slots_by_value: HashMap<VReg, BTreeSet<usize>>,
     result_roles: HashSet<VReg>,
     machine_saved_slots: HashSet<VReg>,
@@ -87,6 +88,43 @@ impl ValueIdentities {
     /// Return every SSA identity represented by a coalesced numbered value.
     pub fn candidates(&self, value: &VReg) -> Option<&BTreeSet<SsaValue>> {
         self.by_numbered_value.get(value)
+    }
+
+    /// Return the sole canonical machine-storage base represented by `value`.
+    ///
+    /// This fact is deliberately separate from [`Self::exact`]: phi-copy
+    /// coalescing may combine several non-interfering SSA versions of the same
+    /// physical register. Such a value has no exact SSA identity, but it still
+    /// has one unambiguous architectural storage base.
+    pub(crate) fn unambiguous_physical_base(&self, value: &VReg) -> Option<&str> {
+        let bases = self.physical_bases_by_value.get(value)?;
+        (bases.len() == 1)
+            .then(|| bases.first().map(String::as_str))
+            .flatten()
+    }
+
+    /// Publish a canonical physical-storage fact for a pipeline-minted value.
+    pub(crate) fn attach_physical_base(&mut self, value: VReg, base: impl Into<String>) {
+        self.physical_bases_by_value
+            .entry(value)
+            .or_default()
+            .insert(base.into());
+    }
+
+    /// Copy the exact SSA and physical-storage facts carried by one value.
+    pub(crate) fn inherit_value_facts(&mut self, source: &VReg, destination: VReg) {
+        if let Some(identities) = self.by_numbered_value.get(source).cloned() {
+            self.by_numbered_value
+                .entry(destination.clone())
+                .or_default()
+                .extend(identities);
+        }
+        if let Some(bases) = self.physical_bases_by_value.get(source).cloned() {
+            self.physical_bases_by_value
+                .entry(destination)
+                .or_default()
+                .extend(bases);
+        }
     }
 
     /// Return the authoritative source-parameter slot represented by `value`.
@@ -139,6 +177,12 @@ impl ValueIdentities {
     }
 
     pub(crate) fn record(&mut self, numbered: VReg, identity: SsaValue) {
+        if let Some(base) = identity.canonical_physical_base() {
+            self.physical_bases_by_value
+                .entry(numbered.clone())
+                .or_default()
+                .insert(base.to_string());
+        }
         self.by_numbered_value
             .entry(numbered)
             .or_default()
@@ -190,6 +234,19 @@ impl ValueIdentities {
             if role == "ret" {
                 projected.result_roles.insert(VReg::Phys(role.clone()));
             }
+        }
+        for (value, bases) in &self.physical_bases_by_value {
+            let VReg::Phys(storage) = value else {
+                continue;
+            };
+            let Some(role) = aliases.get(storage) else {
+                continue;
+            };
+            projected
+                .physical_bases_by_value
+                .entry(VReg::Phys(role.clone()))
+                .or_default()
+                .extend(bases.iter().cloned());
         }
         for (value, slots) in &self.parameter_slots_by_value {
             let VReg::Phys(storage) = value else {
@@ -261,6 +318,14 @@ impl ValueIdentities {
                 .entry(numbered)
                 .or_default()
                 .extend(identities);
+        }
+        let previous = std::mem::take(&mut self.physical_bases_by_value);
+        for (value, bases) in previous {
+            let numbered = renames.get(&value).cloned().unwrap_or(value);
+            self.physical_bases_by_value
+                .entry(numbered)
+                .or_default()
+                .extend(bases);
         }
         let previous = std::mem::take(&mut self.parameter_slots_by_value);
         for (value, slots) in previous {
@@ -839,6 +904,29 @@ mod tests {
 
         assert_eq!(identities.exact(&numbered), None);
         assert_eq!(identities.candidates(&numbered).map(BTreeSet::len), Some(2));
+        assert_eq!(identities.unambiguous_physical_base(&numbered), Some("rax"));
+    }
+
+    #[test]
+    fn conflicting_physical_bases_remain_explicitly_ambiguous() {
+        let numbered = VReg::phys("coalesced");
+        let mut identities = ValueIdentities::default();
+        identities.record(
+            numbered.clone(),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 1,
+            },
+        );
+        identities.record(
+            numbered.clone(),
+            SsaValue {
+                base: VReg::phys("rbx"),
+                version: 2,
+            },
+        );
+
+        assert_eq!(identities.unambiguous_physical_base(&numbered), None);
     }
 
     #[test]

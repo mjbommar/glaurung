@@ -33,6 +33,7 @@ use std::collections::HashMap;
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::call_args::CallConv;
 use crate::ir::types::{BinOp, VReg};
+use crate::ir::value_number::ValueIdentities;
 
 /// A System V two-bank aggregate result is at most two eightbytes by
 /// construction: past 16 bytes the ABI returns through memory.
@@ -61,23 +62,64 @@ impl FlowState {
     }
 }
 
-struct Splitter {
+struct Splitter<'a> {
     cc: CallConv,
     next_result: usize,
+    identities: Option<&'a mut ValueIdentities>,
 }
 
 /// Version each consumed ABI call result and its proven reaching uses.
 pub fn split_call_result_lifetimes(function: &mut Function, cc: CallConv) {
-    let mut splitter = Splitter { cc, next_result: 0 };
+    let mut splitter = Splitter {
+        cc,
+        next_result: 0,
+        identities: None,
+    };
     splitter.walk_body(&mut function.body, &mut FlowState::entry());
 }
 
-impl Splitter {
-    /// One logical storage key for all width views of an ABI output register.
-    fn result_storage(&self, register: &VReg) -> Option<String> {
+/// Version consumed ABI call results using pipeline-owned storage identities.
+pub fn split_call_result_lifetimes_with_identities(
+    function: &mut Function,
+    cc: CallConv,
+    identities: &mut ValueIdentities,
+) {
+    let mut splitter = Splitter {
+        cc,
+        next_result: 0,
+        identities: Some(identities),
+    };
+    splitter.walk_body(&mut function.body, &mut FlowState::entry());
+}
+
+impl Splitter<'_> {
+    /// Resolve physical storage without interpreting presentation spelling in
+    /// the production path. The compatibility entry point retains the legacy
+    /// parser for isolated callers that have no identity sidecar.
+    fn physical_base(&self, register: &VReg) -> Option<String> {
+        if let Some(identities) = self.identities.as_deref() {
+            return identities
+                .unambiguous_physical_base(register)
+                .map(str::to_string);
+        }
         let VReg::Phys(name) = register else {
             return None;
         };
+        Some(crate::ir::abi::ssa_base(name).to_string())
+    }
+
+    /// Publish a storage fact owned by this pass, then return the value.
+    fn attach_physical(&mut self, value: VReg, base: &str) -> VReg {
+        if let Some(identities) = self.identities.as_deref_mut() {
+            identities.attach_physical_base(value.clone(), base);
+        }
+        value
+    }
+
+    /// One logical storage key for all width views of an ABI output register.
+    fn result_storage(&self, register: &VReg) -> Option<String> {
+        let name = self.physical_base(register)?;
+        let name = name.as_str();
         if crate::ir::abi::wide_integer_return_part(self.cc, name) == Some(1) {
             return Some("wide_integer_result_high".to_string());
         }
@@ -116,7 +158,6 @@ impl Splitter {
         if !crate::ir::abi::is_return_register(self.cc, name) {
             return None;
         }
-        let base = crate::ir::abi::ssa_base(name);
         Some(match self.cc {
             // `rax` and `xmm0` — and on i386 `rax` and the x87 stack top — are
             // two result BANKS, not two spellings of one, so a post-call SSE or
@@ -127,9 +168,9 @@ impl Splitter {
             // invalidates all of them before installing its attributed
             // destination below.
             CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Cdecl32 => {
-                crate::ir::abi::return_register_class(self.cc, base)
+                crate::ir::abi::return_register_class(self.cc, name)
                     .and_then(|class| class.first().copied())
-                    .unwrap_or(base)
+                    .unwrap_or(name)
                     .to_string()
             }
             // AAPCS64's banks are disjoint by the same argument, and separating
@@ -151,7 +192,7 @@ impl Splitter {
             // AAPCS hard-float has disjoint integer and FP result banks.  Keep
             // their identities distinct; every call still invalidates all of
             // them before installing its attributed destination below.
-            CallConv::Arm | CallConv::ArmHardFloat => base.to_string(),
+            CallConv::Arm | CallConv::ArmHardFloat => name.to_string(),
         })
     }
 
@@ -166,27 +207,31 @@ impl Splitter {
     /// this gate. Without the split the lane keeps exactly the treatment it has
     /// always had.
     fn destination_storage(&self, register: &VReg) -> Option<String> {
-        if let VReg::Phys(name) = register {
-            if crate::ir::abi::sse_pair_result_lane_offset(self.cc, name).is_some() {
-                return None;
-            }
+        if self.physical_base(register).is_some_and(|name| {
+            crate::ir::abi::sse_pair_result_lane_offset(self.cc, &name).is_some()
+        }) {
+            return None;
         }
         self.result_storage(register)
     }
 
     fn fresh_result(&mut self, original: &VReg) -> VReg {
-        let base = match original {
-            VReg::Phys(name) => crate::ir::abi::ssa_base(name),
-            VReg::Temp(_) | VReg::Flag(_) | VReg::FlagValue { .. } => "ret",
-        };
+        let base = self
+            .physical_base(original)
+            .unwrap_or_else(|| "ret".to_string());
         let result = VReg::phys(format!("{base}#call_lifetime_{}", self.next_result));
         self.next_result += 1;
+        if let Some(identities) = self.identities.as_deref_mut() {
+            identities.inherit_value_facts(original, result.clone());
+            identities.attach_physical_base(result.clone(), base);
+        }
         result
     }
 
-    fn fresh_high_result(&self, high_register: &str) -> VReg {
+    fn fresh_high_result(&mut self, high_register: &str) -> VReg {
         let index = self.next_result.saturating_sub(1);
-        VReg::phys(format!("{high_register}#call_lifetime_high_{index}"))
+        let result = VReg::phys(format!("{high_register}#call_lifetime_high_{index}"));
+        self.attach_physical(result, high_register)
     }
 
     /// Materialize result storage only when the callee itself proves a result.
@@ -342,7 +387,11 @@ impl Splitter {
         let registers = crate::ir::abi::hfa_return_registers(self.cc, member_bytes);
         let mut compatibility = Vec::with_capacity(usize::from(members) * 2);
         for (index, register) in registers.iter().take(usize::from(members)).enumerate() {
-            let fresh = VReg::phys(format!("{register}#call_lifetime_{}", self.next_result));
+            let architectural = self.attach_physical(VReg::phys(*register), register);
+            let fresh = self.attach_physical(
+                VReg::phys(format!("{register}#call_lifetime_{}", self.next_result)),
+                register,
+            );
             self.next_result += 1;
             let object = Expr::StackAddr {
                 object: buffer.clone(),
@@ -366,11 +415,11 @@ impl Splitter {
                 },
             });
             compatibility.push(Stmt::Assign {
-                dst: VReg::phys(*register),
+                dst: architectural.clone(),
                 src: Expr::Reg(fresh.clone()),
             });
             if state.reachable {
-                if let Some(storage) = self.result_storage(&VReg::phys(*register)) {
+                if let Some(storage) = self.result_storage(&architectural) {
                     state.results.insert(storage, fresh);
                 }
             }
@@ -413,7 +462,11 @@ impl Splitter {
             .into_iter()
             .chain(lanes)
         {
-            let fresh = VReg::phys(format!("{register}#call_lifetime_{}", self.next_result));
+            let architectural = self.attach_physical(VReg::phys(register), register);
+            let fresh = self.attach_physical(
+                VReg::phys(format!("{register}#call_lifetime_{}", self.next_result)),
+                register,
+            );
             self.next_result += 1;
             let object = Expr::StackAddr {
                 object: buffer.clone(),
@@ -436,11 +489,11 @@ impl Splitter {
                 },
             });
             compatibility.push(Stmt::Assign {
-                dst: VReg::phys(register),
+                dst: architectural.clone(),
                 src: Expr::Reg(fresh.clone()),
             });
-            if primary != &VReg::phys(register)
-                && self.result_storage(primary) == self.result_storage(&VReg::phys(register))
+            if primary != &architectural
+                && self.result_storage(primary) == self.result_storage(&architectural)
             {
                 compatibility.push(Stmt::Assign {
                     dst: primary.clone(),
@@ -448,7 +501,7 @@ impl Splitter {
                 });
             }
             if state.reachable {
-                if let Some(storage) = self.result_storage(&VReg::phys(register)) {
+                if let Some(storage) = self.result_storage(&architectural) {
                     state.results.insert(storage, fresh);
                 }
             }
@@ -469,7 +522,11 @@ impl Splitter {
             .into_iter()
             .filter(|(offset, _)| *offset + 4 <= i64::from(bytes))
         {
-            let fresh = VReg::phys(format!("{register}#call_lifetime_{}", self.next_result));
+            let architectural = self.attach_physical(VReg::phys(register), register);
+            let fresh = self.attach_physical(
+                VReg::phys(format!("{register}#call_lifetime_{}", self.next_result)),
+                register,
+            );
             self.next_result += 1;
             let object = Expr::StackAddr {
                 object: buffer.clone(),
@@ -492,11 +549,11 @@ impl Splitter {
                 },
             });
             compatibility.push(Stmt::Assign {
-                dst: VReg::phys(register),
+                dst: architectural.clone(),
                 src: Expr::Reg(fresh.clone()),
             });
-            if primary != &VReg::phys(register)
-                && self.result_storage(primary) == self.result_storage(&VReg::phys(register))
+            if primary != &architectural
+                && self.result_storage(primary) == self.result_storage(&architectural)
             {
                 compatibility.push(Stmt::Assign {
                     dst: primary.clone(),
@@ -504,7 +561,7 @@ impl Splitter {
                 });
             }
             if state.reachable {
-                if let Some(storage) = self.result_storage(&VReg::phys(register)) {
+                if let Some(storage) = self.result_storage(&architectural) {
                     state.results.insert(storage, fresh);
                 }
             }
@@ -532,7 +589,11 @@ impl Splitter {
             (if integer_first { 0 } else { 8 }, "rax"),
             (if integer_first { 8 } else { 0 }, "xmm0"),
         ] {
-            let fresh = VReg::phys(format!("{register}#call_lifetime_{}", self.next_result));
+            let architectural = self.attach_physical(VReg::phys(register), register);
+            let fresh = self.attach_physical(
+                VReg::phys(format!("{register}#call_lifetime_{}", self.next_result)),
+                register,
+            );
             self.next_result += 1;
             let object = Expr::StackAddr {
                 object: buffer.clone(),
@@ -555,11 +616,11 @@ impl Splitter {
                 },
             });
             compatibility.push(Stmt::Assign {
-                dst: VReg::phys(register),
+                dst: architectural.clone(),
                 src: Expr::Reg(fresh.clone()),
             });
             if state.reachable {
-                if let Some(storage) = self.result_storage(&VReg::phys(register)) {
+                if let Some(storage) = self.result_storage(&architectural) {
                     state.results.insert(storage, fresh);
                 }
             }
@@ -745,10 +806,18 @@ impl Splitter {
                     *dst = None;
                     return Vec::new();
                 }
-                let Some(original) = dst
-                    .clone()
-                    .or_else(|| self.declared_result_register(call_spec.as_ref()))
-                else {
+                let original = if let Some(original) = dst.clone() {
+                    original
+                } else if let Some(declared) = self.declared_result_register(call_spec.as_ref()) {
+                    // This register is minted from the proven ABI contract,
+                    // rather than inherited from the numbered AST. Publish
+                    // that provenance explicitly before semantic lookup.
+                    let VReg::Phys(base) = &declared else {
+                        return Vec::new();
+                    };
+                    let base = base.clone();
+                    self.attach_physical(declared, &base)
+                } else {
                     return Vec::new();
                 };
                 *dst = Some(original.clone());
@@ -802,16 +871,13 @@ impl Splitter {
                     state.results.insert(storage, fresh.clone());
                 }
                 let mut compatibility = Vec::with_capacity(if wide_pair.is_some() { 2 } else { 1 });
-                if let Some((_, high_register)) = wide_pair.filter(|(low, _)| {
-                    crate::ir::abi::ssa_base(match &original {
-                        VReg::Phys(name) => name,
-                        _ => "",
-                    }) == *low
-                }) {
+                if let Some((_, high_register)) = wide_pair
+                    .filter(|(low, _)| self.physical_base(&original).as_deref() == Some(*low))
+                {
                     let high = self.fresh_high_result(high_register);
                     if state.reachable {
                         let high_storage = self
-                            .result_storage(&VReg::phys(high_register))
+                            .result_storage(&high)
                             .expect("a wide return pair must expose its high storage");
                         state.results.insert(high_storage, high.clone());
                     }
@@ -991,6 +1057,7 @@ mod tests {
     use super::*;
     use crate::ir::ast::OriginSet;
     use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority, CallSiteSpec};
+    use crate::ir::ssa::SsaValue;
 
     fn reg(name: &str) -> VReg {
         VReg::phys(name)
@@ -1108,6 +1175,105 @@ mod tests {
         assert_eq!(stored_results, call_results);
         assert_ne!(call_results[0], call_results[1]);
         assert_ne!(call_results[1], call_results[2]);
+    }
+
+    #[test]
+    fn owned_opaque_call_result_splits_without_parsing_its_name() {
+        let opaque = reg("opaque-result");
+        let identity = SsaValue {
+            base: reg("rax"),
+            version: 7,
+        };
+        let mut identities = ValueIdentities::default();
+        identities.record(opaque.clone(), identity.clone());
+        let mut function = Function {
+            name: "owned_opaque_result".to_string(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "producer".to_string(),
+                    },
+                    args: Vec::new(),
+                    dst: Some(opaque.clone()),
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: reg("consumer"),
+                    src: Expr::Reg(opaque),
+                },
+            ],
+        };
+
+        split_call_result_lifetimes_with_identities(
+            &mut function,
+            CallConv::SysVAmd64,
+            &mut identities,
+        );
+
+        let Stmt::Call {
+            dst: Some(fresh), ..
+        } = &function.body[0]
+        else {
+            panic!("call result was not retained: {function:#?}");
+        };
+        assert_eq!(identities.exact(fresh), Some(&identity));
+        assert_eq!(identities.unambiguous_physical_base(fresh), Some("rax"));
+        assert!(function.body.iter().any(|statement| matches!(
+            statement,
+            Stmt::Assign {
+                dst: VReg::Phys(destination),
+                src: Expr::Reg(source),
+            } if destination == "consumer" && source == fresh
+        )));
+    }
+
+    #[test]
+    fn unowned_result_like_spelling_is_not_semantic_storage() {
+        let fake = reg("rax#convincing_but_unowned");
+        let mut identities = ValueIdentities::default();
+        let mut function = Function {
+            name: "unowned_result".to_string(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0,
+                        name: "producer".to_string(),
+                    },
+                    args: Vec::new(),
+                    dst: Some(fake.clone()),
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: reg("consumer"),
+                    src: Expr::Reg(fake.clone()),
+                },
+            ],
+        };
+
+        split_call_result_lifetimes_with_identities(
+            &mut function,
+            CallConv::SysVAmd64,
+            &mut identities,
+        );
+
+        assert_eq!(function.body.len(), 2);
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Call {
+                dst: Some(destination),
+                ..
+            } if destination == &fake
+        ));
+        assert!(matches!(
+            &function.body[1],
+            Stmt::Assign {
+                src: Expr::Reg(source),
+                ..
+            } if source == &fake
+        ));
     }
 
     #[test]
@@ -1432,7 +1598,11 @@ mod tests {
     #[test]
     fn the_two_x86_64_result_banks_do_not_share_one_identity() {
         for cc in [CallConv::SysVAmd64, CallConv::Win64] {
-            let splitter = Splitter { cc, next_result: 0 };
+            let splitter = Splitter {
+                cc,
+                next_result: 0,
+                identities: None,
+            };
             let storage = |name: &str| splitter.result_storage(&reg(name));
             assert_eq!(storage("rax"), Some("rax".to_string()), "{cc:?}");
             assert_eq!(storage("eax"), storage("rax"), "{cc:?}");
@@ -1445,6 +1615,7 @@ mod tests {
         let splitter = Splitter {
             cc: CallConv::Cdecl32,
             next_result: 0,
+            identities: None,
         };
         assert_eq!(
             splitter.result_storage(&reg("st0")),
