@@ -238,7 +238,7 @@ fn wide_left_shift_operand_ctypes(lhs: &Expr, rhs: &Expr) -> Option<(&'static st
 /// `base[i]` is exactly `*(base + i)` and C scales the index by `sizeof(*base)`,
 /// which equals `size` — the guard we check.
 fn try_array_index<'a>(addr: &'a Expr, size: u8) -> Option<(&'a str, &'a Expr)> {
-    let (lhs, rhs) = match addr {
+    let (lhs, rhs) = match addr.semantic() {
         Expr::Bin {
             op: BinOp::Add,
             lhs,
@@ -247,7 +247,7 @@ fn try_array_index<'a>(addr: &'a Expr, size: u8) -> Option<(&'a str, &'a Expr)> 
         _ => return None,
     };
     for (base_side, off_side) in [(lhs, rhs), (rhs, lhs)] {
-        if let Expr::Reg(VReg::Phys(name)) = base_side {
+        if let Expr::Reg(VReg::Phys(name)) = base_side.semantic() {
             if dec_ptr_width(name) == Some(size) {
                 if let Some(index) = scaled_index(off_side, size) {
                     return Some((name.as_str(), index));
@@ -262,18 +262,22 @@ fn try_array_index<'a>(addr: &'a Expr, size: u8) -> Option<(&'a str, &'a Expr)> 
 /// wrapped in a redundant `+ 0` — return the (unscaled) index. `size == 1` needs
 /// no scaling, so any expression is the index.
 fn scaled_index<'a>(off: &'a Expr, size: u8) -> Option<&'a Expr> {
+    let off = off.semantic();
     // Strip a redundant `0 + x` / `x + 0` the lifter leaves on scaled indices.
     let off = match off {
         Expr::Bin {
             op: BinOp::Add,
             lhs,
             rhs,
-        } => match (lhs.as_ref(), rhs.as_ref()) {
-            (Expr::Const(0), x) | (x, Expr::Const(0)) => x,
-            _ => off,
-        },
+        } if matches!(lhs.semantic(), Expr::Const(0)) => rhs.as_ref(),
+        Expr::Bin {
+            op: BinOp::Add,
+            lhs,
+            rhs,
+        } if matches!(rhs.semantic(), Expr::Const(0)) => lhs.as_ref(),
         _ => off,
     };
+    let off = off.semantic();
     if size == 1 {
         return Some(strip_implicit_pointer_index_extension(off));
     }
@@ -282,17 +286,21 @@ fn scaled_index<'a>(off: &'a Expr, size: u8) -> Option<&'a Expr> {
             op: BinOp::Mul,
             lhs,
             rhs,
-        } => match (lhs.as_ref(), rhs.as_ref()) {
-            (idx, Expr::Const(s)) | (Expr::Const(s), idx) if *s == size as i64 => {
-                Some(strip_implicit_pointer_index_extension(idx))
-            }
-            _ => None,
-        },
+        } if matches!(rhs.semantic(), Expr::Const(s) if *s == size as i64) => {
+            Some(strip_implicit_pointer_index_extension(lhs))
+        }
+        Expr::Bin {
+            op: BinOp::Mul,
+            lhs,
+            rhs,
+        } if matches!(lhs.semantic(), Expr::Const(s) if *s == size as i64) => {
+            Some(strip_implicit_pointer_index_extension(rhs))
+        }
         Expr::Bin {
             op: BinOp::Shl,
             lhs,
             rhs,
-        } => match rhs.as_ref() {
+        } => match rhs.semantic() {
             Expr::Const(k) if *k >= 0 && *k < 63 && (1i64 << *k) == size as i64 => {
                 Some(strip_implicit_pointer_index_extension(lhs))
             }
@@ -378,11 +386,12 @@ fn write_array_access_dec(base: &str, index: &Expr, element_size: u8, out: &mut 
 }
 
 fn strip_implicit_pointer_index_extension(expr: &Expr) -> &Expr {
+    let expression = expr.semantic();
     let Expr::Cast {
         signed: outer_signed,
         width: outer_width,
         expr: outer,
-    } = expr
+    } = expression
     else {
         return expr;
     };
@@ -390,11 +399,11 @@ fn strip_implicit_pointer_index_extension(expr: &Expr) -> &Expr {
         signed: _,
         width: inner_width,
         expr: inner,
-    } = outer.as_ref()
+    } = outer.semantic()
     else {
         return expr;
     };
-    let Expr::Reg(VReg::Phys(name)) = inner.as_ref() else {
+    let Expr::Reg(VReg::Phys(name)) = inner.semantic() else {
         return expr;
     };
     if inner_width < outer_width && dec_int_type(name) == Some((*outer_signed, *inner_width)) {

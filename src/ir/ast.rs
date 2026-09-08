@@ -8040,19 +8040,35 @@ function f @ 0x1000 {
         // `*(int*)(arg0 + i*4)` with `arg0` a declared `int *` renders as
         // `arg0[i]`, dropping the byte-offset arithmetic and `(long)` cast.
         let deref = Expr::Deref {
-            addr: Box::new(Expr::Bin {
-                op: BinOp::Add,
-                lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
-                rhs: Box::new(Expr::Bin {
+            addr: Box::new(
+                Expr::Bin {
                     op: BinOp::Add,
-                    lhs: Box::new(Expr::Const(0)),
-                    rhs: Box::new(Expr::Bin {
-                        op: BinOp::Mul,
-                        lhs: Box::new(Expr::Reg(VReg::phys("local_4"))),
-                        rhs: Box::new(Expr::Const(4)),
-                    }),
-                }),
-            }),
+                    lhs: Box::new(
+                        Expr::Reg(VReg::phys("arg0")).with_origins(OriginSet::one(0x1000)),
+                    ),
+                    rhs: Box::new(
+                        Expr::Bin {
+                            op: BinOp::Add,
+                            lhs: Box::new(Expr::Const(0).with_origins(OriginSet::one(0x1004))),
+                            rhs: Box::new(
+                                Expr::Bin {
+                                    op: BinOp::Mul,
+                                    lhs: Box::new(
+                                        Expr::Reg(VReg::phys("local_4"))
+                                            .with_origins(OriginSet::one(0x1008)),
+                                    ),
+                                    rhs: Box::new(
+                                        Expr::Const(4).with_origins(OriginSet::one(0x100c)),
+                                    ),
+                                }
+                                .with_origins(OriginSet::one(0x1010)),
+                            ),
+                        }
+                        .with_origins(OriginSet::one(0x1014)),
+                    ),
+                }
+                .with_origins(OriginSet::one(0x1018)),
+            ),
             size: 4,
         };
         let f = Function {
