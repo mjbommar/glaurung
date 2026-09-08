@@ -1425,6 +1425,10 @@ provenance through lowering.
   the deleted definition owner on the surviving value. Its strengthened
   observed-red test and all nine return-fold tests pass; see
   `results/wp3-folded-return-carrier-origins.md`.
+  Commit `08f0f858` then makes exhaustive branch-return recovery recognize an
+  attributed promoted result-slot target and transfers the consumed target
+  owner to the synthesized return value. Its observed-red test and all ten
+  return-fold tests pass; see `results/wp3-return-store-target-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
