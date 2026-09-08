@@ -457,6 +457,39 @@ fn prune_unread_promoted_locals_where(
 /// Only the exact single-use promoted-slot bridge is removed; ordinary locals
 /// and result-register values used by any other statement are left alone.
 pub(crate) fn prune_void_entry_result_restores(function: &mut Function) {
+    prune_void_entry_result_restores_where(
+        function,
+        &crate::ir::types::is_promoted_local_reg,
+        &is_exact_return_storage,
+    );
+}
+
+/// Remove a void result save/restore using typed stack and SSA ownership.
+pub(crate) fn prune_void_entry_result_restores_with_identities(
+    function: &mut Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    prune_void_entry_result_restores_where(
+        function,
+        &|value| identities.is_promoted_stack_object(value),
+        &|value| {
+            identities.candidates(value).is_some_and(|candidates| {
+                !candidates.is_empty()
+                    && candidates.iter().all(|identity| {
+                        identity
+                            .canonical_physical_base()
+                            .is_some_and(is_projected_result_register)
+                    })
+            })
+        },
+    );
+}
+
+fn prune_void_entry_result_restores_where(
+    function: &mut Function,
+    is_promoted_stack_object: &impl Fn(&VReg) -> bool,
+    is_machine_result_value: &impl Fn(&VReg) -> bool,
+) {
     fn reads(expr: &Expr, target: &VReg) -> bool {
         match expr {
             Expr::Origin { expr, .. } => reads(expr, target),
@@ -532,7 +565,11 @@ pub(crate) fn prune_void_entry_result_restores(function: &mut Function) {
         }
     }
 
-    fn prune(body: &mut Vec<Stmt>) {
+    fn prune(
+        body: &mut Vec<Stmt>,
+        is_promoted_stack_object: &impl Fn(&VReg) -> bool,
+        is_machine_result_value: &impl Fn(&VReg) -> bool,
+    ) {
         for statement in body.iter_mut() {
             match statement.semantic_mut() {
                 Stmt::Origin { .. } => {
@@ -543,25 +580,33 @@ pub(crate) fn prune_void_entry_result_restores(function: &mut Function) {
                     else_body,
                     ..
                 } => {
-                    prune(then_body);
+                    prune(then_body, is_promoted_stack_object, is_machine_result_value);
                     if let Some(else_body) = else_body {
-                        prune(else_body);
+                        prune(else_body, is_promoted_stack_object, is_machine_result_value);
                     }
                 }
-                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => prune(body),
-                Stmt::For { body, .. } => prune(body),
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                    prune(body, is_promoted_stack_object, is_machine_result_value)
+                }
+                Stmt::For { body, .. } => {
+                    prune(body, is_promoted_stack_object, is_machine_result_value)
+                }
                 Stmt::Switch { cases, default, .. } => {
                     for (_, case) in cases {
-                        prune(case);
+                        prune(case, is_promoted_stack_object, is_machine_result_value);
                     }
                     if let Some(default) = default {
-                        prune(default);
+                        prune(default, is_promoted_stack_object, is_machine_result_value);
                     }
                 }
                 Stmt::TryCatch { try_body, catches } => {
-                    prune(try_body);
+                    prune(try_body, is_promoted_stack_object, is_machine_result_value);
                     for catch in catches {
-                        prune(&mut catch.body);
+                        prune(
+                            &mut catch.body,
+                            is_promoted_stack_object,
+                            is_machine_result_value,
+                        );
                     }
                 }
                 _ => {}
@@ -578,9 +623,7 @@ pub(crate) fn prune_void_entry_result_restores(function: &mut Function) {
             else {
                 continue;
             };
-            let promoted = matches!(slot, VReg::Phys(name)
-                if name.starts_with("local_") || name.starts_with("stack_"));
-            if !promoted || !is_exact_return_storage(saved) {
+            if !is_promoted_stack_object(slot) || !is_machine_result_value(saved) {
                 continue;
             }
             let restores = body
@@ -623,7 +666,11 @@ pub(crate) fn prune_void_entry_result_restores(function: &mut Function) {
         }
     }
 
-    prune(&mut function.body);
+    prune(
+        &mut function.body,
+        is_promoted_stack_object,
+        is_machine_result_value,
+    );
 }
 
 fn clear_body_return_values(body: &mut [Stmt]) {
@@ -1202,6 +1249,119 @@ mod tests {
 
         assert_eq!(function.body.len(), 1);
         assert!(matches!(function.body[0], Stmt::Call { .. }));
+    }
+
+    #[test]
+    fn opaque_void_result_bridge_is_removed_by_typed_identities() {
+        let object_name = "opaque_void_save".to_string();
+        let object = VReg::phys(&object_name);
+        let saved = VReg::phys("opaque_machine_value");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object_name]);
+        identities.record(
+            saved.clone(),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 3,
+            },
+        );
+        let mut function = Function {
+            name: "print_message".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(object.clone()),
+                    src: Expr::Reg(saved.clone()),
+                    size: 8,
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "puts".into(),
+                    },
+                    args: Vec::new(),
+                    dst: None,
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: saved,
+                    src: Expr::Reg(object),
+                },
+            ],
+        };
+
+        prune_void_entry_result_restores_with_identities(&mut function, &identities);
+
+        assert_eq!(function.body.len(), 1);
+        assert!(matches!(function.body[0], Stmt::Call { .. }));
+    }
+
+    #[test]
+    fn unowned_local_spelling_does_not_authorize_void_bridge_cleanup() {
+        let slot = VReg::phys("local_8");
+        let saved = VReg::phys("opaque_machine_value");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            saved.clone(),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 3,
+            },
+        );
+        let mut function = Function {
+            name: "print_message".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(slot.clone()),
+                    src: Expr::Reg(saved.clone()),
+                    size: 8,
+                },
+                Stmt::Assign {
+                    dst: saved,
+                    src: Expr::Reg(slot),
+                },
+            ],
+        };
+
+        prune_void_entry_result_restores_with_identities(&mut function, &identities);
+
+        assert_eq!(function.body.len(), 2);
+    }
+
+    #[test]
+    fn misleading_result_spelling_does_not_authorize_void_bridge_cleanup() {
+        let object_name = "opaque_void_save".to_string();
+        let object = VReg::phys(&object_name);
+        let saved = VReg::phys("rax#3");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object_name]);
+        identities.record(
+            saved.clone(),
+            SsaValue {
+                base: VReg::phys("rdi"),
+                version: 3,
+            },
+        );
+        let mut function = Function {
+            name: "print_message".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(object.clone()),
+                    src: Expr::Reg(saved.clone()),
+                    size: 8,
+                },
+                Stmt::Assign {
+                    dst: saved,
+                    src: Expr::Reg(object),
+                },
+            ],
+        };
+
+        prune_void_entry_result_restores_with_identities(&mut function, &identities);
+
+        assert_eq!(function.body.len(), 2);
     }
 
     #[test]

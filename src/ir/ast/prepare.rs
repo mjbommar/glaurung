@@ -326,7 +326,14 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
     let mut owned = f.clone();
     if output_kind == crate::ir::types_recover::RecoveredOutputKind::Void {
         crate::ir::direct_output::clear_return_values(&mut owned);
-        crate::ir::direct_output::prune_void_entry_result_restores(&mut owned);
+        match identities {
+            Some(identities) => {
+                crate::ir::direct_output::prune_void_entry_result_restores_with_identities(
+                    &mut owned, identities,
+                )
+            }
+            None => crate::ir::direct_output::prune_void_entry_result_restores(&mut owned),
+        }
     } else {
         match identities {
             Some(identities) => {
