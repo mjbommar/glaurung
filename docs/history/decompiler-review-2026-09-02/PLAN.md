@@ -1094,7 +1094,14 @@ provenance through lowering.
   Both forms were observed red, all 111 call-argument tests pass, and the exact
   i386 O0/O2 `call_into_spill` release A/B remains 2/2 green; see
   `results/wp3-cdecl32-argument-expression-origins.md`. Hard-float and
-  table-call fallback expression producers remain open.
+  table-call fallback expression producers remain open. Commit `a756a6d5`
+  then attributes each pure-VFP hard-float argument to its distinct setup
+  assignment without changing the contiguous-prefix or mixed-bank refusal.
+  Its observed-red ownership test, four AAPCS tests, all 111 call-argument
+  tests, and two exact real ARM hard-float tests pass on a fresh release build;
+  the two A32 complex-float canaries remain identically known-failing. See
+  `results/wp3-hard-float-argument-expression-origins.md`. The table-call
+  reaching-value fallback remains the final identified call-argument producer.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
