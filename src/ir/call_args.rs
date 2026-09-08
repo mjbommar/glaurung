@@ -823,7 +823,8 @@ fn fold_body_with_context(
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                 // A loop's own carried inputs are `loop_carried_arg_inputs`'
                 // business; only the path INTO the loop is inherited here.
-                let loop_inputs = loop_carried_arg_inputs(prefix, body, arch, &enclosing.overrides);
+                let loop_inputs =
+                    loop_carried_arg_inputs(prefix, body, arch, &enclosing.overrides, identities);
                 let nested = enclosing
                     .with_blocked(
                         running.clone(),
@@ -953,31 +954,55 @@ fn loop_carried_arg_inputs(
     loop_body: &[Stmt],
     arch: CallConv,
     inherited: &[Option<Expr>],
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Vec<Option<Expr>> {
     let mut inputs = inherited.to_vec();
     inputs.resize(arg_slots(arch).len(), None);
     for (update_index, statement) in loop_body.iter().enumerate() {
-        let Stmt::Assign {
-            dst: VReg::Phys(dst),
-            ..
-        } = statement.semantic()
-        else {
+        let Stmt::Assign { dst, .. } = statement.semantic() else {
             continue;
         };
-        let Some(slot) = slot_of(arch, dst) else {
+        let Some((slot, versioned, initialized)) = (match identities {
+            Some(identities) => identities.exact(dst).and_then(|identity| {
+                let VReg::Phys(storage) = &identity.base else {
+                    return None;
+                };
+                let slot = slot_of(arch, storage)?;
+                let initialized = prefix.iter().rev().any(|candidate| {
+                    matches!(
+                        candidate.semantic(),
+                        Stmt::Assign { dst: prior, .. }
+                            if identities.exact(prior) == Some(identity)
+                    )
+                });
+                Some((slot, identity.version > 0, initialized))
+            }),
+            None => {
+                let VReg::Phys(name) = dst else {
+                    continue;
+                };
+                slot_of(arch, name).map(|slot| {
+                    let initialized = prefix.iter().rev().any(|candidate| {
+                        matches!(
+                            candidate.semantic(),
+                            Stmt::Assign { dst: VReg::Phys(prior), .. } if prior == name
+                        )
+                    });
+                    (slot, name.contains('#'), initialized)
+                })
+            }
+        }) else {
             continue;
         };
-        if !dst.contains('#')
+        if !versioned
             || !loop_body[..update_index]
                 .iter()
                 .any(|candidate| matches!(candidate.semantic(), Stmt::Call { .. }))
-            || !prefix.iter().rev().any(|candidate| {
-                matches!(candidate.semantic(), Stmt::Assign { dst: VReg::Phys(prior), .. } if prior == dst)
-            })
+            || !initialized
         {
             continue;
         }
-        inputs[slot] = Some(Expr::Reg(VReg::Phys(dst.clone())));
+        inputs[slot] = Some(Expr::Reg(dst.clone()));
     }
     inputs
 }
@@ -2954,6 +2979,66 @@ mod tests {
             _ => None,
         });
         assert_eq!(args, Some(&vec![Expr::Reg(reg("rdi#1"))]));
+    }
+
+    #[test]
+    fn loop_carried_input_uses_exact_identity_not_display_spelling() {
+        let loop_with = |name: &str| {
+            vec![
+                call_to("signed_step"),
+                Stmt::Assign {
+                    dst: reg(name),
+                    src: Expr::Reg(reg("rax")),
+                },
+            ]
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            reg("opaque_init"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi"),
+                version: 1,
+            },
+        );
+        identities.record(
+            reg("opaque_loop"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi"),
+                version: 1,
+            },
+        );
+        identities.record(
+            reg("rdi#1"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 1,
+            },
+        );
+
+        let exact = loop_carried_arg_inputs(
+            &[Stmt::Assign {
+                dst: reg("opaque_init"),
+                src: Expr::Reg(reg("rdi")),
+            }],
+            &loop_with("opaque_loop"),
+            CallConv::SysVAmd64,
+            &[None],
+            Some(&identities),
+        );
+        assert_eq!(exact[0], Some(Expr::Reg(reg("opaque_loop"))));
+        assert!(exact[1..].iter().all(Option::is_none));
+
+        let misleading = loop_carried_arg_inputs(
+            &[Stmt::Assign {
+                dst: reg("rdi#1"),
+                src: Expr::Reg(reg("rdi")),
+            }],
+            &loop_with("rdi#1"),
+            CallConv::SysVAmd64,
+            &[None],
+            Some(&identities),
+        );
+        assert!(misleading.iter().all(Option::is_none));
     }
 
     /// AArch64 reuses x0 for both the first argument and the return value. GCC
