@@ -1729,7 +1729,9 @@ fn merge_equality_and_less(equality: &Expr, less: &Expr) -> Option<Expr> {
     // signed and unsigned views as interchangeable here is value-correct for
     // the equality alone, but prematurely rewrites GCC switch range flags into
     // inequalities and destroys the comparison ladder before switch recovery.
-    if equality_lhs != less_lhs || equality_rhs != less_rhs {
+    if equality_lhs.semantic() != less_lhs.semantic()
+        || equality_rhs.semantic() != less_rhs.semantic()
+    {
         return None;
     }
     let op = match op {
@@ -1744,11 +1746,24 @@ fn merge_equality_and_less(equality: &Expr, less: &Expr) -> Option<Expr> {
         .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
             owners.union(next)
         });
+    let merge_operand = |first: &Expr, second: &Expr| {
+        let origins = first
+            .origins()
+            .into_iter()
+            .chain(second.origins())
+            .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+                owners.union(next)
+            });
+        first
+            .semantic()
+            .clone()
+            .with_optional_origins((!origins.is_empty()).then_some(origins))
+    };
     Some(
         Expr::Cmp {
             op,
-            lhs: equality_lhs.clone(),
-            rhs: equality_rhs.clone(),
+            lhs: Box::new(merge_operand(equality_lhs, less_lhs)),
+            rhs: Box::new(merge_operand(equality_rhs, less_rhs)),
         }
         .with_optional_origins((!origins.is_empty()).then_some(origins)),
     )
@@ -2605,18 +2620,22 @@ mod tests {
         let rhs = Expr::Reg(reg("rbx"));
         let equality_owner = crate::ir::ast::OriginSet::one(0x1000);
         let less_owner = crate::ir::ast::OriginSet::one(0x1004);
+        let equality_lhs_owner = crate::ir::ast::OriginSet::one(0x1008);
+        let equality_rhs_owner = crate::ir::ast::OriginSet::one(0x100c);
+        let less_lhs_owner = crate::ir::ast::OriginSet::one(0x1010);
+        let less_rhs_owner = crate::ir::ast::OriginSet::one(0x1014);
         let mut function = one_stmt(bin(
             BinOp::Or,
             Expr::Cmp {
                 op: CmpOp::Eq,
-                lhs: Box::new(lhs.clone()),
-                rhs: Box::new(rhs.clone()),
+                lhs: Box::new(lhs.clone().with_origins(equality_lhs_owner.clone())),
+                rhs: Box::new(rhs.clone().with_origins(equality_rhs_owner.clone())),
             }
             .with_origins(equality_owner.clone()),
             Expr::Cmp {
                 op: CmpOp::Slt,
-                lhs: Box::new(lhs.clone()),
-                rhs: Box::new(rhs.clone()),
+                lhs: Box::new(lhs.clone().with_origins(less_lhs_owner.clone())),
+                rhs: Box::new(rhs.clone().with_origins(less_rhs_owner.clone())),
             }
             .with_origins(less_owner.clone()),
         ));
@@ -2626,15 +2645,29 @@ mod tests {
         let Stmt::Assign { src, .. } = &function.body[0] else {
             panic!("expected assignment")
         };
-        assert_eq!(
+        assert!(matches!(
             src.semantic(),
-            &Expr::Cmp {
-                op: CmpOp::Sle,
-                lhs: Box::new(lhs),
-                rhs: Box::new(rhs),
-            }
-        );
+            Expr::Cmp { op: CmpOp::Sle, lhs, rhs }
+                if matches!(lhs.semantic(), Expr::Reg(register) if register == &reg("rax"))
+                    && matches!(rhs.semantic(), Expr::Reg(register) if register == &reg("rbx"))
+        ));
         assert_eq!(src.origins(), Some(&equality_owner.union(&less_owner)));
+        let Expr::Cmp {
+            lhs: merged_lhs,
+            rhs: merged_rhs,
+            ..
+        } = src.semantic()
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            merged_lhs.origins(),
+            Some(&equality_lhs_owner.union(&less_lhs_owner))
+        );
+        assert_eq!(
+            merged_rhs.origins(),
+            Some(&equality_rhs_owner.union(&less_rhs_owner))
+        );
     }
 
     #[test]
