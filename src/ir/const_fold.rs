@@ -499,6 +499,21 @@ fn fold_stored_value(src: &mut Expr, size: u8, changed: &mut bool) {
     if size == 0 {
         return;
     }
+    // Storage context is semantic, so an origin carrier must not hide the
+    // cast/mask that the write width proves redundant. Recurse inside it, then
+    // flatten any carrier produced by the replacement into one canonical set.
+    if let Expr::Origin { origins, expr } = src {
+        fold_stored_value(expr, size, changed);
+        if matches!(expr.as_ref(), Expr::Origin { .. }) {
+            let nested = std::mem::replace(expr.as_mut(), Expr::Unknown(String::new()));
+            let (semantic, nested_origins) = nested.into_semantic_with_origins();
+            if let Some(nested_origins) = nested_origins {
+                origins.merge(&nested_origins);
+            }
+            **expr = semantic;
+        }
+        return;
+    }
     // A machine store observes only its low `size` bytes. Integer casts whose
     // target is at least that wide cannot change those bits, so retaining the
     // zero/sign-extension in source C only changes instruction selection.
@@ -3501,6 +3516,36 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn attributed_store_width_fold_unions_cast_and_value_origins() {
+        let cast_owner = crate::ir::ast::OriginSet::one(0x1090);
+        let value_owner = crate::ir::ast::OriginSet::one(0x1094);
+        let mut function = Function {
+            name: "store".into(),
+            entry_va: 0,
+            body: vec![Stmt::Store {
+                addr: Expr::Reg(reg("destination")),
+                src: Expr::Cast {
+                    signed: false,
+                    width: 4,
+                    expr: Box::new(
+                        Expr::Reg(reg("value")).with_origins(value_owner.clone()),
+                    ),
+                }
+                .with_origins(cast_owner.clone()),
+                size: 1,
+            }],
+        };
+
+        fold_constants(&mut function);
+
+        let Stmt::Store { src, .. } = &function.body[0] else {
+            panic!("expected store")
+        };
+        assert_eq!(src.semantic(), &Expr::Reg(reg("value")));
+        assert_eq!(src.origins(), Some(&cast_owner.union(&value_owner)));
     }
 
     #[test]
