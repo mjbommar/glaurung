@@ -516,6 +516,15 @@ passes syntax compilation. The amd64 O2 executable matches output and status
 with controlled `argv[0]`; arm64 O2 still omits the second variadic `printf`
 value and remains explicit WP6/WP9 debt. No broad suite or corpus ran.
 
+## Void result-bridge identities
+
+Commit `70b6dc82` requires producer-owned promoted storage plus complete SSA
+machine-result candidates before deleting a void function's entry-result
+save/restore bridge. Three exact tests and all 21 direct-output tests pass; the
+census is 5,133 declared Rust tests with zero outside every gate. After a fresh
+serial extension rebuild, only `09_memory_effects:clang:O0:tick_n` was run and
+reported no regression. No broad suite or corpus ran.
+
 ## Ground rules
 
 Verified before any claim of done: `cargo test --features python-ext`,

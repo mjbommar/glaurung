@@ -2017,6 +2017,14 @@ provenance through lowering.
   already red at the parent and renders byte-identically at the tip, so it is
   recorded as baseline debt rather than attributed to this migration. See
   `results/wp3-promoted-float-store-identities.md`.
+  Commit `70b6dc82` migrates void-function result save/restore cleanup across
+  the same boundary. The removable bridge now requires both a
+  stack-promotion-owned object and complete SSA candidates whose canonical
+  bases are machine result storage. Opaque valid identities are accepted;
+  unowned `local_8` and misleading `rax#3` spellings decline. Three exact
+  adversarial tests, all 21 direct-output tests, the census gate, and only the
+  Clang O0 `tick_n` fixture pass after a fresh serial extension rebuild. See
+  `results/wp3-void-result-bridge-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
