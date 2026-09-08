@@ -1768,6 +1768,12 @@ provenance through lowering.
   `rbp#version` spelling. All 83 owning type-recovery tests and one production
   typed-render CLI check pass; see
   `results/wp3-frame-spill-type-identities.md`.
+  Commit `a86966f1` migrates typed-output return refinement using exact result
+  identity plus the pipeline-owned definition width. Opaque four-byte `rax`
+  storage narrows correctly, while a misleading `rax#version` spelling mapped
+  to `rdi` cannot alter the return. All 84 owning type-recovery tests and one
+  production typed-output check pass; see
+  `results/wp3-return-width-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
@@ -3814,9 +3820,12 @@ relevant ratchet's accepted-regression record.
    `types_recover/tagging.rs` frame-base and spill/reload surface using complete
    exact SSA identities; its 83 owning tests and production typed-render smoke
    check pass. See `results/wp3-frame-spill-type-identities.md`. Continue in
-   `src/ir/call_args.rs` and the remaining type/return readers; keep pre-sidecar
-   tagging internals and explicit no-sidecar compatibility parsers classified
-   separately.
+   `src/ir/call_args.rs` and the remaining type/return readers. Commit
+   `a86966f1` closes the typed renderer's final integer return-width reader by
+   joining exact result identity to authoritative definition width; its 84
+   owning tests and production typed-output smoke check pass. See
+   `results/wp3-return-width-identities.md`. Keep pre-sidecar tagging internals
+   and explicit no-sidecar compatibility parsers classified separately.
    Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
