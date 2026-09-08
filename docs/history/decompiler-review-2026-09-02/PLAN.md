@@ -1180,6 +1180,11 @@ provenance through lowering.
   comparison plus both operand owners. Its observed-red test and all 69
   constant-fold tests pass; see
   `results/wp3-constant-comparison-expression-origins.md`.
+  Commit `ff0ced1c` then makes same-semantic-operand identities transparent to
+  distinct carriers. The `x ^ x`, `x - x`, `x & x`, and `x | x` family now
+  preserves the enclosing operation and both operand owners. Its observed-red
+  test and all 70 constant-fold tests pass; see
+  `results/wp3-same-operand-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 

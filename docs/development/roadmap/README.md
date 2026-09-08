@@ -262,7 +262,7 @@ float-role type projection as the first product consumer. Commit `af65c260`
 migrates optimized DWARF register-local recovery as the second; both 419-pair
 maps are byte-identical. Statement origins and structured line mappings are
 now live. Commits `3c5c74b9`, `f30167f7`, `b269a3f2`, `86ac95a6`, and
-`fb878925`, `5f8dec01`, `76753c05`, `bb98a3a9`, `e68ff86f`, `a756a6d5`, `f2e69784`, `4c19cb2e`, `97aef0c3`, `65162531`, `6c737361`, `5e04d66a`, `02791f18`, `3b1f34ca`, `22cb5827`, `66e533d7`, `1647953d`, `14eef6d2`, and `e2df3e60` make the first bounded production expression-origin attachments
+`fb878925`, `5f8dec01`, `76753c05`, `bb98a3a9`, `e68ff86f`, `a756a6d5`, `f2e69784`, `4c19cb2e`, `97aef0c3`, `65162531`, `6c737361`, `5e04d66a`, `02791f18`, `3b1f34ca`, `22cb5827`, `66e533d7`, `1647953d`, `14eef6d2`, `e2df3e60`, and `ff0ced1c` make the first bounded production expression-origin attachments
 during temporary reconstruction, simple/exhaustive return folding, all four
 safe adjacent value movements, generic register-call argument recovery, and
 both generic SysV stack-argument forms, the generic AAPCS stack area, and
@@ -273,7 +273,7 @@ terminal mixed-view relation folding, subtraction zero-test recovery, and
 constant-select hoisting, full-width parameter-address load recovery, and
 repeated-condition select collapse, proved nested-cast subsumption, and safe
 eager SETcc boolean-tree recovery, observed partial-register masks, and safe
-constant arithmetic and comparisons
+constant arithmetic and comparisons, and same-operand algebraic folds
 without changing their scoped real-binary verdicts. Multi-output
 identity, remaining display-name consumers,
 universal expression attribution, and remaining mutating-pass migrations keep
