@@ -1513,7 +1513,7 @@ fn merge_equality_and_less(equality: &Expr, less: &Expr) -> Option<Expr> {
         op: CmpOp::Eq,
         lhs: equality_lhs,
         rhs: equality_rhs,
-    } = equality
+    } = equality.semantic()
     else {
         return None;
     };
@@ -1521,7 +1521,7 @@ fn merge_equality_and_less(equality: &Expr, less: &Expr) -> Option<Expr> {
         op,
         lhs: less_lhs,
         rhs: less_rhs,
-    } = less
+    } = less.semantic()
     else {
         return None;
     };
@@ -1537,11 +1537,21 @@ fn merge_equality_and_less(equality: &Expr, less: &Expr) -> Option<Expr> {
         CmpOp::Ult => CmpOp::Ule,
         _ => return None,
     };
-    Some(Expr::Cmp {
-        op,
-        lhs: equality_lhs.clone(),
-        rhs: equality_rhs.clone(),
-    })
+    let origins = equality
+        .origins()
+        .into_iter()
+        .chain(less.origins())
+        .fold(crate::ir::ast::OriginSet::empty(), |owners, next| {
+            owners.union(next)
+        });
+    Some(
+        Expr::Cmp {
+            op,
+            lhs: equality_lhs.clone(),
+            rhs: equality_rhs.clone(),
+        }
+        .with_optional_origins((!origins.is_empty()).then_some(origins)),
+    )
 }
 
 /// Prove and invert `(unsigned(x) == K) | (signed(x) < K)` as `K < signed(x)`.
@@ -2085,6 +2095,44 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn attributed_equality_or_less_merges_and_unions_origins() {
+        let lhs = Expr::Reg(reg("rax"));
+        let rhs = Expr::Reg(reg("rbx"));
+        let equality_owner = crate::ir::ast::OriginSet::one(0x1000);
+        let less_owner = crate::ir::ast::OriginSet::one(0x1004);
+        let mut function = one_stmt(bin(
+            BinOp::Or,
+            Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(lhs.clone()),
+                rhs: Box::new(rhs.clone()),
+            }
+            .with_origins(equality_owner.clone()),
+            Expr::Cmp {
+                op: CmpOp::Slt,
+                lhs: Box::new(lhs.clone()),
+                rhs: Box::new(rhs.clone()),
+            }
+            .with_origins(less_owner.clone()),
+        ));
+
+        fold_constants(&mut function);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected assignment")
+        };
+        assert_eq!(
+            src.semantic(),
+            &Expr::Cmp {
+                op: CmpOp::Sle,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            }
+        );
+        assert_eq!(src.origins(), Some(&equality_owner.union(&less_owner)));
     }
 
     #[test]
