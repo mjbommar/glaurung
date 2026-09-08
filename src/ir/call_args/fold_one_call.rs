@@ -30,7 +30,7 @@ use super::{
     is_stable_frame_arg_definition_with_identities, known_arm_core_register_arity,
     known_arm_hard_float_layout, layout_matches_abi_allocation_order,
     mark_arg_reads_in_expr_with_identities, mark_arg_reads_in_stmt_with_identities,
-    mark_arg_writes_in_stmt_with_identities, outgoing_aapcs_stack_area,
+    mark_arg_writes_in_stmt_with_identities, outgoing_aapcs_stack_area_with_identities,
     outgoing_stack_cleanup_with_identities, outgoing_sysv_stack_area,
     outgoing_sysv_stack_push_with_identities, reads_reg_in_expr, register_is_storage,
     resolve_captured_definition, resolve_captured_definition_in, return_reg, slot_of, ssa_base,
@@ -95,7 +95,9 @@ pub(super) fn fold_one_call(
         .then(|| {
             recovered_layout
                 .and_then(|layout| aapcs_integer_stack_suffix(layout))
-                .and_then(|count| outgoing_aapcs_stack_area(body, call_idx, count))
+                .and_then(|count| {
+                    outgoing_aapcs_stack_area_with_identities(body, call_idx, count, identities)
+                })
         })
         .flatten();
     if let Some(layout) = recovered_layout.filter(|_| aapcs_stack.is_none()) {

@@ -17,7 +17,7 @@ use crate::ir::ast::{Expr, Stmt};
 use crate::ir::types::VReg;
 use crate::ir::value_number::ValueIdentities;
 
-use super::{ssa_base, CallConv};
+use super::{register_is_storage, ssa_base, CallConv};
 
 /// Exact core-register arity of a fixed AAPCS32 library call.
 ///
@@ -335,10 +335,20 @@ pub(super) fn aapcs_integer_stack_suffix(layout: &[VReg]) -> Option<usize> {
 /// then require one nearest 4-byte store for every offset `0,4,..`; a call,
 /// control boundary, stack-pointer write, unrelated store, duplicate, or gap
 /// rejects the whole candidate.
-pub(super) fn outgoing_aapcs_stack_area(
+#[cfg(test)]
+fn outgoing_aapcs_stack_area(
     body: &[Stmt],
     call_index: usize,
     expected_args: usize,
+) -> Option<(Vec<Expr>, Vec<usize>)> {
+    outgoing_aapcs_stack_area_with_identities(body, call_index, expected_args, None)
+}
+
+pub(super) fn outgoing_aapcs_stack_area_with_identities(
+    body: &[Stmt],
+    call_index: usize,
+    expected_args: usize,
+    identities: Option<&ValueIdentities>,
 ) -> Option<(Vec<Expr>, Vec<usize>)> {
     if expected_args == 0 {
         return None;
@@ -352,13 +362,13 @@ pub(super) fn outgoing_aapcs_stack_area(
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Store { addr, src, size: 4 } => {
                 let disp = match addr {
-                    Expr::Reg(VReg::Phys(base)) if ssa_base(base) == "sp" => 0,
+                    Expr::Reg(base) if register_is_storage(base, "sp", identities) => 0,
                     Expr::Lea {
-                        base: Some(VReg::Phys(base)),
+                        base: Some(base),
                         index: None,
                         disp,
                         ..
-                    } if ssa_base(base) == "sp" => *disp,
+                    } if register_is_storage(base, "sp", identities) => *disp,
                     _ => return None,
                 };
                 if disp < 0 || disp >= expected_bytes || disp % 4 != 0 {
@@ -375,10 +385,7 @@ pub(super) fn outgoing_aapcs_stack_area(
                     break;
                 }
             }
-            Stmt::Assign {
-                dst: VReg::Phys(name),
-                ..
-            } if ssa_base(name) == "sp" => return None,
+            Stmt::Assign { dst, .. } if register_is_storage(dst, "sp", identities) => return None,
             Stmt::Assign { .. } => {}
             Stmt::Comment(_) | Stmt::Nop => {}
             // Do not cross a prior call/control boundary or an unproved memory
@@ -557,6 +564,51 @@ mod tests {
                 vec![1, 0],
             ))
         );
+    }
+
+    #[test]
+    fn aapcs_stack_area_uses_exact_identity_not_display_spelling() {
+        let store = |base: &str| Stmt::Store {
+            addr: Expr::Lea {
+                base: Some(reg(base)),
+                index: None,
+                scale: 1,
+                disp: 0,
+                segment: None,
+            },
+            src: Expr::Const(5),
+            size: 4,
+        };
+        let mut identities = ValueIdentities::default();
+        identities.record(
+            reg("opaque_sp"),
+            crate::ir::ssa::SsaValue {
+                base: reg("sp"),
+                version: 2,
+            },
+        );
+        identities.record(
+            reg("sp#2"),
+            crate::ir::ssa::SsaValue {
+                base: reg("r4"),
+                version: 2,
+            },
+        );
+
+        assert!(outgoing_aapcs_stack_area_with_identities(
+            &[store("opaque_sp"), call_to("callee")],
+            1,
+            1,
+            Some(&identities),
+        )
+        .is_some());
+        assert!(outgoing_aapcs_stack_area_with_identities(
+            &[store("sp#2"), call_to("callee")],
+            1,
+            1,
+            Some(&identities),
+        )
+        .is_none());
     }
 
     #[test]
