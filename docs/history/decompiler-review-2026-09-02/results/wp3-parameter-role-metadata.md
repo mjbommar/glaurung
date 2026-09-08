@@ -268,3 +268,29 @@ Each command was `cargo test --features python-ext --lib
 <focused-test>`, with `-- --exact` on the individually named cases. No broad
 Rust, Python, fixture, DecBench, or Joern suite was run. Remaining
 parameter-role consumers are still open under WP3.
+
+## Pre-naming direct-output authority
+
+Commit `e79bb7b5` removes a distinct `ret` spelling dependency from
+prototype-backed output recovery. `materialize_prototype_output` runs before
+`apply_role_names`, so a value already spelled `ret` at that boundary is not a
+pipeline-owned result role. The pass now admits body-written output storage
+only through the selected calling convention's ABI register predicate. Its
+ordinary post-naming compatibility sibling continues to accept canonical
+`ret`; replacing that path requires typed result-role transport and is not
+claimed here.
+
+Focused RED/GREEN evidence:
+
+```text
+cargo test --features python-ext --lib \
+  prototype_output_does_not_trust_an_unowned_ret_spelling -- --nocapture
+RED: 1 failed; 4,444 filtered out
+GREEN: 1 passed; 4,444 filtered out
+
+cargo test --features python-ext --lib ir::direct_output::tests -- --nocapture
+14 passed; 4,431 filtered out
+```
+
+No fixture matrix, broad Rust/Python suite, DecBench, or Joern lane was run for
+this single-module semantic correction.

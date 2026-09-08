@@ -1682,7 +1682,13 @@ provenance through lowering.
   to-slot map into the immutable declaration plan. Lvalue naming and both
   `StackAddr` rendering decisions now query that plan, leaving
   `dec_render.rs` with no `argN` parser and preventing a local array called
-  `arg0` from rendering as a parameter-valued `void *`.
+  `arg0` from rendering as a parameter-valued `void *`. Commit `e79bb7b5`
+  removes the first pre-naming `ret` spelling decision from direct-output
+  recovery. Prototype-backed identity returns now recognize body writes only
+  through the selected calling convention's ABI result registers; an unrelated
+  value literally named `ret` cannot suppress or replace the proven live-in
+  result. The post-naming compatibility projection still accepts the canonical
+  `ret` role and remains a separate migration target.
   See
   `results/wp3-parameter-role-metadata.md`. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
