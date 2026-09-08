@@ -536,6 +536,16 @@ tests and zero outside every gate. A fresh serial extension rebuild passes the
 build guard, and only `03_loop_shapes:gcc:O0:for_sum` was exercised; it reports
 no scoped regression. No broad suite or corpus ran.
 
+## Guarded-switch stack identities
+
+Commit `dad31027` moves the guarded-switch promoted discriminator-copy proof
+from `local_`/`stack_` spelling to producer-owned stack identity in both the
+untyped preparation and typed range-guard paths. All 20 owning tests pass with
+4,580 unrelated tests filtered out. The census records 5,137 declared Rust
+tests and zero outside every gate. After a fresh serial native rebuild, only
+`204_adjacent_dispatch_tables:clang:O2:adt204_guarded_control` ran and reported
+no scoped regression. No broad suite or corpus ran.
+
 ## Ground rules
 
 Verified before any claim of done: `cargo test --features python-ext`,

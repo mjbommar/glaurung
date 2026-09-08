@@ -2033,6 +2033,13 @@ provenance through lowering.
   O0 `for_sum` fixture pass after a fresh native rebuild; 4,581 unrelated Rust
   tests were filtered out. See
   `results/wp3-condition-hoist-stack-identities.md`.
+  Commit `dad31027` then applies the same producer-owned stack identity to the
+  guarded-switch discriminator-copy proof in both untyped preparation and the
+  typed range-guard pass. Opaque owned objects are eligible; misleading
+  `local_28` spelling without ownership declines. All 20 owning tests and the
+  exact Clang O2 `adt204_guarded_control` fixture pass, with 4,580 unrelated
+  Rust tests filtered out. See
+  `results/wp3-wp5-guarded-switch-stack-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and

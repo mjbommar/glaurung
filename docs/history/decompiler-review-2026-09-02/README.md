@@ -88,6 +88,10 @@ three places. The detailed file now records the reconciled decisions:
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
 The latest WP3 record is
+[`results/wp3-wp5-guarded-switch-stack-identities.md`](results/wp3-wp5-guarded-switch-stack-identities.md):
+guarded-switch discriminator copies now require producer-owned promoted-stack
+identity in production. Its 20 owning tests and one exact Clang O2 switch
+fixture pass. The preceding
 [`results/wp3-condition-hoist-stack-identities.md`](results/wp3-condition-hoist-stack-identities.md):
 condition motion now treats producer-owned promoted-stack identity, rather
 than `local_`/`stack_` spelling, as the store barrier. Its 17 focused Rust tests
