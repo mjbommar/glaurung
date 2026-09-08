@@ -14,7 +14,7 @@
 //! structure, and `collect_goto_targets`/`deduplicate_labels` repair the labels
 //! that survive.
 
-use super::float_gate::scalar_float_semantics_are_closed;
+use super::float_gate::scalar_float_semantics_are_closed_with_identities;
 use super::fold_returns;
 use super::lower_conds::{
     exit_is_taken_branch, extract_cond_and_strip, hoisting_the_header_is_safe, lower_block,
@@ -344,6 +344,7 @@ fn lower_raw_loop_block(
     inline_regions: &[crate::ir::structure::RawSwitchInlineRegion],
     default_target: Option<u64>,
     lower_scalar_float: bool,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Vec<Stmt> {
     let explicit_index = block
         .instrs
@@ -355,7 +356,7 @@ fn lower_raw_loop_block(
             } => Some(lower_value(index)),
             _ => None,
         });
-    let mut statements = lower_block(block, lower_scalar_float);
+    let mut statements = lower_block(block, lower_scalar_float, identities);
     if fold_switch_guard {
         let guard_is_exact = switch
             .filter(|evidence| evidence.complete)
@@ -414,7 +415,7 @@ fn lower_raw_loop_block(
             if position > 0 {
                 body.push(Stmt::Label(block.start_va));
             }
-            let mut statements = lower_block(block, lower_scalar_float);
+            let mut statements = lower_block(block, lower_scalar_float, identities);
             let lexical_next = region
                 .blocks
                 .get(position + 1)
@@ -532,8 +533,9 @@ fn lower_region(
     lf: &LlirFunction,
     targets: &std::collections::HashSet<u64>,
     lower_scalar_float: bool,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Vec<Stmt> {
-    let mut out = lower_region_inner(r, lf, targets, lower_scalar_float);
+    let mut out = lower_region_inner(r, lf, targets, lower_scalar_float, identities);
     // A region that *emits* a goto-target block (any shape — a plain block or a
     // structured `if`/`while` that begins at the target) gets a label at the
     // start of its statements so the jump resolves. The block's statements render
@@ -555,10 +557,11 @@ fn lower_region_inner(
     lf: &LlirFunction,
     targets: &std::collections::HashSet<u64>,
     lower_scalar_float: bool,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Vec<Stmt> {
     match r {
-        Region::Block(bi) => lower_block(&lf.blocks[*bi], lower_scalar_float),
-        Region::Borrowed(inner) => lower_region(inner, lf, targets, lower_scalar_float),
+        Region::Block(bi) => lower_block(&lf.blocks[*bi], lower_scalar_float, identities),
+        Region::Borrowed(inner) => lower_region(inner, lf, targets, lower_scalar_float, identities),
         Region::Goto(bi) => vec![Stmt::Goto {
             target: lf.blocks[*bi].start_va,
         }],
@@ -571,7 +574,7 @@ fn lower_region_inner(
             // list either way.
             let mut out: Vec<Stmt> = Vec::new();
             for (idx, p) in parts.iter().enumerate() {
-                let mut lowered = lower_region(p, lf, targets, lower_scalar_float);
+                let mut lowered = lower_region(p, lf, targets, lower_scalar_float, identities);
                 // A sequence emits its next region immediately after this one,
                 // so an unconditional jump to that region is ordinary
                 // fallthrough and must disappear. This includes entry jumps to
@@ -603,7 +606,7 @@ fn lower_region_inner(
             join,
             invert,
         } => {
-            let cond_stmts = lower_block(&lf.blocks[*cond], lower_scalar_float);
+            let cond_stmts = lower_block(&lf.blocks[*cond], lower_scalar_float, identities);
             let (cond_expr, mut pre, condition_origins) =
                 extract_cond_and_strip(&lf.blocks[*cond], cond_stmts);
             // The raw condition is true when the branch is taken; if `then_r` is
@@ -613,7 +616,7 @@ fn lower_region_inner(
             } else {
                 cond_expr
             };
-            let mut then_stmts = lower_region(then_r, lf, targets, lower_scalar_float);
+            let mut then_stmts = lower_region(then_r, lf, targets, lower_scalar_float, identities);
             // The arm's trailing `goto <join>` is redundant — control falls
             // through to the join right after the `if`. Leaving it makes the arm
             // jump *past* the join's body (e.g. the epilogue's `return`) to a
@@ -638,7 +641,7 @@ fn lower_region_inner(
             join,
             invert,
         } => {
-            let cond_stmts = lower_block(&lf.blocks[*cond], lower_scalar_float);
+            let cond_stmts = lower_block(&lf.blocks[*cond], lower_scalar_float, identities);
             let (cond_expr, mut pre, condition_origins) =
                 extract_cond_and_strip(&lf.blocks[*cond], cond_stmts);
             let cond_expr = if *invert {
@@ -646,8 +649,8 @@ fn lower_region_inner(
             } else {
                 cond_expr
             };
-            let mut then_stmts = lower_region(then_r, lf, targets, lower_scalar_float);
-            let mut else_stmts = lower_region(else_r, lf, targets, lower_scalar_float);
+            let mut then_stmts = lower_region(then_r, lf, targets, lower_scalar_float, identities);
+            let mut else_stmts = lower_region(else_r, lf, targets, lower_scalar_float, identities);
             if let Some(j) = join {
                 let jva = lf.blocks[*j].start_va;
                 strip_trailing_goto(&mut then_stmts, jva);
@@ -664,7 +667,7 @@ fn lower_region_inner(
             pre
         }
         Region::While { header, body, exit } => {
-            let cond_stmts = lower_block(&lf.blocks[*header], lower_scalar_float);
+            let cond_stmts = lower_block(&lf.blocks[*header], lower_scalar_float, identities);
             let (cond_expr, pre, condition_origins) =
                 extract_cond_and_strip(&lf.blocks[*header], cond_stmts);
             // `cond_expr` is the branch-TAKEN condition. Whether that is the
@@ -684,7 +687,7 @@ fn lower_region_inner(
                 cond_expr
             };
             let cond_expr = continue_cond;
-            let mut body_stmts = lower_region(body, lf, targets, lower_scalar_float);
+            let mut body_stmts = lower_region(body, lf, targets, lower_scalar_float, identities);
             if let Some(exit) = exit {
                 recover_direct_loop_breaks(&mut body_stmts, lf.blocks[*exit].start_va);
             }
@@ -764,11 +767,11 @@ fn lower_region_inner(
             }
         }
         Region::DoWhile { body, cond, exit } => {
-            let mut body_stmts = lower_region(body, lf, targets, lower_scalar_float);
+            let mut body_stmts = lower_region(body, lf, targets, lower_scalar_float, identities);
             if let Some(exit) = exit {
                 recover_direct_loop_breaks(&mut body_stmts, lf.blocks[*exit].start_va);
             }
-            let cond_stmts = lower_block(&lf.blocks[*cond], lower_scalar_float);
+            let cond_stmts = lower_block(&lf.blocks[*cond], lower_scalar_float, identities);
             let (cond_expr, mut latch_stmts, condition_origins) =
                 extract_cond_and_strip(&lf.blocks[*cond], cond_stmts);
             // A shared arm can explicitly jump to the bottom test (source-level
@@ -803,7 +806,8 @@ fn lower_region_inner(
             let continuation_va = continuation.map(|block| lf.blocks[block].start_va);
             let mut lowered_exits = std::collections::HashMap::new();
             for (target, exit) in exits {
-                let mut statements = lower_region(exit, lf, targets, lower_scalar_float);
+                let mut statements =
+                    lower_region(exit, lf, targets, lower_scalar_float, identities);
                 if let Some(continuation_va) = continuation_va {
                     strip_trailing_goto(&mut statements, continuation_va);
                 }
@@ -812,7 +816,7 @@ fn lower_region_inner(
                 }
                 lowered_exits.insert(lf.blocks[*target].start_va, statements);
             }
-            let body = lower_region(body, lf, targets, lower_scalar_float);
+            let body = lower_region(body, lf, targets, lower_scalar_float, identities);
             vec![Stmt::While {
                 cond: Expr::Const(1),
                 body: materialize_multi_exit_transfers(
@@ -856,6 +860,7 @@ fn lower_region_inner(
                     switch_inline_regions,
                     default_target,
                     lower_scalar_float,
+                    identities,
                 ));
 
                 // Raw blocks normally rely on source order for fallthrough. The
@@ -903,7 +908,7 @@ fn lower_region_inner(
             // arm with its case index (positional) and an implicit
             // break at the end.
             let mut prefix = guard
-                .map(|guard| lower_block(&lf.blocks[guard], lower_scalar_float))
+                .map(|guard| lower_block(&lf.blocks[guard], lower_scalar_float, identities))
                 .unwrap_or_default();
             // The range branch is now represented by the switch's formal
             // default. Keep normalization/dataflow statements from the guard,
@@ -914,7 +919,11 @@ fn lower_region_inner(
             ) {
                 prefix.pop();
             }
-            prefix.extend(lower_block(&lf.blocks[*dispatch], lower_scalar_float));
+            prefix.extend(lower_block(
+                &lf.blocks[*dispatch],
+                lower_scalar_float,
+                identities,
+            ));
             let explicit_index = lf.blocks[*dispatch]
                 .instrs
                 .iter()
@@ -952,7 +961,7 @@ fn lower_region_inner(
             }
             let mut cases: Vec<(Option<i64>, Vec<Stmt>)> = Vec::new();
             for (arm_index, arm) in arms.iter().enumerate() {
-                let mut body = lower_region(arm, lf, targets, lower_scalar_float);
+                let mut body = lower_region(arm, lf, targets, lower_scalar_float, identities);
                 if let Some(join) = join {
                     // The renderer supplies the case `break`; a jump to the
                     // block emitted immediately after this switch is plain
@@ -969,7 +978,7 @@ fn lower_region_inner(
                 }
             }
             let default = formal_default.as_deref().map(|region| {
-                let mut body = lower_region(region, lf, targets, lower_scalar_float);
+                let mut body = lower_region(region, lf, targets, lower_scalar_float, identities);
                 if let Some(join) = join {
                     strip_trailing_goto(&mut body, lf.blocks[*join].start_va);
                 }
@@ -1005,7 +1014,7 @@ fn lower_region_inner(
             for (position, &bi) in blocks.iter().enumerate() {
                 out.push(Stmt::Label(lf.blocks[bi].start_va));
                 let block = &lf.blocks[bi];
-                out.extend(lower_block(block, lower_scalar_float));
+                out.extend(lower_block(block, lower_scalar_float, identities));
                 // A partial labelled-CFG fallback need not own every block
                 // between two addresses. Preserve a displaced machine
                 // fallthrough explicitly instead of relying on vector order.
@@ -1318,12 +1327,23 @@ mod lowering_stack_tests {
 /// `collect_goto_targets` and `deduplicate_labels` — so the whole body needs the
 /// headroom, not just the first pass.
 pub fn lower(lf: &LlirFunction, region: &Region, name: impl Into<String>) -> Function {
+    lower_with_identities(lf, region, name, None)
+}
+
+pub fn lower_with_identities(
+    lf: &LlirFunction,
+    region: &Region,
+    name: impl Into<String>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Function {
     let name = name.into();
     std::thread::scope(|scope| {
         std::thread::Builder::new()
             .name("glaurung-lower".to_string())
             .stack_size(lowering_stack_bytes())
-            .spawn_scoped(scope, move || lower_on_this_stack(lf, region, name))
+            .spawn_scoped(scope, move || {
+                lower_on_this_stack(lf, region, name, identities)
+            })
             .expect("spawn the lowering thread")
             .join()
             // Preserve panic behavior exactly: a panic inside lowering must
@@ -1332,8 +1352,13 @@ pub fn lower(lf: &LlirFunction, region: &Region, name: impl Into<String>) -> Fun
     })
 }
 
-fn lower_on_this_stack(lf: &LlirFunction, region: &Region, name: String) -> Function {
-    let lower_scalar_float = scalar_float_semantics_are_closed(lf);
+fn lower_on_this_stack(
+    lf: &LlirFunction,
+    region: &Region,
+    name: String,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Function {
+    let lower_scalar_float = scalar_float_semantics_are_closed_with_identities(lf, identities);
     let mut targets = std::collections::HashSet::new();
     collect_goto_targets(region, lf, &mut targets);
     // Region::Goto is not the only source of an explicit edge. A raw direct
@@ -1343,11 +1368,11 @@ fn lower_on_this_stack(lf: &LlirFunction, region: &Region, name: String) -> Func
     // emitted destination block receives its real label. Without this pass the
     // renderer can only append an empty label at function end, changing where
     // the case actually transfers control.
-    let mut body = lower_region(region, lf, &targets, lower_scalar_float);
+    let mut body = lower_region(region, lf, &targets, lower_scalar_float, identities);
     let known_target_count = targets.len();
     crate::ir::label_prune::collect_goto_targets(&body, &mut targets);
     if targets.len() != known_target_count {
-        body = lower_region(region, lf, &targets, lower_scalar_float);
+        body = lower_region(region, lf, &targets, lower_scalar_float, identities);
     }
     deduplicate_labels(&mut body);
     let mut f = Function {

@@ -13,7 +13,7 @@
 //! model?" and return `None` otherwise, so an unrecognised name falls through
 //! to the generic `Expr::Call` form rather than being mis-lowered.
 
-use super::float_gate::scalar_float_intrinsic;
+use super::float_gate::scalar_float_intrinsic_with_identities;
 use super::width_semantics::{containing_c_integer_bytes, exact_non_byte_value};
 use super::{Expr, ScalarType, Stmt, WideArithmetic};
 use crate::ir::types::{BinOp, CallTarget, CmpOp, MemOp, Op, UnOp, VReg, Value, Width};
@@ -80,11 +80,23 @@ fn lower_float_value(value: &Value, width: u8) -> Expr {
     }
 }
 
-fn packed_dword_value(value: &Value) -> bool {
-    let Value::Reg(VReg::Phys(name)) = value else {
+fn packed_dword_value(
+    value: &Value,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    let Value::Reg(register) = value else {
         return false;
     };
-    let name = crate::ir::abi::ssa_base(name);
+    let name = match identities {
+        Some(identities) => match identities.exact(register).map(|identity| &identity.base) {
+            Some(VReg::Phys(name)) => name.as_str(),
+            _ => return false,
+        },
+        None => match register {
+            VReg::Phys(name) => crate::ir::abi::ssa_base(name),
+            _ => return false,
+        },
+    };
     name.rsplit_once("_d").is_some_and(|(register, lane)| {
         matches!(lane, "0" | "1" | "2" | "3")
             && (register
@@ -618,7 +630,11 @@ pub(super) fn switch_index_of(target: &Expr) -> Option<Expr> {
 /// of allocations in the whole lowering phase. The `Vec` shape survives as a
 /// test-only wrapper (`lower_op`, at the foot of this file) for the tests that
 /// pattern-match on a slice.
-pub(super) fn lower_op_stmt(op: &Op, lower_scalar_float: bool) -> Stmt {
+pub(super) fn lower_op_stmt_with_identities(
+    op: &Op,
+    lower_scalar_float: bool,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Stmt {
     fn predicate_expr(cond: &VReg, inverted: bool) -> Expr {
         if inverted {
             Expr::Cmp {
@@ -863,7 +879,7 @@ pub(super) fn lower_op_stmt(op: &Op, lower_scalar_float: bool) -> Stmt {
         // qword. Unknown-width temporaries retain the conservative historical
         // form rather than silently acquiring a guessed width.
         Op::Concat { dst, hi, lo } => {
-            let src = if packed_dword_value(hi) && packed_dword_value(lo) {
+            let src = if packed_dword_value(hi, identities) && packed_dword_value(lo, identities) {
                 let bits = |value: &Value| Expr::Cast {
                     signed: false,
                     width: 8,
@@ -962,9 +978,10 @@ pub(super) fn lower_op_stmt(op: &Op, lower_scalar_float: bool) -> Stmt {
                     },
                 };
             }
-            if let (Some((operation, width)), Some((dst, _))) =
-                (scalar_float_intrinsic(name, ins, outs), outs.first())
-            {
+            if let (Some((operation, width)), Some((dst, _))) = (
+                scalar_float_intrinsic_with_identities(name, ins, outs, identities),
+                outs.first(),
+            ) {
                 // Moves and negation retain exact value semantics even when an
                 // unrelated opaque VFP status instruction prevents lowering a
                 // whole arithmetic region. Keeping these producer edges is
@@ -1046,7 +1063,11 @@ pub(super) fn lower_op_stmt(op: &Op, lower_scalar_float: bool) -> Stmt {
 /// intrinsics are the first production multi-output family: keeping only
 /// output zero would make the remaining architectural register definitions
 /// disappear between LLIR and the AST.
-pub(super) fn lower_op_stmts(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
+pub(super) fn lower_op_stmts_with_identities(
+    op: &Op,
+    lower_scalar_float: bool,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Vec<Stmt> {
     if let Op::Intrinsic {
         name, ins, outs, ..
     } = op
@@ -1071,7 +1092,16 @@ pub(super) fn lower_op_stmts(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
                 .collect();
         }
     }
-    vec![lower_op_stmt(op, lower_scalar_float)]
+    vec![lower_op_stmt_with_identities(
+        op,
+        lower_scalar_float,
+        identities,
+    )]
+}
+
+#[cfg(test)]
+pub(super) fn lower_op_stmts(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
+    lower_op_stmts_with_identities(op, lower_scalar_float, None)
 }
 
 /// The `Vec` shape of [`lower_op_stmt`], retained for the tests that assert on

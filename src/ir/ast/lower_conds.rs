@@ -25,7 +25,7 @@
 //! never answer with a wildcard, so every walker here is exhaustive and a new
 //! `Expr` variant is a compile error rather than a silent permission.
 
-use super::lower_ops::lower_op_stmts;
+use super::lower_ops::lower_op_stmts_with_identities;
 use super::{Expr, OriginSet, Stmt, WideArithmetic};
 use crate::ir::types::{BinOp, CmpOp, LlirBlock, LlirFunction, LlirInstr, Op, UnOp, VReg};
 
@@ -278,11 +278,15 @@ pub(super) fn hoisting_the_header_is_safe(pre: &[Stmt], body: &[Stmt]) -> bool {
 }
 
 /// Lower every op in a block to stmts.
-pub(super) fn lower_block(b: &LlirBlock, lower_scalar_float: bool) -> Vec<Stmt> {
+pub(super) fn lower_block(
+    b: &LlirBlock,
+    lower_scalar_float: bool,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Vec<Stmt> {
     let mut out = Vec::with_capacity(b.instrs.len());
     for ins in &b.instrs {
         out.extend(
-            lower_op_stmts(&ins.op, lower_scalar_float)
+            lower_op_stmts_with_identities(&ins.op, lower_scalar_float, identities)
                 .into_iter()
                 .map(|statement| statement.with_origins(OriginSet::one(ins.va))),
         );
@@ -1050,7 +1054,7 @@ mod tests {
             succs: Vec::new(),
         };
 
-        let statements = super::lower_block(&block, false);
+        let statements = super::lower_block(&block, false, None);
         assert_eq!(statements.len(), 2);
         assert_eq!(
             statements[0].origins().expect("nop origin").addresses(),

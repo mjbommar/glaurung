@@ -84,7 +84,7 @@ pub use decbench_render::{
 };
 pub(crate) use dwarf_render_types::dwarf_prototype_type_is_renderable;
 pub(crate) use lower_conds::negate_cmp_expr;
-pub use lower_region::lower;
+pub use lower_region::{lower, lower_with_identities};
 pub use origin::OriginSet;
 
 pub(crate) fn take_decbench_line_mappings() -> Vec<(usize, OriginSet)> {

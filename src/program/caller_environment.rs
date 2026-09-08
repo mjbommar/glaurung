@@ -47,7 +47,12 @@ fn caller_ast(
             cc,
             &[],
         );
-    let ast = crate::ir::ast::lower(&numbered, &region, function.name.clone());
+    let ast = crate::ir::ast::lower_with_identities(
+        &numbered,
+        &region,
+        function.name.clone(),
+        Some(&identities),
+    );
     Some((lifted, ast, identities))
 }
 

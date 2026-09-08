@@ -1598,7 +1598,12 @@ pub(super) fn lower_and_run_ast_passes(
     let mut profiler =
         crate::decompile::profile::FunctionProfiler::from_env(&function_name, function_va);
     let mut function = profiler.measure("lower", || {
-        crate::ir::ast::lower(&numbered, &region, function_name)
+        crate::ir::ast::lower_with_identities(
+            &numbered,
+            &region,
+            function_name,
+            Some(&value_identities),
+        )
     });
     crate::ir::exception_recover::mark_landing_pads(&mut function, exception_sites);
     crate::ir::health::trace_pass("lower", &function, cfg_health);
