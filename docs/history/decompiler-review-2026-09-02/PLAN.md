@@ -1920,6 +1920,14 @@ provenance through lowering.
   both owning float-gate tests, and only the GCC O2
   `hfa197_tagged_control` fixture pass with a fresh extension. No broad suite or
   corpus ran. See `results/wp3-float-register-identities.md`.
+  Commit `e4aaabf8` then migrates stack promotion's frame-anchor proof. Exact
+  identities now distinguish x86 frame establishment versus repurposing and
+  ARM32 `fp`/`r7`/`r11` establishment from `sp`; opaque storage is accepted and
+  misleading frame-looking names are ignored. The exact cross-architecture
+  regression, three adjacent frame controls, and only the GCC O0 `sum_arg7`
+  fixture pass. A controlled one-file A/B proves the initially selected
+  fixture-196 failure predates this patch. No broad suite or corpus ran. See
+  `results/wp3-frame-anchor-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
