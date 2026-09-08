@@ -1630,7 +1630,10 @@ provenance through lowering.
   carries pipeline-owned parameter slots beside opaque identities during AST
   role projection, without parsing aliases. Commit `53eb97ec` migrates callee-
   contract pointer back-propagation to that typed role: owned parameters still
-  refine and an unowned `arg99` refuses. See
+  refine and an unowned `arg99` refuses. Commit `14f6d24a` threads the same
+  authority through recursive pointer classification and copy-origin proofs;
+  an unowned `varN` intermediary now refuses while an exact intermediary still
+  transports the owned parameter fact. See
   `results/wp3-parameter-role-metadata.md`. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
   merge hid the unresolved SysV `al` variadic live-in. That cell is now an

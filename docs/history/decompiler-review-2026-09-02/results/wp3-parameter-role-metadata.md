@@ -14,6 +14,14 @@ installed. A fake `arg99` therefore cannot acquire pointer type from its
 spelling, while an owned `arg0` and the compatibility no-sidecar copy-chain
 path retain their established behavior.
 
+Commit `14f6d24a` completes the authority migration across this pointer-copy
+decision chain. Structured call discovery, recursive definition compatibility,
+expression classification, and parameter-origin tracing all receive the same
+identity context. With a sidecar installed, only exact values, typed parameters,
+and separately modelled promoted storage are trusted. An unowned `var2` copy no
+longer transports a pointer fact merely because of its spelling; an exact
+`var2` still transports the owned `arg0` fact.
+
 Focused validation used exact Rust tests only:
 
 ```text
@@ -31,6 +39,15 @@ attributed_authoritative_callee_refines_a_forwarded_argument
 
 recovered_callee_pointer_flows_back_through_one_exact_parameter_copy
 1 passed; 4,425 filtered out
+
+callee_pointer_contract_does_not_follow_an_unowned_var_copy
+1 passed; 4,426 filtered out
+
+recovered_callee_pointer_flows_back_through_one_exact_parameter_copy
+1 passed; 4,426 filtered out
+
+attributed_authoritative_callee_refines_a_forwarded_argument
+1 passed; 4,426 filtered out
 ```
 
 Each command was `cargo test --features python-ext --lib
