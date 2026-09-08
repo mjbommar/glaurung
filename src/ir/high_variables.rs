@@ -192,7 +192,7 @@ fn refine_pointer_facts(
             {
                 continue;
             }
-            let Some(width) = compatible_pointer_definitions(defs, types) else {
+            let Some(width) = compatible_pointer_definitions(defs, types, identities) else {
                 continue;
             };
             learned.push((
@@ -313,7 +313,11 @@ fn refine_authoritative_pointer_values(
     types: &mut TypeMap,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
-    fn collect(body: &[Stmt], out: &mut HashMap<String, Vec<u8>>) {
+    fn collect(
+        body: &[Stmt],
+        out: &mut HashMap<String, Vec<u8>>,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) {
         for statement in body {
             match statement.semantic() {
                 Stmt::Call {
@@ -333,7 +337,7 @@ fn refine_authoritative_pointer_values(
                         let Expr::Reg(VReg::Phys(argument_name)) = argument else {
                             continue;
                         };
-                        if !is_trusted_copy_source(argument_name) {
+                        if !is_trusted_copy_source_with_identities(argument_name, identities) {
                             continue;
                         }
                         let c_type = recovered
@@ -355,25 +359,27 @@ fn refine_authoritative_pointer_values(
                     else_body,
                     ..
                 } => {
-                    collect(then_body, out);
+                    collect(then_body, out, identities);
                     if let Some(else_body) = else_body {
-                        collect(else_body, out);
+                        collect(else_body, out, identities);
                     }
                 }
-                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => collect(body, out),
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                    collect(body, out, identities)
+                }
                 Stmt::For {
                     init, step, body, ..
                 } => {
-                    collect(std::slice::from_ref(init.as_ref()), out);
-                    collect(body, out);
-                    collect(std::slice::from_ref(step.as_ref()), out);
+                    collect(std::slice::from_ref(init.as_ref()), out, identities);
+                    collect(body, out, identities);
+                    collect(std::slice::from_ref(step.as_ref()), out, identities);
                 }
                 Stmt::Switch { cases, default, .. } => {
                     for (_, case) in cases {
-                        collect(case, out);
+                        collect(case, out, identities);
                     }
                     if let Some(default) = default {
-                        collect(default, out);
+                        collect(default, out, identities);
                     }
                 }
                 _ => {}
@@ -382,7 +388,7 @@ fn refine_authoritative_pointer_values(
     }
 
     let mut candidates = HashMap::new();
-    collect(body, &mut candidates);
+    collect(body, &mut candidates, identities);
     let mut direct_values = Vec::new();
     let mut widths_by_origin: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     for (name, widths) in candidates {
@@ -405,6 +411,7 @@ fn refine_authoritative_pointer_values(
                     width,
                     types,
                     definitions,
+                    identities,
                 )
             })
         {
@@ -446,6 +453,7 @@ fn definitions_accept_authoritative_pointer_use(
     width: u8,
     types: &TypeMap,
     all_definitions: &HashMap<String, Vec<Definition>>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> bool {
     fn accepts(
         definition: &Definition,
@@ -453,6 +461,7 @@ fn definitions_accept_authoritative_pointer_use(
         width: u8,
         types: &TypeMap,
         all_definitions: &HashMap<String, Vec<Definition>>,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
         visiting: &mut HashSet<String>,
     ) -> bool {
         if definition.is_null_initializer() {
@@ -471,14 +480,17 @@ fn definitions_accept_authoritative_pointer_use(
         {
             return true;
         }
-        match (definition.classify(types), definition) {
+        match (
+            definition.classify_with_identities(types, identities),
+            definition,
+        ) {
             (ValueClass::Pointer(candidate), _) => {
                 candidate == 0 || width == 0 || candidate == width
             }
             (
                 ValueClass::Scalar | ValueClass::Unknown,
                 Definition::Assignment(Expr::Reg(VReg::Phys(source))),
-            ) if is_trusted_copy_source(source) => {
+            ) if is_trusted_copy_source_with_identities(source, identities) => {
                 let Some(source_definitions) = all_definitions.get(source) else {
                     return false;
                 };
@@ -492,6 +504,7 @@ fn definitions_accept_authoritative_pointer_use(
                         width,
                         types,
                         all_definitions,
+                        identities,
                         visiting,
                     )
                 });
@@ -514,6 +527,7 @@ fn definitions_accept_authoritative_pointer_use(
             width,
             types,
             all_definitions,
+            identities,
             &mut HashSet::new(),
         )
     })
@@ -537,9 +551,13 @@ enum Definition {
 }
 
 impl Definition {
-    fn classify(&self, types: &TypeMap) -> ValueClass {
+    fn classify_with_identities(
+        &self,
+        types: &TypeMap,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) -> ValueClass {
         match self {
-            Self::Assignment(value) => classify_expr(value, types),
+            Self::Assignment(value) => classify_expr(value, types, identities),
             Self::Call {
                 target,
                 return_type,
@@ -610,7 +628,7 @@ fn single_exact_parameter_origin(
                 let Definition::Assignment(Expr::Reg(VReg::Phys(source))) = definition else {
                     return None;
                 };
-                if !is_trusted_copy_source(source) {
+                if !is_trusted_copy_source_with_identities(source, identities) {
                     return None;
                 }
                 let next = visit(source, definitions, identities, visiting)?;
@@ -914,7 +932,11 @@ fn unsigned_widening_cast(expression: &Expr, width: u8) -> bool {
     )
 }
 
-fn compatible_pointer_definitions(definitions: &[Definition], types: &TypeMap) -> Option<u8> {
+fn compatible_pointer_definitions(
+    definitions: &[Definition],
+    types: &TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<u8> {
     let mut width = 0;
     let mut has_pointer = false;
     let mut has_opaque_pointer = false;
@@ -926,7 +948,7 @@ fn compatible_pointer_definitions(definitions: &[Definition], types: &TypeMap) -
         if definition.is_null_initializer() {
             continue;
         }
-        match definition.classify(types) {
+        match definition.classify_with_identities(types, identities) {
             ValueClass::Pointer(next) if width == 0 || next == 0 || width == next => {
                 width = width.max(next);
                 has_pointer = true;
@@ -948,9 +970,13 @@ fn compatible_pointer_definitions(definitions: &[Definition], types: &TypeMap) -
     has_pointer.then_some(width)
 }
 
-fn classify_expr(expression: &Expr, types: &TypeMap) -> ValueClass {
+fn classify_expr(
+    expression: &Expr,
+    types: &TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> ValueClass {
     match expression {
-        Expr::Origin { expr, .. } => classify_expr(expr, types),
+        Expr::Origin { expr, .. } => classify_expr(expr, types, identities),
         Expr::StringLit { .. } => ValueClass::Pointer(1),
         Expr::StackAddr { .. } => ValueClass::Pointer(0),
         Expr::FunctionTableEntry { .. } => ValueClass::Pointer(0),
@@ -966,18 +992,22 @@ fn classify_expr(expression: &Expr, types: &TypeMap) -> ValueClass {
                     ValueClass::Scalar
                 }
             }),
-        Expr::Reg(reg @ VReg::Phys(name)) if is_trusted_copy_source(name) => match types.get(reg) {
-            Some(TypeHint::Pointer { pointee_width }) => ValueClass::Pointer(pointee_width),
-            Some(TypeHint::CodePointer) => ValueClass::Pointer(0),
-            Some(_) => ValueClass::Scalar,
-            None => ValueClass::Unknown,
-        },
+        Expr::Reg(reg @ VReg::Phys(name))
+            if is_trusted_copy_source_with_identities(name, identities) =>
+        {
+            match types.get(reg) {
+                Some(TypeHint::Pointer { pointee_width }) => ValueClass::Pointer(pointee_width),
+                Some(TypeHint::CodePointer) => ValueClass::Pointer(0),
+                Some(_) => ValueClass::Scalar,
+                None => ValueClass::Unknown,
+            }
+        }
         Expr::Reg(_) => ValueClass::Unknown,
         Expr::Select {
             if_true, if_false, ..
         } => merge_selected_values(
-            classify_expr(if_true, types),
-            classify_expr(if_false, types),
+            classify_expr(if_true, types, identities),
+            classify_expr(if_false, types, identities),
             if_true,
             if_false,
         ),
@@ -1100,6 +1130,22 @@ fn is_high_variable(name: &str) -> bool {
 
 fn is_trusted_copy_source(name: &str) -> bool {
     is_source_value_local(name) || crate::ir::ast::parse_arg_index(name).is_some()
+}
+
+fn is_trusted_copy_source_with_identities(
+    name: &str,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    if is_promoted_local(name) {
+        return true;
+    }
+    match identities {
+        Some(identities) => {
+            let value = VReg::phys(name);
+            identities.exact(&value).is_some() || identities.parameter_slot(&value).is_some()
+        }
+        None => is_trusted_copy_source(name),
+    }
 }
 
 /// Mark names below incompatible integer/address operations. Declaring these

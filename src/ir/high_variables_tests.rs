@@ -707,6 +707,48 @@ fn callee_pointer_contract_does_not_trust_an_unowned_arg_spelling() {
 }
 
 #[test]
+fn callee_pointer_contract_does_not_follow_an_unowned_var_copy() {
+    let recovered = CallPrototype {
+        return_type: "int".into(),
+        parameter_types: vec!["long *".into()],
+        variadic: false,
+        authority: CallPrototypeAuthority::Recovered,
+    };
+    let function = Function {
+        name: "unowned_copy".into(),
+        entry_va: 0,
+        body: vec![
+            Stmt::Assign {
+                dst: VReg::phys("var2"),
+                src: Expr::Reg(VReg::phys("arg0")),
+            },
+            Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "refill".into(),
+                },
+                args: vec![Expr::Reg(VReg::phys("var2"))],
+                dst: Some(VReg::phys("ret")),
+                call_spec: Some(CallSiteSpec {
+                    call_prototype: recovered.clone(),
+                    callee_prototype: Some(recovered),
+                }),
+            },
+        ],
+    };
+    let identities = crate::ir::value_number::ValueIdentities::default()
+        .with_role_aliases_and_parameter_slots(
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::from([0]),
+        );
+    let mut types = TypeMap::default();
+
+    refine_pointer_high_variables_with_identities(&function, &mut types, Some(&identities));
+
+    assert_eq!(pointer_width(&types, "arg0"), None);
+}
+
+#[test]
 fn recovered_callee_pointer_flows_back_through_one_exact_parameter_copy() {
     // Real shape: diffutils `lf_skip(struct line_filter *lf, lin lines)`.
     // The incoming pointer is copied to a numbered value, used in raw byte
@@ -756,6 +798,29 @@ fn recovered_callee_pointer_flows_back_through_one_exact_parameter_copy() {
 
     assert_eq!(pointer_width(&types, "arg0"), Some(8));
     assert_eq!(pointer_width(&types, "var2"), None);
+
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
+    identities.record(
+        VReg::phys("var2"),
+        crate::ir::ssa::SsaValue {
+            base: VReg::phys("rax"),
+            version: 1,
+        },
+    );
+    let identities = identities.with_role_aliases_and_parameter_slots(
+        &std::collections::HashMap::new(),
+        &std::collections::HashSet::from([0]),
+    );
+    let mut authoritative_types = TypeMap::default();
+
+    refine_pointer_high_variables_with_identities(
+        &function,
+        &mut authoritative_types,
+        Some(&identities),
+    );
+
+    assert_eq!(pointer_width(&authoritative_types, "arg0"), Some(8));
+    assert_eq!(pointer_width(&authoritative_types, "var2"), None);
 }
 
 #[test]
