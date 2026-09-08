@@ -15,7 +15,7 @@
 //! performs the same label selection. This pass encodes that proof rather than
 //! treating every `if { switch }` shape as safe.
 
-use crate::ir::ast::{Expr, Function, Stmt};
+use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 use crate::ir::types::{CmpOp, VReg};
 use crate::ir::types_recover::{TypeHint, TypeMap};
 
@@ -112,9 +112,7 @@ fn collapse_body(body: &mut Vec<Stmt>, types: Option<&TypeMap>) {
         }
 
         *discriminant = value;
-        if let Some(origins) = body[index - 1].origins() {
-            switch.merge_origins(origins);
-        }
+        merge_statement_origin(&mut switch, &body[index - 1]);
         install_candidate(body, index, consumed, hoisted, switch);
         body.remove(index - 1);
         // The replacement moved left by one. Continue after it.
@@ -212,9 +210,9 @@ fn guarded_switch(statement: &Stmt) -> Option<(Stmt, Expr)> {
         op: CmpOp::Ule,
         lhs,
         rhs,
-    } = cond
+    } = cond.semantic()
     {
-        let Expr::Const(bound) = rhs.as_ref() else {
+        let Expr::Const(bound) = rhs.semantic() else {
             return None;
         };
         let [switch] = then_body.as_slice() else {
@@ -241,11 +239,11 @@ fn guarded_switch(statement: &Stmt) -> Option<(Stmt, Expr)> {
         op: CmpOp::Ult,
         lhs,
         rhs,
-    } = cond
+    } = cond.semantic()
     else {
         return None;
     };
-    let Expr::Const(bound) = lhs.as_ref() else {
+    let Expr::Const(bound) = lhs.semantic() else {
         return None;
     };
     let [switch] = else_body.as_deref()? else {
@@ -273,18 +271,22 @@ fn guarded_switch(statement: &Stmt) -> Option<(Stmt, Expr)> {
 /// from falling out of the switch to taking the synthesized default.
 fn guarded_switch_after_early_return(guard: &Stmt, following: &Stmt) -> Option<(Stmt, Expr)> {
     let Stmt::If {
-        cond: Expr::Cmp {
-            op: CmpOp::Ult,
-            lhs,
-            rhs,
-        },
+        cond,
         then_body,
         else_body: None,
     } = guard.semantic()
     else {
         return None;
     };
-    let Expr::Const(bound) = lhs.as_ref() else {
+    let Expr::Cmp {
+        op: CmpOp::Ult,
+        lhs,
+        rhs,
+    } = cond.semantic()
+    else {
+        return None;
+    };
+    let Expr::Const(bound) = lhs.semantic() else {
         return None;
     };
     if !crate::ir::control_semantics::straight_line_return_body(then_body) {
@@ -307,8 +309,64 @@ fn guarded_switch_after_early_return(guard: &Stmt, following: &Stmt) -> Option<(
 }
 
 fn merge_statement_origin(target: &mut Stmt, source: &Stmt) {
-    if let Some(origins) = source.origins() {
-        target.merge_origins(origins);
+    let mut origins = source.origins().cloned().unwrap_or_default();
+    match source.semantic() {
+        Stmt::If { cond, .. } => collect_expression_origins(cond, &mut origins),
+        Stmt::Assign { src, .. } => collect_expression_origins(src, &mut origins),
+        _ => {}
+    }
+    if !origins.is_empty() {
+        target.merge_origins(&origins);
+    }
+}
+
+fn collect_expression_origins(expression: &Expr, origins: &mut OriginSet) {
+    if let Some(owner) = expression.origins() {
+        origins.merge(owner);
+    }
+    match expression.semantic() {
+        Expr::Origin { .. } => unreachable!("semantic expression cannot be an origin wrapper"),
+        Expr::FunctionTableEntry { index, .. } | Expr::Deref { addr: index, .. } => {
+            collect_expression_origins(index, origins);
+        }
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            collect_expression_origins(lhs, origins);
+            collect_expression_origins(rhs, origins);
+        }
+        Expr::Un { src, .. }
+        | Expr::Cast { expr: src, .. }
+        | Expr::NumericConvert { expr: src, .. } => collect_expression_origins(src, origins),
+        Expr::Call { target, args, .. } => {
+            collect_expression_origins(target, origins);
+            for argument in args {
+                collect_expression_origins(argument, origins);
+            }
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            collect_expression_origins(cond, origins);
+            collect_expression_origins(if_true, origins);
+            collect_expression_origins(if_false, origins);
+        }
+        Expr::WideArithmetic { args, .. } => {
+            for argument in args {
+                collect_expression_origins(argument, origins);
+            }
+        }
+        Expr::Reg(_)
+        | Expr::Const(_)
+        | Expr::FloatConst { .. }
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::StackAddr { .. }
+        | Expr::Lea { .. }
+        | Expr::PdbFieldAddr { .. }
+        | Expr::Unknown(_) => {}
     }
 }
 
@@ -339,7 +397,7 @@ fn labels_exhaust_unsigned_bound(cases: &[(Option<i64>, Vec<Stmt>)], bound: i64)
 /// wrapped in wider unsigned casts. A narrowing or signed cast would not
 /// preserve the range proof and is rejected.
 fn is_unsigned_extension_of(candidate: &Expr, guarded: &Expr, types: Option<&TypeMap>) -> bool {
-    if candidate == guarded {
+    if candidate.semantic() == guarded.semantic() {
         return true;
     }
 
@@ -353,40 +411,40 @@ fn is_unsigned_extension_of(candidate: &Expr, guarded: &Expr, types: Option<&Typ
     // Requiring the source width to fit through the narrowest cast on both
     // sides rules out every truncating view.
     fn unsigned_view(expr: &Expr) -> (&Expr, u8) {
-        let mut current = expr;
+        let mut current = expr.semantic();
         let mut narrowest = u8::MAX;
         while let Expr::Cast {
             signed: false,
             width,
             expr,
-        } = current
+        } = current.semantic()
         {
             narrowest = narrowest.min(*width);
-            current = expr;
+            current = expr.semantic();
         }
         (current, narrowest)
     }
 
     let (candidate_root, candidate_narrowest) = unsigned_view(candidate);
     let (guarded_root, guarded_narrowest) = unsigned_view(guarded);
-    if candidate_root == guarded_root
+    if candidate_root.semantic() == guarded_root.semantic()
         && known_width(candidate_root, types)
             .is_some_and(|width| width <= candidate_narrowest && width <= guarded_narrowest)
     {
         return true;
     }
 
-    let mut current = candidate;
+    let mut current = candidate.semantic();
     let mut narrowest_cast = u8::MAX;
     while let Expr::Cast {
         signed: false,
         width,
         expr,
-    } = current
+    } = current.semantic()
     {
         narrowest_cast = narrowest_cast.min(*width);
-        current = expr;
-        if current == guarded {
+        current = expr.semantic();
+        if current.semantic() == guarded.semantic() {
             return known_width(guarded, types).is_some_and(|width| width <= narrowest_cast);
         }
     }
@@ -394,7 +452,7 @@ fn is_unsigned_extension_of(candidate: &Expr, guarded: &Expr, types: Option<&Typ
 }
 
 fn known_width(expr: &Expr, types: Option<&TypeMap>) -> Option<u8> {
-    match expr {
+    match expr.semantic() {
         Expr::Cast { width, .. } => Some(*width),
         Expr::Reg(register) => match types?.get(register)? {
             TypeHint::Int { width, .. } => Some(width),
@@ -637,9 +695,12 @@ mod tests {
                 Stmt::If {
                     cond: Expr::Cmp {
                         op: CmpOp::Ule,
-                        lhs: Box::new(guarded_value),
-                        rhs: Box::new(Expr::Const(3)),
-                    },
+                        lhs: Box::new(
+                            guarded_value.with_origins(OriginSet::one(0x1010)),
+                        ),
+                        rhs: Box::new(Expr::Const(3).with_origins(OriginSet::one(0x1014))),
+                    }
+                    .with_origins(OriginSet::one(0x100c)),
                     then_body: vec![Stmt::Switch {
                         discriminant: Expr::Reg(temporary),
                         cases: (0..=3).map(|case| (Some(case), vec![Stmt::Nop])).collect(),
@@ -661,7 +722,7 @@ mod tests {
                 .origins()
                 .expect("replacement switch origins")
                 .addresses(),
-            &[0x1000, 0x1004, 0x1008]
+            &[0x1000, 0x1004, 0x1008, 0x100c, 0x1010, 0x1014]
         );
     }
 
