@@ -145,8 +145,9 @@ fn parse_prologue(
         // slot. Recover that first word only when the next word is a proven LR
         // save and the immediately following setup uses the same address.
         if registers.is_empty() {
-            if let Some((fp_slot, saved_fp_address)) =
-                body.get(group_cursor).and_then(aliased_frame_pointer_store)
+            if let Some((fp_slot, saved_fp_address)) = body
+                .get(group_cursor)
+                .and_then(|statement| aliased_frame_pointer_store(statement, identities))
             {
                 if let Some((lr_slot, lr_name, lr_size)) = body
                     .get(group_cursor + 1)
@@ -246,17 +247,23 @@ fn saved_register_store(
     else {
         return None;
     };
-    let slot = stack_location(addr)?;
+    let slot = stack_location(addr, identities)?;
     let name = canonical_saved_register(register, identities)?;
     let expected_size = if name.starts_with('d') { 8 } else { 4 };
     (*size == expected_size).then(|| (slot, name, *size))
 }
 
-fn aliased_frame_pointer_store(statement: &Stmt) -> Option<(StackLocation, StackLocation)> {
+fn aliased_frame_pointer_store(
+    statement: &Stmt,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<(StackLocation, StackLocation)> {
     let Stmt::Store { addr, src, size: 4 } = statement.semantic() else {
         return None;
     };
-    Some((stack_location(addr)?, stack_location(src)?))
+    Some((
+        stack_location(addr, identities)?,
+        stack_location(src, identities)?,
+    ))
 }
 
 fn collapse_epilogues(
@@ -410,7 +417,7 @@ fn frame_deallocation_piece(
         }
         Stmt::Assign { dst, src } => {
             canonical_saved_register(dst, identities).as_deref() == Some("r7")
-                && stack_location(src).as_ref() == first_saved_slot(frame)
+                && stack_location(src, identities).as_ref() == first_saved_slot(frame)
         }
         _ => false,
     }
@@ -452,7 +459,7 @@ fn match_frame_deallocation(
         ) = (first.semantic(), second.semantic())
         {
             if canonical_saved_register(anchor, identities).as_deref() == Some("r7")
-                && stack_location(src).as_ref() == first_saved_slot(frame)
+                && stack_location(src, identities).as_ref() == first_saved_slot(frame)
                 && is_sp(dst, identities)
                 && source == anchor
             {
@@ -485,19 +492,22 @@ fn restored_register(
         return None;
     };
     let slot = match src {
-        Expr::Reg(slot) if is_promoted_stack_slot(slot) => StackLocation {
+        Expr::Reg(slot) if is_promoted_stack_slot(slot, identities) => StackLocation {
             object: slot.clone(),
             offset: 0,
         },
-        Expr::Deref { addr, size } if *size == 4 || *size == 8 => stack_location(addr)?,
+        Expr::Deref { addr, size } if *size == 4 || *size == 8 => stack_location(addr, identities)?,
         _ => return None,
     };
     canonical_saved_register(dst, identities).map(|name| (name, slot))
 }
 
-fn stack_location(expression: &Expr) -> Option<StackLocation> {
+fn stack_location(
+    expression: &Expr,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<StackLocation> {
     match expression {
-        Expr::Reg(slot) if is_promoted_stack_slot(slot) => Some(StackLocation {
+        Expr::Reg(slot) if is_promoted_stack_slot(slot, identities) => Some(StackLocation {
             object: slot.clone(),
             offset: 0,
         }),
@@ -511,7 +521,7 @@ fn stack_location(expression: &Expr) -> Option<StackLocation> {
             rhs,
         } => match rhs.as_ref() {
             Expr::Const(offset) => {
-                let mut location = stack_location(lhs)?;
+                let mut location = stack_location(lhs, identities)?;
                 location.offset = location.offset.checked_add(*offset)?;
                 Some(location)
             }
@@ -529,8 +539,8 @@ fn frame_pointer_setup(
         return None;
     };
     let name = canonical_saved_register(dst, identities)?;
-    ((name == "r7" || name == "fp") && stack_location(src).is_some())
-        .then(|| stack_location(src))
+    ((name == "r7" || name == "fp") && stack_location(src, identities).is_some())
+        .then(|| stack_location(src, identities))
         .flatten()
 }
 
@@ -609,8 +619,14 @@ fn canonical_saved_register(
     (core || vfp).then(|| name.to_string())
 }
 
-fn is_promoted_stack_slot(register: &VReg) -> bool {
-    matches!(register, VReg::Phys(name) if name == "stack_top" || name.starts_with("stack_"))
+fn is_promoted_stack_slot(
+    register: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    identities.map_or_else(
+        || matches!(register, VReg::Phys(name) if name == "stack_top" || name.starts_with("stack_")),
+        |identities| identities.is_promoted_stack_object(register),
+    )
 }
 
 fn is_sp(register: &VReg, identities: Option<&crate::ir::value_number::ValueIdentities>) -> bool {
@@ -872,6 +888,20 @@ mod tests {
         }
     }
 
+    fn typed_simple_frame_identities() -> crate::ir::value_number::ValueIdentities {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for (value, base, version) in [("sp", "sp", 1), ("lr", "lr", 0), ("lr#1", "lr", 1)] {
+            identities.record(
+                reg(value),
+                crate::ir::ssa::SsaValue {
+                    base: reg(base),
+                    version,
+                },
+            );
+        }
+        identities
+    }
+
     fn base_name(name: &str) -> &str {
         name.split_once('#').map_or(name, |(base, _)| base)
     }
@@ -1009,6 +1039,44 @@ mod tests {
             "machine stack arithmetic leaked after a balanced collapse: {:#?}",
             f.body
         );
+    }
+
+    #[test]
+    fn identity_aware_arm32_frame_accepts_an_owned_opaque_slot() {
+        let slot_name = "frame_link_save".to_string();
+        let mut identities = typed_simple_frame_identities();
+        identities.attach_promoted_stack_objects([&slot_name]);
+        let mut f = function(vec![
+            sp_sub(4),
+            save(&slot_name, "lr", 4),
+            Stmt::Nop,
+            restore("lr#1", &slot_name),
+            sp_add(4),
+            Stmt::Return { value: None },
+        ]);
+
+        recognise_arm32_frame_with_identities(&mut f, &identities);
+
+        assert_eq!(f.body.len(), 4, "owned ARM32 frame leaked: {:#?}", f.body);
+        assert!(matches!(&f.body[0], Stmt::Comment(text) if text.contains("prologue")));
+        assert!(matches!(&f.body[2], Stmt::Comment(text) if text.contains("epilogue")));
+    }
+
+    #[test]
+    fn identity_aware_arm32_frame_rejects_unowned_stack_spelling() {
+        let mut f = function(vec![
+            sp_sub(4),
+            save("stack_0", "lr", 4),
+            Stmt::Nop,
+            restore("lr#1", "stack_0"),
+            sp_add(4),
+            Stmt::Return { value: None },
+        ]);
+        let original = f.clone();
+
+        recognise_arm32_frame_with_identities(&mut f, &typed_simple_frame_identities());
+
+        assert_eq!(f, original);
     }
 
     #[test]
