@@ -1429,6 +1429,12 @@ provenance through lowering.
   attributed promoted result-slot target and transfers the consumed target
   owner to the synthesized return value. Its observed-red test and all ten
   return-fold tests pass; see `results/wp3-return-store-target-origins.md`.
+  Commit `ce55594e` then begins the declared copy-propagation migration at its
+  loop invalidation boundary. Attributed register store targets now enter the
+  write set, so a source changed in the loop invalidates its pre-loop alias
+  instead of freezing the entry value. Its negative test was observed red and
+  all 53 copy-propagation tests pass; see
+  `results/wp3-copy-loop-store-invalidation.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
