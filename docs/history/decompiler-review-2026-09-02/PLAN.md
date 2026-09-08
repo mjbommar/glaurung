@@ -1790,6 +1790,15 @@ provenance through lowering.
   tests filtered out, and a 16-lane 110/192/199/207 release canary reports no
   regression. See
   `results/wp3-pointer-null-expression-origin-rendering.md`.
+  Commit `40da0e41` then makes declared integer-promotion cleanup transparent
+  to origins inside a cast chain. The proof now compares cast width and
+  signedness with the declaration actually rendered, rather than potentially
+  conflicting internal type metadata. The strengthened positive contract was
+  observed red, and its adjacent refusal remains green. A 16-lane
+  02/96/97/194 release canary reports four current-tip fixture-02 failures, but
+  reversing every owned renderer line and rebuilding reproduces the same four;
+  they are not attributed to this increment. See
+  `results/wp3-declared-cast-expression-origin-rendering.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
