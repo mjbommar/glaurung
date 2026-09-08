@@ -1957,6 +1957,13 @@ provenance through lowering.
   it, two nearest enclosing-state controls, and only the GCC O2
   `se189_select_call` fixture pass with a fresh extension. No broad suite or
   corpus ran. See `results/wp3-enclosing-canonical-identities.md`.
+  Commit `d9e77a0a` then centralizes these local defenses as
+  `SsaValue::canonical_physical_base` and migrates the remaining related
+  call/parameter identity consumers behind it. ABI compatibility parsers no
+  longer silently repair malformed identity bases, while explicit no-sidecar
+  paths retain their old behavior. Seven exact tests and only the GCC O2
+  `se189_select_call` fixture pass with a fresh extension. No broad suite or
+  corpus ran. See `results/wp3-canonical-ssa-base-boundary.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
