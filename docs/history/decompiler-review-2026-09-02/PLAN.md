@@ -1241,6 +1241,13 @@ provenance through lowering.
   value owner itself; mask-disjointness remains mandatory. Its strengthened
   observed-red test and all 76 constant-fold tests pass; see
   `results/wp3-disjoint-mask-expression-origins.md`.
+  Commit `321d205b` then makes inclusive-comparison recovery compare
+  attributed operands by semantic value. Equivalent equality and strict-less
+  inputs now fuse despite distinct carriers, and each surviving operand keeps
+  the exact union of its two contributing owners; ordering and signedness
+  refusals remain unchanged. Its strengthened observed-red test and all 76
+  constant-fold tests pass; see
+  `results/wp3-inclusive-operand-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
