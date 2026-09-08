@@ -44,15 +44,16 @@ use result_hint::{
     output_trial_is_dedicated, qualified_result_hint, ResultHintClass,
 };
 use tagging::{
-    classify_int_default, float_return_reg_names, merge_type_hint, propagate_pointer_arithmetic,
-    propagate_spill_slot_pointers, return_reg_names, tag_value_regs,
+    classify_int_default, float_return_reg_names, merge_type_hint,
+    propagate_pointer_arithmetic_with_optional_identities,
+    propagate_spill_slot_pointers_with_optional_identities, return_reg_names, tag_value_regs,
 };
 // `is_frame_base` has no caller outside `tagging` itself except `mod tests`
 // below, which reaches it through `use super::*`. Re-exporting it
 // unconditionally would be an unused import in the shipped lib build.
 #[cfg(test)]
-use tagging::is_frame_base;
-pub use tagging::recover_types_for;
+use tagging::{is_frame_base, is_frame_base_with_identities};
+pub use tagging::{recover_types_for, recover_types_for_with_identities};
 pub use valued::recover_types_valued;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1858,6 +1859,21 @@ fn int_for_reg(v: &VReg) -> TypeHint {
 
 /// Produce a [`TypeMap`] for all register VRegs touched by `lf`.
 pub fn recover_types(lf: &LlirFunction) -> TypeMap {
+    recover_types_with_optional_identities(lf, None)
+}
+
+/// Recover types using exact SSA identity for semantic register roles.
+pub fn recover_types_with_identities(
+    lf: &LlirFunction,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> TypeMap {
+    recover_types_with_optional_identities(lf, Some(identities))
+}
+
+fn recover_types_with_optional_identities(
+    lf: &LlirFunction,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> TypeMap {
     let mut tm = TypeMap::default();
 
     // First pass: gather registers that ever receive a plain constant
@@ -1997,8 +2013,8 @@ pub fn recover_types(lf: &LlirFunction) -> TypeMap {
     // `*(param + i*scale)` resolves through the reload to the parameter. Iterated
     // together so either order of discovery converges.
     for _ in 0..4 {
-        propagate_pointer_arithmetic(lf, &mut tm);
-        propagate_spill_slot_pointers(lf, &mut tm);
+        propagate_pointer_arithmetic_with_optional_identities(lf, &mut tm, identities);
+        propagate_spill_slot_pointers_with_optional_identities(lf, &mut tm, identities);
     }
 
     // Demote pointer / code-pointer classifications for regs that get a
@@ -2049,6 +2065,87 @@ mod tests {
             );
             assert!(!is_frame_base(&VReg::phys(format!("{name}#2"))));
         }
+    }
+
+    #[test]
+    fn frame_base_uses_exact_identity_not_display_spelling() {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            VReg::phys("opaque_frame"),
+            SsaValue {
+                base: VReg::phys("rbp"),
+                version: 3,
+            },
+        );
+        identities.record(
+            VReg::phys("rbp#3"),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 3,
+            },
+        );
+
+        assert!(is_frame_base_with_identities(
+            &VReg::phys("opaque_frame"),
+            &identities,
+        ));
+        assert!(!is_frame_base_with_identities(
+            &VReg::phys("rbp#3"),
+            &identities,
+        ));
+    }
+
+    #[test]
+    fn spill_pointer_does_not_cross_frame_ssa_versions() {
+        let lf = mk_block(vec![
+            Op::Store {
+                addr: MemOp {
+                    base: Some(VReg::phys("store_frame")),
+                    disp: -8,
+                    size: 8,
+                    ..Default::default()
+                },
+                src: Value::Reg(VReg::phys("rdi")),
+            },
+            Op::Load {
+                dst: VReg::phys("rax"),
+                addr: MemOp {
+                    base: Some(VReg::phys("load_frame")),
+                    disp: -8,
+                    size: 8,
+                    ..Default::default()
+                },
+            },
+            Op::Load {
+                dst: VReg::phys("rcx"),
+                addr: MemOp {
+                    base: Some(VReg::phys("rax")),
+                    size: 1,
+                    ..Default::default()
+                },
+            },
+        ]);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            VReg::phys("store_frame"),
+            SsaValue {
+                base: VReg::phys("rbp"),
+                version: 1,
+            },
+        );
+        identities.record(
+            VReg::phys("load_frame"),
+            SsaValue {
+                base: VReg::phys("rbp"),
+                version: 2,
+            },
+        );
+
+        let types = recover_types_with_identities(&lf, &identities);
+        assert!(!matches!(
+            types.get(&VReg::phys("rdi")),
+            Some(TypeHint::Pointer { .. })
+        ));
     }
 
     fn mk_block(ops: Vec<Op>) -> LlirFunction {

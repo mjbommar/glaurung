@@ -1354,7 +1354,11 @@ pub(super) fn render_prepared_ast(
             None => body,
         }
     } else if render_options.types {
-        let recovered = crate::ir::types_recover::recover_types_for(&prepared.numbered, cc);
+        let recovered = crate::ir::types_recover::recover_types_for_with_identities(
+            &prepared.numbered,
+            cc,
+            &prepared.value_identities,
+        );
         let renamed = super::type_maps::remap_type_map_with_roles(
             &recovered,
             cc,
