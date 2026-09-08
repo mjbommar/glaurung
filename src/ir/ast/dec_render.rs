@@ -1105,7 +1105,7 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
                     // function boundary. State the machine interpretation at
                     // this use rather than changing the declaration.
                 } else if !matches!(op, CmpOp::Eq | CmpOp::Ne)
-                    || !matches!(rhs.as_ref(), Expr::Const(0))
+                    || !matches!(rhs.semantic(), Expr::Const(0))
                     || !write_direct_pointer_value_dec(lhs, out)
                 {
                     write_expr_dec(lhs, out);
@@ -1120,7 +1120,7 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
                 {
                     // Symmetric declared-unsigned operand.
                 } else if !matches!(op, CmpOp::Eq | CmpOp::Ne)
-                    || !matches!(lhs.as_ref(), Expr::Const(0))
+                    || !matches!(lhs.semantic(), Expr::Const(0))
                     || !write_direct_pointer_value_dec(rhs, out)
                 {
                     write_expr_dec(rhs, out);
@@ -1318,7 +1318,7 @@ fn write_select_arm_dec(expression: &Expr, canonical_all_ones: bool, out: &mut S
 /// arithmetic still goes through `write_expr_dec`, where the integer spelling
 /// is required for byte offsets and masks.
 fn write_direct_pointer_value_dec(expression: &Expr, out: &mut String) -> bool {
-    match expression {
+    match expression.semantic() {
         Expr::Reg(register @ VReg::Phys(name))
             if dec_ptr_arg_type(name).is_some()
                 || dec_struct_ptr_type(name).is_some()

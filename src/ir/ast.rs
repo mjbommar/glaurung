@@ -7676,16 +7676,32 @@ function f @ 0x1000 {
         let f = Function {
             name: "has_node".to_string(),
             entry_va: 0x1000,
-            body: vec![Stmt::While {
-                cond: Expr::Cmp {
-                    op: CmpOp::Ne,
-                    lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
-                    rhs: Box::new(Expr::Const(0)),
+            body: vec![
+                Stmt::While {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Ne,
+                        lhs: Box::new(
+                            Expr::Reg(VReg::phys("arg0")).with_origins(OriginSet::one(0x1004)),
+                        ),
+                        rhs: Box::new(Expr::Const(0).with_origins(OriginSet::one(0x1008))),
+                    },
+                    body: vec![Stmt::Return {
+                        value: Some(Expr::Const(1)),
+                    }],
                 },
-                body: vec![Stmt::Return {
-                    value: Some(Expr::Const(1)),
-                }],
-            }],
+                Stmt::While {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Eq,
+                        lhs: Box::new(Expr::Const(0).with_origins(OriginSet::one(0x100c))),
+                        rhs: Box::new(
+                            Expr::Reg(VReg::phys("arg0")).with_origins(OriginSet::one(0x1010)),
+                        ),
+                    },
+                    body: vec![Stmt::Return {
+                        value: Some(Expr::Const(0)),
+                    }],
+                },
+            ],
         };
         let mut tm = TypeMap::default();
         tm.upsert_public(VReg::phys("arg0"), TypeHint::Pointer { pointee_width: 1 });
@@ -7693,6 +7709,7 @@ function f @ 0x1000 {
         let text = render_decbench_typed(&f, Some(&tm), Some(&tm));
 
         assert!(text.contains("while (arg0 != 0)"), "{text}");
+        assert!(text.contains("while (0 == arg0)"), "{text}");
         assert!(!text.contains("(long)arg0"), "{text}");
     }
 
@@ -7704,12 +7721,15 @@ function f @ 0x1000 {
             body: vec![Stmt::Return {
                 value: Some(Expr::Cmp {
                     op: CmpOp::Ne,
-                    lhs: Box::new(Expr::Cast {
-                        signed: false,
-                        width: 4,
-                        expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
-                    }),
-                    rhs: Box::new(Expr::Const(0)),
+                    lhs: Box::new(
+                        Expr::Cast {
+                            signed: false,
+                            width: 4,
+                            expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        }
+                        .with_origins(OriginSet::one(0x1004)),
+                    ),
+                    rhs: Box::new(Expr::Const(0).with_origins(OriginSet::one(0x1008))),
                 }),
             }],
         };
