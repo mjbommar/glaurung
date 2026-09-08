@@ -1787,6 +1787,13 @@ provenance through lowering.
   proved `rbp` identity is accepted. All 132 owning tests and the exact
   `11_call_shapes:clang:O0:call_into_spill` lane pass; no broad suite or corpus
   ran. See `results/wp3-captured-frame-definition-identities.md`.
+  Commit `541a6e5b` then migrates call-slot read/write liveness, enclosing
+  clobbers/reaching definitions, loop-entry constancy, and table/mixed-layout
+  backfill to identity candidate sets. Agreement across several SSA versions
+  is accepted; cross-slot ambiguity fails closed. All 133 owning tests and the
+  exact effectful branch-call fixture pass after that fixture caught and
+  rejected an over-conservative `rsp` prototype. See
+  `results/wp3-call-slot-liveness-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
@@ -3843,8 +3850,12 @@ relevant ratchet's accepted-regression record.
    `results/wp3-call-frame-coordinate-identities.md`. Commit `d2518e37` closes
    captured-definition frame aliasing with exact identities; its 132 owning
    tests and exact Clang O0 `call_into_spill` fixture pass. See
-   `results/wp3-captured-frame-definition-identities.md`. Continue through
-   stack-area recovery, slot marking, and the AAPCS/cdecl readers. Keep
+   `results/wp3-captured-frame-definition-identities.md`. Commit `541a6e5b`
+   closes call-slot liveness and enclosing reaching-state with identity
+   candidate sets; its 133 owning tests and exact fixture-189 GCC O2 effectful
+   branch-call lane pass. See `results/wp3-call-slot-liveness-identities.md`.
+   Continue through stack-area recovery, loop-carried slot discovery, and the
+   AAPCS/cdecl readers. Keep
    pre-sidecar tagging internals and explicit no-sidecar compatibility parsers
    classified separately.
    Keep expression ownership behind completion of that audit.
