@@ -28,16 +28,20 @@ uv run maturin develop
 passed; debug extension rebuilt
 
 uv run python tools/build_guard.py
-fresh; native SHA-256 21142b2d469ec16b3558e81db1da7ab606b78de198ec0d923a4a1565e33656e0
+fresh; native SHA-256 2e20be293e61cbfd1f4583686650ee60eff48d6141e8ffb09826b4dafb658416
+
+uv run python tools/dectest.py \
+  95_function_pointer_table:gcc:O0:dispatch_operation --show
+1 of 838 lanes selected; no regression in scope
 ```
 
-The exact real fixture probe
-`95_function_pointer_table:gcc:O0:dispatch_operation` remains red. An A/B
-rebuild that restored the production caller to the pre-increment compatibility
-entry point produced byte-identical unresolved-table output and the same
-`pass -> fail` verdict. This is therefore existing branch-tip debt rather than
-a regression caused by the identity migration, but it remains open and is not
-reported as green evidence.
+After the topic branch merged to `master`, the exact real fixture probe exposed
+adjacent WP3 debt: expression origins wrapped its scaled table index, while the
+address proof stripped casts but not origin carriers. Commit `b5f96b91` makes
+this semantic inspection origin-transparent and adds the exact wrapped-index
+unit regression. The owning module then passed 13 tests with 4,575 filtered
+out; a fresh native rebuild returned the single fixture cell from `pass ->
+fail` to no regression in scope.
 
 No broad Rust or Python suite, fixture sweep, DecBench run, or Joern run was
 performed for this bounded increment.

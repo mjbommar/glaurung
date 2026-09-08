@@ -477,14 +477,13 @@ recovery from `#version` display spelling to the pipeline-owned SSA identity
 sidecar. The production path preserves only explicit non-entry values across a
 nested call; missing, entry, or mixed identities fail closed.
 
-Focused evidence: all 12 `ir::function_tables::tests` passed with 4,495 library
-tests filtered out, followed by a fresh native rebuild and build guard. The
-single real fixture probe
-`95_function_pointer_table:gcc:O0:dispatch_operation` is red at this branch
-tip, but restoring the old production caller and rebuilding reproduced the
-same unresolved table and verdict. It remains separately tracked debt rather
-than a claimed green result for this increment. No broad suite ran. Full
-commands and limits are in
+Focused evidence: all 12 initial `ir::function_tables::tests` passed with 4,495
+library tests filtered out. The single real fixture initially remained red,
+and restoring the old production caller reproduced the same output. After
+integration, commit `b5f96b91` fixed the adjacent cause: an expression-origin
+wrapper hid the scaled table index from address analysis. All 13 owning tests
+now pass, and `95_function_pointer_table:gcc:O0:dispatch_operation` is green
+after a fresh native rebuild. No broad suite ran. Full commands and limits are in
 `docs/history/decompiler-review-2026-09-02/results/wp3-function-table-definition-identities.md`.
 
 ## Ground rules
