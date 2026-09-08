@@ -7,7 +7,7 @@
 //! member.  The renderer remains responsible only for spelling that semantic
 //! field access as C.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::debug::dwarf::{DwarfType, DwarfTypeKind};
 use crate::ir::ast::{Expr, Function, PdbFieldHint, Stmt};
@@ -46,6 +46,7 @@ pub fn annotate_function_fields(
             );
         }
     }
+    let parameter_pointer_roles = pointer_types.keys().cloned().collect::<HashSet<_>>();
 
     // Pointer identity is monotone here: the AST's high variables are already
     // value-numbered, and only an authoritative parameter, an exact copy/cast,
@@ -62,7 +63,7 @@ pub fn annotate_function_fields(
     loop {
         let invalid = pointer_types
             .iter()
-            .filter(|(register, _)| !is_parameter_role(register))
+            .filter(|(register, _)| !parameter_pointer_roles.contains(*register))
             .filter_map(|(register, type_name)| {
                 (!all_definitions_compatible(
                     &function.body,
@@ -90,12 +91,6 @@ pub fn annotate_function_fields(
         &mut HashMap::new(),
     );
     pointer_types
-}
-
-fn is_parameter_role(register: &VReg) -> bool {
-    matches!(register, VReg::Phys(name) if name.strip_prefix("arg").is_some_and(|suffix| {
-        !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
-    }))
 }
 
 fn all_definitions_compatible(
@@ -1507,6 +1502,30 @@ mod tests {
                 ..
             } if base == &VReg::phys("arg0")
         ));
+    }
+
+    #[test]
+    fn arg_spelling_outside_the_prototype_is_not_a_parameter_identity() {
+        let impostor = VReg::phys("arg99");
+        let mut function = Function {
+            name: "stale_parameter_role".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: impostor.clone(),
+                    src: Expr::Reg(VReg::phys("arg0")),
+                },
+                Stmt::Assign {
+                    dst: impostor.clone(),
+                    src: Expr::Const(7),
+                },
+            ],
+        };
+
+        let pointer_types =
+            annotate_function_fields(&mut function, Some(&node_prototype()), &[node_layout()], 8);
+
+        assert!(!pointer_types.contains_key(&impostor));
     }
 
     #[test]
