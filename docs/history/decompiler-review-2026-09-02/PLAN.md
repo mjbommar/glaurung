@@ -1737,6 +1737,12 @@ provenance through lowering.
   opaque exact `r15` value is accepted, a misleading `r15#0` spelling mapped to
   `rax` is rejected, and missing identity fails closed in production. See
   `results/wp3-x86-frame-identities.md`.
+  Commit `5fdb7906` applies the same authority boundary to ARM32 frame
+  recognition. Prologue/epilogue matching, restore classification, frame
+  deallocation, and residual-SP refusal now resolve `sp`, `fp`/`r11`,
+  `lr`/`r14`, core, and VFP saves through exact identities. Misleading `sp#0`
+  and `lr#0` spellings mapped to `r0` refuse. See
+  `results/wp3-arm32-frame-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
@@ -3764,8 +3770,11 @@ relevant ratchet's accepted-regression record.
    Commit `a7762f05` then removes the adjacent x86 frame recognizer's production
    `#version` parsing. All 40 x86-prologue tests and the exact compiled/stripped
    stack-clash execution check pass; see `results/wp3-x86-frame-identities.md`.
-   Continue with ARM32 frame identity, then re-audit remaining production name
-   parsers.
+   Commit `5fdb7906` then migrates the ARM32 frame recognizer across its full
+   parse, nested-exit, restore, and residual-SP surface. All 10 module tests and
+   the exact ARM frame-spill fixture pass; see
+   `results/wp3-arm32-frame-identities.md`. Re-audit remaining production name
+   parsers next.
    Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
