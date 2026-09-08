@@ -51,7 +51,7 @@ pub(super) fn fold_one_call(
     let incoming_overrides = enclosing.overrides.as_slice();
     let format_proven_arity = format_proven_arity(body, call_idx, arch, string_pool);
     if arch == CallConv::Cdecl32 {
-        fold_one_cdecl32_call(body, call_idx);
+        fold_one_cdecl32_call(body, call_idx, identities);
         return;
     }
     // Before any register-liveness recovery: a call through a proven

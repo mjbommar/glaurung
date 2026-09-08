@@ -11,8 +11,11 @@
 
 use crate::ir::ast::{Expr, Stmt};
 use crate::ir::types::{BinOp, VReg};
+use crate::ir::value_number::ValueIdentities;
 
-use super::{is_pure_arg_normalisation, ssa_base, stack_pointer_sub_width};
+use super::{
+    is_pure_arg_normalisation, register_is_storage, stack_pointer_sub_width_with_identities,
+};
 
 /// Recover 32-bit cdecl arguments from stores into the outgoing ESP area.
 ///
@@ -21,7 +24,11 @@ use super::{is_pure_arg_normalisation, ssa_base, stack_pointer_sub_width};
 /// arguments at all. Walk backward only to the nearest call/stack adjustment or
 /// control-flow boundary, retain the latest store at each non-negative offset,
 /// and accept an exactly contiguous layout beginning at `[esp]`.
-pub(super) fn fold_one_cdecl32_call(body: &mut Vec<Stmt>, call_idx: usize) {
+pub(super) fn fold_one_cdecl32_call(
+    body: &mut Vec<Stmt>,
+    call_idx: usize,
+    identities: Option<&ValueIdentities>,
+) {
     let mut by_offset: std::collections::BTreeMap<i64, (usize, Expr, u8)> =
         std::collections::BTreeMap::new();
     let mut pushed_args = Vec::new();
@@ -31,7 +38,7 @@ pub(super) fn fold_one_cdecl32_call(body: &mut Vec<Stmt>, call_idx: usize) {
     // how much of the preceding stack traffic belongs to this call — and it is
     // what makes it safe to step over a statement sitting between the last push
     // and the call. See `proven_outgoing_cleanup`.
-    let cleanup = proven_outgoing_cleanup(body, call_idx);
+    let cleanup = proven_outgoing_cleanup(body, call_idx, identities);
     let mut skipped_before_setup = 0usize;
     let mut cursor = call_idx;
     while cursor > 0 {
@@ -51,28 +58,36 @@ pub(super) fn fold_one_cdecl32_call(body: &mut Vec<Stmt>, call_idx: usize) {
             | Stmt::Push { .. }
             | Stmt::Pop { .. } => break,
             Stmt::Assign {
-                dst: VReg::Phys(frame),
-                src: Expr::Reg(VReg::Phys(stack)),
-            } if matches!(frame.as_str(), "ebp" | "rbp")
-                && matches!(stack.as_str(), "esp" | "rsp") =>
+                dst: frame,
+                src: Expr::Reg(stack),
+            } if (register_is_storage(frame, "ebp", identities)
+                || register_is_storage(frame, "rbp", identities))
+                && (register_is_storage(stack, "esp", identities)
+                    || register_is_storage(stack, "rsp", identities)) =>
             {
                 break;
             }
-            Stmt::Assign {
-                dst: VReg::Phys(name),
-                ..
-            } if name == "esp" || name == "rsp" => break,
+            Stmt::Assign { dst, .. }
+                if register_is_storage(dst, "esp", identities)
+                    || register_is_storage(dst, "rsp", identities) =>
+            {
+                break;
+            }
             Stmt::Store {
                 addr:
                     Expr::Lea {
-                        base: Some(VReg::Phys(base)),
+                        base: Some(base),
                         index: None,
                         disp,
                         ..
                     },
                 src,
                 size,
-            } if matches!(base.as_str(), "esp" | "rsp") && *disp >= 0 && *size > 0 => {
+            } if (register_is_storage(base, "esp", identities)
+                || register_is_storage(base, "rsp", identities))
+                && *disp >= 0
+                && *size > 0 =>
+            {
                 // Iced lowers `push X` to `sp -= width; [sp] = X`. Walking
                 // backward encounters cdecl's right-to-left pushes in source
                 // argument order: arg0, arg1, ... . Absorb both halves of each
@@ -80,7 +95,8 @@ pub(super) fn fold_one_cdecl32_call(body: &mut Vec<Stmt>, call_idx: usize) {
                 // local allocation, or cleanup) rather than guessing across it.
                 if *disp == 0
                     && i > 0
-                    && stack_pointer_sub_width(&body[i - 1]) == Some(i64::from(*size))
+                    && stack_pointer_sub_width_with_identities(&body[i - 1], identities)
+                        == Some(i64::from(*size))
                 {
                     let mut argument = src.clone();
                     if let Some(origins) = body[i].origins() {
@@ -115,7 +131,7 @@ pub(super) fn fold_one_cdecl32_call(body: &mut Vec<Stmt>, call_idx: usize) {
                     && by_offset.is_empty()
                     && cleanup.is_some()
                     && skipped_before_setup < 4
-                    && is_pure_register_value(statement) =>
+                    && is_pure_register_value(statement, identities) =>
             {
                 skipped_before_setup += 1;
             }
@@ -159,13 +175,16 @@ pub(super) fn fold_one_cdecl32_call(body: &mut Vec<Stmt>, call_idx: usize) {
     // per-argument offset, leave the whole call alone: an unfolded call renders
     // the pushes verbatim, while a folded one with mis-based arguments is a
     // confidently wrong prototype.
-    if args.iter().any(mentions_stack_pointer) {
+    if args
+        .iter()
+        .any(|argument| mentions_stack_pointer(argument, identities))
+    {
         return;
     }
     // Never fold more stack traffic than the caller proved it owns.
     let pushed_bytes: i64 = used
         .iter()
-        .filter_map(|&index| stack_pointer_sub_width(&body[index]))
+        .filter_map(|&index| stack_pointer_sub_width_with_identities(&body[index], identities))
         .sum();
     if let Some(cleanup) = cleanup {
         if pushed_bytes > cleanup {
@@ -194,7 +213,10 @@ pub(super) fn fold_one_cdecl32_call(body: &mut Vec<Stmt>, call_idx: usize) {
     used.sort_unstable_by(|left, right| right.cmp(left));
     let removed_pushes: Vec<(usize, i64)> = used
         .iter()
-        .filter_map(|&index| stack_pointer_sub_width(&body[index]).map(|width| (index, width)))
+        .filter_map(|&index| {
+            stack_pointer_sub_width_with_identities(&body[index], identities)
+                .map(|width| (index, width))
+        })
         .collect();
     let adjustment_origins = removed_pushes
         .iter()
@@ -202,7 +224,7 @@ pub(super) fn fold_one_cdecl32_call(body: &mut Vec<Stmt>, call_idx: usize) {
         .cloned()
         .reduce(|left, right| left.union(&right));
     let folded_bytes: i64 = removed_pushes.iter().map(|(_, width)| *width).sum();
-    rebase_esp_after_removed_pushes(body, call_idx, &removed_pushes);
+    rebase_esp_after_removed_pushes(body, call_idx, &removed_pushes, identities);
     let removed_before_call = used.iter().filter(|&&index| index < call_idx).count();
     for stmt_idx in used {
         body.remove(stmt_idx);
@@ -238,6 +260,7 @@ fn rebase_esp_after_removed_pushes(
     body: &mut [Stmt],
     call_idx: usize,
     removed_pushes: &[(usize, i64)],
+    identities: Option<&ValueIdentities>,
 ) {
     if removed_pushes.is_empty() {
         return;
@@ -258,7 +281,7 @@ fn rebase_esp_after_removed_pushes(
         if removed.contains(&index) || shifted == 0 {
             continue;
         }
-        shift_stack_pointer_displacements(&mut body[index], shifted);
+        shift_stack_pointer_displacements(&mut body[index], shifted, identities);
     }
 }
 
@@ -281,18 +304,21 @@ fn folded_push_adjustment(total: i64) -> Stmt {
 
 /// True when `expr` reads the stack pointer, so hoisting it to the call site
 /// would change which slot it names.
-fn mentions_stack_pointer(expr: &Expr) -> bool {
+fn mentions_stack_pointer(expr: &Expr, identities: Option<&ValueIdentities>) -> bool {
     let mut found = false;
     visit_expr(expr, &mut |node| {
-        let named = match node {
-            Expr::Reg(VReg::Phys(name)) => Some(name),
+        let register = match node {
+            Expr::Reg(register) => Some(register),
             Expr::Lea {
-                base: Some(VReg::Phys(name)),
+                base: Some(register),
                 ..
-            } => Some(name),
+            } => Some(register),
             _ => None,
         };
-        if named.is_some_and(|name| matches!(ssa_base(name), "esp" | "rsp")) {
+        if register.is_some_and(|register| {
+            register_is_storage(register, "esp", identities)
+                || register_is_storage(register, "rsp", identities)
+        }) {
             found = true;
         }
     });
@@ -350,32 +376,44 @@ fn visit_expr_mut(expr: &mut Expr, f: &mut impl FnMut(&mut Expr)) {
 }
 
 /// Subtract `bytes` from every `esp`/`rsp`-relative displacement in `stmt`.
-fn shift_stack_pointer_displacements(stmt: &mut Stmt, bytes: i64) {
+fn shift_stack_pointer_displacements(
+    stmt: &mut Stmt,
+    bytes: i64,
+    identities: Option<&ValueIdentities>,
+) {
     match stmt.semantic_mut() {
         Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
-        Stmt::Assign { src, .. } => shift_stack_pointer_displacements_in_expr(src, bytes),
-        Stmt::Store { addr, src, .. } => {
-            shift_stack_pointer_displacements_in_expr(addr, bytes);
-            shift_stack_pointer_displacements_in_expr(src, bytes);
+        Stmt::Assign { src, .. } => {
+            shift_stack_pointer_displacements_in_expr(src, bytes, identities)
         }
-        Stmt::Push { value } => shift_stack_pointer_displacements_in_expr(value, bytes),
+        Stmt::Store { addr, src, .. } => {
+            shift_stack_pointer_displacements_in_expr(addr, bytes, identities);
+            shift_stack_pointer_displacements_in_expr(src, bytes, identities);
+        }
+        Stmt::Push { value } => shift_stack_pointer_displacements_in_expr(value, bytes, identities),
         Stmt::Return { value: Some(value) } => {
-            shift_stack_pointer_displacements_in_expr(value, bytes)
+            shift_stack_pointer_displacements_in_expr(value, bytes, identities)
         }
         _ => {}
     }
 }
 
-fn shift_stack_pointer_displacements_in_expr(expr: &mut Expr, bytes: i64) {
+fn shift_stack_pointer_displacements_in_expr(
+    expr: &mut Expr,
+    bytes: i64,
+    identities: Option<&ValueIdentities>,
+) {
     visit_expr_mut(expr, &mut |node| {
         if let Expr::Lea {
-            base: Some(VReg::Phys(base)),
+            base: Some(base),
             index: None,
             disp,
             ..
         } = node
         {
-            if matches!(ssa_base(base), "esp" | "rsp") {
+            if register_is_storage(base, "esp", identities)
+                || register_is_storage(base, "rsp", identities)
+            {
                 *disp -= bytes;
             }
         }
@@ -389,10 +427,14 @@ fn shift_stack_pointer_displacements_in_expr(expr: &mut Expr, bytes: i64) {
 /// area was. Flag and temporary assignments the lifter emits for the arithmetic
 /// itself are stepped over; anything else ends the search, because a cleanup
 /// that is not adjacent proves nothing about this call.
-fn proven_outgoing_cleanup(body: &[Stmt], call_idx: usize) -> Option<i64> {
+fn proven_outgoing_cleanup(
+    body: &[Stmt],
+    call_idx: usize,
+    identities: Option<&ValueIdentities>,
+) -> Option<i64> {
     for statement in body.iter().skip(call_idx + 1).take(16) {
         if let Stmt::Assign {
-            dst: VReg::Phys(dst),
+            dst,
             src:
                 Expr::Bin {
                     op: BinOp::Add,
@@ -401,8 +443,12 @@ fn proven_outgoing_cleanup(body: &[Stmt], call_idx: usize) -> Option<i64> {
                 },
         } = statement.semantic()
         {
-            if matches!(ssa_base(dst), "esp" | "rsp")
-                && matches!(lhs.as_ref(), Expr::Reg(VReg::Phys(base)) if ssa_base(base) == ssa_base(dst))
+            let dst_is_esp = register_is_storage(dst, "esp", identities);
+            let dst_is_rsp = register_is_storage(dst, "rsp", identities);
+            if (dst_is_esp || dst_is_rsp)
+                && matches!(lhs.as_ref(), Expr::Reg(base)
+                    if (dst_is_esp && register_is_storage(base, "esp", identities))
+                        || (dst_is_rsp && register_is_storage(base, "rsp", identities)))
             {
                 return match rhs.as_ref() {
                     Expr::Const(bytes) if *bytes > 0 => Some(*bytes),
@@ -425,14 +471,76 @@ fn proven_outgoing_cleanup(body: &[Stmt], call_idx: usize) -> Option<i64> {
 
 /// A statement that only computes a value into a register, touching neither
 /// memory nor the stack pointer.
-fn is_pure_register_value(statement: &Stmt) -> bool {
+fn is_pure_register_value(statement: &Stmt, identities: Option<&ValueIdentities>) -> bool {
     let Stmt::Assign { dst, src } = statement.semantic() else {
         return false;
     };
-    if let VReg::Phys(name) = dst {
-        if matches!(ssa_base(name), "esp" | "rsp") {
-            return false;
+    if register_is_storage(dst, "esp", identities) || register_is_storage(dst, "rsp", identities) {
+        return false;
+    }
+    is_pure_arg_normalisation(src) && !mentions_stack_pointer(src, identities)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reg(name: &str) -> VReg {
+        VReg::phys(name)
+    }
+
+    fn call() -> Stmt {
+        Stmt::Call {
+            target: Expr::Named {
+                va: 0x2000,
+                name: "callee".into(),
+            },
+            args: Vec::new(),
+            dst: None,
+            call_spec: None,
         }
     }
-    is_pure_arg_normalisation(src) && !mentions_stack_pointer(src)
+
+    fn stack_store(base: &str) -> Stmt {
+        Stmt::Store {
+            addr: Expr::Lea {
+                base: Some(reg(base)),
+                index: None,
+                scale: 1,
+                disp: 0,
+                segment: None,
+            },
+            src: Expr::Const(7),
+            size: 4,
+        }
+    }
+
+    #[test]
+    fn cdecl_stack_reader_uses_exact_identity_not_display_spelling() {
+        let mut identities = ValueIdentities::default();
+        identities.record(
+            reg("opaque_sp"),
+            crate::ir::ssa::SsaValue {
+                base: reg("esp"),
+                version: 2,
+            },
+        );
+        identities.record(
+            reg("esp#2"),
+            crate::ir::ssa::SsaValue {
+                base: reg("eax"),
+                version: 2,
+            },
+        );
+
+        let mut exact = vec![stack_store("opaque_sp"), call()];
+        fold_one_cdecl32_call(&mut exact, 1, Some(&identities));
+        assert!(matches!(&exact[..], [Stmt::Call { args, .. }] if args == &vec![Expr::Const(7)]));
+
+        let mut misleading = vec![stack_store("esp#2"), call()];
+        fold_one_cdecl32_call(&mut misleading, 1, Some(&identities));
+        assert!(
+            matches!(&misleading[..], [Stmt::Store { .. }, Stmt::Call { args, .. }] if args.is_empty())
+        );
+    }
 }
