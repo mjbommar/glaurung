@@ -661,7 +661,11 @@ pub(super) fn run_ast_passes(
     // indirect-return call, so the hint list is unchanged where it does not
     // apply.
     let indirect_result_hints =
-        crate::ir::aapcs64_indirect_result::indirect_result_buffer_hints(f, cc);
+        crate::ir::aapcs64_indirect_result::indirect_result_buffer_hints_with_identities(
+            f,
+            cc,
+            Some(value_identities),
+        );
     let stack_object_hints = if indirect_result_hints.is_empty() {
         stack_object_hints.to_vec()
     } else {
@@ -685,7 +689,11 @@ pub(super) fn run_ast_passes(
     // arithmetic, which no renderer can take the address of.
     pass!(
         "bind_indirect_result_buffers",
-        crate::ir::aapcs64_indirect_result::bind_indirect_result_buffers(f, cc)
+        crate::ir::aapcs64_indirect_result::bind_indirect_result_buffers_with_identities(
+            f,
+            cc,
+            Some(value_identities),
+        )
     );
     // Frame-relative storage is source-level state; the push/mov/sub sequence
     // that establishes its machine frame is not.  Recognise the machine prologue
