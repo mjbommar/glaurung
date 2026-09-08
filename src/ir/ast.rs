@@ -4493,6 +4493,53 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn attributed_typed_call_select_is_render_byte_neutral() {
+        let render = |attributed: bool| {
+            let select = Expr::Select {
+                cond: Box::new(Expr::Reg(VReg::phys("zf_0"))),
+                if_true: Box::new(Expr::StackAddr {
+                    object: VReg::phys("local_16"),
+                    size: 8,
+                }),
+                if_false: Box::new(Expr::Const(7)),
+                width: 8,
+            };
+            let argument = if attributed {
+                select.with_origins(OriginSet::one(0x1010))
+            } else {
+                select
+            };
+            let prototype = CallPrototype {
+                return_type: "void".into(),
+                parameter_types: vec!["void *".into()],
+                variadic: false,
+                authority: CallPrototypeAuthority::Authoritative,
+            };
+            render_decbench(&Function {
+                name: "dispatch_pointer".into(),
+                entry_va: 0x1000,
+                body: vec![Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "consume_pointer".into(),
+                    },
+                    args: vec![argument],
+                    dst: None,
+                    call_spec: Some(CallSiteSpec {
+                        callee_prototype: Some(prototype.clone()),
+                        call_prototype: prototype,
+                    }),
+                }],
+            })
+        };
+
+        let plain = render(false);
+        let attributed = render(true);
+
+        assert_eq!(attributed, plain);
+    }
+
+    #[test]
     fn attributed_integer_call_arguments_drop_only_proven_identity_views() {
         let callee = CallPrototype {
             return_type: "int".into(),

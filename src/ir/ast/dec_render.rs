@@ -1927,7 +1927,7 @@ fn write_typed_call_arg_dec(parameter_type: &str, arg: &Expr, out: &mut String) 
         if_true,
         if_false,
         ..
-    } = arg
+    } = arg.semantic()
     {
         out.push('(');
         write_expr_dec(cond, out);
