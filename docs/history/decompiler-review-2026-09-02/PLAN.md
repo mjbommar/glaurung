@@ -1645,7 +1645,10 @@ provenance through lowering.
   `arg0` but not an unrelated role spelled `arg99`. Commit `f3781342` migrates
   source-loop scratch eligibility to the same typed
   roles: an exact unowned `arg99` may coalesce, while a value carrying parameter
-  slot 99 refuses. See
+  slot 99 refuses. Commit `4219eee0` migrates optimized DWARF register-local
+  merging to pipeline-owned parameter slots: an exact local role merely spelled
+  `arg99` can receive its authoritative DWARF name and type, while a role owned
+  by parameter slot 99 remains protected. See
   `results/wp3-parameter-role-metadata.md`. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
   merge hid the unresolved SysV `al` variadic live-in. That cell is now an

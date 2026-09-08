@@ -48,6 +48,14 @@ called `arg99` can therefore coalesce normally; attaching slot 99 to the same
 value preserves the parameter refusal. The no-sidecar compatibility path keeps
 the legacy parser.
 
+Commit `4219eee0` migrates optimized DWARF register-local merging. The common
+pipeline now supplies its authoritative parameter-slot set directly; the merge
+protects only the canonical roles owned by those slots instead of treating
+every `argN` spelling as a parameter. An exact register local bound to an
+unowned role called `arg99` therefore receives its DWARF name and type, while
+the same role with owned slot 99 remains protected. Existing range, lifetime,
+identifier-safety, ambiguity, and widest-claimant behavior is unchanged.
+
 Focused validation used exact Rust tests only:
 
 ```text
@@ -107,9 +115,18 @@ keeps_a_loop_update_scratch_when_the_old_carrier_is_still_needed
 
 keeps_a_loop_update_scratch_with_a_different_semantic_width
 1 passed; 4,429 filtered out
+
+register_local_merge_uses_parameter_slots_not_arg_spelling
+1 passed; 4,430 filtered out
+
+python_bindings::ir::tests::dwarf_register_
+7 passed; 4,424 filtered out
+
+register_local_role_uses_opaque_identity_not_numbered_spelling
+1 passed; 4,430 filtered out
 ```
 
 Each command was `cargo test --features python-ext --lib
-ir::<module>::tests::<name> -- --exact`. No broad Rust, Python, fixture,
-DecBench, or Joern suite was run. Remaining parameter-role consumers are still
-open under WP3.
+<focused-test>`, with `-- --exact` on the individually named cases. No broad
+Rust, Python, fixture, DecBench, or Joern suite was run. Remaining
+parameter-role consumers are still open under WP3.
