@@ -9856,6 +9856,36 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn decbench_logical_shift_does_not_repeat_an_attributed_unsigned_cast() {
+        let function = Function {
+            name: "shift_unsigned_word".to_string(),
+            entry_va: 0x7c,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Bin {
+                    op: BinOp::Shr,
+                    lhs: Box::new(
+                        Expr::Cast {
+                            signed: false,
+                            width: 4,
+                            expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                        }
+                        .with_origins(OriginSet::one(0x7c)),
+                    ),
+                    rhs: Box::new(Expr::Const(8)),
+                }),
+            }],
+        };
+
+        let text = render_decbench(&function);
+
+        assert!(
+            text.contains("return ((unsigned int)(arg0) >> 8);"),
+            "an existing attributed unsigned cast must not be repeated:\n{text}"
+        );
+        assert!(!text.contains("(unsigned int)((unsigned int)"), "{text}");
+    }
+
+    #[test]
     fn decbench_wide_left_shift_keeps_declared_narrow_operand_through_origins() {
         use crate::ir::types_recover::{TypeHint, TypeMap};
 

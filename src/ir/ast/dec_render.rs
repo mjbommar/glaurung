@@ -940,7 +940,7 @@ fn write_expr_dec(e: &Expr, out: &mut String) {
                 // `widen::insert_widening_casts` states the reinterpretation
                 // structurally when it has recovered types; re-stating it here
                 // would only nest an identical cast.
-                let stated = matches!(lhs.as_ref(), Expr::Cast { signed: false, .. });
+                let stated = matches!(lhs.semantic(), Expr::Cast { signed: false, .. });
                 out.push('(');
                 if stated {
                     write_expr_dec(lhs, out);
