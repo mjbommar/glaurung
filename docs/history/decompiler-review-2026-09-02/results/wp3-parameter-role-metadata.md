@@ -107,6 +107,16 @@ the authoritative sidecar is installed. A stray type-map row named `arg0` or
 Exact SSA identities and promoted stack locals remain separately eligible, and
 the explicit no-sidecar compatibility path retains legacy spelling.
 
+Commit `973d1931` migrates the recursive identifier census used by the
+production renderer. Every nested expression and statement receives the same
+identity sidecar, so signature arity, locals, stack objects, wide-vector
+storage, and call-result declaration facts agree on parameter ownership. The
+type-map arity fallback uses the same predicate. With an empty authoritative
+sidecar, a value merely named `arg0` renders as a local in a zero-argument
+function; attaching slot 0 restores the parameter signature. The health-only
+and public compatibility paths explicitly pass no sidecar and retain legacy
+behavior.
+
 Focused validation used exact Rust tests only:
 
 ```text
@@ -227,6 +237,12 @@ GREEN: 1 passed; 4,438 filtered out
 
 ir::ast::declaration_plan::identity_tests::
 6 passed; 4,433 filtered out
+
+identifier_census_does_not_trust_an_unowned_arg_spelling
+RED: rendered long census_identity(long arg0); 1 failed, 4,439 filtered out
+
+ir::ast::decbench_render::identity_census_tests::
+3 passed; 4,439 filtered out
 ```
 
 Each command was `cargo test --features python-ext --lib

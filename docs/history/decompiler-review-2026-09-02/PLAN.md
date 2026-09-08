@@ -1674,6 +1674,11 @@ provenance through lowering.
   fact admission to the same authority rule. With identities installed, an
   unowned `argN` type-map row cannot influence casts or pointer indexing;
   exact SSA values and promoted storage retain their independent eligibility.
+  Commit `973d1931` migrates the recursive production identifier census and
+  type-map arity fallback. Signature arity, local declarations, stack/wide
+  objects, and typed call-result declarations now share one identity-aware
+  parameter decision; health and compatibility callers explicitly retain the
+  no-sidecar spelling path.
   See
   `results/wp3-parameter-role-metadata.md`. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
