@@ -1223,6 +1223,12 @@ provenance through lowering.
   and return-promotion refusal remain unchanged while the surviving source
   receives the canonical three-owner union. Its observed-red test and all 76
   constant-fold tests pass; see `results/wp3-typed-view-expression-origins.md`.
+  Commit `251ae25e` applies the same rule to typed comparison-extension
+  removal. Both compared operands retain their exact outer-cast, inner-cast,
+  and source owners, and the shared terminal mixed-view relation composes the
+  cast owners into its readable replacement. Its strengthened observed-red
+  test and all 76 constant-fold tests pass; see
+  `results/wp3-typed-comparison-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
