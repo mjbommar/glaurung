@@ -556,7 +556,10 @@ fn decbench_text_with_installed_environment(
     );
     pass!(
         "prune_unobserved_promoted_object_stores",
-        crate::ir::dead_stores::prune_unobserved_promoted_object_stores(&mut prepared)
+        crate::ir::dead_stores::prune_unobserved_promoted_object_stores_with_identities(
+            &mut prepared,
+            &value_identities,
+        )
     );
     pass!("prune_promoted_self_stores", {
         crate::ir::stack_locals::prune_promoted_self_stores(&mut prepared, promoted_stack_slots)

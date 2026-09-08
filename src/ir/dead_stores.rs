@@ -782,7 +782,26 @@ fn prune_callee_saved_spills_with_scope(
 /// stores. The proof here is storage-based: every remaining mention of the
 /// object must be the destination address of one such store.
 pub fn prune_unobserved_promoted_object_stores(f: &mut Function) {
-    fn field_store_base(statement: &Stmt) -> Option<&VReg> {
+    prune_unobserved_promoted_object_stores_impl(f, None);
+}
+
+/// Production form of [`prune_unobserved_promoted_object_stores`] with exact
+/// stack-promotion ownership.
+pub fn prune_unobserved_promoted_object_stores_with_identities(
+    f: &mut Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    prune_unobserved_promoted_object_stores_impl(f, Some(identities));
+}
+
+fn prune_unobserved_promoted_object_stores_impl(
+    f: &mut Function,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
+    fn field_store_base<'a>(
+        statement: &'a Stmt,
+        identities: Option<&crate::ir::value_number::ValueIdentities>,
+    ) -> Option<&'a VReg> {
         let Stmt::Store { addr, src, .. } = statement else {
             return None;
         };
@@ -799,10 +818,11 @@ pub fn prune_unobserved_promoted_object_stores(f: &mut Function) {
             | (Expr::Const(_), Expr::StackAddr { object, .. }) => object,
             _ => return None,
         };
-        let VReg::Phys(name) = object else {
-            return None;
-        };
-        if !(name.starts_with("local_") || name.starts_with("stack_")) || expr_reads(src, object) {
+        let promoted = identities.map_or_else(
+            || matches!(object, VReg::Phys(name) if name.starts_with("local_") || name.starts_with("stack_")),
+            |identities| identities.is_promoted_stack_object(object),
+        );
+        if !promoted || expr_reads(src, object) {
             return None;
         }
         Some(object)
@@ -811,14 +831,15 @@ pub fn prune_unobserved_promoted_object_stores(f: &mut Function) {
     let candidates = f
         .body
         .iter()
-        .filter_map(field_store_base)
+        .filter_map(|statement| field_store_base(statement, identities))
         .cloned()
         .collect::<HashSet<_>>();
     let doomed = candidates
         .into_iter()
         .filter(|object| {
             !f.body.iter().any(|statement| {
-                field_store_base(statement) != Some(object) && stmt_reads(statement, object)
+                field_store_base(statement, identities) != Some(object)
+                    && stmt_reads(statement, object)
             })
         })
         .collect::<HashSet<_>>();
@@ -826,7 +847,7 @@ pub fn prune_unobserved_promoted_object_stores(f: &mut Function) {
         return;
     }
     f.body.retain(|statement| {
-        !field_store_base(statement).is_some_and(|object| doomed.contains(object))
+        !field_store_base(statement, identities).is_some_and(|object| doomed.contains(object))
     });
 }
 
@@ -2465,6 +2486,66 @@ mod tests {
         };
 
         prune_unobserved_promoted_object_stores(&mut f);
+
+        assert_eq!(f.body.len(), 2);
+    }
+
+    #[test]
+    fn opaque_owned_unobserved_promoted_object_field_stores_are_removed() {
+        let object = "frame_object".to_string();
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object]);
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::StackAddr {
+                            object: reg(&object),
+                            size: 16,
+                        }),
+                        rhs: Box::new(Expr::Const(8)),
+                    },
+                    src: Expr::Reg(reg("var0")),
+                    size: 4,
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        prune_unobserved_promoted_object_stores_with_identities(&mut f, &identities);
+
+        assert_eq!(f.body, vec![Stmt::Return { value: None }]);
+    }
+
+    #[test]
+    fn unowned_local_spelling_does_not_authorize_field_store_deletion() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::StackAddr {
+                            object: reg("local_10"),
+                            size: 16,
+                        }),
+                        rhs: Box::new(Expr::Const(8)),
+                    },
+                    src: Expr::Reg(reg("var0")),
+                    size: 4,
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        prune_unobserved_promoted_object_stores_with_identities(
+            &mut f,
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
 
         assert_eq!(f.body.len(), 2);
     }
