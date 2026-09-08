@@ -407,10 +407,11 @@ fn decbench_text_with_installed_environment(
         // or value identity.
         pass!(
             "insert_widening_casts_for_machine_width",
-            crate::ir::widen::insert_widening_casts_for_machine_width(
+            crate::ir::widen::insert_widening_casts_for_machine_width_with_identities(
                 &mut prepared,
                 tm,
                 machine_word_bytes(cc),
+                Some(value_identities),
             )
         );
         // The subtract-and-unsigned-compare range idiom is deliberately

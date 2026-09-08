@@ -50,28 +50,50 @@ pub fn insert_widening_casts(f: &mut Function, tm: &TypeMap) {
 /// pass four for ARM32/i386 so their recovered C is not widened merely because
 /// the differential runner rebuilds it on an LP64 host.
 pub fn insert_widening_casts_for_machine_width(f: &mut Function, tm: &TypeMap, machine_width: u8) {
+    insert_widening_casts_for_machine_width_with_identities(f, tm, machine_width, None);
+}
+
+/// Rewrite implicit widening using exact opaque SSA identities when available.
+pub fn insert_widening_casts_for_machine_width_with_identities(
+    f: &mut Function,
+    tm: &TypeMap,
+    machine_width: u8,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     // A return value may span more than one architectural register.  ARM32 and
     // i386 return a uint64_t in a register pair, so clamping the return context
     // to one machine word turns `(uint64_t)a * b` back into a 32-bit C multiply
     // and only widens the already-truncated product.
     let ret_width = crate::ir::ast::inferred_return_width(&f.body, Some(tm));
-    rewrite_body(&mut f.body, ret_width, tm, machine_width);
+    rewrite_body(&mut f.body, ret_width, tm, machine_width, identities);
 }
 
-fn rewrite_body(body: &mut [Stmt], ret_width: u8, tm: &TypeMap, machine_width: u8) {
+fn rewrite_body(
+    body: &mut [Stmt],
+    ret_width: u8,
+    tm: &TypeMap,
+    machine_width: u8,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     for s in body.iter_mut() {
-        rewrite_stmt(s, ret_width, tm, machine_width);
+        rewrite_stmt(s, ret_width, tm, machine_width, identities);
     }
 }
 
-fn rewrite_stmt(s: &mut Stmt, ret_width: u8, tm: &TypeMap, machine_width: u8) {
+fn rewrite_stmt(
+    s: &mut Stmt,
+    ret_width: u8,
+    tm: &TypeMap,
+    machine_width: u8,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     match s.semantic_mut() {
         Stmt::Assign { dst, src } => {
             // The destination's own declaration says how wide this value is kept.
-            let want = declared_int_destination(dst, tm)
+            let want = declared_int_destination(dst, tm, identities)
                 .map(|(_, w)| w)
                 .unwrap_or(machine_width);
-            rewrite_expr(src, Some(want), tm);
+            rewrite_expr(src, Some(want), tm, identities);
         }
         Stmt::Store { src, size, .. } => {
             // The address expression is left alone: pointer arithmetic already
@@ -80,26 +102,26 @@ fn rewrite_stmt(s: &mut Stmt, ret_width: u8, tm: &TypeMap, machine_width: u8) {
             // scalar integer to widen.  Casting its array temporary to a
             // machine word would narrow the subsequent store back to 8 bytes.
             if *size != 16 {
-                rewrite_expr(src, Some((*size).min(machine_width)), tm);
+                rewrite_expr(src, Some((*size).min(machine_width)), tm, identities);
             }
         }
         // NOT a blanket 64-bit context: a function declared to return `int`
         // returns a value the machine computed in 32 bits.
-        Stmt::Return { value: Some(e) } => rewrite_expr(e, Some(ret_width), tm),
+        Stmt::Return { value: Some(e) } => rewrite_expr(e, Some(ret_width), tm, identities),
         Stmt::If {
             cond,
             then_body,
             else_body,
         } => {
-            rewrite_expr(cond, None, tm);
-            rewrite_body(then_body, ret_width, tm, machine_width);
+            rewrite_expr(cond, None, tm, identities);
+            rewrite_body(then_body, ret_width, tm, machine_width, identities);
             if let Some(b) = else_body {
-                rewrite_body(b, ret_width, tm, machine_width);
+                rewrite_body(b, ret_width, tm, machine_width, identities);
             }
         }
         Stmt::While { cond, body } => {
-            rewrite_expr(cond, None, tm);
-            rewrite_body(body, ret_width, tm, machine_width);
+            rewrite_expr(cond, None, tm, identities);
+            rewrite_body(body, ret_width, tm, machine_width, identities);
         }
         Stmt::For {
             init,
@@ -107,45 +129,50 @@ fn rewrite_stmt(s: &mut Stmt, ret_width: u8, tm: &TypeMap, machine_width: u8) {
             step,
             body,
         } => {
-            rewrite_stmt(init, ret_width, tm, machine_width);
-            rewrite_expr(cond, None, tm);
-            rewrite_body(body, ret_width, tm, machine_width);
-            rewrite_stmt(step, ret_width, tm, machine_width);
+            rewrite_stmt(init, ret_width, tm, machine_width, identities);
+            rewrite_expr(cond, None, tm, identities);
+            rewrite_body(body, ret_width, tm, machine_width, identities);
+            rewrite_stmt(step, ret_width, tm, machine_width, identities);
         }
         Stmt::DoWhile { body, cond } => {
-            rewrite_body(body, ret_width, tm, machine_width);
-            rewrite_expr(cond, None, tm);
+            rewrite_body(body, ret_width, tm, machine_width, identities);
+            rewrite_expr(cond, None, tm, identities);
         }
         Stmt::Switch {
             discriminant,
             cases,
             default,
         } => {
-            rewrite_expr(discriminant, None, tm);
+            rewrite_expr(discriminant, None, tm, identities);
             for (_, b) in cases.iter_mut() {
-                rewrite_body(b, ret_width, tm, machine_width);
+                rewrite_body(b, ret_width, tm, machine_width, identities);
             }
             if let Some(b) = default {
-                rewrite_body(b, ret_width, tm, machine_width);
+                rewrite_body(b, ret_width, tm, machine_width, identities);
             }
         }
         Stmt::Call { target, args, .. } => {
-            rewrite_expr(target, None, tm);
+            rewrite_expr(target, None, tm, identities);
             for a in args.iter_mut() {
-                rewrite_expr(a, None, tm);
+                rewrite_expr(a, None, tm, identities);
             }
         }
-        Stmt::Push { value } => rewrite_expr(value, None, tm),
+        Stmt::Push { value } => rewrite_expr(value, None, tm, identities),
         _ => {}
     }
 }
 
-fn rewrite_expr(e: &mut Expr, want: Want, tm: &TypeMap) {
+fn rewrite_expr(
+    e: &mut Expr,
+    want: Want,
+    tm: &TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     match e {
         Expr::Reg(v) => {
             let Some(want) = want else { return };
             let Some(name) = reg_name(v) else { return };
-            let Some((signed, w)) = declared_int(Some(name), tm) else {
+            let Some((signed, w)) = declared_int(Some(name), tm, identities) else {
                 return;
             };
             if w == 0 || w >= want {
@@ -157,37 +184,37 @@ fn rewrite_expr(e: &mut Expr, want: Want, tm: &TypeMap) {
             // A shift *count* is consumed at its own width; only the shifted
             // value participates in the wide operation.
             BinOp::Shl => {
-                rewrite_expr(lhs, want, tm);
-                rewrite_expr(rhs, None, tm);
+                rewrite_expr(lhs, want, tm, identities);
+                rewrite_expr(rhs, None, tm, identities);
             }
             // An arithmetic right shift replicates the SIGN bit at the operand's
             // own width — `sar %eax` is a 32-bit signed shift. Widening the
             // operand through its unsigned type would turn it into a zero-fill,
             // which is precisely the shift `Shr` already means.
             BinOp::Sar => {
-                rewrite_expr(lhs, None, tm);
-                rewrite_expr(rhs, None, tm);
+                rewrite_expr(lhs, None, tm, identities);
+                rewrite_expr(rhs, None, tm, identities);
             }
             // A logical right shift zero-fills at the operand's own width. C
             // would shift a signed-declared operand arithmetically, so the
             // reinterpretation is stated even when no widening is needed.
             BinOp::Shr => {
-                rewrite_expr(lhs, want, tm);
-                make_unsigned(lhs, tm);
-                rewrite_expr(rhs, None, tm);
+                rewrite_expr(lhs, want, tm, identities);
+                make_unsigned(lhs, tm, identities);
+                rewrite_expr(rhs, None, tm, identities);
             }
             _ => {
-                rewrite_expr(lhs, want, tm);
-                rewrite_expr(rhs, want, tm);
+                rewrite_expr(lhs, want, tm, identities);
+                rewrite_expr(rhs, want, tm, identities);
             }
         },
-        Expr::Un { src, .. } => rewrite_expr(src, want, tm),
+        Expr::Un { src, .. } => rewrite_expr(src, want, tm, identities),
         // An explicit cast states its own width: it is the compiler's recovered
         // extension, and its operand is consumed at the cast's width.
-        Expr::Cast { width, expr, .. } => rewrite_expr(expr, Some(*width), tm),
+        Expr::Cast { width, expr, .. } => rewrite_expr(expr, Some(*width), tm, identities),
         Expr::Cmp { lhs, rhs, .. } => {
-            rewrite_expr(lhs, None, tm);
-            rewrite_expr(rhs, None, tm);
+            rewrite_expr(lhs, None, tm, identities);
+            rewrite_expr(rhs, None, tm, identities);
         }
         Expr::Select {
             cond,
@@ -195,11 +222,11 @@ fn rewrite_expr(e: &mut Expr, want: Want, tm: &TypeMap) {
             if_false,
             width,
         } => {
-            rewrite_expr(cond, None, tm);
-            rewrite_expr(if_true, Some(*width), tm);
-            rewrite_expr(if_false, Some(*width), tm);
+            rewrite_expr(cond, None, tm, identities);
+            rewrite_expr(if_true, Some(*width), tm, identities);
+            rewrite_expr(if_false, Some(*width), tm, identities);
         }
-        Expr::Deref { addr, .. } => rewrite_expr(addr, None, tm),
+        Expr::Deref { addr, .. } => rewrite_expr(addr, None, tm, identities),
         _ => {}
     }
 }
@@ -208,10 +235,14 @@ fn rewrite_expr(e: &mut Expr, want: Want, tm: &TypeMap) {
 /// following logical shift zero-fills. A no-op for anything already unsigned, for
 /// compound expressions (whose own operands were handled on the way down), and for
 /// values that are not integers.
-fn make_unsigned(e: &mut Expr, tm: &TypeMap) {
+fn make_unsigned(
+    e: &mut Expr,
+    tm: &TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     let Expr::Reg(v) = e else { return };
     let Some(name) = reg_name(v) else { return };
-    let Some((true, w)) = declared_int(Some(name), tm) else {
+    let Some((true, w)) = declared_int(Some(name), tm, identities) else {
         return;
     };
     *e = Expr::Cast {
@@ -249,9 +280,13 @@ fn reg_name(v: &VReg) -> Option<&str> {
     }
 }
 
-fn declared_int_destination(v: &VReg, tm: &TypeMap) -> Option<(bool, u8)> {
+fn declared_int_destination(
+    v: &VReg,
+    tm: &TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<(bool, u8)> {
     if let Some(name) = reg_name(v) {
-        return declared_int(Some(name), tm);
+        return declared_int(Some(name), tm, identities);
     }
     match tm.get(v) {
         Some(crate::ir::types_recover::TypeHint::Int { signed, width }) => Some((signed, width)),
@@ -263,8 +298,12 @@ fn declared_int_destination(v: &VReg, tm: &TypeMap) -> Option<(bool, u8)> {
 /// not merely what type recovery inferred. Delegating keeps the two in step: a
 /// `varN` that recovery tagged 4 bytes is still printed `long`, and widening it
 /// would emit a cast that truncates.
-fn declared_int(name: Option<&str>, tm: &TypeMap) -> Option<(bool, u8)> {
-    crate::ir::ast::declared_int_type(name?, Some(tm))
+fn declared_int(
+    name: Option<&str>,
+    tm: &TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> Option<(bool, u8)> {
+    crate::ir::ast::declared_int_type_with_identities(name?, Some(tm), identities)
 }
 
 #[cfg(test)]
@@ -324,6 +363,105 @@ mod tests {
             ) || out.contains("(unsigned long)((unsigned int)(arg0))"),
             "both operands must widen before the multiply:\n{out}"
         );
+    }
+
+    #[test]
+    fn exact_opaque_identity_is_widened_in_a_wide_context() {
+        let value = VReg::phys("opaque_value");
+        let tm = tm_of(&[("opaque_value", true, 4), ("local_8", false, 8)]);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            value.clone(),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("eax"),
+                version: 1,
+            },
+        );
+        let mut function = func(vec![Stmt::Assign {
+            dst: VReg::phys("local_8"),
+            src: Expr::Reg(value.clone()),
+        }]);
+
+        insert_widening_casts_for_machine_width_with_identities(
+            &mut function,
+            &tm,
+            8,
+            Some(&identities),
+        );
+
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Assign {
+                src: Expr::Cast {
+                    signed: false,
+                    width: 8,
+                    ..
+                },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn ambiguous_opaque_identity_is_not_widened() {
+        let value = VReg::phys("opaque_value");
+        let tm = tm_of(&[("opaque_value", true, 4), ("local_8", false, 8)]);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for (base, version) in [("eax", 1), ("ebx", 2)] {
+            identities.record(
+                value.clone(),
+                crate::ir::ssa::SsaValue {
+                    base: VReg::phys(base),
+                    version,
+                },
+            );
+        }
+        let mut function = func(vec![Stmt::Assign {
+            dst: VReg::phys("local_8"),
+            src: Expr::Reg(value.clone()),
+        }]);
+        let before = function.clone();
+
+        insert_widening_casts_for_machine_width_with_identities(
+            &mut function,
+            &tm,
+            8,
+            Some(&identities),
+        );
+
+        assert_eq!(function, before);
+    }
+
+    #[test]
+    fn exact_opaque_destination_keeps_its_arithmetic_narrow() {
+        let destination = VReg::phys("opaque_destination");
+        let tm = tm_of(&[
+            ("opaque_destination", false, 4),
+            ("arg0", false, 4),
+            ("arg1", false, 4),
+        ]);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            destination.clone(),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("eax"),
+                version: 2,
+            },
+        );
+        let mut function = func(vec![Stmt::Assign {
+            dst: destination,
+            src: bin(BinOp::Add, reg("arg0"), reg("arg1")),
+        }]);
+        let before = function.clone();
+
+        insert_widening_casts_for_machine_width_with_identities(
+            &mut function,
+            &tm,
+            8,
+            Some(&identities),
+        );
+
+        assert_eq!(function, before);
     }
 
     #[test]
