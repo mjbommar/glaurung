@@ -1352,6 +1352,13 @@ provenance through lowering.
   value, carried-latch, result-overwrite, and trailing-control refusals remain
   mandatory. Its strengthened observed-red test and all 30 loop-form tests
   pass; see `results/wp3-guarded-loop-seed-origins.md`.
+  Commit `82deec7a` then makes guarded counted-loop promotion recognize an
+  attributed semantic `while (1)`, retaining the consumed constant-condition
+  owner on the reconstructed `for` and the exit-predicate owner on its inverted
+  condition. Adjacent-initializer, exact-break, induction-variable, unit-step,
+  and iterator-bypass proofs remain mandatory. Its strengthened observed-red
+  test and all 30 loop-form tests pass; see
+  `results/wp3-counted-loop-condition-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
