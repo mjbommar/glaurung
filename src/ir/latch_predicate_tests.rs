@@ -348,6 +348,14 @@ fn ambiguous_opaque_identity_keeps_loop_entry_copy() {
 }
 
 #[test]
+fn installed_identity_authority_does_not_fall_back_to_var_spelling() {
+    let identities = crate::ir::value_number::ValueIdentities::default();
+
+    assert!(!coalescible_value_role(&reg("var3"), Some(&identities)));
+    assert!(coalescible_value_role(&reg("var3"), None));
+}
+
+#[test]
 fn keeps_loop_entry_copy_when_source_remains_live() {
     let mut function = Function {
         name: "two_live_values".to_string(),
