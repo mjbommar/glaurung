@@ -887,14 +887,9 @@ fn wide_signed_integer(expression: &Expr, types: &TypeMap) -> bool {
             width: 8,
             ..
         } => true,
-        Expr::Reg(register @ VReg::Phys(name)) => match types.get(register) {
-            Some(TypeHint::Int {
-                signed: true,
-                width: 8,
-            }) => true,
-            None => is_high_variable(name),
-            _ => false,
-        },
+        Expr::Reg(VReg::Phys(name)) => {
+            crate::ir::ast::declared_int_type(name, Some(types)) == Some((true, 8))
+        }
         _ => false,
     }
 }

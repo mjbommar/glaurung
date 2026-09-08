@@ -353,6 +353,61 @@ fn high_bit_bound_compared_in_a_wide_signed_domain_is_unsigned() {
 }
 
 #[test]
+fn exact_opaque_high_bit_bound_uses_the_rendered_machine_word_domain() {
+    let value = VReg::phys("opaque_constant");
+    let bound = VReg::phys("opaque_bound");
+    let function = Function {
+        name: "range_guard".into(),
+        entry_va: 0,
+        body: vec![
+            Stmt::Assign {
+                dst: value.clone(),
+                src: Expr::Const(0x8000_0000),
+            },
+            Stmt::If {
+                cond: Expr::Cmp {
+                    op: CmpOp::Sle,
+                    lhs: Box::new(Expr::Reg(value.clone())),
+                    rhs: Box::new(Expr::Reg(bound.clone())),
+                },
+                then_body: vec![Stmt::Return {
+                    value: Some(Expr::Const(-2)),
+                }],
+                else_body: None,
+            },
+        ],
+    };
+    let mut types = TypeMap::default();
+    types.upsert_public(
+        value.clone(),
+        TypeHint::Int {
+            signed: true,
+            width: 4,
+        },
+    );
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
+    for (role, base) in [(&value, "eax"), (&bound, "rcx")] {
+        identities.record(
+            role.clone(),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys(base),
+                version: 1,
+            },
+        );
+    }
+
+    refine_pointer_high_variables_with_identities(&function, &mut types, Some(&identities));
+
+    assert_eq!(
+        types.get(&value),
+        Some(TypeHint::Int {
+            signed: false,
+            width: 4,
+        })
+    );
+}
+
+#[test]
 fn known_call_and_literal_flow_through_exact_copy_chain() {
     let function = Function {
         name: "f".into(),
