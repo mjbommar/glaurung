@@ -2514,6 +2514,8 @@ mod boolean_origin_tests {
 /// implicit pointer/integer conversions are neither valid C23 nor useful
 /// evidence about the recovered program.
 fn write_representation_value_dec(destination_type: &str, src: &Expr, out: &mut String) {
+    let src = src.semantic();
+
     if let Expr::Select {
         cond,
         if_true,

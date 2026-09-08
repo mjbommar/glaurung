@@ -9351,6 +9351,41 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn attributed_pointer_assignment_select_is_render_byte_neutral() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let render = |src: Expr| {
+            let function = Function {
+                name: "choose_pointer".to_string(),
+                entry_va: 0x68,
+                body: vec![Stmt::Assign {
+                    dst: VReg::phys("var0"),
+                    src,
+                }],
+            };
+            let mut types = TypeMap::default();
+            types.upsert_public(VReg::phys("var0"), TypeHint::Pointer { pointee_width: 1 });
+            types.upsert_public(VReg::phys("arg0"), TypeHint::Pointer { pointee_width: 1 });
+            render_decbench_typed(&function, Some(&types), None)
+        };
+        let select = Expr::Select {
+            cond: Box::new(Expr::Reg(VReg::phys("zf_0"))),
+            if_true: Box::new(Expr::Reg(VReg::phys("arg0"))),
+            if_false: Box::new(Expr::Const(7)),
+            width: 8,
+        };
+        let plain = render(select.clone());
+        let attributed = render(select.with_origins(OriginSet::one(0x4068)));
+
+        assert_eq!(
+            attributed, plain,
+            "an origin wrapper must not change destination-aware select rendering"
+        );
+        assert!(plain.contains("? arg0 : (char *)(7)"), "{plain}");
+        assert_looks_like_c(&plain);
+    }
+
+    #[test]
     fn decbench_stack_address_reclassified_as_argument_stays_a_pointer_value() {
         let f = Function {
             name: "consume_reclassified_address".to_string(),
