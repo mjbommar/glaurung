@@ -1131,6 +1131,12 @@ provenance through lowering.
   four-owner union. Its two observed-red states, focused test, and all 60
   constant-fold tests pass; see
   `results/wp3-terminal-relation-expression-origins.md`.
+  Commit `6c737361` next makes subtraction zero-test recovery transparent:
+  attributed `(x - y) == 0` and `!= 0` forms recover their direct readable
+  relation and preserve the deterministic union of the outer comparison and
+  consumed subtraction/zero owners. Its observed-red test and all 61
+  constant-fold tests pass; see
+  `results/wp3-subtraction-relation-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
