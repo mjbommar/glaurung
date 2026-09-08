@@ -1894,6 +1894,14 @@ provenance through lowering.
   backed by `rax` refuses. The exact regression, all 21 owning module tests,
   and only the GCC O2 `bv195_make_mixed` fixture pass. No broad suite or corpus
   ran. See `results/wp3-register-return-bank-identities.md`.
+  Commit `0e824a04` then removes production live-in parameter inference's
+  dependency on `tag_phys` spelling. Reads must carry version-zero identities,
+  definitions kill paths by exact ABI storage, and ARM balanced-padding
+  recognition uses the same identity authority. The spelling path remains only
+  for callers operating before or without the sidecar. The exact regression,
+  four live-in neighbors, three ARM padding checks, and only the GCC O2
+  `call_accumulate_bytes` fixture pass. No broad suite or corpus ran. See
+  `results/wp3-live-in-parameter-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
