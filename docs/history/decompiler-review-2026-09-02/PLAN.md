@@ -4088,6 +4088,13 @@ relevant ratchet's accepted-regression record.
    `tag_phys` dependency. Keep
    pre-sidecar tagging internals and explicit no-sidecar compatibility parsers
    classified separately.
+   Commit `e0c5fc11` removes another production call-fold dependency on those
+   tags. The argument-motion hazard check now compares SSA identity candidate
+   sets, so opaque aliases still detect an intervening reassignment while two
+   adjacent versions of the same physical register remain distinct. Only the
+   explicit no-sidecar compatibility path parses `#version`. Its two exact
+   contracts and the motivating GCC O2 loop-call fixture pass; see
+   `results/wp3-call-reassignment-identities.md`.
    Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
