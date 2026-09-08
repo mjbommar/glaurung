@@ -381,3 +381,30 @@ cargo test --features python-ext --lib ir::verify_defs::tests -- --nocapture
 ```
 
 No broad Rust/Python suite, fixture matrix, DecBench, or Joern lane ran.
+
+## Typed direct and exhaustive return folding
+
+Commit `c599ac49` migrates the production `result = value; return result;`
+folds to typed result-role authority. Both source-preparation stages use the
+identity-aware direct fold, including the normalization performed before
+exhaustive `if` and `switch` return promotion. An arbitrary local named `ret`
+is no longer classified as exact machine result storage. A pipeline-owned
+`ret`, and exact versioned ABI storage such as `rax#7`, retain their established
+folds. No-sidecar lowering and compatibility APIs retain their legacy behavior.
+
+Focused evidence:
+
+```text
+cargo test --features python-ext --lib \
+  return_fold_does_not_trust_an_unowned_ret_spelling -- --nocapture
+1 passed; 4,452 filtered out
+
+cargo test --features python-ext --lib \
+  return_fold_accepts_a_pipeline_owned_ret_role -- --nocapture
+1 passed; 4,452 filtered out
+
+cargo test --features python-ext --lib ir::ast::return_folds::tests -- --nocapture
+14 passed; 4,439 filtered out
+```
+
+No broad Rust/Python suite, fixture matrix, DecBench, or Joern lane ran.

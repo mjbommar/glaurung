@@ -1699,7 +1699,11 @@ provenance through lowering.
   the final definition-before-use verifier, including its structured and goto-
   aware paths. A destination-less call no longer silently defines an unowned
   `ret` spelling in production, while the pipeline-owned role and explicit call
-  destinations remain valid definitions.
+  destinations remain valid definitions. Commit `c599ac49` migrates direct and
+  exhaustive return folding in both production preparation stages. An unowned
+  `ret = value; return ret;` remains intact, while a pipeline-owned result role
+  still folds to `return value;`; exact versioned ABI storage continues to fold
+  independently of presentation spelling.
   See
   `results/wp3-parameter-role-metadata.md`. The latter migration also
   exposed that `gcc-O2-vsa_double_args` had been a false pass: one display-name
