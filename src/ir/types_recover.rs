@@ -5010,7 +5010,38 @@ int never_returns(void) { for (;;) {} }
             types.get(&VReg::phys("rax#9")),
             Some(TypeHint::Int {
                 signed: true,
-                width: 8,
+                width: 4,
+            }),
+            "the misleading name is not a return, but its own exact definition width still applies"
+        );
+    }
+
+    #[test]
+    fn ordinary_definition_width_comes_from_the_exact_width_sidecar() {
+        use crate::ir::call_args::CallConv;
+
+        let function = mk_block(vec![Op::Assign {
+            dst: VReg::phys("opaque_local"),
+            src: Value::Const(1),
+        }]);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            VReg::phys("opaque_local"),
+            SsaValue {
+                base: VReg::phys("rbx"),
+                version: 2,
+            },
+        );
+        let widths = HashMap::from([(VReg::phys("opaque_local"), 4)]);
+
+        let types =
+            recover_types_for_with_identities(&function, CallConv::SysVAmd64, &identities, &widths);
+
+        assert_eq!(
+            types.get(&VReg::phys("opaque_local")),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
             })
         );
     }

@@ -443,6 +443,16 @@ pub fn recover_types_for_with_identities(
     definition_widths: &std::collections::HashMap<VReg, u8>,
 ) -> TypeMap {
     let mut tm = recover_types_with_identities(lf, identities);
+    for (value, &width) in definition_widths {
+        if width == 0 || identities.candidates(value).is_none() {
+            continue;
+        }
+        let signed = match tm.get(value) {
+            Some(TypeHint::Int { signed, .. }) => signed,
+            _ => true,
+        };
+        tm.upsert(value.clone(), TypeHint::Int { signed, width });
+    }
     refine_return_type(lf, &mut tm, cc, Some(identities), Some(definition_widths));
     tm
 }
