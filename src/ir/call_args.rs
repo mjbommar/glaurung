@@ -7067,7 +7067,7 @@ mod tests {
     }
 
     #[test]
-    fn stable_frame_load_uses_exact_identity_not_display_spelling() {
+    fn stable_frame_load_uses_unambiguous_identity_not_display_spelling() {
         let frame_load = |base| {
             Expr::Deref {
                 addr: Box::new(
@@ -7085,13 +7085,24 @@ mod tests {
             .with_origins(OriginSet::one(0x1004))
         };
         let mut identities = crate::ir::value_number::ValueIdentities::default();
-        identities.record(
-            VReg::phys("opaque_frame"),
-            crate::ir::ssa::SsaValue {
-                base: VReg::phys("rbp"),
-                version: 3,
-            },
-        );
+        for version in [3, 8] {
+            identities.record(
+                VReg::phys("opaque_frame"),
+                crate::ir::ssa::SsaValue {
+                    base: VReg::phys("rbp"),
+                    version,
+                },
+            );
+        }
+        for (base, version) in [("rbp", 3), ("rax", 8)] {
+            identities.record(
+                VReg::phys("mixed_frame"),
+                crate::ir::ssa::SsaValue {
+                    base: VReg::phys(base),
+                    version,
+                },
+            );
+        }
         identities.record(
             VReg::phys("rbp#3"),
             crate::ir::ssa::SsaValue {
@@ -7118,6 +7129,13 @@ mod tests {
         ));
         assert!(!is_stable_frame_arg_definition_with_identities(
             &frame_load("rbp#3"),
+            &body,
+            0,
+            0,
+            Some(&identities),
+        ));
+        assert!(!is_stable_frame_arg_definition_with_identities(
+            &frame_load("mixed_frame"),
             &body,
             0,
             0,

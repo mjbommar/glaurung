@@ -94,8 +94,8 @@ pub(super) fn resolve_captured_definition_in(
 /// boundary rejects substitution.
 /// Decide whether a captured impure definition is a stable frame read.
 ///
-/// Production value-numbered input must prove the frame base from its exact
-/// SSA identity. Display spellings such as `rbp#4` are not semantic evidence.
+/// Production value-numbered input must prove one unambiguous physical frame
+/// base. Display spellings such as `rbp#4` are not semantic evidence.
 pub(super) fn is_stable_frame_arg_definition_with_identities(
     expr: &Expr,
     body: &[Stmt],
@@ -223,11 +223,9 @@ fn fixed_frame_address(expr: &Expr, identities: Option<&ValueIdentities>) -> Opt
 fn frame_base_identity(register: &VReg, identities: Option<&ValueIdentities>) -> Option<VReg> {
     match identities {
         Some(identities) => identities
-            .exact(register)
-            .filter(|identity| {
-                matches!(&identity.base, VReg::Phys(base) if matches!(base.as_str(), "ebp" | "rbp"))
-            })
-            .map(|identity| identity.base.clone()),
+            .unambiguous_physical_base(register)
+            .filter(|base| matches!(*base, "ebp" | "rbp"))
+            .map(VReg::phys),
         None => {
             let VReg::Phys(name) = register else {
                 return None;
