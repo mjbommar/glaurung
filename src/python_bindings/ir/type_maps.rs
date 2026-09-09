@@ -402,12 +402,13 @@ fn word_width_implies_int(cc: crate::ir::call_args::CallConv) -> bool {
     !matches!(cc, crate::ir::call_args::CallConv::Cdecl32)
 }
 
-fn merge_exact_definition_widths(
+fn merge_exact_definition_widths_with_identities(
     tm: &mut crate::ir::types_recover::TypeMap,
     definition_widths: &std::collections::HashMap<crate::ir::types::VReg, u8>,
     role_names: &std::collections::HashMap<String, String>,
     cc: crate::ir::call_args::CallConv,
     param_slots: &std::collections::HashSet<usize>,
+    value_identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
     let word = machine_word_bytes(cc);
     let parameter_roles = param_slots
@@ -444,7 +445,16 @@ fn merge_exact_definition_widths(
     // `stack_locals`'s `ambiguous_coordinates`.
     let mut by_role: std::collections::BTreeMap<&str, Option<u8>> =
         std::collections::BTreeMap::new();
-    for (storage, &exact_width) in definition_widths {
+    for (storage, &compatibility_width) in definition_widths {
+        let exact_width = match value_identities {
+            Some(identities) => {
+                let Some(width) = identities.unambiguous_definition_width(storage) else {
+                    continue;
+                };
+                width
+            }
+            None => compatibility_width,
+        };
         // A full-width machine-register definition on a 32-bit target is not a
         // narrowing and therefore not evidence of an `int`. Recording it as one
         // declares every machine word `int`, and the DecBench C is rebuilt at the
@@ -517,6 +527,24 @@ fn merge_exact_definition_widths(
             },
         );
     }
+}
+
+#[cfg(test)]
+fn merge_exact_definition_widths(
+    tm: &mut crate::ir::types_recover::TypeMap,
+    definition_widths: &std::collections::HashMap<crate::ir::types::VReg, u8>,
+    role_names: &std::collections::HashMap<String, String>,
+    cc: crate::ir::call_args::CallConv,
+    param_slots: &std::collections::HashSet<usize>,
+) {
+    merge_exact_definition_widths_with_identities(
+        tm,
+        definition_widths,
+        role_names,
+        cc,
+        param_slots,
+        None,
+    );
 }
 
 pub(super) fn decbench_type_maps(
@@ -592,7 +620,14 @@ pub(super) fn decbench_type_maps(
     }
     merge_slot_sizes(&mut decl, slot_sizes, cc);
     apply_stack_source_types(&mut decl, source_types, source_names, cc, dwarf_type_env);
-    merge_exact_definition_widths(&mut decl, definition_widths, role_names, cc, param_slots);
+    merge_exact_definition_widths_with_identities(
+        &mut decl,
+        definition_widths,
+        role_names,
+        cc,
+        param_slots,
+        Some(value_identities),
+    );
     crate::ir::call_contracts::refine_call_result_types(f, &mut decl);
     refine_float_copy_types(
         &f.body,
@@ -639,7 +674,14 @@ pub(super) fn decbench_type_maps(
     }
     merge_slot_sizes(&mut width, slot_sizes, cc);
     apply_stack_source_types(&mut width, source_types, source_names, cc, dwarf_type_env);
-    merge_exact_definition_widths(&mut width, definition_widths, role_names, cc, param_slots);
+    merge_exact_definition_widths_with_identities(
+        &mut width,
+        definition_widths,
+        role_names,
+        cc,
+        param_slots,
+        Some(value_identities),
+    );
     crate::ir::call_contracts::refine_call_result_types(f, &mut width);
     refine_float_copy_types(
         &f.body,
@@ -752,7 +794,8 @@ fn refine_numbered_declaration(
 #[cfg(test)]
 mod tests {
     use super::{
-        integer_widths_by_role, merge_exact_definition_widths, refine_float_copy_types,
+        integer_widths_by_role, merge_exact_definition_widths,
+        merge_exact_definition_widths_with_identities, refine_float_copy_types,
         refine_numbered_declaration, remap_type_map_impl, remap_type_map_with_roles,
     };
     use crate::ir::ast::{Expr, Stmt};
@@ -1059,6 +1102,39 @@ mod tests {
             &role_names,
             CallConv::SysVAmd64,
             &std::collections::HashSet::from([0]),
+        );
+
+        assert_eq!(
+            types.get(&role),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn definition_width_merge_uses_stable_identity_fact_not_name_keyed_width() {
+        let storage = VReg::phys("opaque-value");
+        let role = VReg::phys("var0");
+        let identity = SsaValue {
+            base: VReg::phys("rax"),
+            version: 3,
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(storage.clone(), identity.clone());
+        identities.attach_definition_width(&identity, 4);
+
+        let mut types = TypeMap::default();
+        let compatibility_widths = HashMap::from([(storage, 8)]);
+        let role_names = HashMap::from([("opaque-value".to_string(), "var0".to_string())]);
+        merge_exact_definition_widths_with_identities(
+            &mut types,
+            &compatibility_widths,
+            &role_names,
+            CallConv::SysVAmd64,
+            &Default::default(),
+            Some(&identities),
         );
 
         assert_eq!(

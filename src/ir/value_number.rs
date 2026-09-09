@@ -84,6 +84,7 @@ impl ValueId {
 pub struct ValueIdentities {
     by_numbered_value: HashMap<VReg, BTreeSet<SsaValue>>,
     value_id_by_ssa: HashMap<SsaValue, ValueId>,
+    definition_widths_by_value_id: HashMap<ValueId, BTreeSet<u8>>,
     next_value_id: u32,
     physical_bases_by_value: HashMap<VReg, BTreeSet<String>>,
     parameter_slots_by_value: HashMap<VReg, BTreeSet<usize>>,
@@ -118,6 +119,18 @@ impl ValueIdentities {
             .iter()
             .map(|identity| self.value_id_by_ssa.get(identity).copied())
             .collect()
+    }
+
+    /// Return the one machine width on which every represented value agrees.
+    pub(crate) fn unambiguous_definition_width(&self, value: &VReg) -> Option<u8> {
+        let value_ids = self.value_ids(value)?;
+        let mut widths = BTreeSet::new();
+        for value_id in value_ids {
+            widths.extend(self.definition_widths_by_value_id.get(&value_id)?);
+        }
+        (widths.len() == 1)
+            .then(|| widths.first().copied())
+            .flatten()
     }
 
     /// Return the sole canonical machine-storage base represented by `value`.
@@ -227,6 +240,18 @@ impl ValueIdentities {
             .entry(numbered)
             .or_default()
             .insert(identity);
+    }
+
+    /// Attach a proved definition width to the stable identity already interned
+    /// for `identity`. Conflicting evidence remains explicitly ambiguous.
+    pub(crate) fn attach_definition_width(&mut self, identity: &SsaValue, width: u8) {
+        let Some(value_id) = self.value_id_by_ssa.get(identity).copied() else {
+            return;
+        };
+        self.definition_widths_by_value_id
+            .entry(value_id)
+            .or_default()
+            .insert(width);
     }
 
     /// Attach ABI parameter slots to exact version-zero values.
@@ -620,6 +645,7 @@ pub fn value_number_with_parameter_slots_lifetimes_and_identities(
                     definition_widths_by_site.insert((addr, output_index), width);
                     if let Some(value) = ssa.def_value_ref_at(lf, addr, output_index) {
                         definition_widths_by_value.insert(value.clone(), width);
+                        identities.attach_definition_width(value, width);
                     }
                 }
             } else if let (Some(dst), Some(width)) =
@@ -629,6 +655,7 @@ pub fn value_number_with_parameter_slots_lifetimes_and_identities(
                 definition_widths_by_site.insert((addr, 0), width);
                 if let Some(value) = ssa.def_value_ref(lf, addr) {
                     definition_widths_by_value.insert(value.clone(), width);
+                    identities.attach_definition_width(value, width);
                 }
             }
         }
@@ -827,6 +854,13 @@ fn insert_phi_copies(
             // packed signed comparisons from silently becoming `long` without
             // perturbing unrelated loop-carried integer types.
             definition_widths.insert(dst.clone(), width);
+            identities.attach_definition_width(
+                &SsaValue {
+                    base: phi.base.clone(),
+                    version: phi.dst_version,
+                },
+                width,
+            );
         }
         for (pred, ver) in &phi.incoming {
             if *pred >= out.blocks.len() {
@@ -1027,20 +1061,18 @@ mod tests {
         let second_name = VReg::phys("opaque-b");
         let merged_name = VReg::phys("merged");
         let mut identities = ValueIdentities::default();
-        identities.record(
-            first_name.clone(),
-            SsaValue {
-                base: VReg::phys("rax"),
-                version: 1,
-            },
-        );
-        identities.record(
-            second_name.clone(),
-            SsaValue {
-                base: VReg::phys("rax"),
-                version: 2,
-            },
-        );
+        let first_identity = SsaValue {
+            base: VReg::phys("rax"),
+            version: 1,
+        };
+        identities.record(first_name.clone(), first_identity.clone());
+        let second_identity = SsaValue {
+            base: VReg::phys("rax"),
+            version: 2,
+        };
+        identities.record(second_name.clone(), second_identity.clone());
+        identities.attach_definition_width(&first_identity, 4);
+        identities.attach_definition_width(&second_identity, 4);
         let first_id = identities.exact_value_id(&first_name).expect("first id");
         let second_id = identities.exact_value_id(&second_name).expect("second id");
 
@@ -1063,6 +1095,13 @@ mod tests {
             projected.value_ids(&merged_name),
             Some(BTreeSet::from([first_id, second_id]))
         );
+        assert_eq!(
+            projected.unambiguous_definition_width(&merged_name),
+            Some(4)
+        );
+
+        identities.attach_definition_width(&second_identity, 8);
+        assert_eq!(identities.unambiguous_definition_width(&merged_name), None);
     }
 
     #[test]
