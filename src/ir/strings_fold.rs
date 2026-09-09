@@ -269,7 +269,17 @@ fn fold_constant_string(expr: &mut Expr, pool: &HashMap<u64, String>) {
 
 fn fold_expr(e: &mut Expr, pool: &HashMap<u64, String>) {
     match e {
-        Expr::Origin { expr, .. } => fold_expr(expr, pool),
+        Expr::Origin { origins, expr } => {
+            fold_expr(expr, pool);
+            if matches!(expr.as_ref(), Expr::Origin { .. }) {
+                let nested = std::mem::replace(expr, Box::new(Expr::Unknown(String::new())));
+                let (semantic, nested_origins) = (*nested).into_semantic_with_origins();
+                if let Some(nested_origins) = nested_origins {
+                    origins.merge(&nested_origins);
+                }
+                *expr = Box::new(semantic);
+            }
+        }
         Expr::Addr(v) => {
             if let Some(s) = pool.get(v) {
                 *e = Expr::StringLit { value: shorten(s) };
@@ -439,7 +449,8 @@ mod tests {
                     rhs: Box::new(
                         Expr::Const(0x34).with_origins(crate::ir::ast::OriginSet::one(0x401004)),
                     ),
-                },
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(0x400ffc)),
             }],
         };
 
@@ -451,7 +462,7 @@ mod tests {
         assert_eq!(
             src.origins(),
             Some(&crate::ir::ast::OriginSet::from_addresses([
-                0x401000, 0x401004,
+                0x400ffc, 0x401000, 0x401004,
             ]))
         );
         assert_eq!(
