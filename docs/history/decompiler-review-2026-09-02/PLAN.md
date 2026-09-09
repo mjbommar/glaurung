@@ -2957,6 +2957,11 @@ provenance through lowering.
   ambiguity, aliases, and renames, while synthesized ABI results publish their
   provenance explicitly. The identity-free wrapper alone retains compatibility
   parsing; see `results/wp3-call-result-splitting-storage-identities.md`.
+  Commit `d68b005f` removes presentation-name lookup from scalarized-lane phi
+  width agreement. Incoming widths are now queried by exact `(base, SSA
+  version)` identity; its 64 owning tests, the exact Clang-O2 vectorized-max
+  round trip, and three O2 Hello cells across x86-64, AArch64, and ARMv7 pass.
+  See `results/wp3-phi-width-identities.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
