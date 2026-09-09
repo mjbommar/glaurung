@@ -1182,7 +1182,7 @@ fn fold_one_table_call(
     else {
         return false;
     };
-    if let Stmt::Call { args, .. } = &mut body[call_idx] {
+    if let Stmt::Call { args, .. } = body[call_idx].semantic_mut() {
         *args = arguments;
         return true;
     }
@@ -8299,11 +8299,13 @@ mod tests {
         let Stmt::If { then_body, .. } = &mut f.body[3] else {
             unreachable!()
         };
-        let Stmt::Call { target, .. } = then_body[0].semantic_mut() else {
+        let mut attributed_call = std::mem::replace(&mut then_body[0], Stmt::Nop);
+        let Stmt::Call { target, .. } = attributed_call.semantic_mut() else {
             unreachable!()
         };
         let semantic_target = std::mem::replace(target, Expr::Unknown("moved".into()));
         *target = semantic_target.with_origins(OriginSet::one(0x1160));
+        then_body[0] = attributed_call.with_origins(OriginSet::one(0x1167));
         let first_owner = OriginSet::one(0x1154);
         let second_owner = OriginSet::one(0x1158);
         for (index, owner) in [(1, first_owner.clone()), (2, second_owner.clone())] {
