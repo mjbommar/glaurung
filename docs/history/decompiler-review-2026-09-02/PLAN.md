@@ -5407,6 +5407,14 @@ relevant ratchet's accepted-regression record.
    and exact-release x86-64 GCC Hello O0/O2 round trips pass. The broader
    six-cell checkpoint was not repeated. See
    `results/wp3-stack-frame-anchor-expression-origins.md`.
+   Commit `0d29922b` closes the residual stack-coordinate phase reader in
+   call-argument folding. Expression ownership around an `rsp`-relative load no
+   longer lets reconstruction move that dereference across an `rsp` restore
+   and silently change the memory it reads; the exact stack-storage,
+   intervening-write, and architecture gates remain. The observed-red x86
+   contract, two adjacent ARM controls, and the original stripped
+   `format_wrapper` real-binary regression pass against an exact clean release
+   build. See `results/wp3-stack-coordinate-load-expression-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
