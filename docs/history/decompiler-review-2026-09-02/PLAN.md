@@ -5688,6 +5688,13 @@ relevant ratchet's accepted-regression record.
    misleading names decline. Its observed-red contract, all 45 focused x86
    prologue tests, and exact-release x86-64 GCC O0/O2 symbols/PIE Hello cells
    pass. See `results/wp3-coalesced-x86-storage-identity.md`.
+   Commit `51780adb` migrates the scalar-float gate's physical-register-bank
+   lookup to the identity sidecar's unambiguous-base fact. Coalesced versions
+   of one VFP, SSE, or x87 register can retain modeled float lowering; mixed
+   bases and misleading names still decline. Its observed-red contract, both
+   focused float-gate tests, and the exact-release GCC O2 homogeneous-float
+   tagged control pass. See
+   `results/wp3-coalesced-float-storage-identity.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
