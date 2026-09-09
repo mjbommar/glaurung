@@ -5371,6 +5371,15 @@ relevant ratchet's accepted-regression record.
    The observed-red ownership contract, all 25 guard-chain tests, and both
    exact-release GCC/Clang O2 `validate_header` controls pass. See
    `results/wp3-terminal-tail-expression-origins.md`.
+   Commit `f8433a3f` closes the adjacent single-guard matching-return sibling.
+   An attributed exact predicate and independently attributed matching return
+   values now recover as `if (!bad) { work; } return x;`, retaining the
+   condition owner and transferring the eliminated return's statement/value
+   owners. Exact negation, matching terminal semantics, non-empty structured
+   continuation, and no-unstructured-transfer gates remain. The observed-red
+   ownership contract, all 25 guard-chain tests, and both exact-release
+   GCC/Clang O2 `validate_header` controls pass. See
+   `results/wp3-matching-return-expression-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
