@@ -271,7 +271,9 @@ fn incoming_arg_expr_with_identities(
 fn walk_body_reg_names(body: &[Stmt], f: &mut impl FnMut(&str)) {
     fn expr(e: &Expr, f: &mut impl FnMut(&str)) {
         match e {
+            Expr::Origin { expr: inner, .. } => expr(inner, f),
             Expr::Reg(VReg::Phys(n)) => f(n),
+            Expr::Reg(_) => {}
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
                 expr(lhs, f);
                 expr(rhs, f);
@@ -287,8 +289,22 @@ fn walk_body_reg_names(body: &[Stmt], f: &mut impl FnMut(&str)) {
                 expr(if_false, f);
             }
             Expr::Un { src, .. } => expr(src, f),
-            Expr::Cast { expr: e, .. } => expr(e, f),
+            Expr::Cast { expr: inner, .. } | Expr::NumericConvert { expr: inner, .. } => {
+                expr(inner, f);
+            }
             Expr::Deref { addr, .. } => expr(addr, f),
+            Expr::Call { target, args, .. } => {
+                expr(target, f);
+                for argument in args {
+                    expr(argument, f);
+                }
+            }
+            Expr::FunctionTableEntry { index, .. } => expr(index, f),
+            Expr::WideArithmetic { args, .. } => {
+                for argument in args {
+                    expr(argument, f);
+                }
+            }
             Expr::StackAddr { object, .. } => {
                 if let VReg::Phys(name) = object {
                     f(name);
@@ -301,7 +317,12 @@ fn walk_body_reg_names(body: &[Stmt], f: &mut impl FnMut(&str)) {
                     }
                 }
             }
-            _ => {}
+            Expr::Const(_)
+            | Expr::FloatConst { .. }
+            | Expr::Addr(_)
+            | Expr::Named { .. }
+            | Expr::StringLit { .. }
+            | Expr::Unknown(_) => {}
         }
     }
     for s in body {
@@ -329,6 +350,19 @@ fn walk_body_reg_names(body: &[Stmt], f: &mut impl FnMut(&str)) {
                 }
             }
             Stmt::Return { value: Some(e) } => expr(e, f),
+            Stmt::Return { value: None } => {}
+            Stmt::Throw { value } | Stmt::IndirectGoto { target: value } | Stmt::Push { value } => {
+                expr(value, f)
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                walk_body_reg_names(try_body, f);
+                for catch in catches {
+                    if let VReg::Phys(name) = &catch.binding {
+                        f(name);
+                    }
+                    walk_body_reg_names(&catch.body, f);
+                }
+            }
             Stmt::If {
                 cond,
                 then_body,
@@ -372,8 +406,17 @@ fn walk_body_reg_names(body: &[Stmt], f: &mut impl FnMut(&str)) {
                     walk_body_reg_names(b, f);
                 }
             }
-            Stmt::Push { value } => expr(value, f),
-            _ => {}
+            Stmt::Pop {
+                target: VReg::Phys(name),
+            } => f(name),
+            Stmt::Pop { .. }
+            | Stmt::Label(_)
+            | Stmt::Goto { .. }
+            | Stmt::Continue
+            | Stmt::Break
+            | Stmt::Nop
+            | Stmt::Unknown(_)
+            | Stmt::Comment(_) => {}
         }
     }
 }
@@ -6628,7 +6671,7 @@ mod tests {
     #[test]
     fn origin_wrappers_do_not_hide_register_names_from_call_recovery() {
         let body = vec![Stmt::Return {
-            value: Some(Expr::Reg(reg("rdi"))),
+            value: Some(Expr::Reg(reg("rdi")).with_origins(OriginSet::one(0x1004))),
         }
         .with_origins(OriginSet::one(0x1000))];
         let mut names = Vec::new();
