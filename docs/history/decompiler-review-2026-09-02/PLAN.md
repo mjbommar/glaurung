@@ -2005,6 +2005,14 @@ provenance through lowering.
   non-stack, and redefined-base addresses decline. The new refusal was observed
   red before the repair, all 10 owning tests pass, and the release-built real
   fixture remains green.
+  Commit `ab265881` closes the next expression-origin readability consumer.
+  Symbolic constant recovery now reads attributed constants and casts through
+  their semantic view, preserving security-relevant annotations such as
+  `PTRACE_TRACEME` and `PROT_READ|PROT_EXEC`. Both focused contracts were
+  observed red, the eight-test owner module passes, and a release-built A/B on
+  the existing `suspicious_linux` GCC O0 `main` adds both annotations while its
+  generated C remains syntax-valid. See
+  `results/wp3-symbolic-constant-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
