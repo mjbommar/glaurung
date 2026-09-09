@@ -2962,6 +2962,12 @@ provenance through lowering.
   version)` identity; its 64 owning tests, the exact Clang-O2 vectorized-max
   round trip, and three O2 Hello cells across x86-64, AArch64, and ARMv7 pass.
   See `results/wp3-phi-width-identities.md`.
+  Commit `d4fe3568` closes the remaining identity-free numbered-type call in
+  the DecBench-style renderer. It now consumes the prepared `ValueIdentities`
+  and `TypeMapV` sidecars, preserving a raw four-byte `edi` use after its
+  numbered presentation becomes `rdi`. All 26 owning tests and the exact
+  release binary32 sign-bit canary pass; see
+  `results/wp3-renderer-valued-types.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
