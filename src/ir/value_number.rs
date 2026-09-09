@@ -3550,6 +3550,43 @@ mod tests {
     }
 
     #[test]
+    fn arm_r3_alignment_padding_survives_explicit_return_materialization() {
+        use crate::ir::types::MemOp;
+
+        let saved_r3 = MemOp::plain(Some(VReg::phys("sp")), None, 0, 0, 4);
+        let saved_lr = MemOp::plain(Some(VReg::phys("sp")), None, 0, 4, 4);
+        let mut function = mk(vec![
+            Op::Store {
+                addr: saved_r3.clone(),
+                src: Value::Reg(VReg::phys("r3")),
+            },
+            Op::Store {
+                addr: saved_lr,
+                src: Value::Reg(VReg::phys("lr")),
+            },
+            Op::Load {
+                dst: VReg::phys("r3"),
+                addr: saved_r3,
+            },
+            Op::Assign {
+                dst: VReg::phys("r0"),
+                src: Value::Const(0),
+            },
+            Op::ReturnValue {
+                value: Value::Reg(VReg::phys("r0")),
+            },
+        ]);
+        // Both stores are the expansion of one `push {r3, lr}` instruction.
+        function.blocks[0].instrs[1].va = function.blocks[0].instrs[0].va;
+
+        assert_eq!(
+            live_in_arg_slots_llir(&function, CallConv::ArmHardFloat),
+            HashSet::new(),
+            "a balanced alignment save stays machine state after return materialization"
+        );
+    }
+
+    #[test]
     fn arm_r3_save_with_a_conditional_exit_is_not_proven_alignment_padding() {
         use crate::ir::types::MemOp;
 

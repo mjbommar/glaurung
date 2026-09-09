@@ -79,13 +79,12 @@ impl ArmAlignmentPadding {
                 };
 
                 let suffix = &block.instrs[restore_idx + 1..];
-                let returns_without_observing_r3 =
-                    matches!(
-                        suffix.last().map(|candidate| &candidate.op),
-                        Some(Op::Return)
-                    ) && suffix.iter().enumerate().all(|(index, candidate)| {
+                let returns_without_observing_r3 = suffix
+                    .last()
+                    .is_some_and(|candidate| is_unconditional_return(&candidate.op))
+                    && suffix.iter().enumerate().all(|(index, candidate)| {
                         let is_final_return =
-                            index + 1 == suffix.len() && matches!(candidate.op, Op::Return);
+                            index + 1 == suffix.len() && is_unconditional_return(&candidate.op);
                         if !is_final_return
                             && matches!(
                                 candidate.op,
@@ -94,6 +93,7 @@ impl ArmAlignmentPadding {
                                     | Op::CondJump { .. }
                                     | Op::IndirectJump { .. }
                                     | Op::Return
+                                    | Op::ReturnValue { .. }
                             )
                         {
                             return false;
@@ -123,6 +123,10 @@ impl ArmAlignmentPadding {
     ) -> bool {
         self.save_sites.contains(&site) && has_base(register, "r3", identities)
     }
+}
+
+fn is_unconditional_return(operation: &Op) -> bool {
+    matches!(operation, Op::Return | Op::ReturnValue { .. })
 }
 
 fn has_base(register: &VReg, expected: &str, identities: Option<&ValueIdentities>) -> bool {
