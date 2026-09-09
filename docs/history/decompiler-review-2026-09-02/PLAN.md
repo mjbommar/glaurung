@@ -5423,6 +5423,13 @@ relevant ratchet's accepted-regression record.
    and lowered-pop controls, and the exact-release i386 O2 `forward_sum6`
    calling-convention fixture pass. See
    `results/wp3-stack-argument-proof-expression-origins.md`.
+   Commit `02d0ab6c` closes the residual captured-frame address reader. An
+   attributed constant `rbp`/`ebp` address can again support exact stable-load
+   substitution, while identity, overlap, clobber, call, and control-boundary
+   refusals remain. The observed-red ownership/identity contract, the adjacent
+   multi-load and stack-phase controls, and the exact-release Clang O0
+   `call_into_spill` fixture pass. See
+   `results/wp3-stable-frame-address-expression-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
