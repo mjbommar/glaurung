@@ -2306,6 +2306,16 @@ provenance through lowering.
   existing failure: redundant parameter spill/reload reconstruction prevents
   `arm_hf_callee(x, y)`. That larger value/storage-identity repair remains
   open. See `results/wp3-declared-float-call-expression-origins.md`.
+  Commit `025264fd` completes the adjacent named parameter-home expression
+  consumer migration: attributed promoted-slot addresses, source parameters,
+  aliases, and self-stores now participate in the same typed-identity and
+  symmetric-reaching proof as plain expressions. The observed-red ownership
+  contract and all five parameter-spill tests pass. The exact release ARM
+  hard-float call remains red with unchanged `local_c`/union output, proving
+  that wrapper transparency was necessary but not sufficient; debug-local
+  protection, float bit-carrier compatibility, and the reaching refusal must
+  now be distinguished. See
+  `results/wp3-parameter-spill-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
