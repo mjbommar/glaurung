@@ -1163,7 +1163,7 @@ def test_real_direct_callee_pointer_type_refines_forwarding_caller_parameter():
     decompiled = D.decompiled_c(binary, caller_va)
 
     assert decompiled is not None
-    assert "forward_pointer(int * arg0)" in decompiled, decompiled
+    assert "forward_pointer(int *arg0)" in decompiled, decompiled
     assert "arg1" not in decompiled, decompiled
     assert "read_first(arg0)" in decompiled, decompiled
 

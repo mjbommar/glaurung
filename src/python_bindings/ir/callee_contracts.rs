@@ -545,6 +545,47 @@ pub(super) fn refine_passthrough_parameter_hints(
         >,
         mut value: crate::ir::ssa::SsaValue,
     ) -> Option<crate::ir::ssa::SsaValue> {
+        fn exact_reaching_spill_source(
+            function: &crate::ir::types::LlirFunction,
+            ssa: &crate::ir::ssa::SsaInfo,
+            load_at: InstrAddr,
+            load_addr: &crate::ir::types::MemOp,
+        ) -> Option<crate::ir::ssa::SsaValue> {
+            use crate::ir::types::{Op, Value};
+
+            let block = function.blocks.get(load_at.block_idx)?;
+            for store_idx in (0..load_at.instr_idx).rev() {
+                let instruction = block.instrs.get(store_idx)?;
+                match &instruction.op {
+                    Op::Store { addr, src } if addr == load_addr => {
+                        if !matches!(src, Value::Reg(_)) {
+                            return None;
+                        }
+                        let source_use =
+                            usize::from(addr.base.is_some()) + usize::from(addr.index.is_some());
+                        return ssa.use_value(
+                            function,
+                            InstrAddr {
+                                block_idx: load_at.block_idx,
+                                instr_idx: store_idx,
+                            },
+                            source_use,
+                        );
+                    }
+                    // Memory is not in SSA. Any intervening writer makes this
+                    // load/store relation ambiguous, even when its spelling
+                    // appears to use a different address.
+                    Op::Store { .. }
+                    | Op::CondStore { .. }
+                    | Op::Call { .. }
+                    | Op::Intrinsic { .. }
+                    | Op::Unknown { .. } => return None,
+                    _ => {}
+                }
+            }
+            None
+        }
+
         for _ in 0..=definitions.len() {
             if value.version == 0 {
                 return Some(value);
@@ -555,10 +596,13 @@ pub(super) fn refine_passthrough_parameter_hints(
             // address parameter into `char *` even though only the converted
             // call operand has pointer semantics. Only identity copies retain
             // the definition-site type contract.
-            if !matches!(definition.1, Op::Assign { .. }) {
-                return None;
-            }
-            value = ssa.use_value(function, definition.0, 0)?;
+            value = match definition.1 {
+                Op::Assign { .. } => ssa.use_value(function, definition.0, 0)?,
+                Op::Load { addr, .. } => {
+                    exact_reaching_spill_source(function, ssa, definition.0, addr)?
+                }
+                _ => return None,
+            };
         }
         None
     }
@@ -1116,6 +1160,140 @@ fn recover_table_entry_layouts(
 #[cfg(test)]
 mod tests {
     use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority};
+
+    fn passthrough_caller(
+        spill: crate::ir::types::MemOp,
+        load: crate::ir::types::MemOp,
+        between: Vec<crate::ir::types::Op>,
+    ) -> crate::ir::types::LlirFunction {
+        use crate::ir::types::{CallEffects, CallTarget, LlirBlock, LlirInstr, Op, VReg, Value};
+
+        let mut ops = vec![Op::Store {
+            addr: spill,
+            src: Value::Reg(VReg::phys("rdi")),
+        }];
+        ops.extend(between);
+        ops.extend([
+            Op::Load {
+                dst: VReg::phys("rax"),
+                addr: load,
+            },
+            Op::Assign {
+                dst: VReg::phys("rdi"),
+                src: Value::Reg(VReg::phys("rax")),
+            },
+            Op::Call {
+                target: CallTarget::Direct(0x2000),
+                effects: Some(CallEffects {
+                    args: vec![VReg::phys("rdi")],
+                    proven_args: vec![VReg::phys("rdi")],
+                    args_are_exact: true,
+                    ..Default::default()
+                }),
+            },
+            Op::Return,
+        ]);
+        crate::ir::types::LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1014,
+                instrs: ops
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, op)| LlirInstr {
+                        va: 0x1000 + index as u64 * 4,
+                        op,
+                    })
+                    .collect(),
+                succs: Vec::new(),
+            }],
+        }
+    }
+
+    fn stack_slot(disp: i64) -> crate::ir::types::MemOp {
+        crate::ir::types::MemOp {
+            base: Some(crate::ir::types::VReg::phys("rbp")),
+            disp,
+            size: 8,
+            ..Default::default()
+        }
+    }
+
+    fn refine_spilled_passthrough(
+        function: &crate::ir::types::LlirFunction,
+    ) -> crate::ir::types_recover::RecoveredPrototype {
+        use crate::ir::call_args::CallConv;
+
+        let ssa = crate::ir::ssa::compute_ssa(function);
+        let mut prototype = crate::ir::types_recover::recover_prototype(
+            function,
+            &ssa,
+            CallConv::SysVAmd64,
+            &std::collections::HashSet::from([0]),
+        );
+        let mut facts = super::DirectCalleeFacts::default();
+        facts
+            .layouts
+            .insert(0x2000, vec![crate::ir::types::VReg::phys("rdi")]);
+        facts.prototypes.insert(
+            0x2000,
+            CallPrototype {
+                return_type: "int".into(),
+                parameter_types: vec!["int *".into()],
+                variadic: false,
+                authority: CallPrototypeAuthority::Recovered,
+            },
+        );
+        super::refine_passthrough_parameter_hints(&mut prototype, function, &ssa, &facts);
+        prototype
+    }
+
+    #[test]
+    fn exact_same_block_spill_reload_refines_passthrough_parameter() {
+        let slot = stack_slot(-8);
+        let prototype =
+            refine_spilled_passthrough(&passthrough_caller(slot.clone(), slot, Vec::new()));
+
+        assert_eq!(
+            prototype.parameter(0).and_then(|parameter| parameter.hint),
+            Some(crate::ir::types_recover::TypeHint::Pointer { pointee_width: 4 })
+        );
+    }
+
+    #[test]
+    fn intervening_memory_writer_blocks_spill_passthrough_refinement() {
+        use crate::ir::types::{Op, Value};
+
+        let slot = stack_slot(-8);
+        let prototype = refine_spilled_passthrough(&passthrough_caller(
+            slot.clone(),
+            slot,
+            vec![Op::Store {
+                addr: stack_slot(-16),
+                src: Value::Const(0),
+            }],
+        ));
+
+        assert!(!matches!(
+            prototype.parameter(0).and_then(|parameter| parameter.hint),
+            Some(crate::ir::types_recover::TypeHint::Pointer { .. })
+        ));
+    }
+
+    #[test]
+    fn different_spill_slot_blocks_passthrough_refinement() {
+        let prototype = refine_spilled_passthrough(&passthrough_caller(
+            stack_slot(-8),
+            stack_slot(-16),
+            Vec::new(),
+        ));
+
+        assert!(!matches!(
+            prototype.parameter(0).and_then(|parameter| parameter.hint),
+            Some(crate::ir::types_recover::TypeHint::Pointer { .. })
+        ));
+    }
 
     #[test]
     fn declared_scalar_return_repairs_a_body_only_void_guess() {
