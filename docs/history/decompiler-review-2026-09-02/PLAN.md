@@ -3003,6 +3003,13 @@ provenance through lowering.
   observed-red register contract, promoted-local sibling, all 24 select-fold
   tests, and both exact release-built `arith.c:signs` O0/O2 controls pass. See
   `results/wp3-created-select-return-origins.md`.
+  Commit `3e8bc8dc` closes the remaining promoted-local diamond boundary.
+  Origin-wrapped stack-slot addresses now remain eligible for same-local
+  conditional-assignment recovery, while both consumed address owners transfer
+  to the synthesized store and the condition and value owners stay on the
+  recovered select. The observed-red contract, all 24 select-fold tests, and
+  both exact release-built `arith.c:signs` O0/O2 controls pass. See
+  `results/wp3-promoted-diamond-expression-origins.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
