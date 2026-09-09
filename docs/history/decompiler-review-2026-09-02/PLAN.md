@@ -2232,7 +2232,13 @@ provenance through lowering.
   12 string-fold tests pass. A six-cell release-built Hello checkpoint remains
   canonical for AMD64 and AArch64 at O0/O2; ARMv7 recovers the string in both
   cells but remains red for its known O0 frame and O2 signature defects. See
-  `results/wp3-split-string-expression-origins.md`.
+  `results/wp3-split-string-expression-origins.md`. Follow-on `7bee91ff`
+  closes the outer-expression side of that rewrite: when the split addition
+  itself is attributed, its owner and both operand owners flatten onto one
+  canonical literal carrier. The strengthened contract was observed red, all
+  12 string-fold tests pass, and eight exact release-built AArch64/ARMv7 O0/O2
+  Hello cells remain green. See
+  `results/wp3-canonical-split-string-expression-origins.md`.
   Commit `befd81e5` closes resolved GOT-load matching across attributed
   dereferences and slot addresses and transfers their flattened ownership union
   to the target address. The strengthened contract was observed red and all six
