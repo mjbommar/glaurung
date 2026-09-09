@@ -71,7 +71,7 @@ pub(crate) fn declared_int_type_with_identities(
 /// The C type of an expression from recovered types, when determinable. Value-
 /// keyed: types the value the expression denotes, not a fixed register name.
 fn expr_ctype(e: &Expr, tm: Option<&TypeMap>) -> Option<&'static str> {
-    match e {
+    match e.semantic() {
         Expr::Reg(VReg::Phys(n)) => tm
             .and_then(|m| m.get(&VReg::Phys(n.clone())))
             .map(hint_to_ctype),
@@ -86,12 +86,12 @@ fn expr_ctype(e: &Expr, tm: Option<&TypeMap>) -> Option<&'static str> {
             signed: false,
             width: 8,
             expr: inner,
-        } if matches!(inner.as_ref(), Expr::Cast { width: 1..=4, .. }) => {
+        } if matches!(inner.semantic(), Expr::Cast { width: 1..=4, .. }) => {
             let Expr::Cast {
                 signed,
                 width,
                 expr: value,
-            } = inner.as_ref()
+            } = inner.semantic()
             else {
                 unreachable!()
             };
@@ -242,12 +242,12 @@ fn fold_return_abi_extensions_body(
         match statement.semantic_mut() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Return { value: Some(value) } => {
-                let replacement = match value {
+                let replacement = match value.semantic() {
                     Expr::Cast {
                         signed: false,
                         width: 8,
                         expr: inner,
-                    } => match inner.as_ref() {
+                    } => match inner.semantic() {
                         Expr::Cast {
                             signed: false,
                             width,
@@ -256,11 +256,19 @@ fn fold_return_abi_extensions_body(
                             let transported_signed = signed_return
                                 && expr_ctype(expr, Some(tm)).and_then(integer_ctype_signedness)
                                     == Some((true, *width));
-                            Some(if transported_signed {
+                            let replacement = if transported_signed {
                                 expr.as_ref().clone()
                             } else {
                                 inner.as_ref().clone()
-                            })
+                            };
+                            let consumed_origins = value
+                                .origins()
+                                .cloned()
+                                .unwrap_or_default()
+                                .union(&inner.origins().cloned().unwrap_or_default());
+                            Some(replacement.with_optional_origins(
+                                (!consumed_origins.is_empty()).then_some(consumed_origins),
+                            ))
                         }
                         _ => None,
                     },
@@ -305,7 +313,7 @@ fn first_return_value_ctype(
         match s.semantic() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Return { value: Some(e) } => {
-                if skip_nulls == SkipNullReturns::Yes && matches!(e, Expr::Const(0)) {
+                if skip_nulls == SkipNullReturns::Yes && matches!(e.semantic(), Expr::Const(0)) {
                     continue;
                 }
                 if let Some(t) = expr_ctype(e, tm) {
@@ -367,6 +375,7 @@ fn first_return_value_ctype(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ast::OriginSet;
 
     fn type_map(entries: &[(&str, TypeHint)]) -> TypeMap {
         let mut tm = TypeMap::default();
@@ -470,5 +479,64 @@ mod tests {
         .with_origins(crate::ir::ast::OriginSet::one(0x1000))];
 
         assert_eq!(infer_return_ctype(&body, Some(&tm)), "int");
+    }
+
+    #[test]
+    fn attributed_signed_return_transport_folds_and_unions_cast_origins() {
+        let mut function = Function {
+            name: "classify".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Return {
+                value: Some(
+                    Expr::Cast {
+                        signed: false,
+                        width: 8,
+                        expr: Box::new(
+                            Expr::Cast {
+                                signed: false,
+                                width: 4,
+                                expr: Box::new(
+                                    Expr::Reg(VReg::phys("local_4"))
+                                        .with_origins(OriginSet::one(0x1008)),
+                                ),
+                            }
+                            .with_origins(OriginSet::one(0x1004)),
+                        ),
+                    }
+                    .with_origins(OriginSet::one(0x1000)),
+                ),
+            }
+            .with_origins(OriginSet::one(0x100c))],
+        };
+        let tm = type_map(&[
+            (
+                "local_4",
+                TypeHint::Int {
+                    signed: true,
+                    width: 4,
+                },
+            ),
+            (
+                "ret",
+                TypeHint::Int {
+                    signed: true,
+                    width: 4,
+                },
+            ),
+        ]);
+
+        fold_typed_return_abi_extensions(&mut function, &tm);
+
+        let Stmt::Return { value: Some(value) } = function.body[0].semantic() else {
+            panic!("expected attributed return: {function:#?}");
+        };
+        assert!(
+            matches!(value.semantic(), Expr::Reg(register) if register == &VReg::phys("local_4"))
+        );
+        assert_eq!(
+            value.origins(),
+            Some(&OriginSet::from_iter([0x1000, 0x1004, 0x1008]))
+        );
+        assert_eq!(function.body[0].origins(), Some(&OriginSet::one(0x100c)));
     }
 }
