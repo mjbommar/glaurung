@@ -85,22 +85,22 @@ fn pure_address_expression(expr: &Expr) -> bool {
 /// expose the complete address without turning this pass into global copy
 /// propagation.
 fn affine_component_size(expr: &Expr) -> Option<usize> {
-    let size = match expr {
+    let size = match expr.semantic() {
         Expr::Reg(_) | Expr::Const(_) => 1,
         Expr::Bin { op, lhs, rhs } => match op {
             BinOp::Add | BinOp::Sub => 1usize
                 .checked_add(affine_component_size(lhs)?)?
                 .checked_add(affine_component_size(rhs)?)?,
             BinOp::Mul => {
-                if matches!(lhs.as_ref(), Expr::Const(_)) {
+                if matches!(lhs.semantic(), Expr::Const(_)) {
                     2usize.checked_add(affine_component_size(rhs)?)?
-                } else if matches!(rhs.as_ref(), Expr::Const(_)) {
+                } else if matches!(rhs.semantic(), Expr::Const(_)) {
                     2usize.checked_add(affine_component_size(lhs)?)?
                 } else {
                     return None;
                 }
             }
-            BinOp::Shl if matches!(rhs.as_ref(), Expr::Const(_)) => {
+            BinOp::Shl if matches!(rhs.semantic(), Expr::Const(_)) => {
                 2usize.checked_add(affine_component_size(lhs)?)?
             }
             _ => return None,
@@ -405,18 +405,21 @@ fn expand_affine_definition(expr: &mut Expr, components: &HashMap<VReg, Expr>) {
         return;
     }
     match expr {
+        Expr::Origin { expr, .. } => expand_affine_definition(expr, components),
         Expr::Bin {
             op: BinOp::Shl,
             lhs,
             rhs,
-        } if matches!(lhs.as_ref(), Expr::Reg(_)) && matches!(rhs.as_ref(), Expr::Const(_)) => {}
+        } if matches!(lhs.semantic(), Expr::Reg(_)) && matches!(rhs.semantic(), Expr::Const(_)) => {
+        }
         Expr::Bin {
             op: BinOp::Mul,
             lhs,
             rhs,
-        } if (matches!(lhs.as_ref(), Expr::Reg(_)) && matches!(rhs.as_ref(), Expr::Const(_)))
-            || (matches!(rhs.as_ref(), Expr::Reg(_)) && matches!(lhs.as_ref(), Expr::Const(_))) => {
-        }
+        } if (matches!(lhs.semantic(), Expr::Reg(_))
+            && matches!(rhs.semantic(), Expr::Const(_)))
+            || (matches!(rhs.semantic(), Expr::Reg(_))
+                && matches!(lhs.semantic(), Expr::Const(_))) => {}
         Expr::Bin { lhs, rhs, .. } => {
             expand_affine_definition(lhs, components);
             expand_affine_definition(rhs, components);
@@ -526,7 +529,7 @@ fn walk(
                 // expanded affine definition for later memory-address uses.
                 let mut expanded_definition = src.clone();
                 expand_affine_definition(&mut expanded_definition, components);
-                let copied_from = match src {
+                let copied_from = match src.semantic() {
                     Expr::Reg(register) if register != dst => Some(register.clone()),
                     _ => None,
                 };

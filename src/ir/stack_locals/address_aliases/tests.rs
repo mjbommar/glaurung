@@ -1,4 +1,5 @@
 use super::*;
+use crate::ir::ast::OriginSet;
 
 fn reg(name: &str) -> VReg {
     VReg::phys(name)
@@ -95,6 +96,54 @@ fn opaque_ssa_stack_address_chain_is_expanded_by_identity() {
         assert!(
             !contains_register(loaded, transient),
             "opaque affine component survived in {loaded:#?}"
+        );
+    }
+    assert!(contains_register(loaded, &reg("fp")), "{loaded:#?}");
+    assert!(contains_register(loaded, &reg("side")), "{loaded:#?}");
+}
+
+#[test]
+fn attributed_ssa_stack_address_chain_is_expanded_by_identity() {
+    let shift = reg("opaque_shift");
+    let offset = reg("opaque_offset");
+    let address = reg("opaque_address");
+    let mut body = vec![
+        Stmt::Label(0x59c),
+        assign(
+            "opaque_shift",
+            bin(BinOp::Shl, Expr::Reg(reg("side")), Expr::Const(2))
+                .with_origins(OriginSet::one(0x5a0)),
+        ),
+        assign(
+            "opaque_offset",
+            bin(BinOp::Sub, Expr::Reg(shift.clone()), Expr::Const(4))
+                .with_origins(OriginSet::one(0x5a4)),
+        ),
+        assign(
+            "opaque_address",
+            bin(BinOp::Add, Expr::Reg(offset.clone()), Expr::Reg(reg("fp")))
+                .with_origins(OriginSet::one(0x5a8)),
+        ),
+        load_through("opaque_address", -132),
+    ];
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
+    for (register, version) in [(&shift, 38), (&offset, 39), (&address, 40)] {
+        identities.record(
+            register.clone(),
+            crate::ir::ssa::SsaValue {
+                base: reg("r3"),
+                version,
+            },
+        );
+    }
+
+    expand_with_identities(&mut body, arm_context(), Some(&identities));
+
+    let loaded = loaded_address(&body);
+    for transient in [&shift, &offset, &address] {
+        assert!(
+            !contains_register(loaded, transient),
+            "attributed affine component survived in {loaded:#?}"
         );
     }
     assert!(contains_register(loaded, &reg("fp")), "{loaded:#?}");
