@@ -60,6 +60,20 @@ use coalesce::{coalesce_phi_copies_with_definition_sites, DefinitionWidthsBySite
 use tagging::{tag_op, tag_phys, VnCtx};
 use temp_remap::build_temp_remap;
 
+/// Deterministic opaque identity assigned to one SSA value on first encounter.
+///
+/// The numeric payload has no register, ABI, or presentation meaning. It is a
+/// migration bridge toward representing semantic values directly instead of
+/// encoding `register#version` in a `VReg::Phys` string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct ValueId(u32);
+
+impl ValueId {
+    pub(crate) fn index(self) -> u32 {
+        self.0
+    }
+}
+
 /// Exact SSA identities carried beside value-numbered LLIR and its lowered AST.
 ///
 /// A rendered variable may represent several non-interfering SSA values after
@@ -69,6 +83,8 @@ use temp_remap::build_temp_remap;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ValueIdentities {
     by_numbered_value: HashMap<VReg, BTreeSet<SsaValue>>,
+    value_id_by_ssa: HashMap<SsaValue, ValueId>,
+    next_value_id: u32,
     physical_bases_by_value: HashMap<VReg, BTreeSet<String>>,
     parameter_slots_by_value: HashMap<VReg, BTreeSet<usize>>,
     result_roles: HashSet<VReg>,
@@ -88,6 +104,20 @@ impl ValueIdentities {
     /// Return every SSA identity represented by a coalesced numbered value.
     pub fn candidates(&self, value: &VReg) -> Option<&BTreeSet<SsaValue>> {
         self.by_numbered_value.get(value)
+    }
+
+    /// Return the sole opaque value identity represented by `value`.
+    pub(crate) fn exact_value_id(&self, value: &VReg) -> Option<ValueId> {
+        self.value_id_by_ssa.get(self.exact(value)?).copied()
+    }
+
+    /// Return every opaque value identity represented by a coalesced value.
+    pub(crate) fn value_ids(&self, value: &VReg) -> Option<BTreeSet<ValueId>> {
+        let candidates = self.candidates(value)?;
+        candidates
+            .iter()
+            .map(|identity| self.value_id_by_ssa.get(identity).copied())
+            .collect()
     }
 
     /// Return the sole canonical machine-storage base represented by `value`.
@@ -177,6 +207,16 @@ impl ValueIdentities {
     }
 
     pub(crate) fn record(&mut self, numbered: VReg, identity: SsaValue) {
+        self.value_id_by_ssa
+            .entry(identity.clone())
+            .or_insert_with(|| {
+                let value_id = ValueId(self.next_value_id);
+                self.next_value_id = self
+                    .next_value_id
+                    .checked_add(1)
+                    .expect("opaque SSA value identity space exhausted");
+                value_id
+            });
         if let Some(base) = identity.canonical_physical_base() {
             self.physical_bases_by_value
                 .entry(numbered.clone())
@@ -874,6 +914,17 @@ mod tests {
                 CallConv::SysVAmd64,
                 &[],
             );
+        let (_, _, _, repeated_identities) =
+            value_number_with_parameter_slots_lifetimes_and_identities(
+                &lf,
+                &ssa,
+                CallConv::SysVAmd64,
+                &[],
+            );
+        assert_eq!(
+            identities, repeated_identities,
+            "opaque value IDs must be deterministic across repeated numbering"
+        );
         let ast = crate::ir::ast::lower(
             &numbered,
             &crate::ir::structure::Region::Block(0),
@@ -899,6 +950,7 @@ mod tests {
                 version: 1,
             })
         );
+        assert!(identities.exact_value_id(numbered_use).is_some());
     }
 
     #[test]
@@ -922,7 +974,95 @@ mod tests {
 
         assert_eq!(identities.exact(&numbered), None);
         assert_eq!(identities.candidates(&numbered).map(BTreeSet::len), Some(2));
+        assert_eq!(identities.exact_value_id(&numbered), None);
+        assert_eq!(
+            identities.value_ids(&numbered).map(|ids| ids.len()),
+            Some(2)
+        );
         assert_eq!(identities.unambiguous_physical_base(&numbered), Some("rax"));
+    }
+
+    #[test]
+    fn opaque_value_ids_are_deterministic_and_ignore_display_spelling() {
+        let first = SsaValue {
+            base: VReg::phys("rax"),
+            version: 1,
+        };
+        let second = SsaValue {
+            base: VReg::phys("rdi"),
+            version: 4,
+        };
+        let build = || {
+            let mut identities = ValueIdentities::default();
+            identities.record(VReg::phys("misleading#name"), first.clone());
+            identities.record(VReg::phys("opaque"), second.clone());
+            identities
+        };
+
+        let left = build();
+        let right = build();
+        let left_first = left
+            .exact_value_id(&VReg::phys("misleading#name"))
+            .expect("first value id");
+        let left_second = left
+            .exact_value_id(&VReg::phys("opaque"))
+            .expect("second value id");
+
+        assert_eq!(left_first.index(), 0);
+        assert_eq!(left_second.index(), 1);
+        assert_ne!(left_first, left_second);
+        assert_eq!(
+            right.exact_value_id(&VReg::phys("misleading#name")),
+            Some(left_first)
+        );
+        assert_eq!(
+            right.exact_value_id(&VReg::phys("opaque")),
+            Some(left_second)
+        );
+    }
+
+    #[test]
+    fn opaque_value_ids_follow_coalescing_and_role_projection() {
+        let first_name = VReg::phys("opaque-a");
+        let second_name = VReg::phys("opaque-b");
+        let merged_name = VReg::phys("merged");
+        let mut identities = ValueIdentities::default();
+        identities.record(
+            first_name.clone(),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 1,
+            },
+        );
+        identities.record(
+            second_name.clone(),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 2,
+            },
+        );
+        let first_id = identities.exact_value_id(&first_name).expect("first id");
+        let second_id = identities.exact_value_id(&second_name).expect("second id");
+
+        identities.apply_renames(&HashMap::from([
+            (first_name, merged_name.clone()),
+            (second_name, merged_name.clone()),
+        ]));
+        assert_eq!(
+            identities.value_ids(&merged_name),
+            Some(BTreeSet::from([first_id, second_id]))
+        );
+
+        let projected = identities
+            .with_role_aliases(&HashMap::from([("merged".to_string(), "var0".to_string())]));
+        assert_eq!(
+            projected.value_ids(&VReg::phys("var0")),
+            Some(BTreeSet::from([first_id, second_id]))
+        );
+        assert_eq!(
+            projected.value_ids(&merged_name),
+            Some(BTreeSet::from([first_id, second_id]))
+        );
     }
 
     #[test]
