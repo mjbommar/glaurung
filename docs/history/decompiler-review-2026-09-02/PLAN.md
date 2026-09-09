@@ -2040,6 +2040,13 @@ provenance through lowering.
   `stack_locals` tests pass, and the exact GCC-O0 C++ `mixed_capture` fixture
   remains green after an isolated release rebuild. See
   `results/wp3-late-stack-object-expression-origins.md`.
+  Commit `e8d09ce4` closes the adjacent cdecl32 parameter-home rewrite. A store
+  whose stack address carries its own origin is now recognized through its
+  semantic `Lea`, promoted to the ABI parameter, and replaced by one assignment
+  carrying the union of the statement and address owners. The focused contract
+  was observed red, all 118 owning `stack_locals` tests pass, and the exact i386
+  O0 `cond_side_effect` fixture remains green after an isolated release rebuild.
+  See `results/wp3-parameter-home-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
