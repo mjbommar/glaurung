@@ -355,7 +355,7 @@ pub(super) fn hoist_inline_flag_conds(
         for i in (0..out.len()).rev() {
             match out[i].semantic() {
                 Stmt::Assign { dst, src } if dst == flag => {
-                    if matches!(src, Expr::Cmp { .. }) {
+                    if matches!(src.semantic(), Expr::Cmp { .. }) {
                         let reads: usize = out[i + 1..]
                             .iter()
                             .map(|stmt| count_reg_uses_in_stmt(stmt, flag))
@@ -694,7 +694,7 @@ pub(super) fn extract_cond_and_strip<'a>(
         for i in (0..stmts.len()).rev() {
             if let Stmt::Assign { dst, src } = stmts[i].semantic() {
                 if dst == cond {
-                    if matches!(src, Expr::Cmp { .. }) {
+                    if matches!(src.semantic(), Expr::Cmp { .. }) {
                         // Ensure the flag isn't also read elsewhere in the
                         // remaining body. If it is, leave everything alone
                         // to avoid losing semantics.
@@ -1108,6 +1108,44 @@ mod tests {
         });
         assert!(rendered.contains("if (%take_update)"), "{rendered}");
         assert!(!rendered.contains('?'), "{rendered}");
+    }
+
+    #[test]
+    fn inline_flag_hoist_sees_attributed_comparison_definition() {
+        let comparison_owner = OriginSet::one(0x1000);
+        let branch_owner = OriginSet::one(0x1004);
+        let flag = VReg::phys("predicate");
+        let statements = vec![
+            Stmt::Assign {
+                dst: flag.clone(),
+                src: Expr::Cmp {
+                    op: CmpOp::Eq,
+                    lhs: Box::new(Expr::Reg(VReg::phys("value"))),
+                    rhs: Box::new(Expr::Const(0)),
+                }
+                .with_origins(comparison_owner.clone()),
+            }
+            .with_origins(comparison_owner.clone()),
+            Stmt::If {
+                cond: Expr::Reg(flag),
+                then_body: vec![Stmt::Nop],
+                else_body: None,
+            }
+            .with_origins(branch_owner.clone()),
+        ];
+
+        let hoisted = super::hoist_inline_flag_conds(statements, None);
+
+        assert_eq!(hoisted.len(), 1);
+        let Stmt::If { cond, .. } = hoisted[0].semantic() else {
+            unreachable!()
+        };
+        assert!(matches!(cond.semantic(), Expr::Cmp { op: CmpOp::Eq, .. }));
+        assert_eq!(cond.origins(), Some(&comparison_owner));
+        assert_eq!(
+            hoisted[0].origins(),
+            Some(&comparison_owner.union(&branch_owner))
+        );
     }
 
     #[test]
