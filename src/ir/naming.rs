@@ -252,7 +252,7 @@ pub fn apply_authoritative_local_names(f: &mut Function, source_names: &HashMap<
 /// only, and declines when `i` or `sum` is already in use.
 pub fn apply_canonical_loop_local_names(f: &mut Function) -> HashMap<String, String> {
     fn is_reg(expr: &Expr, name: &str) -> bool {
-        match expr {
+        match expr.semantic() {
             Expr::Reg(VReg::Phys(candidate)) => candidate == name,
             Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => is_reg(expr, name),
             _ => false,
@@ -264,24 +264,28 @@ pub fn apply_canonical_loop_local_names(f: &mut Function) -> HashMap<String, Str
             Stmt::Assign {
                 dst: VReg::Phys(name),
                 src,
-            }
-            | Stmt::Store {
-                addr: Expr::Reg(VReg::Phys(name)),
-                src,
-                ..
             } if crate::ir::types::is_promoted_local_name(name) => Some((name, src)),
+            Stmt::Store { addr, src, .. } => {
+                let Expr::Reg(VReg::Phys(name)) = addr.semantic() else {
+                    return None;
+                };
+                crate::ir::types::is_promoted_local_name(name).then_some((name, src))
+            }
             _ => None,
         }
     }
 
     fn unit_increment(statement: &Stmt, name: &str) -> bool {
-        let Some((dst, Expr::Bin { op, lhs, rhs })) = local_assignment(statement) else {
+        let Some((dst, source)) = local_assignment(statement) else {
+            return false;
+        };
+        let Expr::Bin { op, lhs, rhs } = source.semantic() else {
             return false;
         };
         dst == name
             && *op == crate::ir::types::BinOp::Add
-            && ((is_reg(lhs, name) && matches!(rhs.as_ref(), Expr::Const(1)))
-                || (is_reg(rhs, name) && matches!(lhs.as_ref(), Expr::Const(1))))
+            && ((is_reg(lhs, name) && matches!(rhs.semantic(), Expr::Const(1)))
+                || (is_reg(rhs, name) && matches!(lhs.semantic(), Expr::Const(1))))
     }
 
     fn has_additive_update(body: &[Stmt], name: &str) -> bool {
@@ -297,7 +301,7 @@ pub fn apply_canonical_loop_local_names(f: &mut Function) -> HashMap<String, Str
                         .is_some_and(|body| has_additive_update(body, name))
             }
             _ => local_assignment(statement).is_some_and(|(dst, src)| {
-                matches!(src, Expr::Bin { op: crate::ir::types::BinOp::Add, lhs, rhs }
+                matches!(src.semantic(), Expr::Bin { op: crate::ir::types::BinOp::Add, lhs, rhs }
                     if dst == name && (is_reg(lhs, name) || is_reg(rhs, name)))
             }),
         })
@@ -314,9 +318,12 @@ pub fn apply_canonical_loop_local_names(f: &mut Function) -> HashMap<String, Str
         else {
             continue;
         };
-        let Some((induction, Expr::Const(0))) = local_assignment(init.as_ref()) else {
+        let Some((induction, initial)) = local_assignment(init.as_ref()) else {
             continue;
         };
+        if !matches!(initial.semantic(), Expr::Const(0)) {
+            continue;
+        }
         if !used.contains("i")
             && !roles.values().any(|name| name == "i")
             && unit_increment(step, induction)
@@ -328,9 +335,10 @@ pub fn apply_canonical_loop_local_names(f: &mut Function) -> HashMap<String, Str
             continue;
         }
         if let Some(accumulator) = f.body[..loop_index].iter().rev().find_map(|candidate| {
-            let (name, Expr::Const(0)) = local_assignment(candidate)? else {
+            let (name, initial) = local_assignment(candidate)?;
+            if !matches!(initial.semantic(), Expr::Const(0)) {
                 return None;
-            };
+            }
             (name != induction && has_additive_update(body, name)).then_some(name.to_string())
         }) {
             roles.insert(accumulator, "sum".to_string());
@@ -416,9 +424,11 @@ fn collect_direct_return_carriers(body: &[Stmt], out: &mut Vec<String>) {
     for statement in body {
         match statement.semantic() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
-            Stmt::Return {
-                value: Some(Expr::Reg(VReg::Phys(name))),
-            } => out.push(name.clone()),
+            Stmt::Return { value: Some(value) } => {
+                if let Expr::Reg(VReg::Phys(name)) = value.semantic() {
+                    out.push(name.clone());
+                }
+            }
             Stmt::If {
                 then_body,
                 else_body,
@@ -996,7 +1006,10 @@ mod tests {
                 }
                 .with_origins(crate::ir::ast::OriginSet::one(0x1010)),
                 Stmt::Return {
-                    value: Some(Expr::Reg(reg("xmm0#7"))),
+                    value: Some(
+                        Expr::Reg(reg("xmm0#7"))
+                            .with_origins(crate::ir::ast::OriginSet::one(0x1012)),
+                    ),
                 }
                 .with_origins(crate::ir::ast::OriginSet::one(0x1014)),
             ],
@@ -1008,10 +1021,10 @@ mod tests {
             function.body[0].semantic(),
             Stmt::Assign { dst, .. } if dst == &reg("ret")
         ));
-        assert!(matches!(
-            function.body[1].semantic(),
-            Stmt::Return { value: Some(Expr::Reg(returned)) } if returned == &reg("ret")
-        ));
+        let Stmt::Return { value: Some(value) } = function.body[1].semantic() else {
+            panic!("expected attributed return value");
+        };
+        assert!(matches!(value.semantic(), Expr::Reg(returned) if returned == &reg("ret")));
     }
 
     #[test]
@@ -1502,16 +1515,16 @@ mod tests {
             entry_va: 0x1000,
             body: vec![
                 Stmt::Store {
-                    addr: Expr::Reg(reg("stack_4")),
-                    src: Expr::Const(0),
+                    addr: Expr::Reg(reg("stack_4")).with_origins(OriginSet::one(0x1001)),
+                    src: Expr::Const(0).with_origins(OriginSet::one(0x1002)),
                     size: 4,
                 }
                 .with_origins(accumulator_owner.clone()),
                 Stmt::For {
                     init: Box::new(
                         Stmt::Store {
-                            addr: Expr::Reg(reg("stack_5")),
-                            src: Expr::Const(0),
+                            addr: Expr::Reg(reg("stack_5")).with_origins(OriginSet::one(0x1005)),
+                            src: Expr::Const(0).with_origins(OriginSet::one(0x1006)),
                             size: 4,
                         }
                         .with_origins(init_owner.clone()),
@@ -1523,23 +1536,29 @@ mod tests {
                     },
                     step: Box::new(
                         Stmt::Store {
-                            addr: Expr::Reg(reg("stack_5")),
+                            addr: Expr::Reg(reg("stack_5")).with_origins(OriginSet::one(0x1009)),
                             src: Expr::Bin {
                                 op: crate::ir::types::BinOp::Add,
-                                lhs: Box::new(Expr::Reg(reg("stack_5"))),
-                                rhs: Box::new(Expr::Const(1)),
-                            },
+                                lhs: Box::new(
+                                    Expr::Reg(reg("stack_5")).with_origins(OriginSet::one(0x100a)),
+                                ),
+                                rhs: Box::new(Expr::Const(1).with_origins(OriginSet::one(0x100b))),
+                            }
+                            .with_origins(OriginSet::one(0x100d)),
                             size: 4,
                         }
                         .with_origins(step_owner.clone()),
                     ),
                     body: vec![Stmt::Store {
-                        addr: Expr::Reg(reg("stack_4")),
+                        addr: Expr::Reg(reg("stack_4")).with_origins(OriginSet::one(0x100e)),
                         src: Expr::Bin {
                             op: crate::ir::types::BinOp::Add,
-                            lhs: Box::new(Expr::Reg(reg("stack_4"))),
-                            rhs: Box::new(Expr::Const(7)),
-                        },
+                            lhs: Box::new(
+                                Expr::Reg(reg("stack_4")).with_origins(OriginSet::one(0x100f)),
+                            ),
+                            rhs: Box::new(Expr::Const(7).with_origins(OriginSet::one(0x1010))),
+                        }
+                        .with_origins(OriginSet::one(0x1011)),
                         size: 4,
                     }
                     .with_origins(update_owner.clone())],
