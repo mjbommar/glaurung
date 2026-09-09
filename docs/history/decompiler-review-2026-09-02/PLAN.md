@@ -1028,11 +1028,18 @@ provenance through lowering.
   value set, including definitions, uses, phi results, and phi inputs; value
   numbering now carries those IDs rather than minting them in traversal order.
   This removes the second identity authority needed before migrating the
-  remaining per-value type facts. See
+  remaining per-value type facts. Commit `1e43c1b9`, with shipped-build helper
+  cleanup at `0d9e54ae`, then migrates all persisted `TypeMapV` facts—including
+  ordinary recovered types, parameter refinements, and strong-refinement
+  membership—to `ValueId` keys. The production numbered-type merge queries
+  those facts directly through the ID carried by `ValueIdentities`; semantic
+  `SsaValue` objects remain only for local graph analysis and reverse ABI
+  projection. See
   `results/wp3-multi-output-identities.md` and
   `results/wp3-ast-identity-renames.md`, and
   `results/wp3-opaque-value-identities.md`, and
-  `results/wp3-ssa-owned-value-identities.md`.
+  `results/wp3-ssa-owned-value-identities.md`, and
+  `results/wp3-valued-types-by-value-id.md`.
 - [~] Add a compositional instruction-origin set to expressions/statements;
   unions must be deterministic and deduplicated. `7bea3314` defines the
   canonical set and `59840017` adds transparent statement ownership with
@@ -5145,6 +5152,13 @@ relevant ratchet's accepted-regression record.
    Next migrate `TypeMapV` facts from semantic `SsaValue` keys to snapshot-owned
    `ValueId` keys one bounded fact family at a time; do not introduce another
    allocator or parse numbered display names.
+   Commit `1e43c1b9`, completed by `0d9e54ae`, performs that migration for the
+   complete `TypeMapV` store rather than one presentation-facing subset. All 88
+   owning type-recovery tests and eight adjacent definition-width tests pass.
+   An exact release build retains O2 Hello on x86-64, AArch64, and ARMv7 plus
+   the binary32 sign-bit lane. Next audit the remaining persistent
+   `HashMap<SsaValue, ...>` stores and migrate only those that are cross-pass
+   facts; temporary SSA graph worklists should remain semantic-value keyed.
    Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
