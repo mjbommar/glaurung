@@ -2985,6 +2985,17 @@ provenance through lowering.
   widening tests, eight directly affected GCC/Clang O0/O2 function checks, and
   12 symbol-bearing Hello checks across x86-64, AArch64, and ARMv7 pass against
   an exact release build. See `results/wp3-widen-expression-origins.md`.
+  Commit `2d7f9e6a` closes the guarded-select-return expression boundary.
+  Attributed initializer views, outer predicates, select roots and arms, and
+  terminal result reads now recover the same nested direct-return structure as
+  their unwrapped forms. Surviving expressions keep their owners; consumed
+  select/result roots transfer to replacement statements; and a default view
+  proved zero on the false edge transfers its complete expression-origin tree
+  to the synthesized `0`. Two strengthened contracts were observed red before
+  repair, all 23 select-fold tests pass, and the exact release-built
+  `branches.c:nested` integration test recovers two nested `if`s and three
+  direct returns without a ternary or join temporary. See
+  `results/wp3-guarded-select-expression-origins.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
