@@ -140,11 +140,14 @@ fn prune_one_contradictory_nested_guard(body: &mut Vec<Stmt>) -> bool {
 }
 
 fn exact_pure_complements(left: &Expr, right: &Expr) -> bool {
+    let left = left.semantic();
+    let right = right.semantic();
     matches!(left, Expr::Cmp { .. })
         && matches!(right, Expr::Cmp { .. })
         && is_short_circuit_safe_boolean(left)
         && is_short_circuit_safe_boolean(right)
-        && (negate_cmp_expr(left.clone()) == *right || negate_cmp_expr(right.clone()) == *left)
+        && (negate_cmp_expr(left.clone()).semantic() == right
+            || negate_cmp_expr(right.clone()).semantic() == left)
 }
 
 /// Keep one shared terminal return when an early guard returns the exact same
@@ -2138,12 +2141,13 @@ mod tests {
 
     #[test]
     fn attributed_contradictory_guard_is_pruned_without_losing_outer_origin() {
-        let outer = Expr::Cmp {
+        let comparison = Expr::Cmp {
             op: CmpOp::Ule,
             lhs: Box::new(Expr::Reg(reg("op"))),
             rhs: Box::new(Expr::Const(5)),
         };
-        let inner = super::negate_cmp_expr(outer.clone());
+        let outer = comparison.clone().with_origins(OriginSet::one(0x1502));
+        let inner = super::negate_cmp_expr(comparison).with_origins(OriginSet::one(0x1506));
         let mut function = Function {
             name: "attributed_guarded_table".into(),
             entry_va: 0x1500,
@@ -2179,9 +2183,16 @@ mod tests {
                 .addresses(),
             &[0x1500]
         );
-        let Stmt::If { then_body, .. } = function.body[0].semantic() else {
+        let Stmt::If {
+            cond, then_body, ..
+        } = function.body[0].semantic()
+        else {
             panic!("expected attributed outer guard")
         };
+        assert_eq!(
+            cond.origins().expect("outer condition origin").addresses(),
+            &[0x1502]
+        );
         assert!(
             !then_body
                 .iter()
