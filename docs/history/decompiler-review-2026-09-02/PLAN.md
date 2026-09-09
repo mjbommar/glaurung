@@ -1019,8 +1019,10 @@ provenance through lowering.
   when every represented ID agrees; missing or conflicting evidence declines.
   Commit `90c9ff42` removes the legacy width-map parameter from production
   numbered type recovery and return narrowing: both now enumerate and query
-  identity-owned width facts directly. The broader type system and remaining
-  consumers are still name-keyed. See
+  identity-owned width facts directly. Commit `a525ba21` removes the map from
+  `PreparedLlir`, `PreparedAst`, and DecBench type projection; production
+  renderer state now transports only the identity-owned width facts. The
+  broader type system and remaining consumers are still name-keyed. See
   `results/wp3-multi-output-identities.md` and
   `results/wp3-ast-identity-renames.md`, and
   `results/wp3-opaque-value-identities.md`.
@@ -3635,8 +3637,9 @@ while keeping machine width as truth.
 - [~] Key type facts by stable value identity from WP3. Commit `d1eec606`
   migrates exact definition widths and their production declaration merge;
   `90c9ff42` removes the name-keyed width input from numbered type recovery and
-  return narrowing. General type facts, constraints, and inferred roles remain
-  to migrate. See
+  return narrowing, and `a525ba21` removes it from prepared pipeline state and
+  DecBench type projection. General type facts, constraints, and inferred roles
+  remain to migrate. See
   `results/wp3-stable-definition-widths.md`.
 - [ ] Split generated type/return reports by C vs Rust before judging movement.
 
@@ -5121,9 +5124,14 @@ relevant ratchet's accepted-regression record.
    numbered type recovery and return narrowing now enumerate stable values and
    query their joined `ValueId` widths directly. The same focused width tests,
    six O0/O2 cross-architecture Hello cells, and GCC-O2 binary32 sign-bit lane
-   pass on an exact clean release build. The name-keyed map remains in the
-   prepared pipeline only for the DecBench role-projection compatibility seam
-   and value-numbering/coalescing internals.
+   pass on an exact clean release build.
+   Commit `a525ba21` then deletes the obsolete name-keyed width transport from
+   both prepared pipeline stages and makes DecBench role projection enumerate
+   role names against identity-owned facts. The 25 type-map, eight width, and
+   two pass-order tests pass. An exact clean release build retains the three
+   selected O2 Hello cells across x86-64, ARMv7, and AArch64 plus the GCC-O2
+   binary32 sign-bit lane. The name-keyed map is now confined to value
+   numbering/coalescing internals and test-only no-sidecar compatibility.
    Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.

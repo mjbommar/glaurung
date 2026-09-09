@@ -82,3 +82,23 @@ AArch64, and ARMv7, as did
 `174_float_compare_classify:gcc:O2:sign_bit_of_binary32`. No broad suite or
 corpus ran. The detached worktree was removed and the main editable package was
 restored.
+
+## Follow-on: remove prepared-pipeline width transport
+
+Commit `a525ba21` removes the name-keyed width map from `PreparedLlir` and
+`PreparedAst`. DecBench type projection now enumerates the exact role map and
+queries each storage through `ValueIdentities`; it no longer needs a parallel
+width map to discover candidate values. The name-keyed representation is now
+confined to value-numbering/phi-coalescing internals and test-only no-sidecar
+compatibility contracts.
+
+Focused validation passed all 25 type-map tests, eight definition-width tests,
+and two AST pass-order tests. A detached clean worktree at `a525ba21` produced
+a fresh release extension with SHA-256
+`68c36f0e42f70772759bd34d9586009000ea438be7047cb205fb17680795f1ea`.
+Three symbols/PIE GCC-O2 canonical Hello cells passed across x86-64, AArch64,
+and ARMv7, as did
+`174_float_compare_classify:gcc:O2:sign_bit_of_binary32`. The immediately prior
+commit already covered the matching O0 cells, so this transport-only follow-on
+did not repeat them or run a broad suite or corpus. The detached worktree was
+removed and the main editable package was restored.
