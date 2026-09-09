@@ -2229,7 +2229,13 @@ provenance through lowering.
   throw/try/catch surface, so resolved exception values become readable
   literals rather than raw addresses. Its observed-red contract, all 13
   string-fold tests, and the same two exact-release Hello controls pass. See
-  `results/wp3-exception-string-folding.md`.
+  `results/wp3-exception-string-folding.md`. Commit `34d25589` closes the next
+  exception-path omission in expression reconstruction. Temporaries defined
+  and immediately consumed by a throw now inline inside try/catch bodies, with
+  the same sole-use and adjacency proof and complete definition/use/statement
+  ownership transfer as ordinary bodies. Its observed-red contract, all 13
+  reconstruction tests, and four exact release-built `classify` lanes pass.
+  See `results/wp3-exception-expression-reconstruction.md`.
   Commit `54ff918b` closes that boundary for authoritative character-pointer
   calls: attributed named targets still select their call contract, and
   attributed constant arguments fold to string literals without losing their
