@@ -95,11 +95,14 @@ fn collapse_prologue(
 
     for (i, s) in body.iter().enumerate() {
         match s.semantic() {
-            Stmt::Store {
-                addr: Expr::Reg(slot @ VReg::Phys(_)),
-                src: Expr::Reg(VReg::Phys(reg)),
-                ..
-            } if is_promoted_stack_object(slot, identities) => {
+            Stmt::Store { addr, src, .. }
+                if matches!(addr.semantic(), Expr::Reg(slot @ VReg::Phys(_))
+                    if is_promoted_stack_object(slot, identities))
+                    && matches!(src.semantic(), Expr::Reg(VReg::Phys(_))) =>
+            {
+                let Expr::Reg(VReg::Phys(reg)) = src.semantic() else {
+                    unreachable!("guard established physical saved register")
+                };
                 if reg == "fp" || reg == "x29" {
                     saw_fp_save = true;
                 } else if reg == "lr" || reg == "x30" {
@@ -115,33 +118,38 @@ fn collapse_prologue(
             }
             // `sp -= N` or `sp += -N` (the lifter sometimes emits Add with
             // a negative constant for the pre-indexed writeback).
-            Stmt::Assign {
-                dst,
-                src: Expr::Bin { op, lhs, rhs },
-            } if is_sp(dst)
-                && matches!(lhs.as_ref(), Expr::Reg(r) if r == dst)
-                && matches!(rhs.as_ref(), Expr::Const(_)) =>
-            {
-                if let Expr::Const(n) = rhs.as_ref() {
-                    let delta = match op {
-                        BinOp::Sub if *n > 0 => Some(*n),
-                        BinOp::Add if *n < 0 => Some(-*n),
-                        _ => None,
-                    };
-                    if let Some(d) = delta {
-                        sp_adjust = Some(d);
-                        end = i + 1;
-                        continue;
-                    }
+            Stmt::Assign { dst, src } if is_sp(dst) => {
+                let Expr::Bin { op, lhs, rhs } = src.semantic() else {
+                    break;
+                };
+                if !matches!(lhs.semantic(), Expr::Reg(r) if r == dst) {
+                    break;
+                }
+                let Expr::Const(n) = rhs.semantic() else {
+                    break;
+                };
+                let delta = match op {
+                    BinOp::Sub if *n > 0 => Some(*n),
+                    BinOp::Add if *n < 0 => Some(-*n),
+                    _ => None,
+                };
+                if let Some(d) = delta {
+                    sp_adjust = Some(d);
+                    end = i + 1;
+                    continue;
                 }
                 break;
             }
             Stmt::Assign {
                 dst: VReg::Phys(fp),
-                src: Expr::Reg(sp_ref),
-            } if (fp == "fp" || fp == "x29") && is_sp(sp_ref) => {
-                saw_fp_set = true;
-                end = i + 1;
+                src,
+            } if fp == "fp" || fp == "x29" => {
+                if matches!(src.semantic(), Expr::Reg(sp_ref) if is_sp(sp_ref)) {
+                    saw_fp_set = true;
+                    end = i + 1;
+                } else {
+                    break;
+                }
             }
             // Any other op means the prologue run is over.
             _ => break,
@@ -205,15 +213,14 @@ fn collapse_epilogue(
         let mut ret_idx = ret_idx;
         let mut adjustment_origins = None;
         if ret_idx > 0
-            && matches!(
-                body[ret_idx - 1].semantic(),
-                Stmt::Assign {
-                    dst,
-                    src: Expr::Bin { op: BinOp::Add, lhs, rhs },
-                } if is_sp(dst)
-                    && matches!(lhs.as_ref(), Expr::Reg(r) if r == dst)
-                    && matches!(rhs.as_ref(), Expr::Const(k) if *k > 0)
-            )
+            && matches!(body[ret_idx - 1].semantic(), Stmt::Assign { dst, src }
+                if is_sp(dst)
+                    && matches!(src.semantic(), Expr::Bin {
+                        op: BinOp::Add,
+                        lhs,
+                        rhs,
+                    } if matches!(lhs.semantic(), Expr::Reg(r) if r == dst)
+                        && matches!(rhs.semantic(), Expr::Const(k) if *k > 0)))
         {
             adjustment_origins = body[ret_idx - 1].origins().cloned();
             body.remove(ret_idx - 1);
@@ -255,7 +262,7 @@ fn collapse_epilogue(
 }
 
 fn stack_object_at(expr: &Expr, expected_offset: i64) -> Option<&VReg> {
-    match (expr, expected_offset) {
+    match (expr.semantic(), expected_offset) {
         (Expr::StackAddr { object, .. }, 0) => Some(object),
         (
             Expr::Bin {
@@ -264,7 +271,7 @@ fn stack_object_at(expr: &Expr, expected_offset: i64) -> Option<&VReg> {
                 rhs,
             },
             offset,
-        ) if matches!(rhs.as_ref(), Expr::Const(value) if *value == offset) => {
+        ) if matches!(rhs.semantic(), Expr::Const(value) if *value == offset) => {
             stack_object_at(lhs, 0)
         }
         _ => None,
@@ -273,16 +280,16 @@ fn stack_object_at(expr: &Expr, expected_offset: i64) -> Option<&VReg> {
 
 fn frame_record_store<'a>(statement: &'a Stmt, register: &str, offset: i64) -> Option<&'a VReg> {
     match statement.semantic() {
-        Stmt::Store {
-            addr,
-            src: Expr::Reg(VReg::Phys(source)),
-            size: 8,
-        } if source == register
-            || (register == "fp" && source == "x29")
-            || (register == "lr" && source == "x30") =>
-        {
-            stack_object_at(addr, offset)
-        }
+        Stmt::Store { addr, src, size: 8 } => match src.semantic() {
+            Expr::Reg(VReg::Phys(source))
+                if source == register
+                    || (register == "fp" && source == "x29")
+                    || (register == "lr" && source == "x30") =>
+            {
+                stack_object_at(addr, offset)
+            }
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -291,19 +298,20 @@ fn is_stack_restore(
     statement: &Stmt,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> bool {
-    matches!(
-        statement.semantic(),
-        Stmt::Assign {
-            dst: VReg::Phys(_),
-            src: Expr::Reg(source),
-        } if is_promoted_stack_object(source, identities)
-    ) || matches!(
-        statement.semantic(),
-        Stmt::Assign {
-            dst: VReg::Phys(_),
-            src: Expr::Deref { addr, size: 8 },
-        } if stack_object_at(addr, 0).is_some() || stack_object_at(addr, 8).is_some()
-    )
+    let Stmt::Assign {
+        dst: VReg::Phys(_),
+        src,
+    } = statement.semantic()
+    else {
+        return false;
+    };
+    match src.semantic() {
+        Expr::Reg(source) => is_promoted_stack_object(source, identities),
+        Expr::Deref { addr, size: 8 } => {
+            stack_object_at(addr, 0).is_some() || stack_object_at(addr, 8).is_some()
+        }
+        _ => false,
+    }
 }
 
 fn is_promoted_stack_object(
@@ -444,12 +452,31 @@ mod tests {
             name: "main".into(),
             entry_va: 0x1000,
             body: vec![
-                store("stack_0", "fp").with_origins(OriginSet::one(0x1000)),
-                store("stack_1", "lr").with_origins(OriginSet::one(0x1004)),
-                sp_sub(48).with_origins(OriginSet::one(0x1008)),
+                Stmt::Store {
+                    addr: Expr::Reg(reg("stack_0")).with_origins(OriginSet::one(0x2000)),
+                    src: Expr::Reg(reg("fp")).with_origins(OriginSet::one(0x2000)),
+                    size: 8,
+                }
+                .with_origins(OriginSet::one(0x1000)),
+                Stmt::Store {
+                    addr: Expr::Reg(reg("stack_1")).with_origins(OriginSet::one(0x2004)),
+                    src: Expr::Reg(reg("lr")).with_origins(OriginSet::one(0x2004)),
+                    size: 8,
+                }
+                .with_origins(OriginSet::one(0x1004)),
+                Stmt::Assign {
+                    dst: reg("sp"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("sp")).with_origins(OriginSet::one(0x2008))),
+                        rhs: Box::new(Expr::Const(48).with_origins(OriginSet::one(0x2008))),
+                    }
+                    .with_origins(OriginSet::one(0x2008)),
+                }
+                .with_origins(OriginSet::one(0x1008)),
                 Stmt::Assign {
                     dst: reg("fp"),
-                    src: Expr::Reg(reg("sp")),
+                    src: Expr::Reg(reg("sp")).with_origins(OriginSet::one(0x200c)),
                 }
                 .with_origins(OriginSet::one(0x100c)),
                 Stmt::Return { value: None }.with_origins(OriginSet::one(0x1010)),
@@ -680,15 +707,24 @@ mod tests {
             body: vec![
                 Stmt::Assign {
                     dst: reg("fp"),
-                    src: Expr::Reg(reg("stack_0")),
+                    src: Expr::Reg(reg("stack_0")).with_origins(OriginSet::one(0x2010)),
                 }
                 .with_origins(OriginSet::one(0x1010)),
                 Stmt::Assign {
                     dst: reg("lr"),
-                    src: Expr::Reg(reg("stack_1")),
+                    src: Expr::Reg(reg("stack_1")).with_origins(OriginSet::one(0x2014)),
                 }
                 .with_origins(OriginSet::one(0x1014)),
-                sp_add(48).with_origins(OriginSet::one(0x1018)),
+                Stmt::Assign {
+                    dst: reg("sp"),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(reg("sp")).with_origins(OriginSet::one(0x2018))),
+                        rhs: Box::new(Expr::Const(48).with_origins(OriginSet::one(0x2018))),
+                    }
+                    .with_origins(OriginSet::one(0x2018)),
+                }
+                .with_origins(OriginSet::one(0x1018)),
                 Stmt::Return { value: None }.with_origins(OriginSet::one(0x101c)),
             ],
         };
@@ -745,15 +781,20 @@ mod tests {
                     object: frame.clone(),
                     size: 16,
                 }
+                .with_origins(OriginSet::one(0x2000))
             } else {
                 Expr::Bin {
                     op: BinOp::Add,
-                    lhs: Box::new(Expr::StackAddr {
-                        object: frame.clone(),
-                        size: 16,
-                    }),
-                    rhs: Box::new(Expr::Const(offset)),
+                    lhs: Box::new(
+                        Expr::StackAddr {
+                            object: frame.clone(),
+                            size: 16,
+                        }
+                        .with_origins(OriginSet::one(0x2000)),
+                    ),
+                    rhs: Box::new(Expr::Const(offset).with_origins(OriginSet::one(0x2008))),
                 }
+                .with_origins(OriginSet::one(0x2008))
             }
         };
         let mut f = Function {
@@ -762,12 +803,12 @@ mod tests {
             body: vec![
                 Stmt::Store {
                     addr: address(0),
-                    src: Expr::Reg(reg("fp")),
+                    src: Expr::Reg(reg("fp")).with_origins(OriginSet::one(0x2010)),
                     size: 8,
                 },
                 Stmt::Store {
                     addr: address(8),
-                    src: Expr::Reg(reg("lr")),
+                    src: Expr::Reg(reg("lr")).with_origins(OriginSet::one(0x2014)),
                     size: 8,
                 },
                 Stmt::Assign {
@@ -780,14 +821,16 @@ mod tests {
                     src: Expr::Deref {
                         addr: Box::new(address(0)),
                         size: 8,
-                    },
+                    }
+                    .with_origins(OriginSet::one(0x2020)),
                 },
                 Stmt::Assign {
                     dst: reg("lr"),
                     src: Expr::Deref {
                         addr: Box::new(address(8)),
                         size: 8,
-                    },
+                    }
+                    .with_origins(OriginSet::one(0x2024)),
                 },
                 Stmt::Return { value: None },
             ],
