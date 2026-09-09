@@ -542,16 +542,19 @@ fn immediately_returned_register(body: &[Stmt], index: usize) -> Option<VReg> {
 }
 
 fn fold_created_select_return(body: &mut Vec<Stmt>, index: usize) -> bool {
-    let (destination, selected) = match body.get(index).map(Stmt::semantic) {
-        Some(Stmt::Assign {
-            dst,
-            src: selected @ Expr::Select { .. },
-        }) => (dst.clone(), selected.clone()),
-        Some(Stmt::Store {
-            addr: Expr::Reg(dst @ VReg::Phys(name)),
-            src: selected @ Expr::Select { .. },
-            ..
-        }) if is_promoted_local(name) => (dst.clone(), selected.clone()),
+    let (destination, selected, consumed_origins) = match body.get(index).map(Stmt::semantic) {
+        Some(Stmt::Assign { dst, src }) if matches!(src.semantic(), Expr::Select { .. }) => {
+            (dst.clone(), src.clone(), OriginSet::empty())
+        }
+        Some(Stmt::Store { addr, src, .. }) if matches!(src.semantic(), Expr::Select { .. }) => {
+            let Expr::Reg(dst @ VReg::Phys(name)) = addr.semantic() else {
+                return false;
+            };
+            if !is_promoted_local(name) {
+                return false;
+            }
+            (dst.clone(), src.clone(), origins_of_expr(addr))
+        }
         _ => return false,
     };
     let mut return_index = index + 1;
@@ -562,15 +565,21 @@ fn fold_created_select_return(body: &mut Vec<Stmt>, index: usize) -> bool {
         return_index += 1;
     }
     let Some(Stmt::Return {
-        value: Some(Expr::Reg(returned)),
+        value: Some(returned_value),
     }) = body.get(return_index).map(Stmt::semantic)
     else {
+        return false;
+    };
+    let Expr::Reg(returned) = returned_value.semantic() else {
         return false;
     };
     if returned != &destination {
         return false;
     }
-    let origins = origins_of(&body[index]).union(&origins_of(&body[return_index]));
+    let origins = origins_of(&body[index])
+        .union(&origins_of(&body[return_index]))
+        .union(&origins_of_expr(returned_value))
+        .union(&consumed_origins);
     body[return_index] = attach_origins(
         Stmt::Return {
             value: Some(selected),
@@ -1360,28 +1369,73 @@ mod tests {
     #[test]
     fn attributed_created_select_return_unions_both_statements() {
         let selected = Expr::Select {
-            cond: Box::new(Expr::Reg(reg("cond"))),
-            if_true: Box::new(Expr::Const(1)),
-            if_false: Box::new(Expr::Const(2)),
+            cond: Box::new(Expr::Reg(reg("cond")).with_origins(OriginSet::one(0x1308))),
+            if_true: Box::new(Expr::Const(1).with_origins(OriginSet::one(0x130c))),
+            if_false: Box::new(Expr::Const(2).with_origins(OriginSet::one(0x130e))),
             width: 4,
-        };
+        }
+        .with_origins(OriginSet::one(0x1304));
         let mut f = function(vec![
             assign("result", selected).with_origins(OriginSet::one(0x1300)),
-            return_reg("result").with_origins(OriginSet::one(0x1310)),
+            Stmt::Return {
+                value: Some(Expr::Reg(reg("result")).with_origins(OriginSet::one(0x1314))),
+            }
+            .with_origins(OriginSet::one(0x1310)),
         ]);
 
         collapse_assignment_diamonds(&mut f);
 
         assert_eq!(f.body.len(), 1, "{:#?}", f.body);
-        assert!(matches!(
-            f.body[0].semantic(),
-            Stmt::Return {
-                value: Some(Expr::Select { .. })
-            }
-        ));
+        let Stmt::Return {
+            value: Some(selected),
+        } = f.body[0].semantic()
+        else {
+            panic!("expected the folded return: {:#?}", f.body);
+        };
+        assert!(matches!(selected.semantic(), Expr::Select { .. }));
+        assert_eq!(selected.origins(), Some(&OriginSet::one(0x1304)));
         assert_eq!(
             f.body[0].origins(),
-            Some(&OriginSet::from_addresses([0x1300, 0x1310]))
+            Some(&OriginSet::from_addresses([0x1300, 0x1310, 0x1314]))
+        );
+    }
+
+    #[test]
+    fn attributed_promoted_select_return_preserves_consumed_address_owner() {
+        let selected = Expr::Select {
+            cond: Box::new(Expr::Reg(reg("cond"))),
+            if_true: Box::new(Expr::Const(1)),
+            if_false: Box::new(Expr::Const(2)),
+            width: 4,
+        }
+        .with_origins(OriginSet::one(0x1324));
+        let mut f = function(vec![
+            Stmt::Store {
+                addr: Expr::Reg(reg("local_4")).with_origins(OriginSet::one(0x1328)),
+                src: selected,
+                size: 4,
+            }
+            .with_origins(OriginSet::one(0x1320)),
+            Stmt::Return {
+                value: Some(Expr::Reg(reg("local_4")).with_origins(OriginSet::one(0x1334))),
+            }
+            .with_origins(OriginSet::one(0x1330)),
+        ]);
+
+        collapse_assignment_diamonds(&mut f);
+
+        assert_eq!(f.body.len(), 1, "{:#?}", f.body);
+        let Stmt::Return {
+            value: Some(selected),
+        } = f.body[0].semantic()
+        else {
+            panic!("expected the promoted select to fold: {:#?}", f.body);
+        };
+        assert!(matches!(selected.semantic(), Expr::Select { .. }));
+        assert_eq!(selected.origins(), Some(&OriginSet::one(0x1324)));
+        assert_eq!(
+            f.body[0].origins(),
+            Some(&OriginSet::from_addresses([0x1320, 0x1328, 0x1330, 0x1334]))
         );
     }
 
