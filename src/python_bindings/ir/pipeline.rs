@@ -784,17 +784,18 @@ pub(super) fn run_ast_passes(
             )
         );
     }
-    let role_names = pass!(
-        "apply_role_names",
-        crate::ir::naming::apply_role_names_with_identities(
+    let role_names = pass!("apply_role_names", {
+        let role_names = crate::ir::naming::role_names_with_identities(
             f,
             cc,
             param_slots,
             &parameter_roles,
             &stack_facts.parameter_slots,
             value_identities,
-        )
-    );
+        );
+        crate::ir::naming::apply_role_name_mapping(f, &role_names);
+        role_names
+    });
     let named_value_identities = value_identities
         .with_role_aliases_and_parameter_slots(&role_names, param_slots)
         .with_source_parameter_slots(parameter_roles.values().copied());

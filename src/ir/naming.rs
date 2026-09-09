@@ -128,16 +128,36 @@ pub(crate) fn apply_role_names_with_parameter_roles_and_stack_parameters(
     )
 }
 
-/// Apply presentation roles using producer-owned SSA identities.
-pub(crate) fn apply_role_names_with_identities(
+fn apply_role_names_impl(
     f: &mut Function,
+    cc: CallConv,
+    param_slots: &std::collections::HashSet<usize>,
+    parameter_roles: &HashMap<String, usize>,
+    stack_parameter_roles: Option<&HashMap<String, usize>>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> HashMap<String, String> {
+    let role = role_names_impl(
+        f,
+        cc,
+        param_slots,
+        parameter_roles,
+        stack_parameter_roles,
+        identities,
+    );
+    apply_role_name_mapping(f, &role);
+    role
+}
+
+/// Compute presentation aliases without changing semantic AST identities.
+pub(crate) fn role_names_with_identities(
+    f: &Function,
     cc: CallConv,
     param_slots: &std::collections::HashSet<usize>,
     parameter_roles: &HashMap<String, usize>,
     stack_parameter_roles: &HashMap<String, usize>,
     identities: &crate::ir::value_number::ValueIdentities,
 ) -> HashMap<String, String> {
-    apply_role_names_impl(
+    role_names_impl(
         f,
         cc,
         param_slots,
@@ -147,8 +167,13 @@ pub(crate) fn apply_role_names_with_identities(
     )
 }
 
-fn apply_role_names_impl(
-    f: &mut Function,
+/// Apply an already-computed presentation map at the current legacy boundary.
+pub(crate) fn apply_role_name_mapping(f: &mut Function, role: &HashMap<String, String>) {
+    rewrite_body(&mut f.body, role);
+}
+
+fn role_names_impl(
+    f: &Function,
     cc: CallConv,
     param_slots: &std::collections::HashSet<usize>,
     parameter_roles: &HashMap<String, usize>,
@@ -255,7 +280,6 @@ fn apply_role_names_impl(
         assign_var(&name, &mut role);
     }
 
-    rewrite_body(&mut f.body, &role);
     role
 }
 
@@ -1060,14 +1084,20 @@ mod tests {
             },
         );
 
-        apply_role_names_with_identities(
-            &mut function,
+        let before = function.clone();
+        let role_names = role_names_with_identities(
+            &function,
             CallConv::SysVAmd64,
             &std::collections::HashSet::new(),
             &HashMap::new(),
             &HashMap::new(),
             &identities,
         );
+        assert_eq!(
+            function, before,
+            "computing presentation names must not mutate semantic AST identity"
+        );
+        apply_role_name_mapping(&mut function, &role_names);
 
         assert!(matches!(
             &function.body[0],
