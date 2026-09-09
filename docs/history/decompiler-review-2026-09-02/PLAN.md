@@ -5333,6 +5333,16 @@ relevant ratchet's accepted-regression record.
    exact parent build reproduces identically, so it is not attributed to this
    increment and remains in the ARM storage lane. See
    `results/wp3-aapcs-proof-expression-origins.md`.
+   Commit `1366b33a` closes the convention-generic zero-setup forwarding
+   sibling. An attributed named direct callee now retains an otherwise proven
+   untouched leading parameter instead of degrading to an empty argument list;
+   all prior direct-target, first-call, used-result, supported-convention,
+   reachability, and untouched-slot gates remain. Both observed-red SysV and
+   AAPCS contracts, all six forwarding tests, and four focused GCC/Clang,
+   AArch64, and ARMv7 O2 `call_result_drives_branch` cells pass against an
+   exact clean release build. The immediately preceding green six-cell Hello
+   checkpoint was not repeated. See
+   `results/wp3-zero-setup-call-target-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
