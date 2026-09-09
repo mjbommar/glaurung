@@ -172,6 +172,16 @@ pub(crate) fn apply_role_name_mapping(f: &mut Function, role: &HashMap<String, S
     rewrite_body(&mut f.body, role);
 }
 
+/// Build a presentation-only function view while preserving the semantic AST.
+pub(crate) fn role_named_render_view(
+    function: &Function,
+    role: &HashMap<String, String>,
+) -> Function {
+    let mut view = function.clone();
+    apply_role_name_mapping(&mut view, role);
+    view
+}
+
 fn role_names_impl(
     f: &Function,
     cc: CallConv,
@@ -1097,7 +1107,12 @@ mod tests {
             function, before,
             "computing presentation names must not mutate semantic AST identity"
         );
-        apply_role_name_mapping(&mut function, &role_names);
+        let named = role_named_render_view(&function, &role_names);
+        assert_eq!(
+            function, before,
+            "building the named render view must preserve semantic AST identity"
+        );
+        function = named;
 
         assert!(matches!(
             &function.body[0],

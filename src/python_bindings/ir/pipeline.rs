@@ -914,9 +914,6 @@ pub(super) fn finalize_prepared_ast(
     if let Some(field_map) = field_map {
         crate::ir::pdb_fields::annotate_function_fields(&mut prepared.function, field_map);
     }
-    prepared.profiler.measure("apply_role_names", || {
-        crate::ir::naming::apply_role_name_mapping(&mut prepared.function, &prepared.role_names)
-    });
     prepared
 }
 
@@ -1300,11 +1297,14 @@ pub(super) fn render_prepared_ast(
     {
         provenance.push(crate::program::environment::DeclarationSource::Analyst.label());
     }
+    let render_function = prepared.profiler.measure("apply_role_names", || {
+        crate::ir::naming::role_named_render_view(&prepared.function, &prepared.role_names)
+    });
 
     let text = if render_options.style == "decbench" {
         let maps = render_options.types.then(|| {
             super::type_maps::decbench_type_maps(
-                &prepared.function,
+                &render_function,
                 raw,
                 &prepared.numbered,
                 prepared
@@ -1364,7 +1364,7 @@ pub(super) fn render_prepared_ast(
             };
         if render_options.analyst_prototype.is_some() {
             super::record_prototype_conflict_with_candidate(
-                &prepared.function.name,
+                &render_function.name,
                 function_va,
                 crate::program::environment::DeclarationSource::Analyst.label(),
                 declared_render.as_ref(),
@@ -1375,7 +1375,7 @@ pub(super) fn render_prepared_ast(
             );
         }
         super::record_recovered_prototype_conflict(
-            &prepared.function.name,
+            &render_function.name,
             function_va,
             declared_source.label(),
             declared_render.as_ref(),
@@ -1383,7 +1383,7 @@ pub(super) fn render_prepared_ast(
             cc,
         );
         super::decbench_render::decbench_text(
-            &prepared.function,
+            &render_function,
             &prepared.ast_value_identities,
             &mut prepared.profiler,
             prepared.cfg_health,
@@ -1409,7 +1409,7 @@ pub(super) fn render_prepared_ast(
     } else if render_options.style == "c" {
         let body = prepared
             .profiler
-            .measure("render_c", || crate::ir::ast::render_c(&prepared.function));
+            .measure("render_c", || crate::ir::ast::render_c(&render_function));
         match pdb_outer_name {
             Some(name) => format!("// PDB: {name}\n{body}"),
             None => body,
@@ -1430,12 +1430,12 @@ pub(super) fn render_prepared_ast(
             &prepared.value_identities,
         );
         prepared.profiler.measure("render_with_types", || {
-            crate::ir::ast::render_with_types(&prepared.function, &renamed)
+            crate::ir::ast::render_with_types(&render_function, &renamed)
         })
     } else {
         prepared
             .profiler
-            .measure("render", || crate::ir::ast::render(&prepared.function))
+            .measure("render", || crate::ir::ast::render(&render_function))
     };
     let mut line_mappings = if render_options.style == "decbench" {
         crate::ir::ast::take_decbench_line_mappings()
