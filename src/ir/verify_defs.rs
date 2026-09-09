@@ -878,6 +878,11 @@ fn frame_pointer_addresses(body: &[Stmt]) -> BTreeSet<String> {
         }
         match e {
             Expr::Origin { expr, .. } => regs_in(expr, out),
+            Expr::Deref { addr, .. }
+            | Expr::Un { src: addr, .. }
+            | Expr::Cast { expr: addr, .. }
+            | Expr::NumericConvert { expr: addr, .. }
+            | Expr::FunctionTableEntry { index: addr, .. } => regs_in(addr, out),
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
                 regs_in(lhs, out);
                 regs_in(rhs, out);
@@ -892,17 +897,32 @@ fn frame_pointer_addresses(body: &[Stmt]) -> BTreeSet<String> {
                 regs_in(if_true, out);
                 regs_in(if_false, out);
             }
-            Expr::Un { src, .. } => regs_in(src, out),
-            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => regs_in(expr, out),
-            Expr::Deref { addr, .. } => regs_in(addr, out),
-            Expr::Lea { base, index, .. } => {
+            Expr::Call { target, args, .. } => {
+                regs_in(target, out);
+                for argument in args {
+                    regs_in(argument, out);
+                }
+            }
+            Expr::WideArithmetic { args, .. } => {
+                for argument in args {
+                    regs_in(argument, out);
+                }
+            }
+            Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
                 for r in [base, index].into_iter().flatten() {
                     if let Some(n) = declared_machine_register(r) {
                         out.insert(n);
                     }
                 }
             }
-            _ => {}
+            Expr::Reg(_)
+            | Expr::Const(_)
+            | Expr::FloatConst { .. }
+            | Expr::Addr(_)
+            | Expr::Named { .. }
+            | Expr::StringLit { .. }
+            | Expr::StackAddr { .. }
+            | Expr::Unknown(_) => {}
         }
     }
     /// Addresses only: the `addr` of a `Deref`, and any `Lea` (an address being
@@ -914,7 +934,11 @@ fn frame_pointer_addresses(body: &[Stmt]) -> BTreeSet<String> {
                 regs_in(addr, out);
                 scan_expr(addr, out);
             }
-            Expr::Lea { .. } => regs_in(e, out),
+            Expr::Lea { .. } | Expr::PdbFieldAddr { .. } => regs_in(e, out),
+            Expr::FunctionTableEntry { index, .. } => {
+                regs_in(index, out);
+                scan_expr(index, out);
+            }
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
                 scan_expr(lhs, out);
                 scan_expr(rhs, out);
@@ -929,9 +953,29 @@ fn frame_pointer_addresses(body: &[Stmt]) -> BTreeSet<String> {
                 scan_expr(if_true, out);
                 scan_expr(if_false, out);
             }
+            Expr::Call { target, args, .. } => {
+                regs_in(target, out);
+                scan_expr(target, out);
+                for argument in args {
+                    regs_in(argument, out);
+                    scan_expr(argument, out);
+                }
+            }
+            Expr::WideArithmetic { args, .. } => {
+                for argument in args {
+                    scan_expr(argument, out);
+                }
+            }
             Expr::Un { src, .. } => scan_expr(src, out),
             Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => scan_expr(expr, out),
-            _ => {}
+            Expr::Reg(_)
+            | Expr::Const(_)
+            | Expr::FloatConst { .. }
+            | Expr::Addr(_)
+            | Expr::Named { .. }
+            | Expr::StringLit { .. }
+            | Expr::StackAddr { .. }
+            | Expr::Unknown(_) => {}
         }
     }
     fn scan(body: &[Stmt], out: &mut BTreeSet<String>) {
@@ -944,6 +988,7 @@ fn frame_pointer_addresses(body: &[Stmt]) -> BTreeSet<String> {
                     scan_expr(src, out);
                 }
                 Stmt::Call { target, args, .. } => {
+                    regs_in(target, out);
                     scan_expr(target, out);
                     for a in args {
                         // ANY argument mentioning an unassigned frame pointer, not
@@ -958,8 +1003,10 @@ fn frame_pointer_addresses(body: &[Stmt]) -> BTreeSet<String> {
                     }
                 }
                 Stmt::Return { value: Some(e) } => scan_expr(e, out),
-                Stmt::Throw { value } | Stmt::IndirectGoto { target: value } => {
-                    scan_expr(value, out)
+                Stmt::Throw { value } => scan_expr(value, out),
+                Stmt::IndirectGoto { target } => {
+                    regs_in(target, out);
+                    scan_expr(target, out);
                 }
                 Stmt::If {
                     cond,
@@ -2154,6 +2201,36 @@ mod tests {
                 }],
             }],
         }]);
+
+        assert_eq!(
+            check(&f),
+            vec![Violation {
+                name: "rbp".into(),
+                kind: ViolationKind::UninitialisedFramePointer,
+            }]
+        );
+    }
+
+    #[test]
+    fn nested_call_argument_cannot_hide_an_attributed_frame_pointer_address() {
+        let frame_address = Expr::Bin {
+            op: BinOp::Sub,
+            lhs: Box::new(reg("rbp")),
+            rhs: Box::new(Expr::Const(48)),
+        }
+        .with_origins(crate::ir::ast::OriginSet::one(0x1030));
+        let f = func(vec![assign(
+            "var1",
+            Expr::Call {
+                target: Box::new(Expr::Named {
+                    va: 0x2000,
+                    name: "consume".into(),
+                }),
+                args: vec![frame_address],
+                call_spec: None,
+                result_width: Some(8),
+            },
+        )]);
 
         assert_eq!(
             check(&f),
