@@ -5313,6 +5313,15 @@ relevant ratchet's accepted-regression record.
    passes the periodic six-cell GCC symbols/PIE Hello checkpoint across
    x86-64, AArch64, and ARMv7 at O0/O2. See
    `results/wp3-tail-call-expression-origins.md`.
+   Commit `e5fe6588` closes the residual cdecl32 stack-slot and caller-cleanup
+   proof readers. Provenance around `[esp + offset]`, `esp + bytes`, and their
+   operands no longer suppress an otherwise exact outgoing-argument proof or
+   the bounded PIC-normalization scan. The same positive-offset, nonzero-width,
+   exact-stack-identity, adjacent-cleanup, and bounded-scan refusals remain.
+   Both observed-red contracts, all 28 `cdecl32_` tests, and six focused i386
+   O0/O2 call-shape functions pass against an exact clean release build. The
+   immediately preceding green six-cell Hello checkpoint was not repeated. See
+   `results/wp3-cdecl32-proof-expression-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
