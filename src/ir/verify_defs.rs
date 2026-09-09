@@ -306,6 +306,13 @@ fn defs_in(body: &[Stmt], out: &mut BTreeSet<String>, authority: VerificationAut
                     defs_in(d, out, authority);
                 }
             }
+            Stmt::TryCatch { try_body, catches } => {
+                defs_in(try_body, out, authority);
+                for catch in catches {
+                    out.extend(checked_name(&catch.binding, authority));
+                    defs_in(&catch.body, out, authority);
+                }
+            }
             _ => {}
         }
     }
@@ -334,6 +341,12 @@ fn has_unstructured_flow(body: &[Stmt]) -> bool {
         Stmt::Switch { cases, default, .. } => {
             cases.iter().any(|(_, b)| has_unstructured_flow(b))
                 || default.as_deref().is_some_and(has_unstructured_flow)
+        }
+        Stmt::TryCatch { try_body, catches } => {
+            has_unstructured_flow(try_body)
+                || catches
+                    .iter()
+                    .any(|catch| has_unstructured_flow(&catch.body))
         }
         _ => false,
     })
@@ -864,6 +877,7 @@ fn frame_pointer_addresses(body: &[Stmt]) -> BTreeSet<String> {
             out.insert(n);
         }
         match e {
+            Expr::Origin { expr, .. } => regs_in(expr, out),
             Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
                 regs_in(lhs, out);
                 regs_in(rhs, out);
@@ -879,7 +893,7 @@ fn frame_pointer_addresses(body: &[Stmt]) -> BTreeSet<String> {
                 regs_in(if_false, out);
             }
             Expr::Un { src, .. } => regs_in(src, out),
-            Expr::Cast { expr, .. } => regs_in(expr, out),
+            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => regs_in(expr, out),
             Expr::Deref { addr, .. } => regs_in(addr, out),
             Expr::Lea { base, index, .. } => {
                 for r in [base, index].into_iter().flatten() {
@@ -895,6 +909,7 @@ fn frame_pointer_addresses(body: &[Stmt]) -> BTreeSet<String> {
     /// taken, which is how a stack object reaches a callee).
     fn scan_expr(e: &Expr, out: &mut BTreeSet<String>) {
         match e {
+            Expr::Origin { expr, .. } => scan_expr(expr, out),
             Expr::Deref { addr, .. } => {
                 regs_in(addr, out);
                 scan_expr(addr, out);
@@ -915,7 +930,7 @@ fn frame_pointer_addresses(body: &[Stmt]) -> BTreeSet<String> {
                 scan_expr(if_false, out);
             }
             Expr::Un { src, .. } => scan_expr(src, out),
-            Expr::Cast { expr, .. } => scan_expr(expr, out),
+            Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => scan_expr(expr, out),
             _ => {}
         }
     }
@@ -943,6 +958,9 @@ fn frame_pointer_addresses(body: &[Stmt]) -> BTreeSet<String> {
                     }
                 }
                 Stmt::Return { value: Some(e) } => scan_expr(e, out),
+                Stmt::Throw { value } | Stmt::IndirectGoto { target: value } => {
+                    scan_expr(value, out)
+                }
                 Stmt::If {
                     cond,
                     then_body,
@@ -984,6 +1002,12 @@ fn frame_pointer_addresses(body: &[Stmt]) -> BTreeSet<String> {
                     }
                     if let Some(b) = default {
                         scan(b, out);
+                    }
+                }
+                Stmt::TryCatch { try_body, catches } => {
+                    scan(try_body, out);
+                    for catch in catches {
+                        scan(&catch.body, out);
                     }
                 }
                 _ => {}
@@ -1036,6 +1060,12 @@ fn poisoned_defs(body: &[Stmt], out: &mut BTreeSet<String>, authority: Verificat
                 }
                 if let Some(default_body) = default {
                     poisoned_defs(default_body, out, authority);
+                }
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                poisoned_defs(try_body, out, authority);
+                for catch in catches {
+                    poisoned_defs(&catch.body, out, authority);
                 }
             }
             _ => {}
@@ -2044,6 +2074,94 @@ mod tests {
             },
         ]);
         assert_eq!(check(&f), vec![]);
+    }
+
+    #[test]
+    fn definitions_inside_recovered_exception_regions_are_counted() {
+        let f = func(vec![Stmt::TryCatch {
+            try_body: vec![
+                assign("local_c", reg("arg0")),
+                Stmt::Throw {
+                    value: reg("local_c"),
+                },
+            ],
+            catches: vec![crate::ir::ast::CatchClause {
+                type_name: "int".into(),
+                binding: phys("exception_0"),
+                body: vec![
+                    assign("rax_5", reg("exception_0")),
+                    assign("stack_0", reg("rax_5")),
+                    Stmt::Return {
+                        value: Some(reg("stack_0")),
+                    },
+                ],
+            }],
+        }]);
+
+        assert_eq!(check(&f), vec![]);
+    }
+
+    #[test]
+    fn poison_inside_a_recovered_catch_remains_a_verifier_finding() {
+        let f = func(vec![Stmt::TryCatch {
+            try_body: vec![Stmt::Return {
+                value: Some(Expr::Const(0)),
+            }],
+            catches: vec![crate::ir::ast::CatchClause {
+                type_name: "int".into(),
+                binding: phys("exception_0"),
+                body: vec![
+                    assign("local_4", Expr::Unknown("undefined(zf)".into())),
+                    Stmt::Return {
+                        value: Some(reg("local_4")),
+                    },
+                ],
+            }],
+        }]);
+
+        assert_eq!(
+            check(&f),
+            vec![Violation {
+                name: "local_4".into(),
+                kind: ViolationKind::UndefinedValue,
+            }]
+        );
+    }
+
+    #[test]
+    fn attributed_frame_pointer_address_inside_a_catch_remains_a_finding() {
+        let frame_address = Expr::Bin {
+            op: BinOp::Sub,
+            lhs: Box::new(reg("rbp")),
+            rhs: Box::new(Expr::Const(32)),
+        }
+        .with_origins(crate::ir::ast::OriginSet::one(0x1020));
+        let f = func(vec![Stmt::TryCatch {
+            try_body: vec![Stmt::Return {
+                value: Some(Expr::Const(0)),
+            }],
+            catches: vec![crate::ir::ast::CatchClause {
+                type_name: "int".into(),
+                binding: phys("exception_0"),
+                body: vec![Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "consume".into(),
+                    },
+                    args: vec![frame_address],
+                    dst: None,
+                    call_spec: None,
+                }],
+            }],
+        }]);
+
+        assert_eq!(
+            check(&f),
+            vec![Violation {
+                name: "rbp".into(),
+                kind: ViolationKind::UninitialisedFramePointer,
+            }]
+        );
     }
 
     fn violation(name: &str) -> Violation {
