@@ -30,7 +30,12 @@ fn materialize_body(body: &mut [Stmt]) {
         if !false_edge_proves_zero(&body[..index], cond, &destination) {
             continue;
         }
-        let origins = body[index].origins().cloned();
+        let origins = match (body[index].origins(), cond.origins()) {
+            (Some(statement), Some(condition)) => Some(statement.union(condition)),
+            (Some(statement), None) => Some(statement.clone()),
+            (None, Some(condition)) => Some(condition.clone()),
+            (None, None) => None,
+        };
         let Stmt::If { else_body, .. } = body[index].semantic_mut() else {
             unreachable!("guarded_update_destination accepts only if statements");
         };
@@ -106,9 +111,9 @@ fn guarded_update_destination(statement: &Stmt) -> Option<VReg> {
 }
 
 fn strip_integer_views(expression: &Expr) -> &Expr {
-    match expression {
+    match expression.semantic() {
         Expr::Cast { expr, .. } => strip_integer_views(expr),
-        _ => expression,
+        expression => expression,
     }
 }
 
@@ -117,15 +122,15 @@ fn false_edge_proves_zero(prefix: &[Stmt], condition: &Expr, destination: &VReg)
         op: CmpOp::Ne,
         lhs,
         rhs,
-    } = condition
+    } = condition.semantic()
     else {
         return false;
     };
-    let tested = match (lhs.as_ref(), rhs.as_ref()) {
+    let tested = match (lhs.semantic(), rhs.semantic()) {
         (tested, Expr::Const(0)) | (Expr::Const(0), tested) => tested,
         _ => return false,
     };
-    if matches!(tested, Expr::Reg(register) if register == destination) {
+    if matches!(tested.semantic(), Expr::Reg(register) if register == destination) {
         return true;
     }
 
@@ -135,14 +140,16 @@ fn false_edge_proves_zero(prefix: &[Stmt], condition: &Expr, destination: &VReg)
     // the query fails closed instead of pretending the structured AST is SSA.
     for statement in prefix.iter().rev() {
         match statement.semantic() {
-            Stmt::Assign { dst, src } if dst == destination => return src == tested,
+            Stmt::Assign { dst, src } if dst == destination => {
+                return src.semantic() == tested.semantic();
+            }
             Stmt::Call { dst: Some(dst), .. } | Stmt::Pop { target: dst } if dst == destination => {
                 return false;
             }
-            Stmt::Store {
-                addr: Expr::Reg(dst),
-                ..
-            } if dst == destination => return false,
+            Stmt::Store { addr, .. } if matches!(addr.semantic(), Expr::Reg(dst) if dst == destination) =>
+            {
+                return false;
+            }
             Stmt::If { .. }
             | Stmt::While { .. }
             | Stmt::DoWhile { .. }
@@ -259,14 +266,24 @@ mod tests {
     #[test]
     fn attributed_guarded_call_preserves_the_false_edge_proof() {
         let guard_origins = crate::ir::ast::OriginSet::one(0x1004);
+        let condition_origins = crate::ir::ast::OriginSet::one(0x1008);
+        let tested_origins = crate::ir::ast::OriginSet::one(0x100c);
+        let zero_origins = crate::ir::ast::OriginSet::one(0x1010);
+        let copied_origins = crate::ir::ast::OriginSet::one(0x1014);
         let mut f = function(vec![
-            assign("value", Expr::Reg(reg("input")))
-                .with_origins(crate::ir::ast::OriginSet::one(0x1000)),
-            guarded_update(Expr::Cmp {
-                op: CmpOp::Ne,
-                lhs: Box::new(Expr::Reg(reg("value"))),
-                rhs: Box::new(Expr::Const(0)),
-            })
+            assign(
+                "value",
+                Expr::Reg(reg("input")).with_origins(copied_origins),
+            )
+            .with_origins(crate::ir::ast::OriginSet::one(0x1000)),
+            guarded_update(
+                Expr::Cmp {
+                    op: CmpOp::Ne,
+                    lhs: Box::new(Expr::Reg(reg("value")).with_origins(tested_origins)),
+                    rhs: Box::new(Expr::Const(0).with_origins(zero_origins)),
+                }
+                .with_origins(condition_origins.clone()),
+            )
             .with_origins(guard_origins.clone()),
         ]);
 
@@ -281,7 +298,10 @@ mod tests {
         };
         assert_eq!(else_body.len(), 1);
         assert!(matches!(else_body[0].semantic(), Stmt::Assign { .. }));
-        assert_eq!(else_body[0].origins(), Some(&guard_origins));
+        assert_eq!(
+            else_body[0].origins(),
+            Some(&guard_origins.union(&condition_origins))
+        );
     }
 
     #[test]
