@@ -155,3 +155,42 @@ SCOPED: 2 lanes of 838 - no regressions in scope
 
 No full Hello matrix, broad suite, fixture corpus, or DecBench run was needed
 for this bounded ordering change.
+
+## Immutable semantic AST at the renderer boundary
+
+Commit `a15e92a7` completes the production-side separation. Finalization no
+longer applies the role map. The one shared renderer creates a cloned
+`role_named_render_view`, applies `argN`/`ret`/`varN` presentation aliases only
+to that view, and passes the view consistently to typed DecBench, typed C,
+plain C, and diagnostic rendering. `PreparedAst.function` remains in the
+semantic value-identity space before, during, and after rendering.
+
+The naming contract now proves both stages are non-mutating: calculating the
+map preserves the source `Function`, and building the named render view also
+preserves it. The compatibility `apply_role_names*` APIs still mutate their
+explicit caller-owned function, so their eventual deletion remains paired with
+the final `tag_phys` migration.
+
+Focused Rust evidence:
+
+```text
+cargo test --features python-ext --lib ir::naming::tests:: --quiet
+22 passed; 0 failed; 4695 filtered out
+
+cargo test --features python-ext --lib ast_pass_order_ --quiet
+2 passed; 0 failed; 4715 filtered out
+```
+
+A clean detached worktree at `a15e92a7` produced a fresh release extension
+with SHA-256
+`824aae1650659f8a37e491c156a41ec02ab73a1e61ffe885a767163f44fdcca2`.
+The same six selected O2 Hello cells across x86-64, ARMv7, and AArch64 passed,
+and the effect-only-call plus C++ exception lanes remained regression-free.
+The deterministic structured line-mapping test also passed with the exact
+worktree package forced first on `PYTHONPATH` while using the main checkout's
+generated fixture directory.
+
+The first line-mapping invocation inside the detached worktree failed because
+its generated `01_conditional_polarity-gcc-O0.so` fixture was absent. That is an
+infrastructure result and is not counted as product evidence. No broad suite,
+full fixture corpus, full Hello matrix, or DecBench run was performed.

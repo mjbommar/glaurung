@@ -2912,8 +2912,10 @@ provenance through lowering.
   behind naming. Commit `5555d85d` moves the mutation past exception recovery,
   architecture frame cleanup, DWARF local merging, and PDB field annotation as
   well. Every shared semantic AST pass now sees the unrenamed identity space;
-  renderer preparation still consumes the named AST, so deleting the mutation
-  remains open. See
+  commit `a15e92a7` then preserves that semantic AST through rendering and
+  applies roles only to a cloned view inside the one shared renderer. Production
+  naming is now a render projection. The explicitly mutating compatibility APIs
+  remain until the final `tag_phys` migration, so this package stays partial. See
   `results/wp3-return-role-naming-identities.md`.
 
 ### Origin and mapping surface
@@ -5074,6 +5076,13 @@ relevant ratchet's accepted-regression record.
    Hello cells across x86-64, ARMv7, and AArch64 plus the effect-only-call and
    C++ exception lanes. Next make renderer preparation consume the immutable
    map so the AST rewrite itself can be deleted.
+   Commit `a15e92a7` completes that production move: every renderer consumes a
+   named clone while `PreparedAst.function` remains unrenamed. The 22 naming and
+   two ordering tests, six selected cross-architecture Hello cells, two exact
+   decompiler lanes, and deterministic structured line mappings pass on the
+   exact release build. Next remove the mutating compatibility surface together
+   with the final `tag_phys` dependency rather than reintroducing semantic name
+   readers.
    Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
