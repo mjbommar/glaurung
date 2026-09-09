@@ -57,6 +57,13 @@ fn reconstruct_body(stmts: &mut Vec<Stmt>) {
                 None
             }
             Stmt::DoWhile { body, cond } => reconstruct_do_while(body, cond),
+            Stmt::TryCatch { try_body, catches } => {
+                reconstruct_body(try_body);
+                for catch in catches {
+                    reconstruct_body(&mut catch.body);
+                }
+                None
+            }
             _ => None,
         };
         if let Some(origins) = contributing_origins {
@@ -611,6 +618,7 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
             .as_ref()
             .map(|e| count_reg_uses(e, target))
             .unwrap_or(0),
+        Stmt::Throw { value } => count_reg_uses(value, target),
         Stmt::Push { value } => count_reg_uses(value, target),
         Stmt::Switch { discriminant, .. } => count_reg_uses(discriminant, target),
         Stmt::Pop { .. }
@@ -621,7 +629,6 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
         | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_)
-        | Stmt::Throw { .. }
         | Stmt::TryCatch { .. } => 0,
     }
 }
@@ -864,6 +871,7 @@ fn substitute_in_stmt(s: &mut Stmt, target: &VReg, with: &Expr) {
                 substitute_in_expr(e, target, with);
             }
         }
+        Stmt::Throw { value } => substitute_in_expr(value, target, with),
         Stmt::Push { value } => substitute_in_expr(value, target, with),
         Stmt::Switch { discriminant, .. } => substitute_in_expr(discriminant, target, with),
         Stmt::Pop { .. }
@@ -874,7 +882,6 @@ fn substitute_in_stmt(s: &mut Stmt, target: &VReg, with: &Expr) {
         | Stmt::Nop
         | Stmt::Unknown(_)
         | Stmt::Comment(_)
-        | Stmt::Throw { .. }
         | Stmt::TryCatch { .. } => {}
     }
 }
@@ -986,6 +993,58 @@ mod tests {
         assert!(matches!(lhs.semantic(), Expr::Const(7)));
         assert_eq!(lhs.origins(), Some(&OriginSet::one(0x1000)));
         assert!(matches!(rhs.as_ref(), Expr::Const(1)));
+    }
+
+    #[test]
+    fn temporary_immediately_consumed_by_throw_is_reconstructed() {
+        let temporary = VReg::Temp(0);
+        let mut function = Function {
+            name: "throw_value".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::TryCatch {
+                try_body: vec![
+                    Stmt::Assign {
+                        dst: temporary.clone(),
+                        src: Expr::Const(7),
+                    }
+                    .with_origins(OriginSet::one(0x1000)),
+                    Stmt::Throw {
+                        value: Expr::Reg(temporary).with_origins(OriginSet::one(0x1002)),
+                    }
+                    .with_origins(OriginSet::one(0x1004)),
+                ],
+                catches: vec![crate::ir::ast::CatchClause {
+                    type_name: "int".into(),
+                    binding: VReg::phys("caught"),
+                    body: Vec::new(),
+                }],
+            }
+            .with_origins(OriginSet::one(0x0ffc))],
+        };
+
+        reconstruct(&mut function);
+
+        let Stmt::TryCatch { try_body, .. } = function.body[0].semantic() else {
+            panic!("exception shape changed: {function:#?}")
+        };
+        assert_eq!(
+            try_body.len(),
+            1,
+            "temporary definition survived: {try_body:#?}"
+        );
+        let Stmt::Throw { value } = try_body[0].semantic() else {
+            panic!("throw shape changed: {try_body:#?}")
+        };
+        assert!(matches!(value.semantic(), Expr::Const(7)));
+        assert_eq!(
+            value.origins(),
+            Some(&OriginSet::from_iter([0x1000, 0x1002]))
+        );
+        assert_eq!(
+            try_body[0].origins(),
+            Some(&OriginSet::from_iter([0x1000, 0x1004]))
+        );
+        assert_eq!(function.body[0].origins(), Some(&OriginSet::one(0x0ffc)));
     }
 
     #[test]
