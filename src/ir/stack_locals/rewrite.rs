@@ -784,7 +784,7 @@ fn promote_address_taken_stack_object(
     if let Some(object_addr) =
         stack_assignment_object_address(expr, map, sp_delta, ctx, address_defs, false, read_slots)
     {
-        *expr = object_addr;
+        *expr.semantic_mut() = object_addr;
         return;
     }
     // A debug scalar is seeded in CFA/entry-SP coordinates before the body is
@@ -807,7 +807,7 @@ fn promote_address_taken_stack_object(
                     object: VReg::phys(entry.name.clone()),
                     size,
                 };
-                *expr = if relative == 0 {
+                *expr.semantic_mut() = if relative == 0 {
                     object
                 } else {
                     Expr::Bin {
@@ -826,7 +826,7 @@ fn promote_address_taken_stack_object(
     // `rewrite_expr` to promote.  Root it in an already-seeded object before
     // falling back to the constant-address path below.
     if let Some(object_addr) = stack_object_address(expr, 0, map, sp_delta, ctx, address_defs) {
-        *expr = object_addr;
+        *expr.semantic_mut() = object_addr;
         return;
     }
     // An address definition may point inside an object that an earlier call,
@@ -836,7 +836,7 @@ fn promote_address_taken_stack_object(
     if let Some(object_addr) =
         stack_object_constant_address(expr, map, sp_delta, ctx, address_defs, false)
     {
-        *expr = object_addr;
+        *expr.semantic_mut() = object_addr;
         return;
     }
     // `push {r7, lr}` saves the CALLER's frame register, and the alias map is
@@ -851,8 +851,10 @@ fn promote_address_taken_stack_object(
     // proven object — a DWARF aggregate, a seeded partition, an observed run of
     // slots — has run above, so a genuine escape into a known object still
     // resolves at its real extent.
-    let bare_frame_anchor =
-        matches!(expr, Expr::Reg(VReg::Phys(name)) if is_arm_frame_pointer(name, ctx));
+    let bare_frame_anchor = matches!(
+        expr.semantic(),
+        Expr::Reg(VReg::Phys(name)) if is_arm_frame_pointer(name, ctx)
+    );
     let recovered = escaped_stack_address(expr, sp_delta, ctx, address_defs, false);
     let Some((base, disp)) = recovered else {
         return;
@@ -938,7 +940,7 @@ fn promote_address_taken_stack_object(
     // the array to its address and use pointer bits as object contents.
     entry.object_size = Some(entry.object_size.unwrap_or(0).max(size));
     entry.bounded_object |= next_slot_extent.is_some() || key_disp >= 0;
-    *expr = Expr::StackAddr { object, size };
+    *expr.semantic_mut() = Expr::StackAddr { object, size };
 }
 
 /// The parameter a just-promoted store address names, when the store writes an
@@ -979,6 +981,40 @@ fn argument_slot_assignment(
 #[cfg(test)]
 mod parameter_slot_tests {
     use super::*;
+    use crate::ir::ast::OriginSet;
+
+    #[test]
+    fn attributed_arm_frame_anchor_stays_one_word_and_keeps_its_owner() {
+        let owner = OriginSet::one(0x1010);
+        let mut expr = Expr::Reg(VReg::phys("r7")).with_origins(owner.clone());
+        let mut map = HashMap::new();
+        let mut names = SlotNames::default();
+        let ctx = StackContext {
+            cc: Some(CallConv::Arm),
+            rbp_repurposed: false,
+            frame_pointer_established: true,
+            arm_frame_register: Some("r7"),
+            parameter_count: None,
+        };
+        let address_defs = HashMap::from([(VReg::phys("r7"), ("entry_sp".into(), -40))]);
+
+        promote_address_taken_stack_object(
+            &mut expr,
+            &mut map,
+            &mut names,
+            ctx,
+            Some(-40),
+            &address_defs,
+            &HashSet::new(),
+        );
+
+        assert!(matches!(expr.semantic(), Expr::StackAddr { size: 4, .. }));
+        assert_eq!(expr.origins(), Some(&owner));
+        assert_eq!(
+            map.values().next().and_then(|slot| slot.object_size),
+            Some(4)
+        );
+    }
 
     #[test]
     fn argument_assignment_does_not_trust_an_unowned_arg_spelling() {
