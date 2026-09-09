@@ -313,26 +313,36 @@ pub(super) fn hoist_inline_flag_conds(
     stmts: Vec<Stmt>,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Vec<Stmt> {
+    fn flag_condition(condition: &Expr) -> Option<(VReg, bool)> {
+        match condition.semantic() {
+            Expr::Reg(flag) => Some((flag.clone(), false)),
+            Expr::Un { op: UnOp::Not, src } => match src.semantic() {
+                Expr::Reg(flag) => Some((flag.clone(), true)),
+                _ => None,
+            },
+            Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs,
+                rhs,
+            } if matches!(rhs.semantic(), Expr::Const(0)) => match lhs.semantic() {
+                Expr::Reg(flag) => Some((flag.clone(), true)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// Whether `stmt` is one of the four shapes the loop below can rewrite: a
     /// select whose condition is a bare flag, or an `if` on a bare flag, on a
     /// negated bare flag, or on `flag == 0`. Every other statement is pushed
     /// through untouched.
     fn may_hoist(stmt: &Stmt) -> bool {
         match stmt.semantic() {
-            Stmt::Assign {
-                src: Expr::Select { cond, .. },
-                ..
-            } => matches!(cond.as_ref(), Expr::Reg(_)),
-            Stmt::If { cond, .. } => match cond {
-                Expr::Reg(_) => true,
-                Expr::Un { op: UnOp::Not, src } => matches!(src.as_ref(), Expr::Reg(_)),
-                Expr::Cmp {
-                    op: CmpOp::Eq,
-                    lhs,
-                    rhs,
-                } => matches!(lhs.as_ref(), Expr::Reg(_)) && matches!(rhs.as_ref(), Expr::Const(0)),
+            Stmt::Assign { src, .. } => match src.semantic() {
+                Expr::Select { cond, .. } => flag_condition(cond).is_some(),
                 _ => false,
             },
+            Stmt::If { cond, .. } => flag_condition(cond).is_some(),
             _ => false,
         }
     }
@@ -436,67 +446,37 @@ pub(super) fn hoist_inline_flag_conds(
         // Match both `Stmt::If { cond: Reg(flag), .. }` (non-inverted
         // CondJump) and `Stmt::If { cond: Un(Not, Reg(flag)), .. }`
         // (inverted CondJump from JNE / JAE / ...).
-        let (flag, was_inverted, then_body, else_body) = match stmt {
+        let (flag, was_inverted, condition_origins, then_body, else_body) = match stmt {
             Stmt::If {
-                cond: Expr::Reg(flag),
+                cond,
                 then_body,
                 else_body,
-            } => (Some(flag), false, then_body, else_body),
-            Stmt::If {
-                cond: Expr::Un { op: UnOp::Not, src },
-                then_body,
-                else_body,
-            } => match *src {
-                Expr::Reg(flag) => (Some(flag), true, then_body, else_body),
-                other => {
+            } => {
+                let Some((flag, was_inverted)) = flag_condition(&cond) else {
                     out.push(
                         Stmt::If {
-                            cond: Expr::Un {
-                                op: UnOp::Not,
-                                src: Box::new(other),
-                            },
+                            cond,
                             then_body,
                             else_body,
                         }
                         .with_optional_origins(origins),
                     );
                     continue;
-                }
-            },
-            Stmt::If {
-                cond:
-                    Expr::Cmp {
-                        op: CmpOp::Eq,
-                        lhs,
-                        rhs,
-                    },
-                then_body,
-                else_body,
-            } if matches!(rhs.as_ref(), Expr::Const(0)) => match *lhs {
-                Expr::Reg(flag) => (Some(flag), true, then_body, else_body),
-                other => {
-                    out.push(
-                        Stmt::If {
-                            cond: Expr::Cmp {
-                                op: CmpOp::Eq,
-                                lhs: Box::new(other),
-                                rhs,
-                            },
-                            then_body,
-                            else_body,
-                        }
-                        .with_optional_origins(origins),
-                    );
-                    continue;
-                }
-            },
+                };
+                (
+                    flag,
+                    was_inverted,
+                    cond.origins().cloned(),
+                    then_body,
+                    else_body,
+                )
+            }
             stmt => {
                 out.push(stmt.with_optional_origins(origins));
                 continue;
             }
         };
 
-        let flag = flag.expect("Some by match above");
         let hoisted = take_reaching_cmp(&mut out, &flag, identities);
         if let Some((_, contributing)) = &hoisted {
             origins
@@ -513,7 +493,8 @@ pub(super) fn hoist_inline_flag_conds(
                 rhs: Box::new(Expr::Const(0)),
             },
             (None, false) => Expr::Reg(flag),
-        };
+        }
+        .with_optional_origins(condition_origins);
         out.push(
             Stmt::If {
                 cond: cond_expr,
@@ -1113,6 +1094,7 @@ mod tests {
     #[test]
     fn inline_flag_hoist_sees_attributed_comparison_definition() {
         let comparison_owner = OriginSet::one(0x1000);
+        let condition_owner = OriginSet::one(0x1002);
         let branch_owner = OriginSet::one(0x1004);
         let flag = VReg::phys("predicate");
         let statements = vec![
@@ -1127,7 +1109,7 @@ mod tests {
             }
             .with_origins(comparison_owner.clone()),
             Stmt::If {
-                cond: Expr::Reg(flag),
+                cond: Expr::Reg(flag).with_origins(condition_owner.clone()),
                 then_body: vec![Stmt::Nop],
                 else_body: None,
             }
@@ -1141,7 +1123,10 @@ mod tests {
             unreachable!()
         };
         assert!(matches!(cond.semantic(), Expr::Cmp { op: CmpOp::Eq, .. }));
-        assert_eq!(cond.origins(), Some(&comparison_owner));
+        assert_eq!(
+            cond.origins(),
+            Some(&comparison_owner.union(&condition_owner))
+        );
         assert_eq!(
             hoisted[0].origins(),
             Some(&comparison_owner.union(&branch_owner))
