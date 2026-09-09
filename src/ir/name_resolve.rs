@@ -90,6 +90,13 @@ fn resolve_body(body: &mut [Stmt], addr_map: &HashMap<u64, String>) {
                     resolve_body(b, addr_map);
                 }
             }
+            Stmt::Throw { value } => resolve_expr(value, addr_map),
+            Stmt::TryCatch { try_body, catches } => {
+                resolve_body(try_body, addr_map);
+                for catch in catches {
+                    resolve_body(&mut catch.body, addr_map);
+                }
+            }
             Stmt::Pop { .. }
             | Stmt::Goto { .. }
             | Stmt::Label(_)
@@ -97,9 +104,7 @@ fn resolve_body(body: &mut [Stmt], addr_map: &HashMap<u64, String>) {
             | Stmt::Continue
             | Stmt::Nop
             | Stmt::Unknown(_)
-            | Stmt::Comment(_)
-            | Stmt::Throw { .. }
-            | Stmt::TryCatch { .. } => {}
+            | Stmt::Comment(_) => {}
         }
     }
 }
@@ -678,6 +683,55 @@ mod tests {
     use crate::ir::ssa::compute_ssa;
     use crate::ir::structure::recover;
     use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
+
+    #[test]
+    fn exception_expressions_share_the_name_resolution_surface() {
+        let owner = crate::ir::ast::OriginSet::one(0x1000);
+        let mut function = Function {
+            name: "probe".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::TryCatch {
+                try_body: vec![Stmt::Throw {
+                    value: Expr::Addr(0x2000),
+                }],
+                catches: vec![crate::ir::ast::CatchClause {
+                    type_name: "void *".into(),
+                    binding: VReg::phys("caught"),
+                    body: vec![Stmt::Call {
+                        target: Expr::Addr(0x3000),
+                        args: Vec::new(),
+                        dst: None,
+                        call_spec: None,
+                    }],
+                }],
+            }
+            .with_origins(owner.clone())],
+        };
+        let names = HashMap::from([
+            (0x2000, "thrown_object".to_string()),
+            (0x3000, "handle_exception".to_string()),
+        ]);
+
+        resolve_names(&mut function, &names);
+
+        let Stmt::TryCatch { try_body, catches } = function.body[0].semantic() else {
+            panic!("exception shape changed: {function:#?}")
+        };
+        assert!(matches!(
+            try_body.as_slice(),
+            [Stmt::Throw {
+                value: Expr::Named { name, .. }
+            }] if name == "thrown_object"
+        ));
+        assert!(matches!(
+            catches[0].body.as_slice(),
+            [Stmt::Call {
+                target: Expr::Named { name, .. },
+                ..
+            }] if name == "handle_exception"
+        ));
+        assert_eq!(function.body[0].origins(), Some(&owner));
+    }
 
     fn mk_single_block(ops: Vec<Op>) -> LlirFunction {
         LlirFunction {
