@@ -1985,6 +1985,16 @@ provenance through lowering.
   tests pass, the release extension rebuilds, and the single GCC-O0
   `spill_combine` lane retains its green baseline. See
   `results/wp3-structured-reaching-expression-origins.md`.
+  Commit `1cf04dd8` closes the high-variable authoritative-use expression
+  readers. Independently attributed named targets and forwarded register
+  arguments now retain catalog and recovered callee pointer-parameter facts.
+  The strengthened recovered-callee contract was observed red; it and the two
+  adjacent recovered/catalog contracts pass after the repair, followed by a
+  successful release rebuild. The nearest real forwarding-caller test remains
+  red because the production pipeline does not project the required parameter
+  identity; that is recorded as the next identity-authority defect rather than
+  claimed as closure. See
+  `results/wp3-authoritative-pointer-use-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
