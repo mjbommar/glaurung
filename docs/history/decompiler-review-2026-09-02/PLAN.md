@@ -2023,6 +2023,15 @@ provenance through lowering.
   isolated release extension rebuild succeeds, and the exact GCC-O2
   `20_graph_bfs:graph_bfs` fixture remains green. See
   `results/wp3-stack-address-expression-origins.md`.
+  Commit `b0a17c1e` follows the coordinate into the ARM affine-alias expander.
+  Attributed shift/multiply components, displaced components, and copied
+  snapshots now retain the same bounded expansion as their unwrapped forms,
+  while the existing size, SSA-identity, loop-phase, and purity limits remain
+  mandatory. The attributed A32 split-address contract was observed red, all
+  eight owning tests pass, and the exact A32 O0 KMP cell remains green on a
+  clean release build. The periodic eight-cell Hello checkpoint is four green
+  and four known-red; a focused source reversal proves both ARMv7 reds predate
+  this increment. See `results/wp3-affine-stack-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
