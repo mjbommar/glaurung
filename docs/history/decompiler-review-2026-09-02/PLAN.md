@@ -2244,6 +2244,13 @@ provenance through lowering.
   Hello checkpoint is 54 pass / 18 fail: every x86-64 and AArch64 node passes,
   while all failures are the separately tracked ARMv7 frame/argument/string
   debts. See `results/wp3-condition-negation-expression-origins.md`.
+  Commit `7b1d072a` closes the adjacent scored-text select boundary: both C
+  renderers now recognize a safe one-armed select through its expression-origin
+  carrier while retaining the existing eager-evaluation and old-value proofs.
+  The observed-red render contract and all 11 focused condition-lowering tests
+  pass. The exact release-built four-lane GCC/Clang O0/O2
+  `se189_select_one_arm` family remains green. See
+  `results/wp3-one-armed-select-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
