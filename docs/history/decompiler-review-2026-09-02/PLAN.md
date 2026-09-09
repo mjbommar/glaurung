@@ -5660,6 +5660,14 @@ relevant ratchet's accepted-regression record.
    focused identity/refusal tests pass, while exact-release GCC O0/O2
    `call_result_drives_branch` controls remain green and byte-identical to the
    parent. See `results/wp3-coalesced-call-result-identity.md`.
+   Commit `4be3e995` migrates the value-equality proof used by proven vtable
+   tail-call recovery from exact-single-candidate SSA lookup to equality of
+   nonempty stable `ValueId` sets. Legal coalescing can now preserve the proof;
+   different sets and missing evidence still decline, without consulting
+   display spelling. Its observed-red equality/refusal contract, all 16
+   tail-call tests, and the exact-release Rust O2 `rust_dyn_apply` terminal
+   vtable-call control pass. See
+   `results/wp3-coalesced-tail-value-identity.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
