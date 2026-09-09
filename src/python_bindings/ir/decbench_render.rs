@@ -571,6 +571,14 @@ fn decbench_text_with_installed_environment(
             &value_identities,
         )
     );
+    // Handler and throw recovery happen after the ordinary unreachable-tail
+    // cleanup. Reapply that origin-transparent pass now that the exception
+    // regions and their unconditional transfers exist, so a recovered catch
+    // cannot render statements after `return` and a try arm cannot render a
+    // sequential tail after `throw`.
+    pass!("prune_recovered_exception_tails", {
+        crate::ir::label_prune::prune_unreachable_tails(&mut prepared)
+    });
     pass!(
         "prune_unobserved_promoted_object_stores",
         crate::ir::dead_stores::prune_unobserved_promoted_object_stores_with_identities(

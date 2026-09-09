@@ -624,6 +624,12 @@ fn prune_unreachable_body(body: &mut Vec<Stmt>) {
                     prune_unreachable_body(default);
                 }
             }
+            Stmt::TryCatch { try_body, catches } => {
+                prune_unreachable_body(try_body);
+                for catch in catches {
+                    prune_unreachable_body(&mut catch.body);
+                }
+            }
             _ => {}
         }
     }
@@ -644,7 +650,11 @@ fn prune_unreachable_body(body: &mut Vec<Stmt>) {
         }
         if matches!(
             statement.semantic(),
-            Stmt::Return { .. } | Stmt::Goto { .. } | Stmt::IndirectGoto { .. } | Stmt::Break
+            Stmt::Return { .. }
+                | Stmt::Throw { .. }
+                | Stmt::Goto { .. }
+                | Stmt::IndirectGoto { .. }
+                | Stmt::Break
         ) {
             reachable = false;
         }
@@ -1368,6 +1378,58 @@ mod tests {
         );
         assert_eq!(f.body[0].origins(), Some(&OriginSet::one(0x1010)));
         assert_eq!(f.body[1].origins(), Some(&OriginSet::one(0x1018)));
+    }
+
+    #[test]
+    fn attributed_exception_terminators_prune_only_their_unreachable_tails() {
+        let mut f = Function {
+            name: "exception_tails".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::TryCatch {
+                try_body: vec![
+                    Stmt::Throw {
+                        value: Expr::Reg(crate::ir::types::VReg::phys("thrown")),
+                    }
+                    .with_origins(OriginSet::one(0x1010)),
+                    Stmt::Return {
+                        value: Some(Expr::Const(7)),
+                    }
+                    .with_origins(OriginSet::one(0x1014)),
+                ],
+                catches: vec![crate::ir::ast::CatchClause {
+                    type_name: "int".into(),
+                    binding: crate::ir::types::VReg::phys("exception_0"),
+                    body: vec![
+                        Stmt::Return {
+                            value: Some(Expr::Const(9)),
+                        }
+                        .with_origins(OriginSet::one(0x1020)),
+                        Stmt::Assign {
+                            dst: crate::ir::types::VReg::phys("dead"),
+                            src: Expr::Const(11),
+                        }
+                        .with_origins(OriginSet::one(0x1024)),
+                    ],
+                }],
+            }],
+        };
+
+        prune_unreachable_tails(&mut f);
+
+        let Stmt::TryCatch { try_body, catches } = f.body[0].semantic() else {
+            panic!("exception region disappeared: {:#?}", f.body)
+        };
+        assert!(matches!(try_body.as_slice(), [Stmt::Origin { .. }]));
+        assert!(matches!(try_body[0].semantic(), Stmt::Throw { .. }));
+        assert_eq!(try_body[0].origins(), Some(&OriginSet::one(0x1010)));
+        assert!(matches!(catches[0].body.as_slice(), [Stmt::Origin { .. }]));
+        assert!(matches!(
+            catches[0].body[0].semantic(),
+            Stmt::Return {
+                value: Some(Expr::Const(9))
+            }
+        ));
+        assert_eq!(catches[0].body[0].origins(), Some(&OriginSet::one(0x1020)));
     }
 
     #[test]
