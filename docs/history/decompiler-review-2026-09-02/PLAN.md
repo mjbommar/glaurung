@@ -2032,6 +2032,14 @@ provenance through lowering.
   clean release build. The periodic eight-cell Hello checkpoint is four green
   and four known-red; a focused source reversal proves both ARMv7 reds predate
   this increment. See `results/wp3-affine-stack-expression-origins.md`.
+  Commit `0b764bc8` then closes late object reconciliation. Attributed promoted
+  locals used as load or store addresses now become the same `StackAddr` as
+  plain locals while retaining the address owner; a wrapped load address can
+  no longer be recursively rewritten into an erroneous double dereference.
+  The combined load/store contract was observed red, all 117 owning
+  `stack_locals` tests pass, and the exact GCC-O0 C++ `mixed_capture` fixture
+  remains green after an isolated release rebuild. See
+  `results/wp3-late-stack-object-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
