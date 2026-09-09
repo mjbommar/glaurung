@@ -2121,6 +2121,15 @@ provenance through lowering.
   observed red, all six owning tests pass, and the exact AArch64 O2 five-word
   aggregate-return round trip reports no regression after a clean release
   rebuild. See `results/wp3-indirect-result-expression-origins.md`.
+  Commit `1c37e83d` closes the callee bank-return expression surface. Stack
+  object loads and offsets, promoted-scalar forwarding, second-bank evidence,
+  final return validation, and register-bank projection now inspect semantic
+  expressions. A rewritten whole-object return also retains the original
+  returned expression's owner instead of merely matching through it. The
+  stack-return contract was observed red, all 23 owning tests pass, and the
+  exact AArch64 GCC O0 three-float homogeneous-aggregate return lane reports no
+  regression after a clean release rebuild. See
+  `results/wp3-bank-return-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
