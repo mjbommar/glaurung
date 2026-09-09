@@ -64,6 +64,7 @@ impl SsaValue {
 pub(crate) struct ValueId(u32);
 
 impl ValueId {
+    #[cfg(test)]
     pub(crate) fn index(self) -> u32 {
         self.0
     }

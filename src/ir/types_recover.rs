@@ -324,20 +324,22 @@ impl TypeMapV {
             .values_with_ids()
             .map(|(value, id)| (id, value.clone()))
             .collect();
-        let mut map = Self {
+        let map = Self {
             value_ids,
             values_by_id,
             ..Self::default()
         };
         #[cfg(test)]
-        {
+        let map = {
+            let mut map = map;
             map.next_test_value_id = ssa
                 .values_with_ids()
                 .map(|(_, id)| id.index())
                 .max()
                 .and_then(|id| id.checked_add(1))
                 .unwrap_or(0);
-        }
+            map
+        };
         map
     }
 
