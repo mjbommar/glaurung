@@ -107,6 +107,11 @@ impl ValueIdentities {
         self.by_numbered_value.get(value)
     }
 
+    /// Every numbered value for which the pipeline owns an SSA identity.
+    pub(crate) fn numbered_values(&self) -> impl Iterator<Item = &VReg> {
+        self.by_numbered_value.keys()
+    }
+
     /// Return the sole opaque value identity represented by `value`.
     pub(crate) fn exact_value_id(&self, value: &VReg) -> Option<ValueId> {
         self.value_id_by_ssa.get(self.exact(value)?).copied()

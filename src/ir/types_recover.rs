@@ -4970,19 +4970,16 @@ int never_returns(void) { for (;;) {} }
             src: Value::Const(1),
         }]);
         let mut identities = crate::ir::value_number::ValueIdentities::default();
-        identities.record(
-            VReg::phys("opaque_result"),
-            SsaValue {
-                base: VReg::phys("rax"),
-                version: 1,
-            },
-        );
-        let widths = HashMap::from([(VReg::phys("opaque_result"), 4)]);
+        let exact_identity = SsaValue {
+            base: VReg::phys("rax"),
+            version: 1,
+        };
+        identities.record(VReg::phys("opaque_result"), exact_identity.clone());
+        identities.attach_definition_width(&exact_identity, 4);
         let types = recover_types_for_with_identities(
             &exact,
             CallConv::SysVAmd64,
             &identities,
-            &widths,
             &TypeMapV::default(),
         );
         assert_eq!(
@@ -4997,19 +4994,16 @@ int never_returns(void) { for (;;) {} }
             dst: VReg::phys("rax#9"),
             src: Value::Const(1),
         }]);
-        identities.record(
-            VReg::phys("rax#9"),
-            SsaValue {
-                base: VReg::phys("rdi"),
-                version: 9,
-            },
-        );
-        let widths = HashMap::from([(VReg::phys("rax#9"), 4)]);
+        let misleading_identity = SsaValue {
+            base: VReg::phys("rdi"),
+            version: 9,
+        };
+        identities.record(VReg::phys("rax#9"), misleading_identity.clone());
+        identities.attach_definition_width(&misleading_identity, 4);
         let types = recover_types_for_with_identities(
             &misleading,
             CallConv::SysVAmd64,
             &identities,
-            &widths,
             &TypeMapV::default(),
         );
         assert_eq!(
@@ -5031,20 +5025,17 @@ int never_returns(void) { for (;;) {} }
             src: Value::Const(1),
         }]);
         let mut identities = crate::ir::value_number::ValueIdentities::default();
-        identities.record(
-            VReg::phys("opaque_local"),
-            SsaValue {
-                base: VReg::phys("rbx"),
-                version: 2,
-            },
-        );
-        let widths = HashMap::from([(VReg::phys("opaque_local"), 4)]);
+        let identity = SsaValue {
+            base: VReg::phys("rbx"),
+            version: 2,
+        };
+        identities.record(VReg::phys("opaque_local"), identity.clone());
+        identities.attach_definition_width(&identity, 4);
 
         let types = recover_types_for_with_identities(
             &function,
             CallConv::SysVAmd64,
             &identities,
-            &widths,
             &TypeMapV::default(),
         );
 
@@ -5069,7 +5060,7 @@ int never_returns(void) { for (;;) {} }
         }]);
         let ssa = crate::ir::ssa::compute_ssa(&raw);
         let valued_types = recover_types_valued(&raw, &ssa);
-        let (numbered, definition_widths, _, identities) =
+        let (numbered, _, _, identities) =
             crate::ir::value_number::value_number_with_parameter_slots_lifetimes_and_identities(
                 &raw,
                 &ssa,
@@ -5093,7 +5084,6 @@ int never_returns(void) { for (;;) {} }
             &numbered,
             CallConv::SysVAmd64,
             &identities,
-            &definition_widths,
             &valued_types,
         );
 
@@ -5144,7 +5134,6 @@ int never_returns(void) { for (;;) {} }
             &function,
             CallConv::SysVAmd64,
             &identities,
-            &HashMap::new(),
             &valued_types,
         );
 

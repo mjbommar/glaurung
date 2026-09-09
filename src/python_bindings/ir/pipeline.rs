@@ -1419,7 +1419,6 @@ pub(super) fn render_prepared_ast(
             &prepared.numbered,
             cc,
             &prepared.value_identities,
-            &prepared.definition_widths,
             &prepared.valued_types,
         );
         let renamed = super::type_maps::remap_type_map_with_roles(

@@ -376,7 +376,6 @@ fn refine_return_type(
     tm: &mut TypeMap,
     cc: crate::ir::call_args::CallConv,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
-    definition_widths: Option<&std::collections::HashMap<VReg, u8>>,
 ) {
     let ret_names = return_reg_names(cc);
     let mut last_dst: Option<VReg> = None;
@@ -398,8 +397,8 @@ fn refine_return_type(
     let Some(dst) = last_dst else {
         return;
     };
-    let w = definition_widths
-        .and_then(|widths| widths.get(&dst).copied())
+    let w = identities
+        .and_then(|identities| identities.unambiguous_definition_width(&dst))
         .unwrap_or_else(|| reg_width_bytes(&dst));
     if w == 0 || w >= 8 {
         // Full-width (or unknown) last definition: could legitimately be a
@@ -431,7 +430,7 @@ fn refine_return_type(
 /// should prefer this over the bare [`recover_types`].
 pub fn recover_types_for(lf: &LlirFunction, cc: crate::ir::call_args::CallConv) -> TypeMap {
     let mut tm = recover_types(lf);
-    refine_return_type(lf, &mut tm, cc, None, None);
+    refine_return_type(lf, &mut tm, cc, None);
     tm
 }
 
@@ -440,7 +439,6 @@ pub fn recover_types_for_with_identities(
     lf: &LlirFunction,
     cc: crate::ir::call_args::CallConv,
     identities: &crate::ir::value_number::ValueIdentities,
-    definition_widths: &std::collections::HashMap<VReg, u8>,
     valued_types: &super::TypeMapV,
 ) -> TypeMap {
     let mut tm = recover_types_with_identities(lf, identities);
@@ -456,8 +454,11 @@ pub fn recover_types_for_with_identities(
             tm.refine_from_value(value, hint);
         }
     }
-    for (value, &width) in definition_widths {
-        if width == 0 || identities.candidates(value).is_none() {
+    for value in identities.numbered_values() {
+        let Some(width) = identities.unambiguous_definition_width(value) else {
+            continue;
+        };
+        if width == 0 {
             continue;
         }
         let signed = match tm.get(value) {
@@ -466,7 +467,7 @@ pub fn recover_types_for_with_identities(
         };
         tm.upsert(value.clone(), TypeHint::Int { signed, width });
     }
-    refine_return_type(lf, &mut tm, cc, Some(identities), Some(definition_widths));
+    refine_return_type(lf, &mut tm, cc, Some(identities));
     tm
 }
 
