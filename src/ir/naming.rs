@@ -106,7 +106,7 @@ pub fn apply_role_names_with_parameter_roles(
     param_slots: &std::collections::HashSet<usize>,
     parameter_roles: &HashMap<String, usize>,
 ) -> HashMap<String, String> {
-    apply_role_names_impl(f, cc, param_slots, parameter_roles, None)
+    apply_role_names_impl(f, cc, param_slots, parameter_roles, None, None)
 }
 
 /// Apply role names while trusting only stack-parameter identities published
@@ -124,6 +124,26 @@ pub(crate) fn apply_role_names_with_parameter_roles_and_stack_parameters(
         param_slots,
         parameter_roles,
         Some(stack_parameter_roles),
+        None,
+    )
+}
+
+/// Apply presentation roles using producer-owned SSA identities.
+pub(crate) fn apply_role_names_with_identities(
+    f: &mut Function,
+    cc: CallConv,
+    param_slots: &std::collections::HashSet<usize>,
+    parameter_roles: &HashMap<String, usize>,
+    stack_parameter_roles: &HashMap<String, usize>,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> HashMap<String, String> {
+    apply_role_names_impl(
+        f,
+        cc,
+        param_slots,
+        parameter_roles,
+        Some(stack_parameter_roles),
+        Some(identities),
     )
 }
 
@@ -133,6 +153,7 @@ fn apply_role_names_impl(
     param_slots: &std::collections::HashSet<usize>,
     parameter_roles: &HashMap<String, usize>,
     stack_parameter_roles: Option<&HashMap<String, usize>>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> HashMap<String, String> {
     // Build the role map: raw name → friendly name. We build it up-front so
     // that every substitution is consistent across the function.
@@ -166,7 +187,15 @@ fn apply_role_names_impl(
     let mut direct_return_carriers = Vec::new();
     collect_direct_return_carriers(&f.body, &mut direct_return_carriers);
     for name in direct_return_carriers {
-        if crate::ir::abi::is_return_register(cc, &name) {
+        let is_return_storage = identities.map_or_else(
+            || crate::ir::abi::is_return_register(cc, &name),
+            |identities| {
+                identities
+                    .unambiguous_physical_base(&VReg::phys(&name))
+                    .is_some_and(|base| crate::ir::abi::is_return_register(cc, base))
+            },
+        );
+        if is_return_storage {
             role.entry(name).or_insert_with(|| "ret".to_string());
         }
     }
@@ -992,6 +1021,66 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn production_return_role_uses_identity_not_numbered_spelling() {
+        let opaque = reg("opaque_result");
+        let misleading = reg("rax#looks_like_a_result");
+        let mut function = Function {
+            name: "f".into(),
+            entry_va: 0x1010,
+            body: vec![
+                Stmt::Assign {
+                    dst: opaque.clone(),
+                    src: Expr::Const(42),
+                },
+                Stmt::Assign {
+                    dst: misleading.clone(),
+                    src: Expr::Const(7),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(opaque.clone())),
+                },
+            ],
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            opaque,
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 3,
+            },
+        );
+        identities.record(
+            misleading,
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi"),
+                version: 4,
+            },
+        );
+
+        apply_role_names_with_identities(
+            &mut function,
+            CallConv::SysVAmd64,
+            &std::collections::HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &identities,
+        );
+
+        assert!(matches!(
+            &function.body[0],
+            Stmt::Assign { dst, .. } if dst == &reg("ret")
+        ));
+        assert!(matches!(
+            &function.body[1],
+            Stmt::Assign { dst, .. } if dst == &reg("var0")
+        ));
+        assert!(matches!(
+            &function.body[2],
+            Stmt::Return { value: Some(Expr::Reg(value)) } if value == &reg("ret")
+        ));
     }
 
     #[test]

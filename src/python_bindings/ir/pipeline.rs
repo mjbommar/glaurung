@@ -786,12 +786,13 @@ pub(super) fn run_ast_passes(
     }
     let role_names = pass!(
         "apply_role_names",
-        crate::ir::naming::apply_role_names_with_parameter_roles_and_stack_parameters(
+        crate::ir::naming::apply_role_names_with_identities(
             f,
             cc,
             param_slots,
             &parameter_roles,
             &stack_facts.parameter_slots,
+            value_identities,
         )
     );
     let named_value_identities = value_identities
