@@ -2161,6 +2161,14 @@ provenance through lowering.
   strengthened contracts were observed red, all 21 naming tests pass, and the
   four exact Clang/GCC O0/O2 `skip_odd_sum` lanes pass on a clean release
   build. See `results/wp3-naming-expression-origins.md`.
+  Commit `e72a8d77` next closes readonly scalar/table folding across attributed
+  dereferences, addresses, casts, constants, scaled indices, and range guards.
+  Synthesized constants and select trees carry the flattened union of consumed
+  expression owners. Both strengthened contracts were observed red, all 10
+  readonly-fold tests pass, and the directly owning AArch64 optimized readonly
+  switch round trip is green after a clean release build. The sampled AMD64
+  non-PIE Hello cells remain known-red at their separate direct-address
+  resolution boundary. See `results/wp3-readonly-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
