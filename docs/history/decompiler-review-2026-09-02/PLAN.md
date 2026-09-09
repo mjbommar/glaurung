@@ -2272,6 +2272,16 @@ provenance through lowering.
   owning GCC/Clang O0/O2 execution cells, and the periodic six-cell
   x86-64/AArch64/ARMv7 O0/O2 Hello checkpoint pass on the exact release build.
   See `results/wp3-catch-local-dead-copies.md`.
+  Commit `84771886` then makes the existing origin-transparent unreachable-tail
+  pass enter recovered try/catch bodies, recognize `throw` as an unconditional
+  terminator, and rerun at the explicit post-recovery production boundary. Its
+  red-first attributed contract and all 21 owning tests pass. All four directly
+  owning exception execution cells, the pipeline-profile transparency check,
+  and the periodic six-cell cross-architecture Hello checkpoint pass on the
+  exact release build. Direct GCC-O2 output loses the impossible second return
+  after the catch return, and its verifier count falls from five undefined reads
+  to three; audit those remaining exception-region identity/dataflow findings
+  next. See `results/wp3-exception-unreachable-tails.md`.
   Commit `54ff918b` closes that boundary for authoritative character-pointer
   calls: attributed named targets still select their call contract, and
   attributed constant arguments fold to string literals without losing their
