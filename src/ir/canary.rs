@@ -146,13 +146,11 @@ fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
         let structured_failure = matches!(
             body[i].semantic(),
             Stmt::If {
-                cond: cond @ Expr::Cmp {
-                    op: crate::ir::types::CmpOp::Ne,
-                    ..
-                },
+                cond,
                 then_body,
                 else_body: None,
-            } if then_body.len() == 1
+            } if matches!(cond.semantic(), Expr::Cmp { op: crate::ir::types::CmpOp::Ne, .. })
+                && then_body.len() == 1
                 && is_stack_chk_fail_call(&then_body[0])
                 && expr_mentions_slot(cond, slot)
         );
@@ -176,14 +174,16 @@ fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
         let structured_success = if i + 1 < body.len() && is_stack_chk_fail_call(&body[i + 1]) {
             match body[i].semantic() {
                 Stmt::If {
-                    cond:
-                        cond @ Expr::Cmp {
-                            op: crate::ir::types::CmpOp::Eq,
-                            ..
-                        },
+                    cond,
                     then_body,
                     else_body: None,
-                } if !then_body.is_empty()
+                } if matches!(
+                    cond.semantic(),
+                    Expr::Cmp {
+                        op: crate::ir::types::CmpOp::Eq,
+                        ..
+                    }
+                ) && !then_body.is_empty()
                     && matches!(
                         then_body.last().map(Stmt::semantic),
                         Some(Stmt::Return { .. })
@@ -199,7 +199,7 @@ fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
             None
         };
         if let Some(success_body) = structured_success {
-            let origins = own_origins(&body[i]).union(&origins_in_tree(&body[i + 1]));
+            let origins = origins_in_tree(&body[i]).union(&origins_in_tree(&body[i + 1]));
             body.splice(
                 i..=i + 1,
                 std::iter::once(comment_with_origins("stack-canary check", origins))
@@ -240,8 +240,11 @@ fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
         let reload = match body[i].semantic() {
             Stmt::Assign {
                 dst: crate::ir::types::VReg::Phys(dst_name),
-                src: Expr::Reg(crate::ir::types::VReg::Phys(s)),
-            } if s == slot => Some(dst_name.clone()),
+                src,
+            } => match src.semantic() {
+                Expr::Reg(crate::ir::types::VReg::Phys(s)) if s == slot => Some(dst_name.clone()),
+                _ => None,
+            },
             _ => None,
         };
         let Some(reloaded_reg) = reload else {
@@ -256,11 +259,13 @@ fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
         let mut end = i + 1;
         let has_compare_step = matches!(
             body[end].semantic(),
-            Stmt::Assign {
-                dst: crate::ir::types::VReg::Phys(d),
-                src: Expr::Bin { lhs, rhs, .. },
-            } if d == &reloaded_reg
-                && (expr_mentions_guard(lhs) || expr_mentions_guard(rhs))
+            Stmt::Assign { dst: crate::ir::types::VReg::Phys(d), src }
+                if d == &reloaded_reg
+                    && matches!(
+                        src.semantic(),
+                        Expr::Bin { lhs, rhs, .. }
+                            if expr_mentions_guard(lhs) || expr_mentions_guard(rhs)
+                    )
         );
         if has_compare_step {
             end += 1;
@@ -294,17 +299,14 @@ fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
 }
 
 fn is_stack_chk_fail_call(stmt: &Stmt) -> bool {
-    matches!(
-        stmt.semantic(),
-        Stmt::Call {
-            target: Expr::Named { name, .. },
-            ..
-        } if name.split('@').next() == Some("__stack_chk_fail")
-    )
+    let Stmt::Call { target, .. } = stmt.semantic() else {
+        return false;
+    };
+    matches!(target.semantic(), Expr::Named { name, .. } if name.split('@').next() == Some("__stack_chk_fail"))
 }
 
 fn expr_mentions_slot(e: &Expr, slot: &str) -> bool {
-    match e {
+    match e.semantic() {
         Expr::Reg(crate::ir::types::VReg::Phys(name)) => name == slot,
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             expr_mentions_slot(lhs, slot) || expr_mentions_slot(rhs, slot)
@@ -332,12 +334,12 @@ fn expr_mentions_canary_marker(e: &Expr) -> bool {
     // Any of the per-ABI guard displacements, not just x86-64's `0x28` — the
     // caller has already proved the expression mentions the canary save slot,
     // which is what keeps this otherwise broad constant match safe.
-    if matches!(e, Expr::Const(c) if CANARY_TLS_SLOTS.iter().any(|(_, off)| off == c))
+    if matches!(e.semantic(), Expr::Const(c) if CANARY_TLS_SLOTS.iter().any(|(_, off)| off == c))
         || expr_mentions_guard(e)
     {
         return true;
     }
-    match e {
+    match e.semantic() {
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             expr_mentions_canary_marker(lhs) || expr_mentions_canary_marker(rhs)
         }
@@ -361,7 +363,7 @@ fn expr_mentions_canary_marker(e: &Expr) -> bool {
 }
 
 fn expr_mentions_guard(e: &Expr) -> bool {
-    match e {
+    match e.semantic() {
         Expr::Named { name, .. } => name == CANARY_NAME,
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             expr_mentions_guard(lhs) || expr_mentions_guard(rhs)
@@ -428,37 +430,37 @@ fn collapse_body(
         // The relocation name, two 64-bit dereferences, and stack destination
         // keep the match specific to the ABI canary sequence.
         let got_addr = match body[i].semantic() {
-            Stmt::Assign {
-                dst,
-                src:
-                    Expr::Deref {
-                        addr: named_slot,
-                        size: 8,
-                    },
-            } if matches!(
-                named_slot.as_ref(),
-                Expr::Named { name, .. } if canary_symbol(name)
-            ) =>
-            {
-                Some(dst.clone())
-            }
+            Stmt::Assign { dst, src } => match src.semantic() {
+                Expr::Deref {
+                    addr: named_slot,
+                    size: 8,
+                } if matches!(
+                    named_slot.semantic(),
+                    Expr::Named { name, .. } if canary_symbol(name)
+                ) =>
+                {
+                    Some(dst.clone())
+                }
+                _ => None,
+            },
             _ => None,
         };
         let split_got_store = got_addr.as_ref().and_then(|got_addr| {
             let mut j = i + 1;
             while j < body.len() {
                 let slot = match body[j].semantic() {
-                    Stmt::Store {
-                        addr: Expr::Reg(slot @ crate::ir::types::VReg::Phys(slot_name)),
-                        src:
+                    Stmt::Store { addr, src, size: 8 } => match (addr.semantic(), src.semantic()) {
+                        (
+                            Expr::Reg(slot @ crate::ir::types::VReg::Phys(slot_name)),
                             Expr::Deref {
                                 addr: saved_addr,
                                 size: 8,
                             },
-                        size: 8,
-                    } if promoted(slot) && is_identity_address(saved_addr, got_addr) => {
-                        Some(slot_name.clone())
-                    }
+                        ) if promoted(slot) && is_identity_address(saved_addr, got_addr) => {
+                            Some(slot_name.clone())
+                        }
+                        _ => None,
+                    },
                     _ => None,
                 };
                 if let Some(slot) = slot {
@@ -486,7 +488,7 @@ fn collapse_body(
             None
         });
         if let Some((store_index, slot)) = split_got_store {
-            let origins = own_origins(&body[i]).union(&origins_in_tree(&body[store_index]));
+            let origins = origins_in_tree(&body[i]).union(&origins_in_tree(&body[store_index]));
             body.remove(store_index);
             body[i] =
                 comment_with_origins(&format!("stack canary: save guard to %{}", slot), origins);
@@ -496,10 +498,8 @@ fn collapse_body(
 
         let load = matches!(
             body[i].semantic(),
-            Stmt::Assign {
-                dst: crate::ir::types::VReg::Phys(_),
-                src: Expr::Named { name, .. },
-            } if name == CANARY_NAME
+            Stmt::Assign { dst: crate::ir::types::VReg::Phys(_), src }
+                if matches!(src.semantic(), Expr::Named { name, .. } if name == CANARY_NAME)
         );
         if !load {
             i += 1;
@@ -512,15 +512,18 @@ fn collapse_body(
         let load_dst = load_dst.clone();
         // Next stmt must store that register to a %stack_* slot.
         let store_match = match body[i + 1].semantic() {
-            Stmt::Store {
-                addr: Expr::Reg(slot @ crate::ir::types::VReg::Phys(slot_name)),
-                src: Expr::Reg(src),
-                ..
-            } if promoted(slot) && src == &load_dst => Some(slot_name.clone()),
+            Stmt::Store { addr, src, .. } => match (addr.semantic(), src.semantic()) {
+                (Expr::Reg(slot @ crate::ir::types::VReg::Phys(slot_name)), Expr::Reg(src))
+                    if promoted(slot) && src == &load_dst =>
+                {
+                    Some(slot_name.clone())
+                }
+                _ => None,
+            },
             _ => None,
         };
         if let Some(slot) = store_match {
-            let origins = own_origins(&body[i]).union(&origins_in_tree(&body[i + 1]));
+            let origins = origins_in_tree(&body[i]).union(&origins_in_tree(&body[i + 1]));
             body.remove(i + 1);
             body[i] =
                 comment_with_origins(&format!("stack canary: save guard to %{}", slot), origins);
@@ -535,6 +538,7 @@ fn own_origins(statement: &Stmt) -> OriginSet {
 
 fn origins_in_tree(statement: &Stmt) -> OriginSet {
     let mut origins = own_origins(statement);
+    collect_statement_expression_origins(statement.semantic(), &mut origins);
     let mut merge = |nested: &Stmt| origins.merge(&origins_in_tree(nested));
     match statement.semantic() {
         Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
@@ -578,6 +582,92 @@ fn origins_in_tree(statement: &Stmt) -> OriginSet {
     origins
 }
 
+fn collect_statement_expression_origins(statement: &Stmt, origins: &mut OriginSet) {
+    match statement {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
+        Stmt::Assign { src, .. }
+        | Stmt::Return { value: Some(src) }
+        | Stmt::Throw { value: src }
+        | Stmt::IndirectGoto { target: src }
+        | Stmt::Push { value: src } => collect_expression_origins(src, origins),
+        Stmt::Store { addr, src, .. } => {
+            collect_expression_origins(addr, origins);
+            collect_expression_origins(src, origins);
+        }
+        Stmt::Call { target, args, .. } => {
+            collect_expression_origins(target, origins);
+            for argument in args {
+                collect_expression_origins(argument, origins);
+            }
+        }
+        Stmt::If { cond, .. }
+        | Stmt::While { cond, .. }
+        | Stmt::DoWhile { cond, .. }
+        | Stmt::For { cond, .. } => collect_expression_origins(cond, origins),
+        Stmt::Switch { discriminant, .. } => collect_expression_origins(discriminant, origins),
+        Stmt::Return { value: None }
+        | Stmt::TryCatch { .. }
+        | Stmt::Label(_)
+        | Stmt::Goto { .. }
+        | Stmt::Continue
+        | Stmt::Break
+        | Stmt::Nop
+        | Stmt::Unknown(_)
+        | Stmt::Comment(_)
+        | Stmt::Pop { .. } => {}
+    }
+}
+
+fn collect_expression_origins(expression: &Expr, origins: &mut OriginSet) {
+    if let Some(owner) = expression.origins() {
+        origins.merge(owner);
+    }
+    match expression.semantic() {
+        Expr::Origin { .. } => unreachable!("semantic expression cannot be an origin wrapper"),
+        Expr::FunctionTableEntry { index, .. } | Expr::Deref { addr: index, .. } => {
+            collect_expression_origins(index, origins);
+        }
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            collect_expression_origins(lhs, origins);
+            collect_expression_origins(rhs, origins);
+        }
+        Expr::Un { src, .. }
+        | Expr::Cast { expr: src, .. }
+        | Expr::NumericConvert { expr: src, .. } => collect_expression_origins(src, origins),
+        Expr::Call { target, args, .. } => {
+            collect_expression_origins(target, origins);
+            for argument in args {
+                collect_expression_origins(argument, origins);
+            }
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            collect_expression_origins(cond, origins);
+            collect_expression_origins(if_true, origins);
+            collect_expression_origins(if_false, origins);
+        }
+        Expr::WideArithmetic { args, .. } => {
+            for argument in args {
+                collect_expression_origins(argument, origins);
+            }
+        }
+        Expr::Reg(_)
+        | Expr::Const(_)
+        | Expr::FloatConst { .. }
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::StackAddr { .. }
+        | Expr::Lea { .. }
+        | Expr::PdbFieldAddr { .. }
+        | Expr::Unknown(_) => {}
+    }
+}
+
 fn comment_with_origins(text: &str, origins: OriginSet) -> Stmt {
     let comment = Stmt::Comment(text.to_string());
     if origins.is_empty() {
@@ -588,7 +678,7 @@ fn comment_with_origins(text: &str, origins: OriginSet) -> Stmt {
 }
 
 fn is_identity_address(expr: &Expr, target: &crate::ir::types::VReg) -> bool {
-    match expr {
+    match expr.semantic() {
         Expr::Reg(register) => register == target,
         Expr::Lea {
             base: Some(base),
@@ -710,10 +800,10 @@ fn rewrite_body(body: &mut [Stmt]) {
 /// dereferenced a null pointer: every `-fstack-protector` function with a local
 /// array took SIGSEGV when recompiled and run.
 fn got_indirect_guard(addr: &Expr) -> Option<(u64, &'static str)> {
-    let Expr::Deref { addr: slot, .. } = addr else {
+    let Expr::Deref { addr: slot, .. } = addr.semantic() else {
         return None;
     };
-    match slot.as_ref() {
+    match slot.semantic() {
         Expr::Named { va, name } if canary_symbol(name) => Some((*va, CANARY_NAME)),
         _ => None,
     }
@@ -791,7 +881,7 @@ fn known_tls_load(addr: &Expr) -> Option<(i64, &'static str)> {
         disp,
         segment,
         ..
-    } = addr
+    } = addr.semantic()
     {
         // Only accept explicit TLS segments. ARM64 and plain x86 loads from
         // absolute address 0x28 are correctly left untouched.
@@ -1380,73 +1470,101 @@ mod tests {
         let guard = Expr::Named {
             va: 0x1ffd8,
             name: "__stack_chk_guard".into(),
-        };
+        }
+        .with_origins(OriginSet::one(0x6a0));
         let mut f = Function {
             name: "graph_bfs".into(),
             entry_va: 0x6a0,
             body: vec![
-                Stmt::Assign {
+                (Stmt::Assign {
                     dst: VReg::phys("var1"),
                     src: Expr::Deref {
                         addr: Box::new(guard.clone()),
                         size: 8,
-                    },
-                },
+                    }
+                    .with_origins(OriginSet::one(0x6a4)),
+                })
+                .with_origins(OriginSet::one(0x6a8)),
                 Stmt::Assign {
                     dst: VReg::phys("var3"),
                     src: Expr::Const(0),
                 },
-                Stmt::Store {
-                    addr: Expr::Reg(VReg::phys("stack_4")),
+                (Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("stack_4")).with_origins(OriginSet::one(0x6ac)),
                     src: Expr::Deref {
-                        addr: Box::new(Expr::Lea {
-                            base: Some(VReg::phys("var1")),
-                            index: None,
-                            scale: 0,
-                            disp: 0,
-                            segment: None,
-                        }),
+                        addr: Box::new(
+                            Expr::Lea {
+                                base: Some(VReg::phys("var1")),
+                                index: None,
+                                scale: 0,
+                                disp: 0,
+                                segment: None,
+                            }
+                            .with_origins(OriginSet::one(0x6b0)),
+                        ),
                         size: 8,
-                    },
+                    }
+                    .with_origins(OriginSet::one(0x6b4)),
                     size: 8,
-                },
-                Stmt::If {
+                })
+                .with_origins(OriginSet::one(0x6b8)),
+                (Stmt::If {
                     cond: Expr::Cmp {
                         op: CmpOp::Eq,
-                        lhs: Box::new(Expr::Reg(VReg::phys("stack_4"))),
+                        lhs: Box::new(
+                            Expr::Reg(VReg::phys("stack_4")).with_origins(OriginSet::one(0x6bc)),
+                        ),
                         rhs: Box::new(guard),
-                    },
+                    }
+                    .with_origins(OriginSet::one(0x6c0)),
                     then_body: vec![Stmt::Return {
                         value: Some(Expr::Const(4)),
                     }],
                     else_body: None,
-                },
-                Stmt::Call {
+                })
+                .with_origins(OriginSet::one(0x6c4)),
+                (Stmt::Call {
                     target: Expr::Named {
                         va: 0x570,
                         name: "__stack_chk_fail@plt".into(),
-                    },
+                    }
+                    .with_origins(OriginSet::one(0x6c8)),
                     args: vec![],
                     dst: None,
                     call_spec: None,
-                },
+                })
+                .with_origins(OriginSet::one(0x6cc)),
             ],
         };
 
         collapse_canary_save(&mut f);
 
         assert_eq!(f.body.len(), 4, "got: {:?}", f.body);
-        assert!(matches!(&f.body[0], Stmt::Comment(s) if s.contains("save guard")));
+        assert!(matches!(f.body[0].semantic(), Stmt::Comment(s) if s.contains("save guard")));
         assert!(
             matches!(&f.body[1], Stmt::Assign { dst, src: Expr::Const(0) } if dst == &VReg::phys("var3"))
         );
-        assert!(matches!(&f.body[2], Stmt::Comment(s) if s == "stack-canary check"));
+        assert!(matches!(f.body[2].semantic(), Stmt::Comment(s) if s == "stack-canary check"));
         assert!(matches!(
-            &f.body[3],
+            f.body[3].semantic(),
             Stmt::Return {
                 value: Some(Expr::Const(4))
             }
         ));
+        assert_eq!(
+            f.body[0]
+                .origins()
+                .expect("save comment owners")
+                .addresses(),
+            &[0x6a0, 0x6a4, 0x6a8, 0x6ac, 0x6b0, 0x6b4, 0x6b8]
+        );
+        assert_eq!(
+            f.body[2]
+                .origins()
+                .expect("check comment owners")
+                .addresses(),
+            &[0x6a0, 0x6bc, 0x6c0, 0x6c4, 0x6c8, 0x6cc]
+        );
     }
 
     #[test]
