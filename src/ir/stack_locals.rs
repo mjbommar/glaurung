@@ -2983,6 +2983,64 @@ mod tests {
     }
 
     #[test]
+    fn attributed_late_object_addresses_reconcile_without_double_dereference() {
+        let object = reg("local_20");
+        let load_owner = OriginSet::one(0x1010);
+        let store_owner = OriginSet::one(0x1014);
+        let mut body = vec![
+            Stmt::Assign {
+                dst: reg("eax"),
+                src: Expr::Deref {
+                    addr: Box::new(Expr::Reg(object.clone()).with_origins(load_owner.clone())),
+                    size: 4,
+                },
+            },
+            Stmt::Store {
+                addr: Expr::Reg(object.clone()).with_origins(store_owner.clone()),
+                src: Expr::Const(7),
+                size: 4,
+            },
+        ];
+        let map = HashMap::from([(
+            SlotKey {
+                base: "rbp".into(),
+                disp: -32,
+            },
+            SlotVal {
+                name: "local_20".into(),
+                parameter_slot: None,
+                declared_size: 4,
+                span_size: 4,
+                observed_read: true,
+                object_size: Some(8),
+                bounded_object: true,
+                source_type: None,
+                source_name: None,
+                debug_proven: false,
+            },
+        )]);
+
+        reconcile_late_address_taken_objects(&mut body, &map);
+
+        assert!(matches!(
+            &body[0],
+            Stmt::Assign {
+                src: Expr::Deref { addr, size: 4 },
+                ..
+            } if matches!(addr.semantic(), Expr::StackAddr { object: found, size: 8 }
+                if found == &object)
+                && addr.origins() == Some(&load_owner)
+        ));
+        assert!(matches!(
+            &body[1],
+            Stmt::Store { addr, size: 4, .. }
+                if matches!(addr.semantic(), Expr::StackAddr { object: found, size: 8 }
+                    if found == &object)
+                    && addr.origins() == Some(&store_owner)
+        ));
+    }
+
+    #[test]
     fn narrow_reads_of_a_wide_spill_keep_the_parent_storage_width() {
         // Both Clang and GCC spill a uint32_t call result and then read its
         // low word and low byte through a union.  Shrinking the declaration to

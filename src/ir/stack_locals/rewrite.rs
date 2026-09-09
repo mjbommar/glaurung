@@ -596,21 +596,26 @@ pub(super) fn reconcile_late_address_taken_objects(
     }
 
     fn rewrite_value(expr: &mut Expr, objects: &HashMap<VReg, ObjectView>) {
-        if let Expr::Reg(reg) = expr {
-            if let Some(view) = objects.get(reg) {
-                *expr = Expr::Deref {
-                    addr: Box::new(object_address(reg, objects).expect("known object view")),
-                    size: view.width,
-                };
+        let semantic_register = match expr.semantic() {
+            Expr::Reg(reg) => Some(reg.clone()),
+            _ => None,
+        };
+        if let Some(reg) = semantic_register {
+            let promoted_value = objects.get(&reg).map(|view| Expr::Deref {
+                addr: Box::new(object_address(&reg, objects).expect("known object view")),
+                size: view.width,
+            });
+            if let Some(promoted_value) = promoted_value {
+                *expr.semantic_mut() = promoted_value;
             }
             return;
         }
         match expr {
             Expr::Origin { expr, .. } => rewrite_value(expr, objects),
             Expr::Deref { addr, .. } => {
-                if let Expr::Reg(reg) = addr.as_ref() {
+                if let Expr::Reg(reg) = addr.semantic() {
                     if let Some(address) = object_address(reg, objects) {
-                        **addr = address;
+                        *addr.semantic_mut() = address;
                         return;
                     }
                 }
@@ -667,9 +672,9 @@ pub(super) fn reconcile_late_address_taken_objects(
                 }
                 Stmt::Assign { src, .. } => rewrite_value(src, objects),
                 Stmt::Store { addr, src, .. } => {
-                    if let Expr::Reg(reg) = addr {
+                    if let Expr::Reg(reg) = addr.semantic() {
                         if let Some(address) = object_address(reg, objects) {
-                            *addr = address;
+                            *addr.semantic_mut() = address;
                         }
                     }
                     rewrite_value(src, objects);
