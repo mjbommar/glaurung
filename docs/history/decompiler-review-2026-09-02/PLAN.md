@@ -2968,6 +2968,11 @@ provenance through lowering.
   numbered presentation becomes `rdi`. All 26 owning tests and the exact
   release binary32 sign-bit canary pass; see
   `results/wp3-renderer-valued-types.md`.
+  Commit `e709c0a0` closes the vector-copy address sibling in the expression-
+  origin audit. Adjacent attributed lane addresses still recover as one
+  16-byte transport, and both surviving statements receive the complete union
+  of consumed expression owners. All ten owning tests and the exact Clang-O2
+  vector-transport canary pass; see `results/wp3-vector-address-origins.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
