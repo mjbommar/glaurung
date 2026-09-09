@@ -2401,6 +2401,13 @@ provenance through lowering.
   PE32 execution round trip, and the periodic three-cell O2 Hello sample across
   x86-64, AArch64, and ARMv7. See
   `results/wp3-cdecl-stack-walker-expression-origins.md`.
+  Commit `9393db47` closes the ARM32 frame-anchor expression boundary. Thumb
+  and A32 frame establishment now recognizes attributed `sp` and `sp +/- C`
+  sources through their semantic view while retaining exact storage-identity
+  authority. The observed-red identity contract, four `arm_frame` tests, and
+  three `thumb_frame` tests pass; an exact clean release build retains both the
+  real ARM frame-spill and Cortex-M leaf-frame controls. See
+  `results/wp3-arm-frame-anchor-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
@@ -5219,6 +5226,13 @@ relevant ratchet's accepted-regression record.
    Hello cells also pass on x86-64, AArch64, and ARMv7. Continue the remaining
    enabled expression-consumer audit. See
    `results/wp3-cdecl-stack-walker-expression-origins.md`.
+   Commit `9393db47` closes the ARM32 stack-local frame-anchor sibling.
+   Provenance on the frame-source expression no longer hides an otherwise
+   identity-proven `r7`/`r11`/`fp` anchor derived from `sp`; constant operands
+   are classified semantically as well. Its focused identity and frame tests
+   pass, together with both exact release-built real ARM frame controls.
+   Continue the remaining enabled expression-consumer audit. See
+   `results/wp3-arm-frame-anchor-expression-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
