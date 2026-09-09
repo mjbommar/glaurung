@@ -2235,6 +2235,15 @@ provenance through lowering.
   and execution checks; both render signed `int`, the clean
   `while (100 < n)`, and direct `return -1`, while the unsigned control remains
   unsigned. See `results/wp3-signed-return-expression-origins.md`.
+  Commit `1b915c0d` closes the next shared condition boundary: attributed
+  comparisons negate to their direct inverse with their owner preserved, and
+  attributed constant-true headers remain eligible for the conservative
+  call-driven loop rotation. Both observed-red contracts, all ten focused
+  condition-lowering tests, all three effectful-loop tests, and the directly
+  owning release integration test pass. The exact-commit 72-node canonical
+  Hello checkpoint is 54 pass / 18 fail: every x86-64 and AArch64 node passes,
+  while all failures are the separately tracked ARMv7 frame/argument/string
+  debts. See `results/wp3-condition-negation-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
