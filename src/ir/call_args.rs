@@ -7222,7 +7222,12 @@ mod tests {
             body: vec![
                 Stmt::Assign {
                     dst: reg("rdi#1"),
-                    src: Expr::Addr(0x3000),
+                    src: Expr::Cast {
+                        signed: false,
+                        width: 8,
+                        expr: Box::new(Expr::Addr(0x3000).with_origins(OriginSet::one(0x1000))),
+                    }
+                    .with_origins(OriginSet::one(0x1004)),
                 },
                 Stmt::Assign {
                     dst: reg("rsi#1"),
@@ -7237,7 +7242,8 @@ mod tests {
                     target: Expr::Named {
                         va: 0x2000,
                         name: "printf".to_string(),
-                    },
+                    }
+                    .with_origins(OriginSet::one(0x100c)),
                     args: Vec::new(),
                     dst: None,
                     call_spec: None,
@@ -7264,7 +7270,12 @@ mod tests {
                 _ => None,
             })
             .expect("the call must survive");
-        assert_eq!(args, &[Expr::Addr(0x3000), Expr::Reg(reg("rsi#1"))]);
+        assert_eq!(args.len(), 2, "body was:\n{:#?}", f.body);
+        assert!(matches!(
+            args[0].semantic(),
+            Expr::Cast { expr, .. } if matches!(expr.semantic(), Expr::Addr(0x3000))
+        ));
+        assert_eq!(args[1].semantic(), &Expr::Reg(reg("rsi#1")));
     }
 
     /// Unsupported format constructs must not relax the read barrier. This is

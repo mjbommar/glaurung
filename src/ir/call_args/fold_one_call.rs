@@ -1052,11 +1052,10 @@ fn format_proven_arity(
     if !matches!(arch, CallConv::SysVAmd64 | CallConv::Win64) {
         return None;
     }
-    let Stmt::Call {
-        target: Expr::Named { name, .. },
-        ..
-    } = body.get(call_idx)?.semantic()
-    else {
+    let Stmt::Call { target, .. } = body.get(call_idx)?.semantic() else {
+        return None;
+    };
+    let Expr::Named { name, .. } = target.semantic() else {
         return None;
     };
     let clean = name.split('@').next().unwrap_or(name);
@@ -1079,14 +1078,7 @@ fn format_proven_arity(
                 dst: VReg::Phys(register),
                 src,
             } if super::slot_of(arch, register) == Some(format_slot) => {
-                let address = match src {
-                    Expr::Addr(address) => *address,
-                    Expr::Cast { expr, .. } => match expr.as_ref() {
-                        Expr::Addr(address) => *address,
-                        _ => return None,
-                    },
-                    _ => return None,
-                };
+                let address = literal_format_address(src)?;
                 let conversions = crate::ir::printf_format::parse_printf_hints(
                     string_pool.get(&address)?,
                     crate::ir::abi::machine_word_bytes(arch),
@@ -1104,4 +1096,12 @@ fn format_proven_arity(
         }
     }
     None
+}
+
+fn literal_format_address(expression: &Expr) -> Option<u64> {
+    match expression.semantic() {
+        Expr::Addr(address) => Some(*address),
+        Expr::Cast { expr, .. } => literal_format_address(expr),
+        _ => None,
+    }
 }
