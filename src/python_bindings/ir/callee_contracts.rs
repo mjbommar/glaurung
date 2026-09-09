@@ -553,6 +553,13 @@ pub(super) fn refine_passthrough_parameter_hints(
         ) -> Option<crate::ir::ssa::SsaValue> {
             use crate::ir::types::{Op, Value};
 
+            // This is a stack-home proof, not general memory forwarding. An
+            // indexed or segmented address could denote an array/global/TLS
+            // object and needs the real memory model instead.
+            if load_addr.base.is_none() || load_addr.index.is_some() || load_addr.segment.is_some()
+            {
+                return None;
+            }
             let block = function.blocks.get(load_at.block_idx)?;
             for store_idx in (0..load_at.instr_idx).rev() {
                 let instruction = block.instrs.get(store_idx)?;
@@ -561,16 +568,34 @@ pub(super) fn refine_passthrough_parameter_hints(
                         if !matches!(src, Value::Reg(_)) {
                             return None;
                         }
+                        let store_at = InstrAddr {
+                            block_idx: load_at.block_idx,
+                            instr_idx: store_idx,
+                        };
+                        let load_base = ssa.use_value(function, load_at, 0)?;
+                        let store_base = ssa.use_value(function, store_at, 0)?;
+                        if load_base != store_base
+                            || !load_base.canonical_physical_base().is_some_and(|base| {
+                                matches!(
+                                    base,
+                                    "rsp"
+                                        | "esp"
+                                        | "rbp"
+                                        | "ebp"
+                                        | "sp"
+                                        | "x29"
+                                        | "w29"
+                                        | "r7"
+                                        | "r11"
+                                        | "fp"
+                                )
+                            })
+                        {
+                            return None;
+                        }
                         let source_use =
                             usize::from(addr.base.is_some()) + usize::from(addr.index.is_some());
-                        return ssa.use_value(
-                            function,
-                            InstrAddr {
-                                block_idx: load_at.block_idx,
-                                instr_idx: store_idx,
-                            },
-                            source_use,
-                        );
+                        return ssa.use_value(function, store_at, source_use);
                     }
                     // Memory is not in SSA. Any intervening writer makes this
                     // load/store relation ambiguous, even when its spelling
@@ -1271,6 +1296,26 @@ mod tests {
             slot,
             vec![Op::Store {
                 addr: stack_slot(-16),
+                src: Value::Const(0),
+            }],
+        ));
+
+        assert!(!matches!(
+            prototype.parameter(0).and_then(|parameter| parameter.hint),
+            Some(crate::ir::types_recover::TypeHint::Pointer { .. })
+        ));
+    }
+
+    #[test]
+    fn redefined_address_base_blocks_spill_passthrough_refinement() {
+        use crate::ir::types::{Op, VReg, Value};
+
+        let slot = stack_slot(-8);
+        let prototype = refine_spilled_passthrough(&passthrough_caller(
+            slot.clone(),
+            slot,
+            vec![Op::Assign {
+                dst: VReg::phys("rbp"),
                 src: Value::Const(0),
             }],
         ));
