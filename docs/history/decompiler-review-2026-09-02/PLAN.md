@@ -2205,6 +2205,12 @@ provenance through lowering.
   passes with none declining. Commit `e942e71f` ratchets exactly those 12 cells,
   and the same scoped rerun is clean against the new baseline. See
   `results/wp3-global-scalar-initializers.md`.
+  Commit `600f9900` then closes the adjacent Boolean-mask expression consumer:
+  attributed conditions and `-1`/`0` select arms still fold to arithmetic
+  negation, with every consumed owner transferred to the replacement. All 23
+  focused `select_fold` tests pass, and the directly owning optimized
+  vectorized-max round trip recompiles and executes after a clean release
+  build. See `results/wp3-boolean-mask-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
