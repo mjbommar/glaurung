@@ -16,7 +16,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ir::abi;
 use crate::ir::call_args::CallConv;
-use crate::ir::ssa::{SsaInfo, SsaValue};
+use crate::ir::ssa::{SsaInfo, SsaValue, ValueId};
 use crate::ir::types::{BinOp, LlirFunction, Op, UnOp, VReg, Value, Width};
 use crate::ir::use_def::{use_count, InstrAddr};
 
@@ -25,7 +25,8 @@ const FULL: u64 = u64::MAX;
 /// Backward bit-demand facts keyed by stable SSA and instruction identities.
 #[derive(Debug, Default, Clone)]
 pub struct BitDemandOracle {
-    values: HashMap<SsaValue, u64>,
+    values: HashMap<ValueId, u64>,
+    value_ids: HashMap<SsaValue, ValueId>,
     /// Demand per `(instruction, source-order use)`. Indexed, not hashed: the
     /// key is a dense coordinate and the fixed point writes it once per operand
     /// per sweep.
@@ -37,6 +38,10 @@ impl BitDemandOracle {
     pub fn analyze(function: &LlirFunction, ssa: &SsaInfo, cc: CallConv) -> Self {
         let mut oracle = Self {
             values: HashMap::new(),
+            value_ids: ssa
+                .values_with_ids()
+                .map(|(value, id)| (value.clone(), id))
+                .collect(),
             uses: crate::ir::ssa::OperandGrid::with_widths(function, use_count),
         };
         let has_unresolved_return = function
@@ -173,7 +178,11 @@ impl BitDemandOracle {
 
     /// Bits of `value` that may reach an observable effect.
     pub fn value_demand(&self, value: &SsaValue) -> u64 {
-        self.values.get(value).copied().unwrap_or(0)
+        self.value_ids
+            .get(value)
+            .and_then(|value_id| self.values.get(value_id))
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Bits demanded from one source-order use of an instruction.
@@ -185,14 +194,19 @@ impl BitDemandOracle {
         if mask == 0 {
             return false;
         }
-        // `entry` needs an owned key, so it allocated the register spelling on
-        // every call including the overwhelmingly common already-present one.
-        if let Some(demanded) = self.values.get_mut(value) {
+        let Some(value_id) = self.value_ids.get(value).copied() else {
+            debug_assert!(
+                false,
+                "bit demand references a value outside its SSA snapshot"
+            );
+            return false;
+        };
+        if let Some(demanded) = self.values.get_mut(&value_id) {
             let before = *demanded;
             *demanded |= mask;
             return *demanded != before;
         }
-        self.values.insert(value.clone(), mask);
+        self.values.insert(value_id, mask);
         true
     }
 
@@ -907,7 +921,10 @@ mod tests {
             base: VReg::phys("rdx"),
             version: 0,
         };
+        let input_id = ssa.value_id(&input).expect("SSA snapshot owns input ID");
 
         assert_eq!(oracle.value_demand(&input), 0xff);
+        assert_eq!(oracle.values.get(&input_id), Some(&0xff));
+        assert_eq!(oracle.value_ids.get(&input), Some(&input_id));
     }
 }
