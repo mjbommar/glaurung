@@ -59,3 +59,26 @@ build guard and printed import path independently established the tested build.
 No broad Rust suite, whole Python suite, fixture corpus, DecBench, or Joern run
 was performed. The detached worktree was removed and `uv sync --locked`
 restored the main checkout as the editable Python package.
+
+## Follow-on: numbered type recovery consumes only stable widths
+
+Commit `90c9ff42` removes the name-keyed definition-width parameter from
+`recover_types_for_with_identities`. The production function now enumerates
+the values owned by `ValueIdentities`, joins width facts through their stable
+IDs, and applies only unanimous results. Return narrowing uses the same query.
+The raw compatibility type-recovery entry point still derives width from raw
+register views because it deliberately has no identity sidecar.
+
+The focused `definition_width` filter passed eight tests, including opaque
+local/result identities, misleading result spelling, a use-only raw-view fact,
+and ambiguous-value refusal. The two directly adjacent use-only and ambiguity
+tests also passed independently.
+
+A detached clean worktree at `90c9ff42` produced a fresh release extension
+with SHA-256
+`f7774cbd8e794a1f9ba738c4e83dd19e296f077bdf154a4ed319defb6d963b0d`.
+The same six symbols/PIE O0/O2 canonical Hello cells passed across GCC x86-64,
+AArch64, and ARMv7, as did
+`174_float_compare_classify:gcc:O2:sign_bit_of_binary32`. No broad suite or
+corpus ran. The detached worktree was removed and the main editable package was
+restored.
