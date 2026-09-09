@@ -49,13 +49,14 @@ to the correct named object:
 vis_public_bias
 ```
 
-The lane remains red because the portable static declaration does not preserve
-the original `.data` initializer value `11`. That is separate static-storage
-initialization debt, not unresolved GOT linkage.
+At this commit the lane remained red because the portable static declaration
+did not preserve the original `.data` initializer value `11`. Commit
+`49a2f7eb` subsequently closed that static-storage boundary; see
+`wp3-global-scalar-initializers.md`.
 
 ## Scope
 
 This closes defined dynamic-symbol target availability for the measured ELF64
-path. General cross-architecture dynamic relocation coverage, initialized
-portable static storage, the visibility fixture's semantic xfail, and universal
-WP3 attribution remain open.
+path. The later scalar-initializer repair closes the visibility fixture;
+general cross-architecture dynamic relocation coverage, aggregate static
+initialization, and universal WP3 attribution remain open.

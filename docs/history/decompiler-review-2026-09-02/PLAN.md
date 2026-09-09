@@ -2196,8 +2196,15 @@ provenance through lowering.
   Four focused ELF relocation tests pass. In the same exact release-built
   visibility lane, the invalid synthetic-GOT dereference becomes the correct
   named `vis_public_bias` object. The lane remains red because portable static
-  storage still drops its `.data` initializer value `11`; that initializer
-  closure remains separate open debt. See `results/wp3-dynamic-got-targets.md`.
+  storage still dropped its `.data` initializer value `11`. See
+  `results/wp3-dynamic-got-targets.md`.
+  Commit `49a2f7eb` closes that scalar-initializer boundary when exact symbol,
+  width, and file-backed value evidence agree. The renderer contract was
+  observed red and three focused scalar/static contracts pass. All 20 verdicts
+  in fixture 157 now pass across GCC/Clang O0/O2: 12 recorded failures became
+  passes with none declining. Commit `e942e71f` ratchets exactly those 12 cells,
+  and the same scoped rerun is clean against the new baseline. See
+  `results/wp3-global-scalar-initializers.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
