@@ -345,9 +345,10 @@ fn consumed_live_ins_before_phi_copy(
     out: &LlirFunction,
     names: &HashSet<VReg>,
     copies: &[(VReg, VReg)],
+    identities: Option<&super::ValueIdentities>,
 ) -> HashSet<VReg> {
     let copy_pairs: HashSet<(VReg, VReg)> = copies.iter().cloned().collect();
-    let architecturally_read = architecturally_read_names(out);
+    let architecturally_read = architecturally_read_names(out, identities);
     let definitions: HashSet<VReg> = out
         .blocks
         .iter()
@@ -679,7 +680,8 @@ pub(crate) fn coalesce_phi_copies_with_definition_sites(
     let definition_claims =
         coalescing_definition_claims(out, definition_widths, definition_widths_by_site);
     let candidate_names: HashSet<VReg> = names.iter().cloned().collect();
-    let consumed_live_ins = consumed_live_ins_before_phi_copy(out, &candidate_names, copies);
+    let consumed_live_ins =
+        consumed_live_ins_before_phi_copy(out, &candidate_names, copies, identities);
     let mut width: Vec<ClassWidth> = class_widths_with_incoming_values(
         &names,
         &index,

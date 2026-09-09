@@ -25,7 +25,10 @@ use crate::ir::use_def::{for_each_use, use_is_proven_input};
 ///
 /// Returns `None` on the raw (non-value-numbered) LLIR: without `#version` tags,
 /// equal bases mean equal names, which the `dst != src` guard rejects.
-pub(crate) fn phi_copy_operands(op: &Op) -> Option<(&str, &str)> {
+pub(crate) fn phi_copy_operands<'a>(
+    op: &'a Op,
+    identities: Option<&super::ValueIdentities>,
+) -> Option<(&'a str, &'a str)> {
     let Op::Assign {
         dst: VReg::Phys(dst),
         src: Value::Reg(VReg::Phys(src)),
@@ -34,8 +37,20 @@ pub(crate) fn phi_copy_operands(op: &Op) -> Option<(&str, &str)> {
         return None;
     };
     let (dst, src) = (dst.as_str(), src.as_str());
-    (dst != src && crate::ir::abi::ssa_base(dst) == crate::ir::abi::ssa_base(src))
-        .then_some((dst, src))
+    if dst == src {
+        return None;
+    }
+    let same_storage = match identities {
+        Some(identities) => {
+            let dst_identity = identities.exact(&VReg::phys(dst))?;
+            let src_identity = identities.exact(&VReg::phys(src))?;
+            let dst_base = dst_identity.canonical_physical_base()?;
+            let src_base = src_identity.canonical_physical_base()?;
+            dst_base == src_base
+        }
+        None => crate::ir::abi::ssa_base(dst) == crate::ir::abi::ssa_base(src),
+    };
+    same_storage.then_some((dst, src))
 }
 
 /// The value-numbered names read by a *genuine* architectural operand.
@@ -52,12 +67,15 @@ pub(crate) fn phi_copy_operands(op: &Op) -> Option<(&str, &str)> {
 /// liveness fixpoint of the phi graph — with the difference that that
 /// one (in `insert_phi_copies`) deliberately counts the call may-uses, because an argument register a
 /// callee might read must stay defined.
-pub(crate) fn architecturally_read_names(lf: &LlirFunction) -> HashSet<String> {
+pub(crate) fn architecturally_read_names(
+    lf: &LlirFunction,
+    identities: Option<&super::ValueIdentities>,
+) -> HashSet<String> {
     let mut read: HashSet<String> = HashSet::new();
     let mut phi_copies: Vec<(&str, &str)> = Vec::new();
     for block in &lf.blocks {
         for ins in &block.instrs {
-            if let Some(pair) = phi_copy_operands(&ins.op) {
+            if let Some(pair) = phi_copy_operands(&ins.op, identities) {
                 phi_copies.push(pair);
                 continue;
             }

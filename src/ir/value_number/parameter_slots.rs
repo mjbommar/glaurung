@@ -51,7 +51,7 @@ pub fn live_in_arg_slots_llir_with_identities(
     // phi copy launders the call may-uses this scan already refuses to trust:
     // the copy is an ordinary `Assign`, so the `Op::Call` guard below never sees
     // it, and its source is the bare (version-zero) live-in name.
-    let really_read = architecturally_read_names(lf);
+    let really_read = architecturally_read_names(lf, identities);
     let alignment_padding =
         crate::ir::arm_input_evidence::ArmAlignmentPadding::classify(lf, cc, identities);
     let base_slot = |name: &str| slot_of.get(name.split('#').next().unwrap_or(name)).copied();
@@ -158,7 +158,7 @@ pub fn live_in_arg_slots_llir_with_identities(
                 // phi destination is really read; then the copy's SOURCE is what the
                 // function reads, and the destination is not an architectural
                 // definition of the register at all.
-                if let Some((dst, src)) = phi_copy_operands(&ins.op) {
+                if let Some((dst, src)) = phi_copy_operands(&ins.op, identities) {
                     if really_read.contains(dst) {
                         // `read_slot`, not `base_slot`: the copy in the ENTRY
                         // predecessor of a loop-header phi reads the bare live-in

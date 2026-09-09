@@ -3908,6 +3908,51 @@ mod tests {
     }
 
     #[test]
+    fn opaque_phi_copy_uses_identity_instead_of_display_spelling() {
+        use crate::ir::types::{CallTarget, MemOp};
+
+        let lf = mk(vec![
+            Op::Assign {
+                dst: VReg::phys("opaque_phi"),
+                src: Value::Reg(VReg::phys("opaque_entry")),
+            },
+            Op::Call {
+                target: CallTarget::Direct(0x2000),
+                effects: Some(crate::ir::abi::call_effects(CallConv::Aarch64)),
+            },
+            Op::Load {
+                dst: VReg::phys("opaque_later"),
+                addr: MemOp {
+                    base: Some(VReg::phys("x21")),
+                    index: None,
+                    scale: 0,
+                    disp: 64,
+                    size: 4,
+                    segment: None,
+                    endian: crate::ir::types::Endian::Little,
+                },
+            },
+        ]);
+        let mut identities = ValueIdentities::default();
+        for (name, version) in [("opaque_entry", 0), ("opaque_phi", 1), ("opaque_later", 2)] {
+            identities.record(
+                VReg::phys(name),
+                SsaValue {
+                    base: VReg::phys("x3"),
+                    version,
+                },
+            );
+        }
+
+        let params =
+            live_in_arg_slots_llir_with_identities(&lf, CallConv::Aarch64, Some(&identities));
+        assert!(
+            !params.contains(&3),
+            "opaque SSA phi plumbing is not an architectural read: {params:?}"
+        );
+    }
+
+    #[test]
     fn a_phi_copy_a_real_operand_consumes_still_proves_a_parameter() {
         use crate::ir::types::{BinOp, CallTarget};
         // The same plumbing, but the phi destination is genuinely read: the
