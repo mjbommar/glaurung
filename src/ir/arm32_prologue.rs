@@ -239,12 +239,10 @@ fn saved_register_store(
     statement: &Stmt,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Option<(StackLocation, String, u8)> {
-    let Stmt::Store {
-        addr,
-        src: Expr::Reg(register),
-        size,
-    } = statement.semantic()
-    else {
+    let Stmt::Store { addr, src, size } = statement.semantic() else {
+        return None;
+    };
+    let Expr::Reg(register) = src.semantic() else {
         return None;
     };
     let slot = stack_location(addr, identities)?;
@@ -345,11 +343,10 @@ fn match_epilogue(
     let a32_restores_sp_from_fp = body.get(cursor).is_some_and(|statement| {
         matches!(
             statement.semantic(),
-            Stmt::Assign {
-                dst,
-                src: Expr::Reg(source),
-            } if is_sp(dst, identities)
-                && canonical_saved_register(source, identities).as_deref() == Some("fp")
+            Stmt::Assign { dst, src }
+                if is_sp(dst, identities)
+                    && matches!(src.semantic(), Expr::Reg(source)
+                        if canonical_saved_register(source, identities).as_deref() == Some("fp"))
         )
     });
     if frame.local_width > 0 {
@@ -407,12 +404,12 @@ fn frame_deallocation_piece(
 ) -> bool {
     match statement.semantic() {
         Stmt::Assign { dst, src } if is_sp(dst, identities) => {
-            matches!(src, Expr::Reg(register) if matches!(canonical_saved_register(register, identities).as_deref(), Some("r7" | "fp")))
+            matches!(src.semantic(), Expr::Reg(register) if matches!(canonical_saved_register(register, identities).as_deref(), Some("r7" | "fp")))
                 || matches!(
-                    src,
+                    src.semantic(),
                     Expr::Bin { op: BinOp::Sub, lhs, rhs }
-                        if matches!(lhs.as_ref(), Expr::Reg(register) if canonical_saved_register(register, identities).as_deref() == Some("fp"))
-                            && matches!(rhs.as_ref(), Expr::Const(4))
+                        if matches!(lhs.semantic(), Expr::Reg(register) if canonical_saved_register(register, identities).as_deref() == Some("fp"))
+                            && matches!(rhs.semantic(), Expr::Const(4))
                 )
         }
         Stmt::Assign { dst, src } => {
@@ -437,11 +434,10 @@ fn match_frame_deallocation(
     // storage down with the exact inverse `sp = fp`.
     if matches!(
         body.get(cursor).map(Stmt::semantic),
-        Some(Stmt::Assign {
-            dst,
-            src: Expr::Reg(source),
-        }) if is_sp(dst, identities)
-            && canonical_saved_register(source, identities).as_deref() == Some("fp")
+        Some(Stmt::Assign { dst, src })
+            if is_sp(dst, identities)
+                && matches!(src.semantic(), Expr::Reg(source)
+                    if canonical_saved_register(source, identities).as_deref() == Some("fp"))
     ) {
         return Some(cursor + 1);
     }
@@ -454,14 +450,14 @@ fn match_frame_deallocation(
             Stmt::Assign { dst: anchor, src },
             Stmt::Assign {
                 dst,
-                src: Expr::Reg(source),
+                src: sp_source,
             },
         ) = (first.semantic(), second.semantic())
         {
             if canonical_saved_register(anchor, identities).as_deref() == Some("r7")
                 && stack_location(src, identities).as_ref() == first_saved_slot(frame)
                 && is_sp(dst, identities)
-                && source == anchor
+                && matches!(sp_source.semantic(), Expr::Reg(source) if source == anchor)
             {
                 return Some(cursor + 2);
             }
@@ -471,12 +467,12 @@ fn match_frame_deallocation(
     // A32: `add fp, sp, #4` makes the first pushed word live at `fp - 4`.
     if matches!(
         body.get(cursor).map(Stmt::semantic),
-        Some(Stmt::Assign {
-            dst,
-            src: Expr::Bin { op: BinOp::Sub, lhs, rhs },
-        }) if is_sp(dst, identities)
-            && matches!(lhs.as_ref(), Expr::Reg(register) if canonical_saved_register(register, identities).as_deref() == Some("fp"))
-            && matches!(rhs.as_ref(), Expr::Const(4))
+        Some(Stmt::Assign { dst, src })
+            if is_sp(dst, identities)
+                && matches!(src.semantic(), Expr::Bin { op: BinOp::Sub, lhs, rhs }
+                    if matches!(lhs.semantic(), Expr::Reg(register)
+                        if canonical_saved_register(register, identities).as_deref() == Some("fp"))
+                        && matches!(rhs.semantic(), Expr::Const(4)))
     ) {
         return Some(cursor + 1);
     }
@@ -491,7 +487,7 @@ fn restored_register(
     let Stmt::Assign { dst, src } = statement.semantic() else {
         return None;
     };
-    let slot = match src {
+    let slot = match src.semantic() {
         Expr::Reg(slot) if is_promoted_stack_slot(slot, identities) => StackLocation {
             object: slot.clone(),
             offset: 0,
@@ -506,7 +502,7 @@ fn stack_location(
     expression: &Expr,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Option<StackLocation> {
-    match expression {
+    match expression.semantic() {
         Expr::Reg(slot) if is_promoted_stack_slot(slot, identities) => Some(StackLocation {
             object: slot.clone(),
             offset: 0,
@@ -519,7 +515,7 @@ fn stack_location(
             op: BinOp::Add,
             lhs,
             rhs,
-        } => match rhs.as_ref() {
+        } => match rhs.semantic() {
             Expr::Const(offset) => {
                 let mut location = stack_location(lhs, identities)?;
                 location.offset = location.offset.checked_add(*offset)?;
@@ -549,20 +545,19 @@ fn sp_adjust(
     expected_op: BinOp,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Option<i64> {
-    let Stmt::Assign {
-        dst,
-        src: Expr::Bin { op, lhs, rhs },
-    } = statement.semantic()
-    else {
+    let Stmt::Assign { dst, src } = statement.semantic() else {
+        return None;
+    };
+    let Expr::Bin { op, lhs, rhs } = src.semantic() else {
         return None;
     };
     if *op != expected_op
         || !is_sp(dst, identities)
-        || !matches!(lhs.as_ref(), Expr::Reg(register) if register == dst)
+        || !matches!(lhs.semantic(), Expr::Reg(register) if register == dst)
     {
         return None;
     }
-    match rhs.as_ref() {
+    match rhs.semantic() {
         Expr::Const(width) if *width > 0 => Some(*width),
         _ => None,
     }
@@ -846,6 +841,18 @@ mod tests {
                 lhs: Box::new(Expr::Reg(reg("sp"))),
                 rhs: Box::new(Expr::Const(width)),
             },
+        }
+    }
+
+    fn attributed_sp_adjust(op: BinOp, width: i64, owner: u64) -> Stmt {
+        Stmt::Assign {
+            dst: reg("sp"),
+            src: Expr::Bin {
+                op,
+                lhs: Box::new(Expr::Reg(reg("sp")).with_origins(OriginSet::one(owner))),
+                rhs: Box::new(Expr::Const(width).with_origins(OriginSet::one(owner))),
+            }
+            .with_origins(OriginSet::one(owner)),
         }
     }
 
@@ -1154,34 +1161,35 @@ mod tests {
         use crate::ir::ast::OriginSet;
 
         let mut f = function(vec![
-            sp_sub(8).with_origins(OriginSet::one(0x1000)),
+            attributed_sp_adjust(BinOp::Sub, 8, 0x2000).with_origins(OriginSet::one(0x1000)),
             Stmt::Store {
-                addr: object_addr("local_8", 0),
-                src: Expr::Reg(reg("r7")),
+                addr: object_addr("local_8", 0).with_origins(OriginSet::one(0x2004)),
+                src: Expr::Reg(reg("r7")).with_origins(OriginSet::one(0x2004)),
                 size: 4,
             }
             .with_origins(OriginSet::one(0x1004)),
             Stmt::Store {
-                addr: object_addr("local_8", 4),
-                src: Expr::Reg(reg("lr")),
+                addr: object_addr("local_8", 4).with_origins(OriginSet::one(0x2008)),
+                src: Expr::Reg(reg("lr")).with_origins(OriginSet::one(0x2008)),
                 size: 4,
             }
             .with_origins(OriginSet::one(0x1008)),
             Stmt::Assign {
                 dst: reg("r7#1"),
-                src: object_addr("local_8", 0),
+                src: object_addr("local_8", 0).with_origins(OriginSet::one(0x200c)),
             }
             .with_origins(OriginSet::one(0x100c)),
             Stmt::Nop.with_origins(OriginSet::one(0x1010)),
             Stmt::Assign {
                 dst: reg("r7#2"),
                 src: Expr::Deref {
-                    addr: Box::new(object_addr("local_8", 0)),
+                    addr: Box::new(object_addr("local_8", 0).with_origins(OriginSet::one(0x2014))),
                     size: 4,
-                },
+                }
+                .with_origins(OriginSet::one(0x2014)),
             }
             .with_origins(OriginSet::one(0x1014)),
-            sp_add(8).with_origins(OriginSet::one(0x1018)),
+            attributed_sp_adjust(BinOp::Add, 8, 0x2018).with_origins(OriginSet::one(0x1018)),
             Stmt::Return { value: None }.with_origins(OriginSet::one(0x101c)),
         ]);
 
