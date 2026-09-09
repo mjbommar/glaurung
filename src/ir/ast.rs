@@ -971,7 +971,7 @@ fn indent(out: &mut String, level: usize) {
 }
 
 fn call_target_name(target: &Expr) -> Option<&str> {
-    match target {
+    match target.semantic() {
         Expr::Named { name, .. } => Some(name.as_str()),
         Expr::Unknown(name) => Some(name.as_str()),
         _ => None,
@@ -1372,7 +1372,7 @@ fn collect_idents_expr(
             collect_idents_expr(addr, ids, identities);
         }
         Expr::Call { target, args, .. } => {
-            if !matches!(target.as_ref(), Expr::Named { .. }) {
+            if !matches!(target.semantic(), Expr::Named { .. }) {
                 collect_idents_expr(target, ids, identities);
             }
             for argument in args {
@@ -1449,7 +1449,7 @@ fn collect_idents_stmt(
         } => {
             // A `Named` target is a callee name, not a local; other targets are
             // rendered as value expressions and their registers must be declared.
-            if let Expr::Named { name, .. } = target {
+            if let Expr::Named { name, .. } = target.semantic() {
                 // Evidence the ORIGINAL was built with a stack protector. The
                 // rebuild is then free to add one too, because the code it is
                 // being compared against already has it.
@@ -2628,7 +2628,8 @@ mod tests {
                 target: Expr::Named {
                     va: 0x2000,
                     name: "ReadFile".to_string(),
-                },
+                }
+                .with_origins(OriginSet::one(0x1010)),
                 args: vec![
                     Expr::Reg(VReg::phys("arg0")),
                     Expr::Reg(VReg::phys("arg1")),
@@ -2650,6 +2651,25 @@ mod tests {
         assert!(c_style.contains(
             "// proto: BOOL ReadFile(HANDLE hFile, LPVOID lpBuffer, DWORD nNumberOfBytesToRead"
         ));
+    }
+
+    #[test]
+    fn attributed_stack_check_target_keeps_protector_evidence() {
+        let statement = Stmt::Call {
+            target: Expr::Named {
+                va: 0x2000,
+                name: "__stack_chk_fail@plt".to_string(),
+            }
+            .with_origins(OriginSet::one(0x1010)),
+            args: Vec::new(),
+            dst: None,
+            call_spec: None,
+        };
+        let mut ids = DecIdents::default();
+
+        collect_idents_stmt(&statement, &mut ids, None);
+
+        assert!(ids.calls_stack_check);
     }
 
     #[test]
