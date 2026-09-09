@@ -2251,6 +2251,13 @@ provenance through lowering.
   focused `typed_simplify` tests pass, and the four directly owning
   `nrw194_u8_mix` Clang/GCC O0/O2 fixture lanes remain green on a clean release
   build. See `results/wp3-typed-extension-expression-origins.md`.
+  Follow-on `b836edd9` closes the promoted-store address side of the same
+  consumer. An origin-wrapped, identity-owned stack-object address still
+  proves the narrow destination, so redundant machine-parent widening is
+  removed without changing or detaching the address owner. The observed-red
+  contract, all seven typed-simplify tests, and the four exact
+  `nrw194_u8_mix` Clang/GCC O0/O2 lanes pass on an exact release build. See
+  `results/wp3-promoted-store-address-expression-origins.md`.
   Commit `edd529a6` closes comparison fusion across attributed flag trees,
   cast shells, constants, and proof-only definitions. The synthesized source
   predicate receives the deterministic union of every consumed expression
