@@ -93,7 +93,13 @@ function-table recovery and conservative clobber tracking. Its stripped map is
 exactly neutral, while the whole-Python boundary improves from 218 to 217
 failures with no addition; a controlled release A/B proves the recovered
 portable `ops[5]` table is attributable. See
-`results/wp3-function-table-origins.md`. Commit `849c5a5b` then migrates direct,
+`results/wp3-function-table-origins.md`. Follow-on `48bf0ce5` closes the
+copied-call-target expression boundary: when a register copy of a proven table
+entry becomes an indirect call target, the defining-entry and use-site owners
+are composed on the replacement target instead of being discarded. The
+observed-red ownership contract, all 14 function-table tests, and the exact
+release-built portable `ops[5]` integration pass. See
+`results/wp3-function-table-target-expression-origins.md`. Commit `849c5a5b` then migrates direct,
 resolved GOT-indirect, and relocation-proven vtable tail-call recovery. Its
 stripped map is exactly neutral and its whole-Python boundary improves from 217
 to 216 failures with no addition; a controlled release A/B attributes the
