@@ -250,7 +250,7 @@ fn parameter_source(
     expr: &Expr,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Option<String> {
-    match expr {
+    match expr.semantic() {
         Expr::Reg(register @ VReg::Phys(name))
             if match identities {
                 Some(identities) => identities.parameter_slot(register).is_some(),
@@ -478,11 +478,11 @@ fn slot_stores_to_assigns(
         let statement = s.semantic_mut();
         match statement {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
-            Stmt::Store {
-                addr: Expr::Reg(VReg::Phys(name)),
-                src,
-                ..
-            } if slots.contains_key(name) => {
+            Stmt::Store { addr, src, .. } if matches!(addr.semantic(), Expr::Reg(VReg::Phys(name)) if slots.contains_key(name)) =>
+            {
+                let Expr::Reg(VReg::Phys(name)) = addr.semantic() else {
+                    unreachable!("match guard proved a promoted named slot")
+                };
                 if slots.get(name).is_some_and(|argument| {
                     parameter_source(src, identities).as_ref() == Some(argument)
                 }) {
@@ -555,7 +555,7 @@ fn parameter_alias(
     aliases: &std::collections::HashMap<VReg, String>,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Option<String> {
-    match expr {
+    match expr.semantic() {
         Expr::Reg(register) => aliases
             .get(register)
             .cloned()
@@ -588,11 +588,11 @@ fn collect_param_homes_with_aliases(
                     aliases.remove(dst);
                 }
             }
-            Stmt::Store {
-                addr: Expr::Reg(VReg::Phys(local)),
-                src,
-                ..
-            } if is_promoted_local(local) => {
+            Stmt::Store { addr, src, .. } if matches!(addr.semantic(), Expr::Reg(VReg::Phys(local)) if is_promoted_local(local)) =>
+            {
+                let Expr::Reg(VReg::Phys(local)) = addr.semantic() else {
+                    unreachable!("match guard proved a promoted named slot")
+                };
                 let argument = parameter_alias(src, aliases, identities);
                 let entry = home.entry(local.clone());
                 match entry {
@@ -819,22 +819,22 @@ fn rename_phys_in_body(body: &mut [Stmt], map: &std::collections::HashMap<String
 /// what a coalesced spill `local = arg` collapses to once `local` became `arg`.
 pub(super) fn drop_self_stores(body: &mut Vec<Stmt>) {
     body.retain(|s| {
-        !matches!(
-            s.semantic(),
-            Stmt::Store {
-                addr: Expr::Reg(VReg::Phys(a)),
-                src: Expr::Reg(VReg::Phys(b)),
-                ..
-            } if a == b
-        ) && !matches!(
+        let is_self_store = match s.semantic() {
+            Stmt::Store { addr, src, .. } => matches!(
+                (addr.semantic(), src.semantic()),
+                (Expr::Reg(VReg::Phys(a)), Expr::Reg(VReg::Phys(b))) if a == b
+            ),
             // Same collapse, in assignment form: the spill store is now an Assign
             // (see `slot_stores_to_assigns`), so `arg0 = arg0` must go too.
-            s.semantic(),
             Stmt::Assign {
                 dst: VReg::Phys(a),
-                src: Expr::Reg(VReg::Phys(b)),
-            } if a == b
-        )
+                src,
+            } => {
+                matches!(src.semantic(), Expr::Reg(VReg::Phys(b)) if a == b)
+            }
+            _ => false,
+        };
+        !is_self_store
     });
     for s in body.iter_mut() {
         match s.semantic_mut() {
@@ -984,6 +984,39 @@ mod tests {
                 value: Some(Expr::Reg(register))
             } if register == &VReg::phys("arg0")
         ));
+    }
+
+    #[test]
+    fn attributed_named_parameter_expressions_are_coalesced() {
+        let address_owner = OriginSet::one(0x1100);
+        let value_owner = OriginSet::one(0x1102);
+        let reload_owner = OriginSet::one(0x1104);
+        let mut body = vec![
+            Stmt::Store {
+                addr: Expr::Reg(VReg::phys("local_4")).with_origins(address_owner.clone()),
+                src: Expr::Reg(VReg::phys("arg0")).with_origins(value_owner.clone()),
+                size: 4,
+            },
+            Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("local_4")).with_origins(reload_owner.clone())),
+            },
+        ];
+
+        coalesce_named_param_spills(&mut body, &std::collections::HashSet::new(), None);
+
+        assert_eq!(body.len(), 2);
+        assert!(
+            matches!(body[0].semantic(), Stmt::Nop),
+            "the redundant attributed spill must become removable scaffolding"
+        );
+        let Stmt::Return { value: Some(value) } = body[1].semantic() else {
+            unreachable!()
+        };
+        assert!(matches!(
+            value.semantic(),
+            Expr::Reg(register) if register == &VReg::phys("arg0")
+        ));
+        assert_eq!(value.origins(), Some(&reload_owner));
     }
 
     #[test]
