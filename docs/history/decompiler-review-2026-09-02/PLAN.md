@@ -2113,6 +2113,14 @@ provenance through lowering.
   its previously recorded non-canonical frame/local output; it is a known-red
   canary, not a green closure claim. See
   `results/wp3-arm32-frame-expression-origins.md`.
+  Commit `f93e8655` migrates the adjacent indirect aggregate-result expression
+  readers. AAPCS64 `x8` frame-coordinate chains, SysV hidden-result stack
+  deltas and first arguments, and promoted result objects now remain provable
+  through expression-origin carriers without relaxing convention, frame-base,
+  size, call-clobber, or identity requirements. The AAPCS64 hint contract was
+  observed red, all six owning tests pass, and the exact AArch64 O2 five-word
+  aggregate-return round trip reports no regression after a clean release
+  rebuild. See `results/wp3-indirect-result-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
