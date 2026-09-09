@@ -231,6 +231,13 @@ fn fold_body(body: &mut [Stmt], pool: &HashMap<u64, String>) {
                     fold_body(b, pool);
                 }
             }
+            Stmt::Throw { value } => fold_expr(value, pool),
+            Stmt::TryCatch { try_body, catches } => {
+                fold_body(try_body, pool);
+                for catch in catches {
+                    fold_body(&mut catch.body, pool);
+                }
+            }
             Stmt::Pop { .. }
             | Stmt::Goto { .. }
             | Stmt::Label(_)
@@ -238,9 +245,7 @@ fn fold_body(body: &mut [Stmt], pool: &HashMap<u64, String>) {
             | Stmt::Continue
             | Stmt::Nop
             | Stmt::Unknown(_)
-            | Stmt::Comment(_)
-            | Stmt::Throw { .. }
-            | Stmt::TryCatch { .. } => {}
+            | Stmt::Comment(_) => {}
         }
     }
 }
@@ -374,6 +379,48 @@ mod tests {
     use super::*;
     use crate::ir::ast::{Function, Stmt};
     use crate::ir::types::VReg;
+
+    #[test]
+    fn exception_expressions_share_the_string_fold_surface() {
+        let owner = crate::ir::ast::OriginSet::one(0x401000);
+        let pool = HashMap::from([(0x402000, "exception message".to_string())]);
+        let mut function = Function {
+            name: "probe".into(),
+            entry_va: 0x401000,
+            body: vec![Stmt::TryCatch {
+                try_body: vec![Stmt::Throw {
+                    value: Expr::Addr(0x402000),
+                }],
+                catches: vec![crate::ir::ast::CatchClause {
+                    type_name: "void *".into(),
+                    binding: VReg::phys("caught"),
+                    body: vec![Stmt::Return {
+                        value: Some(Expr::Addr(0x402000)),
+                    }],
+                }],
+            }
+            .with_origins(owner.clone())],
+        };
+
+        fold_string_literals(&mut function, &pool);
+
+        let Stmt::TryCatch { try_body, catches } = function.body[0].semantic() else {
+            panic!("exception shape changed: {function:#?}")
+        };
+        assert!(matches!(
+            try_body.as_slice(),
+            [Stmt::Throw {
+                value: Expr::StringLit { value }
+            }] if value == "exception message"
+        ));
+        assert!(matches!(
+            catches[0].body.as_slice(),
+            [Stmt::Return {
+                value: Some(Expr::StringLit { value })
+            }] if value == "exception message"
+        ));
+        assert_eq!(function.body[0].origins(), Some(&owner));
+    }
 
     #[test]
     fn named_addr_in_call_arg_gets_folded_to_literal() {
