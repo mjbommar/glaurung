@@ -5710,6 +5710,13 @@ relevant ratchet's accepted-regression record.
    `call_args` tests, and the exact-release GCC O2 fixture-197 pair-of-doubles
    round-trip control pass. See
    `results/wp3-coalesced-sse-slot-blocking.md`.
+   Commit `28e70130` migrates loop-carried argument discovery from one exact
+   SSA identity to a four-part proof: one ABI slot, non-entry candidates, the
+   same nonempty stable `ValueId` set in the initializer, and a preceding call.
+   Mixed slots and misleading names still decline. Its observed-red contract,
+   all 18 loop-carried and 130 focused `call_args` tests, and exact-release
+   x86-64 GCC/AArch64 O2 `call_chain_in_loop` controls pass. See
+   `results/wp3-coalesced-loop-carried-arguments.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
