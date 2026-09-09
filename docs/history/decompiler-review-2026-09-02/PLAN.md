@@ -2316,6 +2316,16 @@ provenance through lowering.
   protection, float bit-carrier compatibility, and the reaching refusal must
   now be distinguished. See
   `results/wp3-parameter-spill-expression-origins.md`.
+  Commit `9f04c1a1` closes the actual ARM O0 parameter-restore refusal. An exact
+  restorative copy from an immutable parameter home back into its ABI argument
+  (`arg = home`) preserves the proven alias relation; structured reaching no
+  longer misclassifies that copy as an independent clobber. Independent writes
+  and unstructured ambiguity still fail closed. The observed-red reaching and
+  coalescing contracts pass with all nine structured-reaching and six
+  parameter-spill tests. A clean exact-commit release build makes
+  `test_real_arm_hard_float_call_round_trip` green, removing the redundant
+  `local_c`/integer-float union path and recovering the source parameter at the
+  call boundary. See `results/wp3-parameter-alias-restores.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
