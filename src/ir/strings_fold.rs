@@ -299,7 +299,7 @@ fn fold_expr(e: &mut Expr, pool: &HashMap<u64, String>) {
             //
             // x86-64 needs none of this: `lea rax, [rip+disp]` is one
             // instruction and arrives as a complete `Expr::Addr`.
-            let combined = match (lhs.as_ref(), rhs.as_ref()) {
+            let combined = match (lhs.semantic(), rhs.semantic()) {
                 (Expr::Addr(base), Expr::Const(off)) | (Expr::Const(off), Expr::Addr(base)) => {
                     base.checked_add_signed(*off)
                 }
@@ -307,7 +307,19 @@ fn fold_expr(e: &mut Expr, pool: &HashMap<u64, String>) {
             };
             if let Some(va) = combined {
                 if let Some(s) = pool.get(&va) {
-                    *e = Expr::StringLit { value: shorten(s) };
+                    let mut origins = crate::ir::ast::OriginSet::empty();
+                    if let Some(owner) = lhs.origins() {
+                        origins.merge(owner);
+                    }
+                    if let Some(owner) = rhs.origins() {
+                        origins.merge(owner);
+                    }
+                    let literal = Expr::StringLit { value: shorten(s) };
+                    *e = if origins.is_empty() {
+                        literal
+                    } else {
+                        literal.with_origins(origins)
+                    };
                     return;
                 }
             }
@@ -408,6 +420,46 @@ mod tests {
             ),
             _ => unreachable!(),
         }
+    }
+
+    #[test]
+    fn originated_split_address_folds_and_unions_ownership() {
+        let mut pool = HashMap::new();
+        pool.insert(0x402034, "split address".to_string());
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("x0"),
+                src: Expr::Bin {
+                    op: crate::ir::types::BinOp::Add,
+                    lhs: Box::new(
+                        Expr::Addr(0x402000).with_origins(crate::ir::ast::OriginSet::one(0x401000)),
+                    ),
+                    rhs: Box::new(
+                        Expr::Const(0x34).with_origins(crate::ir::ast::OriginSet::one(0x401004)),
+                    ),
+                },
+            }],
+        };
+
+        fold_string_literals(&mut f, &pool);
+
+        let Stmt::Assign { src, .. } = &f.body[0] else {
+            panic!("expected assignment");
+        };
+        assert_eq!(
+            src.origins(),
+            Some(&crate::ir::ast::OriginSet::from_addresses([
+                0x401000, 0x401004,
+            ]))
+        );
+        assert_eq!(
+            src.semantic(),
+            &Expr::StringLit {
+                value: "split address".to_string(),
+            }
+        );
     }
 
     #[test]
