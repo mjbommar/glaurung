@@ -2055,6 +2055,13 @@ provenance through lowering.
   `stack_locals` tests pass, and the exact ARMv7 A32 O0 `kmp_search` fixture
   remains green after an isolated release rebuild. See
   `results/wp3-escaping-stack-expression-origins.md`.
+  Commit `9e3a75e9` closes the corresponding recovered-object load path. When an
+  attributed dereference address is retargeted from a frame-relative `Lea` to
+  the final `StackAddr`, the rewrite now changes only its semantic payload and
+  retains the address owner. The end-to-end contract was observed red, all 120
+  owning `stack_locals` tests pass, and the exact GCC-O0 C++ `mixed_capture`
+  fixture remains green after an isolated release rebuild. See
+  `results/wp3-stack-load-address-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
