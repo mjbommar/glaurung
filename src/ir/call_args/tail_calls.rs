@@ -326,15 +326,17 @@ fn recover_tail_calls_in_body(
     let mut index = 0;
     while index < body.len() {
         let callee = match body[index].semantic() {
-            Stmt::IndirectGoto {
-                target: Expr::Deref { addr, .. },
-            } => match addr.as_ref() {
-                Expr::Named { .. } => Some((**addr).clone()),
+            Stmt::IndirectGoto { target } => match target.semantic() {
+                Expr::Deref { addr, .. } if matches!(addr.semantic(), Expr::Named { .. }) => {
+                    let mut callee = (**addr).clone();
+                    if let Some(origins) = target.origins() {
+                        callee.merge_origins(origins);
+                    }
+                    Some(callee)
+                }
+                Expr::FunctionTableEntry { .. } => Some(target.clone()),
                 _ => None,
             },
-            Stmt::IndirectGoto {
-                target: target @ Expr::FunctionTableEntry { .. },
-            } => Some(target.clone()),
             _ => None,
         };
         let Some(callee) = callee else {
@@ -430,10 +432,10 @@ fn recover_vtable_tail_calls_in_body(
         }
     }
 
-    let Some(Stmt::IndirectGoto {
-        target: Expr::Reg(target_register),
-    }) = body.last().map(Stmt::semantic)
-    else {
+    let Some(Stmt::IndirectGoto { target }) = body.last().map(Stmt::semantic) else {
+        return;
+    };
+    let Expr::Reg(target_register) = target.semantic() else {
         return;
     };
     let target_register = target_register.clone();
@@ -461,10 +463,10 @@ fn recover_vtable_tail_calls_in_body(
             .enumerate()
             .rev()
             .find_map(|(index, statement)| match statement.semantic() {
-                Stmt::Call {
-                    target: Expr::Named { va, .. },
-                    ..
-                } => Some((index, *va)),
+                Stmt::Call { target, .. } => match target.semantic() {
+                    Expr::Named { va, .. } => Some((index, *va)),
+                    _ => None,
+                },
                 _ => None,
             })
     else {
@@ -563,13 +565,13 @@ fn is_rust_vtable_slot_load(
     identities: Option<&ValueIdentities>,
 ) -> bool {
     let word = crate::ir::abi::machine_word_bytes(arch);
-    let Expr::Deref { addr, size } = target else {
+    let Expr::Deref { addr, size } = target.semantic() else {
         return false;
     };
     if *size != word {
         return false;
     }
-    let (base_is_high_result, offset) = match addr.as_ref() {
+    let (base_is_high_result, offset) = match addr.semantic() {
         Expr::Lea {
             base: Some(base),
             index: None,
@@ -584,7 +586,7 @@ fn is_rust_vtable_slot_load(
             lhs,
             rhs,
         } => {
-            let (base, offset) = match (lhs.as_ref(), rhs.as_ref()) {
+            let (base, offset) = match (lhs.semantic(), rhs.semantic()) {
                 (base, Expr::Const(offset)) | (Expr::Const(offset), base) => (base, *offset),
                 _ => return false,
             };
@@ -600,13 +602,15 @@ fn is_rust_vtable_slot_load(
 }
 
 fn contains_high_word_extract(expr: &Expr, word_bits: u32) -> bool {
-    match expr {
+    match expr.semantic() {
         Expr::Bin {
             op: BinOp::Shr,
             lhs: _,
             rhs,
-        } if matches!(rhs.as_ref(), Expr::Const(bits) if *bits == i64::from(word_bits)) => true,
-        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+        } if matches!(rhs.semantic(), Expr::Const(bits) if *bits == i64::from(word_bits)) => true,
+        Expr::Cast { expr, .. }
+        | Expr::NumericConvert { expr, .. }
+        | Expr::FunctionTableEntry { index: expr, .. } => {
             contains_high_word_extract(expr, word_bits)
         }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
@@ -615,6 +619,25 @@ fn contains_high_word_extract(expr: &Expr, word_bits: u32) -> bool {
         Expr::Un { src, .. } | Expr::Deref { addr: src, .. } => {
             contains_high_word_extract(src, word_bits)
         }
+        Expr::Call { target, args, .. } => {
+            contains_high_word_extract(target, word_bits)
+                || args
+                    .iter()
+                    .any(|arg| contains_high_word_extract(arg, word_bits))
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            contains_high_word_extract(cond, word_bits)
+                || contains_high_word_extract(if_true, word_bits)
+                || contains_high_word_extract(if_false, word_bits)
+        }
+        Expr::WideArithmetic { args, .. } => args
+            .iter()
+            .any(|arg| contains_high_word_extract(arg, word_bits)),
         _ => false,
     }
 }
@@ -926,6 +949,19 @@ mod tests {
     fn attributed_got_tail_and_argument_setup_keep_the_transfer_owner() {
         let setup_owner = OriginSet::one(0x1010);
         let transfer_owner = OriginSet::one(0x1014);
+        let target = Stmt::IndirectGoto {
+            target: Expr::Deref {
+                addr: Box::new(
+                    Expr::Named {
+                        va: 0x4008,
+                        name: "sum_arg6".into(),
+                    }
+                    .with_origins(OriginSet::one(0x1018)),
+                ),
+                size: 8,
+            }
+            .with_origins(OriginSet::one(0x101c)),
+        };
         let mut f = Function {
             name: "forward".into(),
             entry_va: 0,
@@ -935,16 +971,21 @@ mod tests {
                     src: Expr::Reg(reg("rsi#0")),
                 }
                 .with_origins(setup_owner.clone()),
-                got_tail("sum_arg6", 0x4008).with_origins(transfer_owner.clone()),
+                target.with_origins(transfer_owner.clone()),
             ],
         };
 
         recover_resolved_tail_calls(&mut f, CallConv::SysVAmd64);
 
-        let Stmt::Call { args, .. } = f.body[1].semantic() else {
+        let Stmt::Call { target, args, .. } = f.body[1].semantic() else {
             panic!("expected attributed recovered call, got {:#?}", f.body)
         };
         assert!(args.is_empty(), "the attributed local setup was ignored");
+        assert_eq!(
+            target.origins(),
+            Some(&OriginSet::from_addresses([0x1018, 0x101c])),
+            "the slot-load and named-target contributors were not retained"
+        );
         assert_eq!(f.body[0].origins(), Some(&setup_owner));
         assert_eq!(f.body[1].origins(), Some(&transfer_owner));
         assert!(matches!(f.body[2].semantic(), Stmt::Return { .. }));
@@ -1123,6 +1164,24 @@ mod tests {
         let load_owner = OriginSet::one(0x1104);
         let transfer_owner = OriginSet::one(0x1108);
         let mut f = vtable_tail_function(24);
+        let Stmt::Call { target, .. } = &mut f.body[0] else {
+            panic!("expected direct call")
+        };
+        *target = std::mem::replace(target, Expr::Const(0)).with_origins(OriginSet::one(0x10f0));
+        let Stmt::Assign { src, .. } = &mut f.body[1] else {
+            panic!("expected vtable load")
+        };
+        let Expr::Deref { addr, .. } = src else {
+            panic!("expected dereference")
+        };
+        *addr = Box::new(
+            std::mem::replace(addr.as_mut(), Expr::Const(0)).with_origins(OriginSet::one(0x10f4)),
+        );
+        *src = std::mem::replace(src, Expr::Const(0)).with_origins(OriginSet::one(0x10f8));
+        let Stmt::IndirectGoto { target } = &mut f.body[2] else {
+            panic!("expected terminal transfer")
+        };
+        *target = std::mem::replace(target, Expr::Const(0)).with_origins(OriginSet::one(0x10fc));
         f.body[0] = std::mem::replace(&mut f.body[0], Stmt::Nop).with_origins(call_owner.clone());
         f.body[1] = std::mem::replace(&mut f.body[1], Stmt::Nop).with_origins(load_owner.clone());
         f.body[2] =
@@ -1130,7 +1189,10 @@ mod tests {
 
         recover_proven_vtable_tail_calls(&mut f, CallConv::SysVAmd64, &wide_prototypes());
 
-        assert!(matches!(f.body[2].semantic(), Stmt::Call { .. }));
+        let Stmt::Call { target, .. } = f.body[2].semantic() else {
+            panic!("expected attributed recovered call, got {:#?}", f.body)
+        };
+        assert_eq!(target.origins(), Some(&OriginSet::one(0x10f8)));
         assert_eq!(f.body[0].origins(), Some(&call_owner));
         assert_eq!(f.body[1].origins(), Some(&load_owner));
         assert_eq!(f.body[2].origins(), Some(&transfer_owner));
