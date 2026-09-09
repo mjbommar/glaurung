@@ -572,6 +572,14 @@ identity tests, seven ABI declaration controls, and the adjacent wide-scalar
 coalescing contract pass, with more than 4,750 unrelated tests filtered out.
 See the follow-up in `results/wp3-abi-width-identities.md`.
 
+Commit `8eec8cc2` migrates the final declaration plan's eligibility decision to
+the same one-storage proof. Coalesced versions of one carrier can now keep a
+recovered pointer or integer declaration; mixed carriers remain conservative
+`long` values. Its observed-red rendered-pointer contract, all seven focused
+declaration identity tests, and two adjacent pointer/cast controls pass, with
+4,755 or more unrelated tests filtered out. See the follow-up in
+`results/wp3-declaration-identities.md`.
+
 ## Authority and relationship to the roadmaps
 
 `docs/development/roadmap/README.md` remains the canonical roadmap index, and
@@ -5758,6 +5766,10 @@ relevant ratchet's accepted-regression record.
    stale narrow scalar type from their proved definition width; mixed carriers
    still decline. Its observed-red contract and 12 focused ABI-width/
    declaration checks pass. See `results/wp3-abi-width-identities.md`.
+   Commit `8eec8cc2` applies that proof to final declaration-plan eligibility.
+   Same-carrier coalesced values retain recovered pointer/integer declarations;
+   mixed carriers remain `long`. Its observed-red contract and nine focused
+   declaration/cast checks pass. See `results/wp3-declaration-identities.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
