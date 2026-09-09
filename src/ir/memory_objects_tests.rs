@@ -1,5 +1,5 @@
 use super::{infer_from_ast, infer_from_ast_with_identities, AccessRole, LayoutConflict};
-use crate::ir::ast::{Expr, Function, Stmt};
+use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 use crate::ir::types::{BinOp, VReg};
 
 fn reg(name: &str) -> VReg {
@@ -94,10 +94,25 @@ fn opaque_promoted_cursor_recovers_object_by_identity() {
     let mut identities = crate::ir::value_number::ValueIdentities::default();
     identities.attach_promoted_stack_objects([&object_name]);
 
-    let model = infer_from_ast_with_identities(
-        &function(object_cursor_body(&object_name, 64)),
-        Some(&identities),
-    );
+    let mut body = object_cursor_body(&object_name, 64);
+    for statement in &mut body {
+        let statements = match statement {
+            Stmt::Store { .. } => std::slice::from_mut(statement),
+            Stmt::While { body, .. } => body.as_mut_slice(),
+            _ => continue,
+        };
+        for statement in statements {
+            let Stmt::Store { addr, .. } = statement else {
+                continue;
+            };
+            if matches!(addr, Expr::Reg(_)) {
+                *addr =
+                    std::mem::replace(addr, Expr::Const(0)).with_origins(OriginSet::one(0x1010));
+            }
+        }
+    }
+
+    let model = infer_from_ast_with_identities(&function(body), Some(&identities));
     let object = model
         .object_for_base(&reg(&object_name))
         .expect("cursor object");

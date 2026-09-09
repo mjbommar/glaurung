@@ -61,7 +61,7 @@ fn observe_body(
                 // semantic identity. The renderer emits these as assignments;
                 // treating them as `*local = value` here creates a fake object
                 // access and loses the cursor's origin/stride definitions.
-                if let Expr::Reg(dst) = addr {
+                if let Expr::Reg(dst) = addr.semantic() {
                     let promoted = identities.map_or_else(
                         || is_promoted_local_reg(dst),
                         |identities| identities.is_promoted_stack_object(dst),
