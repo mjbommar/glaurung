@@ -416,14 +416,14 @@ fn selected_assignment(
     match (
         condition_proves_nonnegative(cond),
         saturation_call(&if_true),
-        &if_false,
+        if_false.semantic(),
     ) {
         (Some(true), true, Expr::Const(-1)) => {
             if_false = unsigned_all_ones(width);
         }
         _ if condition_proves_negative(cond)
             && saturation_call(&if_false)
-            && matches!(if_true, Expr::Const(-1)) =>
+            && matches!(if_true.semantic(), Expr::Const(-1)) =>
         {
             if_true = unsigned_all_ones(width);
         }
@@ -447,37 +447,37 @@ fn selected_assignment(
 
 fn saturation_call(expression: &Expr) -> bool {
     matches!(
-        expression,
+        expression.semantic(),
         Expr::Bin {
             op: BinOp::Mul,
             lhs,
             rhs,
-        } if (matches!(lhs.as_ref(), Expr::Call { .. })
-            && matches!(rhs.as_ref(), Expr::Const(2)))
-            || (matches!(rhs.as_ref(), Expr::Call { .. })
-                && matches!(lhs.as_ref(), Expr::Const(2)))
+        } if (matches!(lhs.semantic(), Expr::Call { .. })
+            && matches!(rhs.semantic(), Expr::Const(2)))
+            || (matches!(rhs.semantic(), Expr::Call { .. })
+                && matches!(lhs.semantic(), Expr::Const(2)))
     )
 }
 
 fn condition_proves_nonnegative(condition: &Expr) -> Option<bool> {
-    match condition {
+    match condition.semantic() {
         Expr::Cmp {
             op: CmpOp::Sle,
             lhs,
             ..
-        } if matches!(lhs.as_ref(), Expr::Const(0)) => Some(true),
+        } if matches!(lhs.semantic(), Expr::Const(0)) => Some(true),
         _ => None,
     }
 }
 
 fn condition_proves_negative(condition: &Expr) -> bool {
     matches!(
-        condition,
+        condition.semantic(),
         Expr::Cmp {
             op: CmpOp::Slt,
             rhs,
             ..
-        } if matches!(rhs.as_ref(), Expr::Const(0))
+        } if matches!(rhs.semantic(), Expr::Const(0))
     )
 }
 
@@ -498,7 +498,7 @@ fn constant_arm(body: &[Stmt]) -> Option<(AssignmentTarget, Expr)> {
 }
 
 fn constant_expression(expression: &Expr) -> bool {
-    match expression {
+    match expression.semantic() {
         Expr::Const(_) | Expr::FloatConst { .. } | Expr::Addr(_) | Expr::Named { .. } => true,
         Expr::Cast { expr, .. } => constant_expression(expr),
         _ => false,
@@ -577,17 +577,16 @@ fn call_result_width(
 fn assignment(statement: &Stmt) -> Option<(AssignmentTarget, &Expr)> {
     match statement.semantic() {
         Stmt::Assign { dst, src } => Some((AssignmentTarget::Register(dst.clone()), src)),
-        Stmt::Store {
-            addr: Expr::Reg(register @ VReg::Phys(name)),
-            src,
-            size,
-        } if is_promoted_local_name(name) => Some((
-            AssignmentTarget::PromotedLocal {
-                register: register.clone(),
-                size: *size,
-            },
-            src,
-        )),
+        Stmt::Store { addr, src, size } => match addr.semantic() {
+            Expr::Reg(register @ VReg::Phys(name)) if is_promoted_local_name(name) => Some((
+                AssignmentTarget::PromotedLocal {
+                    register: register.clone(),
+                    size: *size,
+                },
+                src,
+            )),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -600,6 +599,7 @@ fn origins_in_slice(body: &[Stmt]) -> OriginSet {
 
 fn origins_in_tree(statement: &Stmt) -> OriginSet {
     let mut origins = statement.origins().cloned().unwrap_or_default();
+    collect_statement_expression_origins(statement.semantic(), &mut origins);
     let mut merge = |nested: &Stmt| origins.merge(&origins_in_tree(nested));
     match statement.semantic() {
         Stmt::If {
@@ -639,6 +639,88 @@ fn origins_in_tree(statement: &Stmt) -> OriginSet {
     origins
 }
 
+fn collect_statement_expression_origins(statement: &Stmt, origins: &mut OriginSet) {
+    match statement {
+        Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
+        Stmt::Assign { src, .. }
+        | Stmt::Return { value: Some(src) }
+        | Stmt::Throw { value: src }
+        | Stmt::IndirectGoto { target: src }
+        | Stmt::Push { value: src } => collect_expression_origins(src, origins),
+        Stmt::Store { addr, src, .. } => {
+            collect_expression_origins(addr, origins);
+            collect_expression_origins(src, origins);
+        }
+        Stmt::Call { target, args, .. } => {
+            collect_expression_origins(target, origins);
+            args.iter()
+                .for_each(|argument| collect_expression_origins(argument, origins));
+        }
+        Stmt::If { cond, .. }
+        | Stmt::While { cond, .. }
+        | Stmt::DoWhile { cond, .. }
+        | Stmt::For { cond, .. } => collect_expression_origins(cond, origins),
+        Stmt::Switch { discriminant, .. } => collect_expression_origins(discriminant, origins),
+        Stmt::Return { value: None }
+        | Stmt::TryCatch { .. }
+        | Stmt::Label(_)
+        | Stmt::Goto { .. }
+        | Stmt::Continue
+        | Stmt::Break
+        | Stmt::Nop
+        | Stmt::Unknown(_)
+        | Stmt::Comment(_)
+        | Stmt::Pop { .. } => {}
+    }
+}
+
+fn collect_expression_origins(expression: &Expr, origins: &mut OriginSet) {
+    if let Some(owner) = expression.origins() {
+        origins.merge(owner);
+    }
+    match expression.semantic() {
+        Expr::Origin { .. } => unreachable!("semantic expression cannot be an origin wrapper"),
+        Expr::FunctionTableEntry { index, .. } | Expr::Deref { addr: index, .. } => {
+            collect_expression_origins(index, origins);
+        }
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            collect_expression_origins(lhs, origins);
+            collect_expression_origins(rhs, origins);
+        }
+        Expr::Un { src, .. }
+        | Expr::Cast { expr: src, .. }
+        | Expr::NumericConvert { expr: src, .. } => collect_expression_origins(src, origins),
+        Expr::Call { target, args, .. } => {
+            collect_expression_origins(target, origins);
+            args.iter()
+                .for_each(|argument| collect_expression_origins(argument, origins));
+        }
+        Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } => {
+            collect_expression_origins(cond, origins);
+            collect_expression_origins(if_true, origins);
+            collect_expression_origins(if_false, origins);
+        }
+        Expr::WideArithmetic { args, .. } => args
+            .iter()
+            .for_each(|argument| collect_expression_origins(argument, origins)),
+        Expr::Reg(_)
+        | Expr::Const(_)
+        | Expr::FloatConst { .. }
+        | Expr::Addr(_)
+        | Expr::Named { .. }
+        | Expr::StringLit { .. }
+        | Expr::StackAddr { .. }
+        | Expr::Lea { .. }
+        | Expr::PdbFieldAddr { .. }
+        | Expr::Unknown(_) => {}
+    }
+}
+
 fn attach_origins(statement: Stmt, origins: OriginSet) -> Stmt {
     if origins.is_empty() {
         statement
@@ -661,23 +743,28 @@ fn doubled_call(expression: &Expr, call_result: &VReg, call: &Expr) -> Option<Ex
         op: BinOp::Add,
         lhs,
         rhs,
-    } = expression
+    } = expression.semantic()
     else {
         return None;
     };
-    if lhs != rhs || !is_integer_view_of(lhs, call_result) {
+    if lhs.semantic() != rhs.semantic() || !is_integer_view_of(lhs, call_result) {
         return None;
     }
     let one_call = substitute_call_result(lhs, call_result, call)?;
-    Some(Expr::Bin {
-        op: BinOp::Mul,
-        lhs: Box::new(one_call),
-        rhs: Box::new(Expr::Const(2)),
-    })
+    let mut origins = OriginSet::empty();
+    collect_expression_origins(expression, &mut origins);
+    Some(
+        Expr::Bin {
+            op: BinOp::Mul,
+            lhs: Box::new(one_call),
+            rhs: Box::new(Expr::Const(2)),
+        }
+        .with_optional_origins((!origins.is_empty()).then_some(origins)),
+    )
 }
 
 fn is_integer_view_of(expression: &Expr, target: &VReg) -> bool {
-    match expression {
+    match expression.semantic() {
         Expr::Reg(register) => register == target,
         Expr::Cast { expr, .. } => is_integer_view_of(expr, target),
         _ => false,

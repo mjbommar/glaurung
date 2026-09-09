@@ -669,6 +669,59 @@ fn attributed_structured_call_diamond_folds_with_all_consumed_origins() {
 }
 
 #[test]
+fn attributed_saturation_expressions_fold_with_all_consumed_origins() {
+    let mut diamond = saturation_diamond(true);
+    let Stmt::If {
+        cond,
+        then_body,
+        else_body: Some(else_body),
+    } = &mut diamond
+    else {
+        unreachable!("saturation fixture is an if/else")
+    };
+    *cond = cond.clone().with_origins(OriginSet::one(0x1500));
+    then_body[0] = then_body[0].clone().with_origins(OriginSet::one(0x1504));
+    let Stmt::Call { target, .. } = then_body[0].semantic_mut() else {
+        unreachable!("true arm starts with the call")
+    };
+    *target = target.clone().with_origins(OriginSet::one(0x1508));
+    then_body[1] = then_body[1].clone().with_origins(OriginSet::one(0x150c));
+    let Stmt::Assign { src, .. } = then_body[1].semantic_mut() else {
+        unreachable!("call result is assigned")
+    };
+    *src = src.clone().with_origins(OriginSet::one(0x1510));
+    let Expr::Bin { lhs, rhs, .. } = src.semantic_mut() else {
+        unreachable!("saturation result doubles the call")
+    };
+    *lhs = Box::new(lhs.as_ref().clone().with_origins(OriginSet::one(0x1514)));
+    *rhs = Box::new(rhs.as_ref().clone().with_origins(OriginSet::one(0x1518)));
+    else_body[0] = else_body[0].clone().with_origins(OriginSet::one(0x151c));
+    let Stmt::Assign { src, .. } = else_body[0].semantic_mut() else {
+        unreachable!("false arm assigns the sentinel")
+    };
+    *src = src.clone().with_origins(OriginSet::one(0x1520));
+
+    let mut function = function(diamond.with_origins(OriginSet::one(0x1524)));
+    collapse_lazy_call_diamonds_with_pointer_width(&mut function, 8);
+
+    let Stmt::Assign { src: selected, .. } = function.body[0].semantic() else {
+        panic!(
+            "attributed saturation diamond was not collapsed: {:#?}",
+            function.body
+        );
+    };
+    assert!(matches!(selected.semantic(), Expr::Select { .. }));
+    assert_eq!(count_calls(selected), 1);
+    assert_eq!(
+        function.body[0]
+            .origins()
+            .expect("folded select statement owners")
+            .addresses(),
+        &[0x1500, 0x1504, 0x1508, 0x150c, 0x1510, 0x1514, 0x1518, 0x151c, 0x1520, 0x1524,]
+    );
+}
+
+#[test]
 fn attributed_conditional_jump_diamond_folds_with_drained_origins() {
     let constant_label = 0x1210;
     let join_label = 0x1220;
