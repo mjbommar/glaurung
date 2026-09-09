@@ -2903,8 +2903,10 @@ provenance through lowering.
 - [~] Keep naming as a render mapping, not a program rewrite. Commit
   `b6e1f92d` adds the production identity-aware naming entry point and removes
   direct-return role classification's dependence on numbered display text.
-  `apply_role_names` still rewrites AST `VReg` spellings, so the architectural
-  separation remains incomplete. See
+  Follow-on `358e0408` makes role-map computation read-only and separates the
+  legacy mutation into an explicit operation; its test proves the complete AST
+  is unchanged while the map is built. Production still applies that map before
+  later semantic passes, so moving/deleting the mutation remains open. See
   `results/wp3-return-role-naming-identities.md`.
 
 ### Origin and mapping surface
@@ -5048,6 +5050,12 @@ relevant ratchet's accepted-regression record.
    the exact release-built GCC O2 x86-64 Hello slice pass; continue from the
    broader naming/render separation and final `tag_phys` boundary. See
    `results/wp3-return-role-naming-identities.md`.
+   Follow-on `358e0408` establishes the next required seam: role-map
+   calculation now takes an immutable AST and the legacy rewrite is a separate
+   explicit operation. Its 22 naming tests and the same exact release-built GCC
+   O2 x86-64 Hello slice pass. Next classify and migrate the post-naming
+   semantic consumers so the mapping can move to rendering without changing
+   their behavior.
    Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.

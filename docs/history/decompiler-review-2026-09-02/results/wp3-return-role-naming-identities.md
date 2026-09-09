@@ -43,3 +43,34 @@ The selector intentionally covers both PIE and non-PIE symbol-bearing GCC O2
 cells (`pie` is also a substring of `nonpie`). No broad Python suite, fixture
 corpus, DecBench run, or redundant 72-cell Hello matrix was run for this small
 identity-only increment.
+
+## Read-only role-map boundary
+
+Follow-on commit `358e0408` separates the calculation from its legacy AST
+rewrite. `role_names_with_identities` now accepts an immutable `Function` and
+returns the complete deterministic presentation map. The independently named
+`apply_role_name_mapping` operation performs the rewrite explicitly. The
+production pipeline calls these in sequence for byte-compatible output today;
+future WP3 increments can migrate downstream semantic consumers before moving
+or deleting that second call.
+
+The adversarial return-role test now snapshots the complete `Function`, computes
+the map, and proves the semantic AST is byte-for-byte structurally unchanged
+before applying the map. Focused evidence remains:
+
+```text
+cargo test --features python-ext --lib ir::naming::tests:: --quiet
+22 passed; 0 failed; 4695 filtered out
+```
+
+A release build from a clean detached worktree at `358e0408` retained both
+selected symbol-bearing GCC O2 x86-64 Hello cells:
+
+```text
+python -m pytest -q --tb=short \
+  python/tests/test_linux_x86_64_hello_canonical.py::test_dynamic_hello_is_canonical \
+  -k 'gcc and O2 and pie and symbols'
+2 passed
+```
+
+No broader suite or corpus was run for this behavior-neutral separation.
