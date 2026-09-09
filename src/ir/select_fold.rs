@@ -622,8 +622,18 @@ fn select_from_diamond(statement: &Stmt, immediately_returned: Option<&VReg>) ->
                     ))
                 }
                 (
-                    Some(AssignmentValue::PromotedLocal(then_dst, then_src, then_size)),
-                    Some(AssignmentValue::PromotedLocal(else_dst, else_src, else_size)),
+                    Some(AssignmentValue::PromotedLocal(
+                        then_dst,
+                        then_src,
+                        then_size,
+                        then_address_origins,
+                    )),
+                    Some(AssignmentValue::PromotedLocal(
+                        else_dst,
+                        else_src,
+                        else_size,
+                        else_address_origins,
+                    )),
                 ) if then_dst == else_dst
                     && then_size == else_size
                     && immediately_returned != Some(then_dst) =>
@@ -636,7 +646,9 @@ fn select_from_diamond(statement: &Stmt, immediately_returned: Option<&VReg>) ->
                         },
                         origins_of(statement)
                             .union(&origins_of(then_statement))
-                            .union(&origins_of(else_statement)),
+                            .union(&origins_of(else_statement))
+                            .union(&then_address_origins)
+                            .union(&else_address_origins),
                     ))
                 }
                 _ => None,
@@ -648,17 +660,19 @@ fn select_from_diamond(statement: &Stmt, immediately_returned: Option<&VReg>) ->
 
 enum AssignmentValue<'a> {
     Register(&'a VReg, &'a Expr),
-    PromotedLocal(&'a VReg, &'a Expr, u8),
+    PromotedLocal(&'a VReg, &'a Expr, u8, OriginSet),
 }
 
 fn assignment_value(statement: &Stmt) -> Option<AssignmentValue<'_>> {
     match statement.semantic() {
         Stmt::Assign { dst, src } => Some(AssignmentValue::Register(dst, src)),
-        Stmt::Store {
-            addr: Expr::Reg(dst @ VReg::Phys(name)),
-            src,
-            size,
-        } if is_promoted_local(name) => Some(AssignmentValue::PromotedLocal(dst, src, *size)),
+        Stmt::Store { addr, src, size } => {
+            let Expr::Reg(dst @ VReg::Phys(name)) = addr.semantic() else {
+                return None;
+            };
+            is_promoted_local(name)
+                .then(|| AssignmentValue::PromotedLocal(dst, src, *size, origins_of_expr(addr)))
+        }
         _ => None,
     }
 }
@@ -1471,17 +1485,21 @@ mod tests {
     #[test]
     fn promoted_local_assignment_diamond_becomes_a_nonterminal_select() {
         let local = reg("local_2c");
-        let store = |value| Stmt::Store {
-            addr: Expr::Reg(local.clone()),
-            src: Expr::Const(value),
-            size: 4,
+        let store = |value, address_owner, value_owner, statement_owner| {
+            Stmt::Store {
+                addr: Expr::Reg(local.clone()).with_origins(OriginSet::one(address_owner)),
+                src: Expr::Const(value).with_origins(OriginSet::one(value_owner)),
+                size: 4,
+            }
+            .with_origins(OriginSet::one(statement_owner))
         };
         let mut f = function(vec![
             Stmt::If {
-                cond: Expr::Reg(reg("is_b")),
-                then_body: vec![store(2)],
-                else_body: Some(vec![store(0)]),
-            },
+                cond: Expr::Reg(reg("is_b")).with_origins(OriginSet::one(0x1404)),
+                then_body: vec![store(2, 0x1414, 0x1418, 0x1410)],
+                else_body: Some(vec![store(0, 0x1424, 0x1428, 0x1420)]),
+            }
+            .with_origins(OriginSet::one(0x1400)),
             Stmt::Store {
                 addr: Expr::Reg(reg("local_state")),
                 src: Expr::Reg(local.clone()),
@@ -1492,17 +1510,36 @@ mod tests {
 
         collapse_assignment_diamonds(&mut f);
 
-        assert!(
-            matches!(
-                f.body.first(),
-                Some(Stmt::Store {
-                    addr: Expr::Reg(destination),
-                    src: Expr::Select { .. },
-                    size: 4,
-                }) if destination == &local
-            ),
-            "same-local stores should become one lazy value select: {:?}",
-            f.body
+        let Some(statement) = f.body.first() else {
+            panic!("the diamond disappeared: {:?}", f.body);
+        };
+        let Stmt::Store {
+            addr, src, size: 4, ..
+        } = statement.semantic()
+        else {
+            panic!(
+                "same-local stores should become one lazy select: {:?}",
+                f.body
+            );
+        };
+        assert!(matches!(addr.semantic(), Expr::Reg(destination) if destination == &local));
+        let Expr::Select {
+            cond,
+            if_true,
+            if_false,
+            ..
+        } = src.semantic()
+        else {
+            panic!("the recovered store has no select: {src:#?}");
+        };
+        assert_eq!(cond.origins(), Some(&OriginSet::one(0x1404)));
+        assert_eq!(if_true.origins(), Some(&OriginSet::one(0x1418)));
+        assert_eq!(if_false.origins(), Some(&OriginSet::one(0x1428)));
+        assert_eq!(
+            statement.origins(),
+            Some(&OriginSet::from_addresses([
+                0x1400, 0x1410, 0x1414, 0x1420, 0x1424
+            ]))
         );
     }
 
