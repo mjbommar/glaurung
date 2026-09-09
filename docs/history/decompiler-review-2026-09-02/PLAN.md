@@ -1022,10 +1022,17 @@ provenance through lowering.
   identity-owned width facts directly. Commit `a525ba21` removes the map from
   `PreparedLlir`, `PreparedAst`, and DecBench type projection; production
   renderer state now transports only the identity-owned width facts. The
-  broader type system and remaining consumers are still name-keyed. See
+  broader type system and remaining consumers are still name-keyed. Commit
+  `3961771e` moves `ValueId` ownership into the authoritative `SsaInfo`
+  snapshot. IDs are allocated deterministically from the complete sorted SSA
+  value set, including definitions, uses, phi results, and phi inputs; value
+  numbering now carries those IDs rather than minting them in traversal order.
+  This removes the second identity authority needed before migrating the
+  remaining per-value type facts. See
   `results/wp3-multi-output-identities.md` and
   `results/wp3-ast-identity-renames.md`, and
-  `results/wp3-opaque-value-identities.md`.
+  `results/wp3-opaque-value-identities.md`, and
+  `results/wp3-ssa-owned-value-identities.md`.
 - [~] Add a compositional instruction-origin set to expressions/statements;
   unions must be deterministic and deduplicated. `7bea3314` defines the
   canonical set and `59840017` adds transparent statement ownership with
@@ -5132,6 +5139,12 @@ relevant ratchet's accepted-regression record.
    selected O2 Hello cells across x86-64, ARMv7, and AArch64 plus the GCC-O2
    binary32 sign-bit lane. The name-keyed map is now confined to value
    numbering/coalescing internals and test-only no-sidecar compatibility.
+   Commit `3961771e` then makes the SSA snapshot itself the sole allocator of
+   opaque IDs. Focused SSA/value-numbering checks pass, as do exact-release O2
+   Hello cells on x86-64, AArch64, and ARMv7 plus the binary32 sign-bit lane.
+   Next migrate `TypeMapV` facts from semantic `SsaValue` keys to snapshot-owned
+   `ValueId` keys one bounded fact family at a time; do not introduce another
+   allocator or parse numbered display names.
    Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
