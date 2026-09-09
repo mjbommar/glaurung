@@ -5,7 +5,7 @@
 //! resolve indirect calls or jumps through the GOT on ELF platforms.
 
 use object::read::Object;
-use object::{ObjectSection, ObjectSymbol, RelocationTarget};
+use object::{ObjectSection, ObjectSymbol, ObjectSymbolTable, RelocationTarget};
 
 /// Build a best-effort map of GOT entry addresses (r_offset) to symbol names.
 /// Supports ELF64 RELA and ELF32 REL formats. Returns empty on failure.
@@ -191,6 +191,42 @@ pub fn elf_got_target_map(data: &[u8]) -> Vec<(u64, u64)> {
         return out;
     }
 
+    // Linked ELF images keep loader relocations in the dynamic relocation
+    // stream. Their symbol indices belong to `.dynsym`, not the ordinary
+    // symbol table used by `Object::symbol_by_index`. Reading section
+    // relocations alone therefore misses common GLOB_DAT entries in shared
+    // objects even though tools such as readelf show them plainly.
+    if let (Some(relocations), Some(symbols)) =
+        (obj.dynamic_relocations(), obj.dynamic_symbol_table())
+    {
+        for (offset, relocation) in relocations {
+            let target = match relocation.target() {
+                RelocationTarget::Symbol(index) => {
+                    let Ok(symbol) = symbols.symbol_by_index(index) else {
+                        continue;
+                    };
+                    if !symbol.is_definition() {
+                        continue;
+                    }
+                    let address = symbol.address();
+                    if address == 0 {
+                        continue;
+                    }
+                    address.wrapping_add(relocation.addend() as u64)
+                }
+                RelocationTarget::Absolute => {
+                    let addend = relocation.addend();
+                    if addend <= 0 {
+                        continue;
+                    }
+                    addend as u64
+                }
+                _ => continue,
+            };
+            out.push((offset, target));
+        }
+    }
+
     for section in obj.sections() {
         let Ok(name) = section.name() else {
             continue;
@@ -326,6 +362,15 @@ fn aarch64_relative_relocations(bytes: &[u8], little_endian: bool) -> Vec<(u64, 
 #[cfg(test)]
 mod relative_relocation_tests {
     use super::{aarch64_relative_relocations, arm_relative_relocations};
+
+    #[test]
+    fn committed_shared_object_resolves_a_defined_dynamic_symbol() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("samples/binaries/platforms/linux/amd64/export/libraries/shared/libmathlib.so");
+        let data = std::fs::read(path).expect("committed shared-library sample");
+        let targets = super::elf_got_target_map(&data);
+        assert!(targets.contains(&(0x4018, 0x1430)), "{targets:#x?}");
+    }
 
     #[test]
     fn aarch64_relative_rela_keeps_its_slot_and_addend() {
