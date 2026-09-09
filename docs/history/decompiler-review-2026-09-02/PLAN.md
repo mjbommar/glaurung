@@ -103,8 +103,14 @@ release-built portable `ops[5]` integration pass. See
 `3889f7e5` preserves the scaled-address provenance consumed while reconstructing
 the semantic table index. Its strengthened contract was observed red, all 14
 function-table tests pass, and the same exact release-built dispatcher remains
-green. See `results/wp3-function-table-index-expression-origins.md`. Commit
-`849c5a5b` then migrates direct, resolved GOT-indirect, and relocation-proven
+green. See `results/wp3-function-table-index-expression-origins.md`. Follow-on
+`5f26fa50` closes the full table-address proof boundary: owners from the scaled
+definition, relocation-proven base definition, address calculation, and table
+load compose on one canonical recovered entry rather than nesting or
+disappearing. The strengthened observed-red contract, all 14 module tests, and
+the same exact release-built dispatcher pass. See
+`results/wp3-function-table-address-expression-origins.md`. Commit `849c5a5b`
+then migrates direct, resolved GOT-indirect, and relocation-proven
 vtable tail-call recovery. Its
 stripped map is exactly neutral and its whole-Python boundary improves from 217
 to 216 failures with no addition; a controlled release A/B attributes the
