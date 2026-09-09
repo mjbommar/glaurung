@@ -552,6 +552,18 @@ fn decbench_text_with_installed_environment(
         "recover_typed_handlers",
         crate::ir::exception_recover::recover_typed_handlers(&mut prepared, exception_sites)
     );
+    // Typed handlers are created after the ordinary expression pipeline, so
+    // their newly nested bodies have never participated in copy propagation,
+    // temporary reconstruction, or constant folding. Run the same
+    // origin-transparent transforms once at this explicit boundary. Each try
+    // and catch is an independent region: no value is carried across the
+    // exceptional edge, and the passes retain their ordinary side-effect and
+    // adjacency restrictions within each body.
+    pass!("prepare_recovered_exception_expressions", {
+        crate::ir::copy_prop::propagate_copies_with_identities(&mut prepared, &value_identities);
+        crate::ir::expr_reconstruct::reconstruct(&mut prepared);
+        crate::ir::const_fold::fold_constants_with_identities(&mut prepared, &value_identities)
+    });
     pass!(
         "recover_throws",
         crate::ir::exception_recover::recover_throws_with_identities(

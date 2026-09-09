@@ -304,13 +304,19 @@ fn propagate_run(
                 *changed |= subst(target, &copies);
                 copies.clear();
             }
+            Stmt::Throw { value } => {
+                *changed |= subst(value, &copies);
+                copies.clear();
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                propagate_run(try_body, changed, identities);
+                for catch in catches {
+                    propagate_run(&mut catch.body, changed, identities);
+                }
+                copies.clear();
+            }
             Stmt::Label(_) | Stmt::Goto { .. } | Stmt::Continue => copies.clear(),
-            Stmt::Break
-            | Stmt::Nop
-            | Stmt::Unknown(_)
-            | Stmt::Comment(_)
-            | Stmt::Throw { .. }
-            | Stmt::TryCatch { .. } => {}
+            Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
         }
     }
     copies
@@ -456,13 +462,19 @@ fn propagate_run_counted(
                 *changed |= subst(target, &copies);
                 copies.clear();
             }
+            Stmt::Throw { value } => {
+                *changed |= subst(value, &copies);
+                copies.clear();
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                propagate_run_counted(try_body, reads, changed, identities);
+                for catch in catches {
+                    propagate_run_counted(&mut catch.body, reads, changed, identities);
+                }
+                copies.clear();
+            }
             Stmt::Label(_) | Stmt::Goto { .. } | Stmt::Continue => copies.clear(),
-            Stmt::Break
-            | Stmt::Nop
-            | Stmt::Unknown(_)
-            | Stmt::Comment(_)
-            | Stmt::Throw { .. }
-            | Stmt::TryCatch { .. } => {}
+            Stmt::Break | Stmt::Nop | Stmt::Unknown(_) | Stmt::Comment(_) => {}
         }
     }
     copies
@@ -502,6 +514,57 @@ mod tests {
             [_, Stmt::Return { value: Some(value) }]
                 if matches!(value.semantic(), Expr::Const(7))
                     && value.origins() == Some(&owner)
+        ));
+    }
+
+    #[test]
+    fn exception_bodies_are_independent_copy_propagation_surfaces() {
+        let binding = reg("exception_0");
+        let mut function = Function {
+            name: "exception_copies".into(),
+            entry_va: 0,
+            body: vec![Stmt::TryCatch {
+                try_body: vec![
+                    Stmt::Assign {
+                        dst: reg("try_copy"),
+                        src: Expr::Reg(reg("arg0")),
+                    },
+                    Stmt::Return {
+                        value: Some(Expr::Reg(reg("try_copy"))),
+                    },
+                ],
+                catches: vec![crate::ir::ast::CatchClause {
+                    type_name: "int".into(),
+                    binding: binding.clone(),
+                    body: vec![
+                        Stmt::Assign {
+                            dst: reg("catch_copy"),
+                            src: Expr::Reg(binding.clone()),
+                        },
+                        Stmt::Throw {
+                            value: Expr::Reg(reg("catch_copy")),
+                        },
+                    ],
+                }],
+            }],
+        };
+
+        assert!(propagate_copies(&mut function));
+
+        let Stmt::TryCatch { try_body, catches } = function.body[0].semantic() else {
+            panic!("exception region disappeared: {:#?}", function.body)
+        };
+        assert!(matches!(
+            try_body.last().map(Stmt::semantic),
+            Some(Stmt::Return {
+                value: Some(Expr::Reg(value))
+            }) if value == &reg("arg0")
+        ));
+        assert!(matches!(
+            catches[0].body.last().map(Stmt::semantic),
+            Some(Stmt::Throw {
+                value: Expr::Reg(value)
+            }) if value == &binding
         ));
     }
 
