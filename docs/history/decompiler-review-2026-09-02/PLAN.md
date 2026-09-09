@@ -3003,7 +3003,8 @@ provenance through lowering.
   expression owners. Shared call-target naming and identifier census now retain
   prototype and stack-protector evidence through expression owners. Wide-load
   and portable-global declaration evidence is likewise origin-transparent;
-  universal production attribution remains open.
+  the scored-C unit-step renderer also retains `++`/`--` spelling through
+  expression owners. Universal production attribution remains open.
 - [~] Thread origins through lowering, expression rewrites, structuring, tail
   duplication, and rendering. Commit `8cb7d171` makes enabled statement
   consumers and all three renderers preserve or ignore the carrier without
@@ -5274,6 +5275,13 @@ relevant ratchet's accepted-regression record.
    removes the fixture's stale byte-array-only spelling assumption while
    preserving its named-storage and no-raw-address contract. See
    `results/wp3-declaration-expression-origins.md`.
+   Commit `e54bd1d7` closes the scored-C unit-step rendering sibling. An
+   attributed cast/addition/value/literal chain now retains source-like `++` or
+   `--` spelling under the same exact integer-local and literal-one proof. Its
+   observed-red contract and all four real `for_sum` GCC/Clang O0/O2 round
+   trips pass against an exact clean release build; direct output inspection
+   confirms the recovered GCC-O0 loop renders `i++`. See
+   `results/wp3-unit-step-render-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
