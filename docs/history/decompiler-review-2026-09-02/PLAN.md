@@ -5389,6 +5389,16 @@ relevant ratchet's accepted-regression record.
    GCC/Clang O2 dense guarded-switch controls, and the periodic six-cell
    x86-64/AArch64/ARMv7 O0/O2 Hello checkpoint pass against an exact release
    build. See `results/wp3-contradictory-guard-expression-origins.md`.
+   Commit `1c8b303e` closes the residual promoted-store address reader in the
+   prepared-AST memory-object adapter. Expression ownership around a
+   pipeline-owned promoted object no longer turns its scalar definition into a
+   fake indirect write or loses recovered origin/stride evidence; the explicit
+   identity gate and all existing conflict refusals remain. The observed-red
+   ownership contract, all 11 focused memory-object tests, and the directly
+   owning aggregate-cursor real-binary round trip pass against an exact clean
+   release build. The immediately preceding green six-cell Hello checkpoint
+   was not repeated. See
+   `results/wp3-memory-object-store-expression-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
