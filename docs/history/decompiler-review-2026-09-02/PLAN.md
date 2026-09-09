@@ -1034,12 +1034,16 @@ provenance through lowering.
   membership—to `ValueId` keys. The production numbered-type merge queries
   those facts directly through the ID carried by `ValueIdentities`; semantic
   `SsaValue` objects remain only for local graph analysis and reverse ABI
-  projection. See
+  projection. Commit `e0d55e45` applies the same ownership rule to the
+  cross-pass `BitDemandOracle`: value masks are stored by snapshot-owned
+  `ValueId`, while per-use masks remain in their already-stable dense
+  instruction/operand grid. See
   `results/wp3-multi-output-identities.md` and
   `results/wp3-ast-identity-renames.md`, and
   `results/wp3-opaque-value-identities.md`, and
   `results/wp3-ssa-owned-value-identities.md`, and
-  `results/wp3-valued-types-by-value-id.md`.
+  `results/wp3-valued-types-by-value-id.md`, and
+  `results/wp3-bit-demand-value-identities.md`.
 - [~] Add a compositional instruction-origin set to expressions/statements;
   unions must be deterministic and deduplicated. `7bea3314` defines the
   canonical set and `59840017` adds transparent statement ownership with
@@ -5159,6 +5163,14 @@ relevant ratchet's accepted-regression record.
    the binary32 sign-bit lane. Next audit the remaining persistent
    `HashMap<SsaValue, ...>` stores and migrate only those that are cross-pass
    facts; temporary SSA graph worklists should remain semantic-value keyed.
+   Commit `e0d55e45` migrates the one additional persistent store found by
+   that audit, `BitDemandOracle::values`, onto `ValueId`. Its six owning tests
+   and six observable-parameter-width consumers pass. Exact-release O2 Hello
+   remains green on x86-64, AArch64, and ARMv7. The four directly adjacent
+   atomic lanes are status-neutral relative to parent: both revisions
+   have the same one pass and three failures, including the same two stale
+   baseline regressions. Do not count those lanes green; repair their current
+   output separately under the appropriate WP9/WP10 capability queue.
    Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
