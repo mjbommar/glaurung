@@ -94,8 +94,23 @@ fn fold_masks_in_stmt(statement: &mut Stmt) {
 }
 
 fn fold_masks_in_expr(expr: &mut Expr) {
+    if let Expr::Origin {
+        origins,
+        expr: semantic,
+    } = expr
+    {
+        fold_masks_in_expr(semantic);
+        let origins = origins.clone();
+        let semantic = std::mem::replace(
+            semantic.as_mut(),
+            Expr::Unknown("temporary boolean-mask expression".into()),
+        );
+        *expr = semantic.with_origins(origins);
+        return;
+    }
+
     match expr {
-        Expr::Origin { expr, .. } => fold_masks_in_expr(expr),
+        Expr::Origin { .. } => unreachable!("origin carrier returned above"),
         Expr::FunctionTableEntry { index, .. } => fold_masks_in_expr(index),
         Expr::Call { target, args, .. } => {
             fold_masks_in_expr(target);
@@ -137,14 +152,21 @@ fn fold_masks_in_expr(expr: &mut Expr) {
             if_true,
             if_false,
             ..
-        } if matches!(cond.as_ref(), Expr::Cmp { .. })
-            && matches!(if_true.as_ref(), Expr::Const(-1))
-            && matches!(if_false.as_ref(), Expr::Const(0)) =>
+        } if matches!(cond.semantic(), Expr::Cmp { .. })
+            && matches!(if_true.semantic(), Expr::Const(-1))
+            && matches!(if_false.semantic(), Expr::Const(0)) =>
         {
-            Some(Expr::Un {
-                op: UnOp::Neg,
-                src: cond.clone(),
-            })
+            let origins = [cond.as_ref(), if_true.as_ref(), if_false.as_ref()]
+                .into_iter()
+                .filter_map(Expr::origins)
+                .fold(OriginSet::empty(), |owners, next| owners.union(next));
+            Some(
+                Expr::Un {
+                    op: UnOp::Neg,
+                    src: Box::new(cond.semantic().clone()),
+                }
+                .with_optional_origins((!origins.is_empty()).then_some(origins)),
+            )
         }
         _ => None,
     };
@@ -688,29 +710,37 @@ mod tests {
             op: CmpOp::Slt,
             lhs: Box::new(Expr::Reg(reg("left"))),
             rhs: Box::new(Expr::Reg(reg("right"))),
-        };
+        }
+        .with_origins(OriginSet::one(0x1004));
         let mut f = function(vec![assign(
             "mask",
             Expr::Select {
                 cond: Box::new(comparison),
-                if_true: Box::new(Expr::Const(-1)),
-                if_false: Box::new(Expr::Const(0)),
+                if_true: Box::new(Expr::Const(-1).with_origins(OriginSet::one(0x1008))),
+                if_false: Box::new(Expr::Const(0).with_origins(OriginSet::one(0x100c))),
                 width: 4,
-            },
+            }
+            .with_origins(OriginSet::one(0x1000)),
         )]);
 
         fold_boolean_masks(&mut f);
 
+        let [Stmt::Assign { src, .. }] = f.body.as_slice() else {
+            panic!("expected one mask assignment");
+        };
         assert!(matches!(
-            f.body.as_slice(),
-            [Stmt::Assign {
-                src: Expr::Un {
-                    op: UnOp::Neg,
-                    src,
-                },
-                ..
-            }] if matches!(src.as_ref(), Expr::Cmp { op: CmpOp::Slt, .. })
+            src.semantic(),
+            Expr::Un {
+                op: UnOp::Neg,
+                src: condition,
+            } if matches!(condition.semantic(), Expr::Cmp { op: CmpOp::Slt, .. })
         ));
+        assert_eq!(
+            src.origins(),
+            Some(&OriginSet::from_addresses(
+                [0x1000, 0x1004, 0x1008, 0x100c,]
+            ))
+        );
     }
 
     #[test]
