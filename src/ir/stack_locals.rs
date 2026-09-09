@@ -2926,6 +2926,63 @@ mod tests {
     }
 
     #[test]
+    fn expression_origin_wrapped_stack_alias_still_promotes_an_indexed_object() {
+        let holder = reg("r8#1");
+        let mut f = Function {
+            name: "graph_bfs_shape".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(104)),
+                    },
+                },
+                Stmt::Assign {
+                    dst: holder.clone(),
+                    src: Expr::Bin {
+                        op: crate::ir::types::BinOp::Add,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(64)),
+                    }
+                    .with_origins(OriginSet::one(0x1004)),
+                },
+                Stmt::Assign {
+                    dst: reg("eax"),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Lea {
+                            base: Some(reg("rax#9")),
+                            index: Some(holder),
+                            scale: 1,
+                            disp: 0,
+                            segment: None,
+                        }),
+                        size: 1,
+                    },
+                },
+            ],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        assert!(matches!(
+            f.body[1].semantic(),
+            Stmt::Assign { src, .. }
+                if matches!(src.semantic(), Expr::StackAddr { size: 40, .. })
+        ));
+        assert!(matches!(
+            f.body[2].semantic(),
+            Stmt::Assign {
+                src: Expr::Deref { addr, size: 1 },
+                ..
+            } if matches!(addr.semantic(), Expr::Bin { lhs, .. }
+                if matches!(lhs.semantic(), Expr::StackAddr { size: 40, .. }))
+        ));
+    }
+
+    #[test]
     fn narrow_reads_of_a_wide_spill_keep_the_parent_storage_width() {
         // Both Clang and GCC spill a uint32_t call result and then read its
         // low word and low byte through a union.  Shrinking the declaration to

@@ -267,7 +267,7 @@ pub(super) fn collect_label_stack_deltas(
 /// those positions consumes the register's bits without inheriting its
 /// coordinate.
 fn expression_roots_at(expr: &Expr, register: &VReg) -> bool {
-    match expr {
+    match expr.semantic() {
         Expr::Reg(reg) => reg == register,
         Expr::Lea { base, index, .. } => {
             base.as_ref() == Some(register) || index.as_ref() == Some(register)

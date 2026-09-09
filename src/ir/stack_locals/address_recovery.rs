@@ -43,7 +43,7 @@ pub(super) fn resolve_stack_address(
         }
     }
 
-    match expr {
+    match expr.semantic() {
         Expr::Reg(reg) => base_address(reg, sp_delta, ctx, address_defs),
         Expr::Lea {
             base: Some(base),
@@ -57,7 +57,7 @@ pub(super) fn resolve_stack_address(
         }
         Expr::Bin { op, lhs, rhs } => {
             let (base, base_disp) = resolve_stack_address(lhs, sp_delta, ctx, address_defs)?;
-            let Expr::Const(amount) = rhs.as_ref() else {
+            let Expr::Const(amount) = rhs.semantic() else {
                 return None;
             };
             let adjustment = match op {
@@ -95,15 +95,16 @@ pub(super) fn resolved_memory_address(
     address_defs: &HashMap<VReg, (String, i64)>,
 ) -> Option<(String, i64, Option<VReg>, u8)> {
     fn scaled_index(expr: &Expr) -> Option<(VReg, u8, i64)> {
-        match expr {
+        match expr.semantic() {
             Expr::Reg(index) => Some((index.clone(), 1, 0)),
             Expr::Bin {
                 op: crate::ir::types::BinOp::Mul,
                 lhs,
                 rhs,
             } => {
-                let (Expr::Reg(index), Expr::Const(scale)) = (lhs.as_ref(), rhs.as_ref()) else {
-                    let (Expr::Const(scale), Expr::Reg(index)) = (lhs.as_ref(), rhs.as_ref())
+                let (Expr::Reg(index), Expr::Const(scale)) = (lhs.semantic(), rhs.semantic())
+                else {
+                    let (Expr::Const(scale), Expr::Reg(index)) = (lhs.semantic(), rhs.semantic())
                     else {
                         return None;
                     };
@@ -122,7 +123,8 @@ pub(super) fn resolved_memory_address(
                 lhs,
                 rhs,
             } => {
-                let (Expr::Reg(index), Expr::Const(shift)) = (lhs.as_ref(), rhs.as_ref()) else {
+                let (Expr::Reg(index), Expr::Const(shift)) = (lhs.semantic(), rhs.semantic())
+                else {
                     return None;
                 };
                 u32::try_from(*shift)
@@ -137,7 +139,7 @@ pub(super) fn resolved_memory_address(
                     crate::ir::types::BinOp::Add | crate::ir::types::BinOp::Sub
                 ) =>
             {
-                if let Expr::Const(amount) = rhs.as_ref() {
+                if let Expr::Const(amount) = rhs.semantic() {
                     let (index, scale, offset) = scaled_index(lhs)?;
                     let adjustment = match op {
                         crate::ir::types::BinOp::Add => *amount,
@@ -147,7 +149,7 @@ pub(super) fn resolved_memory_address(
                     return Some((index, scale, offset.checked_add(adjustment)?));
                 }
                 if matches!(op, crate::ir::types::BinOp::Add) {
-                    if let Expr::Const(amount) = lhs.as_ref() {
+                    if let Expr::Const(amount) = lhs.semantic() {
                         let (index, scale, offset) = scaled_index(rhs)?;
                         return Some((index, scale, offset.checked_add(*amount)?));
                     }
@@ -172,8 +174,8 @@ pub(super) fn resolved_memory_address(
     // Argument reconstruction represents effective addresses as ordinary AST
     // arithmetic rather than `Lea`: `((stack_base + index*scale) + disp)`.
     // Recover that form before handling the lower-level memory operand below.
-    if let Expr::Bin { op, lhs, rhs } = expr {
-        if let Expr::Const(amount) = rhs.as_ref() {
+    if let Expr::Bin { op, lhs, rhs } = expr.semantic() {
+        if let Expr::Const(amount) = rhs.semantic() {
             let adjustment = match op {
                 crate::ir::types::BinOp::Add => Some(*amount),
                 crate::ir::types::BinOp::Sub => amount.checked_neg(),
@@ -207,7 +209,7 @@ pub(super) fn resolved_memory_address(
         scale,
         disp,
         segment: None,
-    } = expr
+    } = expr.semantic()
     else {
         return None;
     };
@@ -670,7 +672,7 @@ pub(super) fn escaped_stack_address(
         return resolve_stack_address(expr, sp_delta, ctx, address_defs);
     }
     if prefer_active_base {
-        return match expr {
+        return match expr.semantic() {
             Expr::Reg(VReg::Phys(name)) if is_active_stack_base(name, ctx) => {
                 Some((name.clone(), 0))
             }
@@ -678,14 +680,14 @@ pub(super) fn escaped_stack_address(
             _ => constant_stack_address(expr, ctx),
         };
     }
-    constant_stack_address(expr, ctx).or_else(|| match expr {
+    constant_stack_address(expr, ctx).or_else(|| match expr.semantic() {
         Expr::Reg(reg) => address_defs.get(reg).cloned(),
         _ => None,
     })
 }
 
 fn constant_stack_address(expr: &Expr, ctx: StackContext) -> Option<(String, i64)> {
-    match expr {
+    match expr.semantic() {
         Expr::Lea {
             base: Some(VReg::Phys(base)),
             index: None,
@@ -694,7 +696,8 @@ fn constant_stack_address(expr: &Expr, ctx: StackContext) -> Option<(String, i64
             ..
         } if is_active_stack_base(base, ctx) => Some((base.clone(), *disp)),
         Expr::Bin { op, lhs, rhs } => {
-            let (Expr::Reg(VReg::Phys(base)), Expr::Const(amount)) = (lhs.as_ref(), rhs.as_ref())
+            let (Expr::Reg(VReg::Phys(base)), Expr::Const(amount)) =
+                (lhs.semantic(), rhs.semantic())
             else {
                 return None;
             };
