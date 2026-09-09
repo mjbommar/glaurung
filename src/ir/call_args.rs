@@ -991,8 +991,9 @@ fn loop_body_reaching(
 /// ... `rdi#1 = next`). A call before that definition consumes `rdi#1`, not the
 /// function-entry `rdi`. Phi-copy coalescing can fold `next` into an arbitrary
 /// computed expression, so the update is not required to remain a register
-/// copy. Requiring the exact initialized SSA destination and a preceding call
-/// keeps this narrower than generic phi reconstruction.
+/// copy. Requiring one ABI slot, only non-entry candidates, the same nonempty
+/// stable value-ID set in the initializer, and a preceding call keeps this
+/// narrower than generic phi reconstruction.
 fn loop_carried_arg_inputs(
     prefix: &[Stmt],
     loop_body: &[Stmt],
@@ -1007,18 +1008,41 @@ fn loop_carried_arg_inputs(
             continue;
         };
         let Some((slot, versioned, initialized)) = (match identities {
-            Some(identities) => identities.exact(dst).and_then(|identity| {
-                let storage = identity.canonical_physical_base()?;
-                let slot = slot_of(arch, storage)?;
+            Some(identities) => {
+                let Some(candidates) = identities.candidates(dst) else {
+                    continue;
+                };
+                let slots = candidates
+                    .iter()
+                    .map(|identity| {
+                        identity
+                            .canonical_physical_base()
+                            .and_then(|storage| slot_of(arch, storage))
+                    })
+                    .collect::<std::collections::BTreeSet<_>>();
+                let Some(slot) = (slots.len() == 1)
+                    .then(|| slots.first().copied().flatten())
+                    .flatten()
+                else {
+                    continue;
+                };
+                let Some(value_ids) = identities.value_ids(dst).filter(|ids| !ids.is_empty())
+                else {
+                    continue;
+                };
                 let initialized = prefix.iter().rev().any(|candidate| {
                     matches!(
                         candidate.semantic(),
                         Stmt::Assign { dst: prior, .. }
-                            if identities.exact(prior) == Some(identity)
+                            if identities.value_ids(prior).is_some_and(|ids| ids == value_ids)
                     )
                 });
-                Some((slot, identity.version > 0, initialized))
-            }),
+                Some((
+                    slot,
+                    candidates.iter().all(|identity| identity.version > 0),
+                    initialized,
+                ))
+            }
             None => {
                 let VReg::Phys(name) = dst else {
                     continue;
@@ -3385,7 +3409,7 @@ mod tests {
     }
 
     #[test]
-    fn loop_carried_input_uses_exact_identity_not_display_spelling() {
+    fn loop_carried_input_uses_stable_identity_set_not_display_spelling() {
         let loop_with = |name: &str| {
             vec![
                 call_to("signed_step"),
@@ -3396,20 +3420,22 @@ mod tests {
             ]
         };
         let mut identities = crate::ir::value_number::ValueIdentities::default();
-        identities.record(
-            reg("opaque_init"),
-            crate::ir::ssa::SsaValue {
+        for version in [1, 3] {
+            let identity = crate::ir::ssa::SsaValue {
                 base: reg("rdi"),
-                version: 1,
-            },
-        );
-        identities.record(
-            reg("opaque_loop"),
-            crate::ir::ssa::SsaValue {
-                base: reg("rdi"),
-                version: 1,
-            },
-        );
+                version,
+            };
+            identities.record(reg("opaque_init"), identity.clone());
+            identities.record(reg("opaque_loop"), identity);
+        }
+        for (base, version) in [("rdi", 1), ("rsi", 3)] {
+            let identity = crate::ir::ssa::SsaValue {
+                base: reg(base),
+                version,
+            };
+            identities.record(reg("mixed_init"), identity.clone());
+            identities.record(reg("mixed_loop"), identity);
+        }
         identities.record(
             reg("rdi#1"),
             crate::ir::ssa::SsaValue {
@@ -3442,6 +3468,18 @@ mod tests {
             Some(&identities),
         );
         assert!(misleading.iter().all(Option::is_none));
+
+        let mixed = loop_carried_arg_inputs(
+            &[Stmt::Assign {
+                dst: reg("mixed_init"),
+                src: Expr::Reg(reg("rdi")),
+            }],
+            &loop_with("mixed_loop"),
+            CallConv::SysVAmd64,
+            &[None],
+            Some(&identities),
+        );
+        assert!(mixed.iter().all(Option::is_none));
     }
 
     /// AArch64 reuses x0 for both the first argument and the return value. GCC
