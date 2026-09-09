@@ -5430,6 +5430,13 @@ relevant ratchet's accepted-regression record.
    multi-load and stack-phase controls, and the exact-release Clang O0
    `call_into_spill` fixture pass. See
    `results/wp3-stable-frame-address-expression-origins.md`.
+   Commit `9a417d69` closes the register-only address-substitution ownership
+   boundary. An attributed semantic register can now replace a `Lea`/PDB-field
+   base or index, and its owner transfers to the enclosing address instead of
+   disappearing; non-register replacements remain statement-rooted. The
+   observed-red ownership contract, the adjacent arithmetic-refusal and
+   value-numbered controls, and the exact-release ARM hard-float three-argument
+   regression pass. See `results/wp3-address-substitution-origin-transfer.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
