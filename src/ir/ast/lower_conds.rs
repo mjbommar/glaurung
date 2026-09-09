@@ -981,7 +981,7 @@ pub(super) fn one_armed_select<'a>(
         if_true,
         if_false,
         ..
-    } = src
+    } = src.semantic()
     else {
         return None;
     };
@@ -1057,7 +1057,7 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use crate::ir::ast::{Expr, OriginSet, Stmt};
+    use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
     use crate::ir::types::{CmpOp, LlirBlock, LlirInstr, Op, VReg, Value};
 
     #[test]
@@ -1077,6 +1077,37 @@ mod tests {
             negated.semantic(),
             Expr::Cmp { op: CmpOp::Ne, .. }
         ));
+    }
+
+    #[test]
+    fn attributed_select_keeps_one_armed_statement_rendering() {
+        let destination = VReg::phys("result");
+        let select = Expr::Select {
+            width: 4,
+            cond: Box::new(Expr::Reg(VReg::phys("take_update"))),
+            if_true: Box::new(Expr::Const(7)),
+            if_false: Box::new(Expr::Reg(destination.clone())),
+        }
+        .with_origins(OriginSet::one(0x1010));
+
+        let (condition, initializer, update, inverted) =
+            super::one_armed_select(&destination, &select)
+                .expect("origin carrier must not hide a safe one-armed select");
+        assert!(matches!(condition, Expr::Reg(name) if name == &VReg::phys("take_update")));
+        assert_eq!(initializer, &Expr::Reg(destination));
+        assert_eq!(update, &Expr::Const(7));
+        assert!(!inverted);
+
+        let rendered = crate::ir::ast::render(&Function {
+            name: "choose".into(),
+            entry_va: 0,
+            body: vec![Stmt::Assign {
+                dst: VReg::phys("result"),
+                src: select,
+            }],
+        });
+        assert!(rendered.contains("if (%take_update)"), "{rendered}");
+        assert!(!rendered.contains('?'), "{rendered}");
     }
 
     #[test]
