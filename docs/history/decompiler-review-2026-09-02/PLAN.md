@@ -5362,6 +5362,15 @@ relevant ratchet's accepted-regression record.
    controls show no regression; the controls retain broader baseline failures
    and are not claimed as proof that this fold fired. See
    `results/wp3-redundant-copy-guard-origins.md`.
+   Commit `2688c23e` closes the matching terminal-tail sibling. Distinct owners
+   on duplicated return values no longer block recovery of
+   `if (bad || !good) return x; return y;`; owners from the eliminated return
+   transfer to the retained statement while its value keeps its own owner.
+   Equality remains limited to the rule's legal comment/no-op/return tail, and
+   exact-Boolean, non-trapping, matching-value, and terminal-shape gates remain.
+   The observed-red ownership contract, all 25 guard-chain tests, and both
+   exact-release GCC/Clang O2 `validate_header` controls pass. See
+   `results/wp3-terminal-tail-expression-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
