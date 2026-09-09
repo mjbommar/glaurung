@@ -423,7 +423,6 @@ const AST_PASS_ORDER: &[&str] = &[
     "materialize_32bit_wide_parameters",
     "eliminate_dead_stores",
     "stack_idiom+label_prune",
-    "apply_role_names",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -816,9 +815,6 @@ pub(super) fn run_ast_passes(
         crate::ir::stack_idiom::rematerialise_stack_ops(f);
         crate::ir::label_prune::prune_unreferenced_labels(f);
     });
-    pass!("apply_role_names", {
-        crate::ir::naming::apply_role_name_mapping(f, &role_names)
-    });
     Ok((stack_facts, role_names))
 }
 
@@ -918,6 +914,9 @@ pub(super) fn finalize_prepared_ast(
     if let Some(field_map) = field_map {
         crate::ir::pdb_fields::annotate_function_fields(&mut prepared.function, field_map);
     }
+    prepared.profiler.measure("apply_role_names", || {
+        crate::ir::naming::apply_role_name_mapping(&mut prepared.function, &prepared.role_names)
+    });
     prepared
 }
 
@@ -1970,13 +1969,12 @@ mod request_tests {
         passes.check("fold_constants").unwrap();
         passes.check("eliminate_dead_stores").unwrap();
         passes.check("stack_idiom+label_prune").unwrap();
-        passes.check("apply_role_names").unwrap();
 
         assert_eq!(
             passes.check("eliminate_dead_stores"),
             Err(AstPassOrderError::OutOfOrder {
                 pass: "eliminate_dead_stores",
-                previous: "apply_role_names",
+                previous: "stack_idiom+label_prune",
             })
         );
     }
