@@ -518,6 +518,87 @@ mod tests {
     }
 
     #[test]
+    fn recovered_catch_reads_enable_single_use_expression_propagation() {
+        let scratch = reg("rax#5");
+        let stack_name = "stack_0".to_string();
+        let stack = reg(&stack_name);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&stack_name]);
+        let expression = Expr::Bin {
+            op: BinOp::Sub,
+            lhs: Box::new(Expr::Const(9000)),
+            rhs: Box::new(Expr::Reg(reg("exception_0"))),
+        };
+        let mut function = Function {
+            name: "caught_value".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::TryCatch {
+                try_body: vec![],
+                catches: vec![crate::ir::ast::CatchClause {
+                    type_name: "int".into(),
+                    binding: reg("exception_0"),
+                    body: vec![
+                        Stmt::Assign {
+                            dst: scratch.clone(),
+                            src: expression.clone(),
+                        },
+                        Stmt::Store {
+                            addr: Expr::Reg(stack),
+                            src: Expr::Reg(scratch),
+                            size: 4,
+                        },
+                    ],
+                }],
+            }],
+        };
+
+        propagate_copies_with_identities(&mut function, &identities);
+
+        let Stmt::TryCatch { catches, .. } = function.body[0].semantic() else {
+            panic!("expected recovered handler")
+        };
+        assert_eq!(
+            catches[0].body,
+            vec![Stmt::Store {
+                addr: Expr::Reg(reg("stack_0")),
+                src: expression,
+                size: 4,
+            }]
+        );
+    }
+
+    #[test]
+    fn throw_values_participate_in_the_copy_read_census() {
+        let scratch = reg("rax#5");
+        let expression = Expr::Bin {
+            op: BinOp::Sub,
+            lhs: Box::new(Expr::Const(9)),
+            rhs: Box::new(Expr::Const(1)),
+        };
+        let mut function = Function {
+            name: "throw_value".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: scratch.clone(),
+                    src: expression.clone(),
+                },
+                Stmt::Throw {
+                    value: Expr::Reg(scratch),
+                },
+            ],
+        };
+
+        propagate_copies(&mut function);
+
+        assert_eq!(
+            function.body,
+            vec![Stmt::Throw { value: expression }],
+            "a throw is an observable read and should receive its single-use value"
+        );
+    }
+
+    #[test]
     fn exception_bodies_are_independent_copy_propagation_surfaces() {
         let binding = reg("exception_0");
         let mut function = Function {

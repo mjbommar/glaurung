@@ -203,6 +203,18 @@ fn visit_stmt_reads_impl<F: FnMut(&VReg) -> bool>(
                 None => true,
             }
         }
+        Stmt::Throw { value } => visit_expr_reads(value, visit),
+        Stmt::TryCatch { try_body, catches } => {
+            if !visit_body_reads_impl(try_body, visit, identities) {
+                return false;
+            }
+            for catch in catches {
+                if !visit_body_reads_impl(&catch.body, visit, identities) {
+                    return false;
+                }
+            }
+            true
+        }
         Stmt::Pop { .. }
         | Stmt::Goto { .. }
         | Stmt::Label(_)
@@ -210,9 +222,7 @@ fn visit_stmt_reads_impl<F: FnMut(&VReg) -> bool>(
         | Stmt::Continue
         | Stmt::Nop
         | Stmt::Unknown(_)
-        | Stmt::Comment(_)
-        | Stmt::Throw { .. }
-        | Stmt::TryCatch { .. } => true,
+        | Stmt::Comment(_) => true,
     }
 }
 
