@@ -530,6 +530,9 @@ pub(super) fn hoist_inline_flag_conds(
 /// CmpOp (Eq <-> Ne, Ult <-> Uge — but Uge isn't in CmpOp so we wrap, ...).
 /// Anything else becomes `expr == 0`, a logical negation that stays boolean.
 pub(crate) fn negate_cmp_expr(expr: Expr) -> Expr {
+    if let Expr::Origin { origins, expr } = expr {
+        return negate_cmp_expr(*expr).with_origins(origins);
+    }
     if let Expr::Cmp { op, lhs, rhs } = expr {
         // Invert the comparison itself so the result stays a boolean `Cmp`, not a
         // wrapped `Un{Not}` — which would render as C's *bitwise* `~` and, applied
@@ -1055,7 +1058,26 @@ fn count_reg_uses_in_stmt(s: &Stmt, target: &VReg) -> usize {
 #[cfg(test)]
 mod tests {
     use crate::ir::ast::{Expr, OriginSet, Stmt};
-    use crate::ir::types::{LlirBlock, LlirInstr, Op, VReg, Value};
+    use crate::ir::types::{CmpOp, LlirBlock, LlirInstr, Op, VReg, Value};
+
+    #[test]
+    fn negating_an_attributed_comparison_preserves_its_owner() {
+        let owner = OriginSet::one(0x1004);
+        let negated = super::negate_cmp_expr(
+            Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(Expr::Reg(VReg::phys("item"))),
+                rhs: Box::new(Expr::Const(0)),
+            }
+            .with_origins(owner.clone()),
+        );
+
+        assert_eq!(negated.origins(), Some(&owner));
+        assert!(matches!(
+            negated.semantic(),
+            Expr::Cmp { op: CmpOp::Ne, .. }
+        ));
+    }
 
     #[test]
     fn lowering_attributes_every_statement_to_its_machine_instruction() {

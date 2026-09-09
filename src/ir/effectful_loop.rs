@@ -63,7 +63,7 @@ fn effectful_call_header_candidate(statement: &Stmt) -> Option<(Stmt, Stmt)> {
     let Stmt::While { cond, body } = statement.semantic() else {
         return None;
     };
-    if !matches!(cond, Expr::Const(1)) {
+    if !matches!(cond.semantic(), Expr::Const(1)) {
         return None;
     }
     let [header, guard, remainder @ ..] = body.as_slice() else {
@@ -216,10 +216,15 @@ mod tests {
     #[test]
     fn attributed_effectful_header_preserves_composed_origins() {
         let next = iterator_call().with_origins(OriginSet::one(0x1000));
-        let guard = exit_guard().with_origins(OriginSet::one(0x1004));
+        let mut guard = exit_guard();
+        let Stmt::If { cond, .. } = &mut guard else {
+            unreachable!()
+        };
+        *cond = cond.clone().with_origins(OriginSet::one(0x1002));
+        let guard = guard.with_origins(OriginSet::one(0x1004));
         let loop_origins = OriginSet::one(0x1010);
         let mut body = vec![Stmt::While {
-            cond: Expr::Const(1),
+            cond: Expr::Const(1).with_origins(OriginSet::one(0x100c)),
             body: vec![next, guard, Stmt::Nop.with_origins(OriginSet::one(0x1008))],
         }
         .with_origins(loop_origins)];
@@ -232,6 +237,11 @@ mod tests {
             body[1].origins().expect("rotated-loop origins").addresses(),
             &[0x1004, 0x1010]
         );
+        let Stmt::While { cond, .. } = body[1].semantic() else {
+            unreachable!()
+        };
+        assert_eq!(cond.origins(), Some(&OriginSet::one(0x1002)));
+        assert!(matches!(cond.semantic(), Expr::Cmp { op: CmpOp::Ne, .. }));
     }
 
     #[test]
