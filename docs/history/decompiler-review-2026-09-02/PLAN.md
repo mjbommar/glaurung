@@ -2274,6 +2274,14 @@ provenance through lowering.
   release-built pure/one-arm fixture-189 slice is green for all eight function
   verdicts across four GCC/Clang O0/O2 lanes. See
   `results/wp3-select-condition-expression-origins.md`.
+  Commit `d8e6c351` closes the structured-condition adoption sibling: an
+  attributed bare flag no longer masquerades as a finished comparison when a
+  region rebuilds an `if` or `while`. The dead reaching flag definition is
+  consumed, comparison and condition owners compose on the recovered
+  expression, and definition and branch owners compose at statement scope.
+  The observed-red ownership contract and all 14 focused condition-lowering
+  tests pass; the exact release-built four-lane polarity canary remains green.
+  See `results/wp3-structured-condition-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
