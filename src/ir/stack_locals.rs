@@ -2615,6 +2615,49 @@ mod tests {
     }
 
     #[test]
+    fn attributed_load_address_keeps_its_owner_when_retargeted_to_stack_object() {
+        let address_owner = OriginSet::one(0x1010);
+        let mut f = Function {
+            name: "read_escaped_local".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Store {
+                    addr: lea("rbp", -16),
+                    src: Expr::Const(1),
+                    size: 4,
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "observe".into(),
+                    },
+                    args: vec![lea("rbp", -16)],
+                    dst: None,
+                    call_spec: None,
+                },
+                Stmt::Assign {
+                    dst: reg("eax"),
+                    src: Expr::Deref {
+                        addr: Box::new(lea("rbp", -16).with_origins(address_owner.clone())),
+                        size: 4,
+                    },
+                },
+            ],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::SysVAmd64));
+
+        assert!(matches!(
+            f.body[2].semantic(),
+            Stmt::Assign {
+                src: Expr::Deref { addr, size: 4 },
+                ..
+            } if matches!(addr.semantic(), Expr::StackAddr { .. })
+                && addr.origins() == Some(&address_owner)
+        ));
+    }
+
+    #[test]
     fn copied_stack_base_unifies_a_contiguous_initialized_array() {
         let mut body = vec![Stmt::Assign {
             dst: reg("rsp"),

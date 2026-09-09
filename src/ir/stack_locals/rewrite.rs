@@ -380,7 +380,7 @@ fn rewrite_expr(
             if let Some(object_addr) =
                 stack_object_address(addr.as_ref(), size_val, map, sp_delta, ctx, address_defs)
             {
-                **addr = object_addr;
+                *addr.semantic_mut() = object_addr;
                 return;
             }
             // After recursion, see whether the addr is a bare Lea of a
