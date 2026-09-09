@@ -40,7 +40,7 @@
 
 use std::collections::HashMap;
 
-use crate::ir::ast::{Expr, Function, Stmt};
+use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 use crate::ir::types::{BinOp, CmpOp, VReg};
 use crate::ir::types_recover::{TypeHint, TypeMap};
 
@@ -167,6 +167,13 @@ fn fuse_expr_with_types(
     types: Option<&TypeMap>,
     definitions: &HashMap<VReg, Expr>,
 ) {
+    if let Expr::Origin { origins, expr } = expression {
+        let origins = origins.clone();
+        let mut semantic = expr.semantic().clone();
+        fuse_expr_with_types(&mut semantic, types, definitions);
+        *expression = semantic.with_origins(origins);
+        return;
+    }
     // Children first: an inner guard must already be fused before an outer
     // rule inspects it.
     match expression {
@@ -179,8 +186,64 @@ fn fuse_expr_with_types(
         _ => {}
     }
     if let Some(fused) = fused_form(expression, types, definitions) {
-        *expression = fused;
+        let origins = expression_origins(expression);
+        *expression = fused.with_optional_origins(origins);
     }
+}
+
+fn expression_origins(expression: &Expr) -> Option<OriginSet> {
+    fn collect(expression: &Expr, origins: &mut OriginSet) {
+        if let Some(owner) = expression.origins() {
+            origins.merge(owner);
+        }
+        match expression.semantic() {
+            Expr::FunctionTableEntry { index, .. } => collect(index, origins),
+            Expr::Deref { addr, .. }
+            | Expr::Un { src: addr, .. }
+            | Expr::Cast { expr: addr, .. }
+            | Expr::NumericConvert { expr: addr, .. } => collect(addr, origins),
+            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+                collect(lhs, origins);
+                collect(rhs, origins);
+            }
+            Expr::Call { target, args, .. } => {
+                collect(target, origins);
+                for argument in args {
+                    collect(argument, origins);
+                }
+            }
+            Expr::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => {
+                collect(cond, origins);
+                collect(if_true, origins);
+                collect(if_false, origins);
+            }
+            Expr::WideArithmetic { args, .. } => {
+                for argument in args {
+                    collect(argument, origins);
+                }
+            }
+            Expr::Origin { .. } => unreachable!("semantic expression cannot be an origin wrapper"),
+            Expr::Reg(_)
+            | Expr::Const(_)
+            | Expr::FloatConst { .. }
+            | Expr::Addr(_)
+            | Expr::Named { .. }
+            | Expr::StringLit { .. }
+            | Expr::StackAddr { .. }
+            | Expr::Lea { .. }
+            | Expr::PdbFieldAddr { .. }
+            | Expr::Unknown(_) => {}
+        }
+    }
+
+    let mut origins = OriginSet::empty();
+    collect(expression, &mut origins);
+    (!origins.is_empty()).then_some(origins)
 }
 
 /// The single fused comparison equivalent to a two-comparison guard, if any.
@@ -384,20 +447,22 @@ fn resolve_proof_expr(
     definitions: &HashMap<VReg, Expr>,
     resolving: &mut Vec<VReg>,
 ) -> Option<Expr> {
-    match expression {
+    let origins = expression.origins().cloned();
+    let resolved = match expression.semantic() {
         Expr::Reg(register) => {
-            let Some(definition) = definitions.get(register) else {
-                return Some(expression.clone());
-            };
-            if resolving.contains(register) || resolving.len() >= 16 {
-                return None;
+            if let Some(definition) = definitions.get(register) {
+                if resolving.contains(register) || resolving.len() >= 16 {
+                    return None;
+                }
+                resolving.push(register.clone());
+                let resolved = resolve_proof_expr(definition, definitions, resolving);
+                resolving.pop();
+                resolved
+            } else {
+                Some(Expr::Reg(register.clone()))
             }
-            resolving.push(register.clone());
-            let resolved = resolve_proof_expr(definition, definitions, resolving);
-            resolving.pop();
-            resolved
         }
-        Expr::Const(_) => Some(expression.clone()),
+        Expr::Const(value) => Some(Expr::Const(*value)),
         Expr::Cast {
             signed,
             width,
@@ -422,11 +487,12 @@ fn resolve_proof_expr(
             src: Box::new(resolve_proof_expr(src, definitions, resolving)?),
         }),
         _ => None,
-    }
+    };
+    resolved.map(|resolved| resolved.with_optional_origins(origins))
 }
 
 fn proof_expression(expression: &Expr) -> bool {
-    match expression {
+    match expression.semantic() {
         Expr::Reg(_) | Expr::Const(_) => true,
         Expr::Cast { expr, .. } | Expr::Un { src: expr, .. } => proof_expression(expr),
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
@@ -437,7 +503,7 @@ fn proof_expression(expression: &Expr) -> bool {
 }
 
 fn expression_reads_register(expression: &Expr, register: &VReg) -> bool {
-    match expression {
+    match expression.semantic() {
         Expr::Reg(candidate) => candidate == register,
         Expr::Cast { expr, .. } | Expr::Un { src: expr, .. } => {
             expression_reads_register(expr, register)
@@ -453,7 +519,7 @@ fn expression_reads_only_immutable_registers(
     expression: &Expr,
     writes: &HashMap<VReg, usize>,
 ) -> bool {
-    match expression {
+    match expression.semantic() {
         Expr::Reg(register) => !writes.contains_key(register),
         Expr::Cast { expr, .. } | Expr::Un { src: expr, .. } => {
             expression_reads_only_immutable_registers(expr, writes)
@@ -631,7 +697,7 @@ pub(crate) fn unsigned_range_bounds(
 /// is signed, the source idiom is not an unsigned modular range and declines.
 fn observed_unsigned_width(expression: &Expr) -> Option<u8> {
     let mut view = None;
-    let mut current = expression;
+    let mut current = expression.semantic();
     while let Expr::Cast {
         signed,
         width,
@@ -641,7 +707,7 @@ fn observed_unsigned_width(expression: &Expr) -> Option<u8> {
         if view.is_none_or(|(seen, _): (u8, bool)| *width <= seen) {
             view = Some((*width, *signed));
         }
-        current = expr;
+        current = expr.semantic();
     }
     match view {
         Some((width, false)) => Some(width),
@@ -676,7 +742,7 @@ fn unsigned_view_with_leaf(shell: &Expr, leaf: &Expr, width: u8) -> Expr {
 
 /// Copy only the explicit cast shell, replacing its arithmetic leaf.
 fn cast_shell_with_leaf(shell: &Expr, leaf: &Expr) -> Expr {
-    match shell {
+    match shell.semantic() {
         Expr::Cast {
             signed,
             width,
@@ -731,25 +797,25 @@ fn zero_comparison(expression: &Expr) -> Option<ZeroComparison<'_>> {
 /// only fusable when that width agrees.
 fn observed_width(expression: &Expr) -> Option<u8> {
     let mut narrowest = None;
-    let mut current = expression;
+    let mut current = expression.semantic();
     while let Expr::Cast { width, expr, .. } = current {
         narrowest = Some(narrowest.map_or(*width, |seen: u8| seen.min(*width)));
-        current = expr;
+        current = expr.semantic();
     }
     narrowest
 }
 
 /// Peel cast wrappers to the underlying value.
 fn strip_casts(expression: &Expr) -> &Expr {
-    let mut current = expression;
+    let mut current = expression.semantic();
     while let Expr::Cast { expr, .. } = current {
-        current = expr;
+        current = expr.semantic();
     }
     current
 }
 
 fn is_zero(expression: &Expr) -> bool {
-    matches!(expression, Expr::Const(0))
+    matches!(expression.semantic(), Expr::Const(0))
 }
 
 /// Whether two operands denote the same underlying value.
@@ -1341,5 +1407,23 @@ mod tests {
             }
         ));
         assert_eq!(function.body[0].origins(), Some(&owner));
+    }
+
+    #[test]
+    fn attributed_flag_expression_fuses_and_unions_consumed_owners() {
+        let mut guard = bin(
+            BinOp::Or,
+            cmp(CmpOp::Eq, local("n"), Expr::Const(0)).with_origins(OriginSet::one(0x1004)),
+            cmp(CmpOp::Slt, local("n"), Expr::Const(0)).with_origins(OriginSet::one(0x1008)),
+        )
+        .with_origins(OriginSet::one(0x1000));
+
+        fuse_expr(&mut guard);
+
+        assert!(matches!(guard.semantic(), Expr::Cmp { op: CmpOp::Sle, .. }));
+        assert_eq!(
+            guard.origins(),
+            Some(&OriginSet::from_iter([0x1000, 0x1004, 0x1008]))
+        );
     }
 }
