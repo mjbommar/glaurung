@@ -509,9 +509,9 @@ fn registers_are_same_value(
 ) -> bool {
     match identities {
         Some(identities) => identities
-            .exact(left)
-            .zip(identities.exact(right))
-            .is_some_and(|(left, right)| left == right),
+            .value_ids(left)
+            .zip(identities.value_ids(right))
+            .is_some_and(|(left, right)| !left.is_empty() && left == right),
         None => left == right,
     }
 }
@@ -1155,6 +1155,49 @@ mod tests {
         assert!(matches!(
             misleading.body.last(),
             Some(Stmt::IndirectGoto { .. })
+        ));
+    }
+
+    #[test]
+    fn coalesced_registers_match_only_the_same_nonempty_value_id_set() {
+        let left = reg("left_coalesced");
+        let right = reg("right_coalesced");
+        let different = reg("different_coalesced");
+        let missing = reg("missing_identity");
+        let shared = [
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 3,
+            },
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 7,
+            },
+        ];
+        let mut identities = ValueIdentities::default();
+        for identity in &shared {
+            identities.record(left.clone(), identity.clone());
+            identities.record(right.clone(), identity.clone());
+        }
+        identities.record(different.clone(), shared[0].clone());
+        identities.record(
+            different.clone(),
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: 8,
+            },
+        );
+
+        assert!(registers_are_same_value(&left, &right, Some(&identities)));
+        assert!(!registers_are_same_value(
+            &left,
+            &different,
+            Some(&identities)
+        ));
+        assert!(!registers_are_same_value(
+            &missing,
+            &missing,
+            Some(&identities)
         ));
     }
 
