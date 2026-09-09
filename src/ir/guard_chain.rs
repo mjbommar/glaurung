@@ -347,14 +347,14 @@ fn collapse_redundant_copy_nested_one(body: &mut Vec<Stmt>) -> bool {
         if index + 1 < body.len() {
             let replacement = match (body[index].semantic(), body[index + 1].semantic()) {
                 (
-                    previous @ Stmt::Assign { src, .. },
+                    previous @ Stmt::Assign { .. },
                     Stmt::If {
                         cond: outer_condition,
                         then_body,
                         else_body: None,
                     },
-                ) if matches!(src, Expr::Reg(_) | Expr::Const(_)) => match then_body.as_slice() {
-                    [duplicate, inner] if duplicate.semantic() == previous => {
+                ) => match then_body.as_slice() {
+                    [duplicate, inner] if same_safe_reaching_copy(previous, duplicate) => {
                         match inner.semantic() {
                             Stmt::If {
                                 cond: inner_condition,
@@ -379,7 +379,7 @@ fn collapse_redundant_copy_nested_one(body: &mut Vec<Stmt>) -> bool {
                                         else_body: None,
                                     }
                                     .with_optional_origins(origins),
-                                    duplicate.origins().cloned(),
+                                    copy_origins(duplicate),
                                 ))
                             }
                             _ => None,
@@ -434,6 +434,41 @@ fn collapse_redundant_copy_nested_one(body: &mut Vec<Stmt>) -> bool {
         }
     }
     false
+}
+
+fn same_safe_reaching_copy(previous: &Stmt, duplicate: &Stmt) -> bool {
+    match (previous.semantic(), duplicate.semantic()) {
+        (
+            Stmt::Assign {
+                dst: previous_dst,
+                src: previous_src,
+            },
+            Stmt::Assign {
+                dst: duplicate_dst,
+                src: duplicate_src,
+            },
+        ) => {
+            previous_dst == duplicate_dst
+                && matches!(previous_src.semantic(), Expr::Reg(_) | Expr::Const(_))
+                && previous_src.semantic() == duplicate_src.semantic()
+        }
+        _ => false,
+    }
+}
+
+fn copy_origins(statement: &Stmt) -> Option<OriginSet> {
+    let mut origins = statement.origins().cloned();
+    let Stmt::Assign { src, .. } = statement.semantic() else {
+        return origins;
+    };
+    let Some(source_origins) = src.origins() else {
+        return origins;
+    };
+    match &mut origins {
+        Some(origins) => origins.merge(source_origins),
+        None => origins = Some(source_origins.clone()),
+    }
+    origins
 }
 
 fn contains_unstructured_transfer(body: &[Stmt]) -> bool {
@@ -1850,19 +1885,23 @@ mod tests {
 
     #[test]
     fn attributed_duplicate_copy_and_nested_guards_preserve_separate_origins() {
-        let copy = Stmt::Assign {
+        let first_copy = Stmt::Assign {
             dst: reg("top"),
-            src: Expr::Reg(reg("previous_top")),
+            src: Expr::Reg(reg("previous_top")).with_origins(OriginSet::one(0x1392)),
+        };
+        let duplicate_copy = Stmt::Assign {
+            dst: reg("top"),
+            src: Expr::Reg(reg("previous_top")).with_origins(OriginSet::one(0x1396)),
         };
         let mut function = Function {
             name: "attributed_bounded_descent".into(),
             entry_va: 0x1390,
             body: vec![
-                copy.clone().with_origins(OriginSet::one(0x1390)),
+                first_copy.with_origins(OriginSet::one(0x1390)),
                 Stmt::If {
                     cond: Expr::Reg(reg("valid_node")),
                     then_body: vec![
-                        copy.with_origins(OriginSet::one(0x1394)),
+                        duplicate_copy.with_origins(OriginSet::one(0x1394)),
                         Stmt::If {
                             cond: Expr::Reg(reg("stack_has_room")),
                             then_body: vec![Stmt::Assign {
@@ -1887,7 +1926,14 @@ mod tests {
                 .origins()
                 .expect("merged copy origins")
                 .addresses(),
-            &[0x1390, 0x1394]
+            &[0x1390, 0x1394, 0x1396]
+        );
+        let Stmt::Assign { src, .. } = function.body[0].semantic() else {
+            panic!("expected surviving reaching copy")
+        };
+        assert_eq!(
+            src.origins().expect("surviving source origin").addresses(),
+            &[0x1392]
         );
         assert_eq!(
             function.body[1]
