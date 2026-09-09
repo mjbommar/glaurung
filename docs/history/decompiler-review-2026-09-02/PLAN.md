@@ -2183,6 +2183,14 @@ provenance through lowering.
   canonical for AMD64 and AArch64 at O0/O2; ARMv7 recovers the string in both
   cells but remains red for its known O0 frame and O2 signature defects. See
   `results/wp3-split-string-expression-origins.md`.
+  Commit `befd81e5` closes resolved GOT-load matching across attributed
+  dereferences and slot addresses and transfers their flattened ownership union
+  to the target address. The strengthened contract was observed red and all six
+  GOT-fold tests pass. The exact release-built
+  `157_symbol_visibility:gcc:O0:vis_read_bias` lane remains a recorded semantic
+  failure because production still lacks a usable target-map entry for its
+  public-global slot; target-map/pipeline availability remains open. See
+  `results/wp3-got-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
