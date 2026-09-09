@@ -1979,7 +1979,7 @@ fn write_typed_call_arg_dec(parameter_type: &str, arg: &Expr, out: &mut String) 
         // explicit cast for machine-word carriers, where it is the evidence
         // that the bits belong to the VFP storage class rather than an integer
         // numeric conversion.
-        if let Expr::Reg(register) = arg {
+        if let Expr::Reg(register) = arg.semantic() {
             if declared_reg_ctype(register) == parameter_type {
                 write_call_arg_dec(arg, out);
                 return;

@@ -11774,6 +11774,47 @@ function f @ 0x1000 {
         assert!(!rendered.contains("*(int *)(arg1)"));
     }
 
+    #[test]
+    fn attributed_declared_float_argument_is_render_byte_neutral() {
+        let render_call = |argument| {
+            let prototype = CallPrototype {
+                return_type: "void".into(),
+                parameter_types: vec!["float".into()],
+                variadic: false,
+                authority: CallPrototypeAuthority::Authoritative,
+            };
+            let function = Function {
+                name: "caller".into(),
+                entry_va: 0x1000,
+                body: vec![Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "consume".into(),
+                    },
+                    args: vec![argument],
+                    dst: None,
+                    call_spec: Some(CallSiteSpec {
+                        callee_prototype: Some(prototype.clone()),
+                        call_prototype: prototype,
+                    }),
+                }],
+            };
+            let mut types = TypeMap::default();
+            types.upsert_public(VReg::phys("arg0"), TypeHint::Float { width: 4 });
+            render_decbench_typed(&function, Some(&types), None)
+        };
+
+        let plain = render_call(Expr::Reg(VReg::phys("arg0")));
+        let attributed =
+            render_call(Expr::Reg(VReg::phys("arg0")).with_origins(OriginSet::one(0x1004)));
+
+        assert_eq!(
+            attributed, plain,
+            "instruction ownership must not add a float conversion at an exact declared boundary"
+        );
+        assert!(plain.contains("consume(arg0);"), "{plain}");
+    }
+
     /// One `float`-declared and one `double`-declared parameter, for the
     /// float-through-an-integer-lvalue tests below.
     fn float_arg_types() -> TypeMap {
