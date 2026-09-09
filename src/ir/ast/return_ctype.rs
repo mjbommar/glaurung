@@ -26,15 +26,16 @@ use super::{
 ///
 /// This is the one rule, shared with the declaration printer and with
 /// [`crate::ir::widen`]: arguments and promoted stack slots take their recovered
-/// integer type. Exact SSA-derived `varN` identities use their value-specific
-/// integer fact when one exists; otherwise they remain machine-word integers
-/// unless the prepared high-variable proof classifies them as pointers. Other
-/// raw machine registers and temps are also declared `long`.
+/// integer type. SSA-derived identities with one unambiguous physical storage
+/// base use their value-specific integer fact when one exists; otherwise they
+/// remain machine-word integers unless the prepared high-variable proof
+/// classifies them as pointers. Other raw machine registers and temps are also
+/// declared `long`.
 pub(crate) fn declared_int_type(ident: &str, tm: Option<&TypeMap>) -> Option<(bool, u8)> {
     declared_int_type_with_identities(ident, tm, None)
 }
 
-/// The declared integer type, recognizing exact opaque SSA identities.
+/// The declared integer type, recognizing pipeline-owned SSA storage.
 pub(crate) fn declared_int_type_with_identities(
     ident: &str,
     tm: Option<&TypeMap>,
@@ -42,7 +43,8 @@ pub(crate) fn declared_int_type_with_identities(
 ) -> Option<(bool, u8)> {
     let value = VReg::Phys(ident.to_string());
     if is_high_variable(ident)
-        || identities.is_some_and(|identities| identities.exact(&value).is_some())
+        || identities
+            .is_some_and(|identities| identities.unambiguous_physical_base(&value).is_some())
     {
         return match tm.and_then(|types| types.get(&value)) {
             Some(TypeHint::Int { signed, width }) => Some((signed, width)),
@@ -423,6 +425,59 @@ mod tests {
         assert_eq!(
             declared_int_type_with_identities("arg0", Some(&tm), Some(&parameter)),
             Some((false, 4))
+        );
+    }
+
+    #[test]
+    fn coalesced_integer_declaration_uses_unambiguous_physical_storage() {
+        let tm = type_map(&[(
+            "opaque-local",
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        )]);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for version in [1, 2] {
+            identities.record(
+                VReg::phys("opaque-local"),
+                crate::ir::ssa::SsaValue {
+                    base: VReg::phys("rax"),
+                    version,
+                },
+            );
+        }
+
+        assert!(identities.exact(&VReg::phys("opaque-local")).is_none());
+        assert_eq!(
+            declared_int_type_with_identities("opaque-local", Some(&tm), Some(&identities)),
+            Some((false, 4))
+        );
+    }
+
+    #[test]
+    fn mixed_storage_integer_declaration_remains_machine_wide() {
+        let tm = type_map(&[(
+            "opaque-local",
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        )]);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for (base, version) in [("rax", 1), ("rbx", 2)] {
+            identities.record(
+                VReg::phys("opaque-local"),
+                crate::ir::ssa::SsaValue {
+                    base: VReg::phys(base),
+                    version,
+                },
+            );
+        }
+
+        assert_eq!(
+            declared_int_type_with_identities("opaque-local", Some(&tm), Some(&identities)),
+            Some((true, 8))
         );
     }
 
