@@ -88,9 +88,9 @@ fn packed_dword_value(
         return false;
     };
     let name = match identities {
-        Some(identities) => match identities.exact(register).map(|identity| &identity.base) {
-            Some(VReg::Phys(name)) => name.as_str(),
-            _ => return false,
+        Some(identities) => match identities.unambiguous_physical_base(register) {
+            Some(name) => name,
+            None => return false,
         },
         None => match register {
             VReg::Phys(name) => crate::ir::abi::ssa_base(name),
@@ -1170,6 +1170,84 @@ mod tests {
         );
         assert!(matches!(rhs.as_ref(), Expr::Cast { width: 8, .. }));
         assert_eq!(((2_u64) << 32) | 1, 0x0000_0002_0000_0001);
+    }
+
+    #[test]
+    fn coalesced_same_lane_concat_widens_before_shifting_high_payload() {
+        let hi = VReg::phys("opaque-hi");
+        let lo = VReg::phys("opaque-lo");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for version in [1, 2] {
+            identities.record(
+                hi.clone(),
+                crate::ir::ssa::SsaValue {
+                    base: VReg::phys("xmm0_d1"),
+                    version,
+                },
+            );
+            identities.record(
+                lo.clone(),
+                crate::ir::ssa::SsaValue {
+                    base: VReg::phys("xmm0_d0"),
+                    version,
+                },
+            );
+        }
+
+        let statement = lower_op_stmt_with_identities(
+            &Op::Concat {
+                dst: VReg::phys("xmm0"),
+                hi: Value::Reg(hi.clone()),
+                lo: Value::Reg(lo.clone()),
+            },
+            false,
+            Some(&identities),
+        );
+
+        assert!(identities.exact(&hi).is_none());
+        assert!(matches!(statement, Stmt::Assign {
+            src: Expr::Bin { op: BinOp::Or, lhs, rhs }, ..
+        } if matches!(lhs.as_ref(), Expr::Bin { op: BinOp::Shl, lhs, rhs }
+                if matches!(lhs.as_ref(), Expr::Cast { width: 8, .. })
+                    && matches!(rhs.as_ref(), Expr::Const(32)))
+            && matches!(rhs.as_ref(), Expr::Cast { width: 8, .. })));
+    }
+
+    #[test]
+    fn mixed_lane_concat_retains_conservative_unshifted_form() {
+        let hi = VReg::phys("opaque-hi");
+        let lo = VReg::phys("opaque-lo");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for (base, version) in [("xmm0_d1", 1), ("xmm1_d1", 2)] {
+            identities.record(
+                hi.clone(),
+                crate::ir::ssa::SsaValue {
+                    base: VReg::phys(base),
+                    version,
+                },
+            );
+        }
+        identities.record(
+            lo.clone(),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("xmm0_d0"),
+                version: 1,
+            },
+        );
+
+        let statement = lower_op_stmt_with_identities(
+            &Op::Concat {
+                dst: VReg::phys("xmm0"),
+                hi: Value::Reg(hi.clone()),
+                lo: Value::Reg(lo.clone()),
+            },
+            false,
+            Some(&identities),
+        );
+
+        assert!(matches!(statement, Stmt::Assign {
+            src: Expr::Bin { op: BinOp::Or, lhs, rhs }, ..
+        } if lhs.as_ref() == &Expr::Reg(hi) && rhs.as_ref() == &Expr::Reg(lo)));
     }
 
     #[test]
