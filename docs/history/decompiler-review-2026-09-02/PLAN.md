@@ -2154,6 +2154,13 @@ provenance through lowering.
   red; all 35 high-variable tests, 33 active memory-object tests, and two
   directly owning release-built binary round trips pass. See
   `results/wp3-high-variable-expression-origins.md`.
+  Commit `95556536` then closes the direct-return and canonical-loop naming
+  expression readers. Attributed return values still establish `ret`, while
+  attributed promoted addresses, zero initializers, unit increments, and
+  additive updates still establish fallback `i` and `sum` names. Both
+  strengthened contracts were observed red, all 21 naming tests pass, and the
+  four exact Clang/GCC O0/O2 `skip_odd_sum` lanes pass on a clean release
+  build. See `results/wp3-naming-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
