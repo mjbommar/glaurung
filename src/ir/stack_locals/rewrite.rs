@@ -40,6 +40,15 @@ pub(super) fn rewrite_body(
     evidence: &mut RewriteEvidence<'_>,
 ) {
     for s in body.iter_mut() {
+        let store_rewrite_origins = match s.semantic() {
+            Stmt::Store { addr, .. } => match (s.origins(), addr.origins()) {
+                (Some(statement), Some(address)) => Some(statement.union(address)),
+                (Some(statement), None) => Some(statement.clone()),
+                (None, Some(address)) => Some(address.clone()),
+                (None, None) => None,
+            },
+            _ => None,
+        };
         match s.semantic_mut() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::IndirectGoto { target } => {
@@ -91,7 +100,7 @@ pub(super) fn rewrite_body(
                 // whose address is already a bare register is a pointer write
                 // (`*p = v`) and must never be mistaken for a slot assignment —
                 // see `argument_slot_assignment`.
-                let addressed_memory = matches!(addr, Expr::Lea { .. });
+                let addressed_memory = matches!(addr.semantic(), Expr::Lea { .. });
                 // Store's addr is an Lea — we need to rewrite the Lea itself
                 // into a Reg reference when the lea points to a stack slot.
                 try_promote_lea_to_local(addr, *size, map, names, ctx, *sp_delta, address_defs);
@@ -120,7 +129,8 @@ pub(super) fn rewrite_body(
                         *s = Stmt::Assign {
                             dst: parameter,
                             src: src.clone(),
-                        };
+                        }
+                        .with_optional_origins(store_rewrite_origins.clone());
                     }
                 }
             }
@@ -956,7 +966,7 @@ fn argument_slot_assignment(
     ctx: StackContext,
     map: &HashMap<SlotKey, SlotVal>,
 ) -> Option<VReg> {
-    let Expr::Reg(register @ VReg::Phys(name)) = addr else {
+    let Expr::Reg(register @ VReg::Phys(name)) = addr.semantic() else {
         return None;
     };
     map.values()
@@ -1017,7 +1027,7 @@ fn try_promote_lea_to_local(
     address_defs: &HashMap<VReg, (String, i64)>,
 ) {
     if let Some(object_addr) = stack_object_address(addr, size, map, sp_delta, ctx, address_defs) {
-        *addr = object_addr;
+        *addr.semantic_mut() = object_addr;
         return;
     }
     // A later narrower read at the exact same address can narrow the declaration,
@@ -1047,5 +1057,5 @@ fn try_promote_lea_to_local(
     entry.declared_size = entry.declared_size.min(size);
     entry.span_size = entry.span_size.max(size);
     let alias = entry.name.clone();
-    *addr = Expr::Reg(VReg::phys(alias));
+    *addr.semantic_mut() = Expr::Reg(VReg::phys(alias));
 }

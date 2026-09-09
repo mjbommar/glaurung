@@ -1493,6 +1493,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn attributed_cdecl32_argument_home_store_preserves_all_owners() {
+        let statement_owner = OriginSet::one(0x1010);
+        let address_owner = OriginSet::one(0x1014);
+        let mut f = Function {
+            name: "writes_its_argument".into(),
+            entry_va: 0,
+            body: vec![Stmt::Store {
+                addr: lea("rbp", 8).with_origins(address_owner.clone()),
+                src: Expr::Reg(reg("eax")),
+                size: 4,
+            }
+            .with_origins(statement_owner.clone())],
+        };
+
+        promote_stack_locals_typed(&mut f, Some(CallConv::Cdecl32));
+
+        assert!(matches!(
+            f.body[0].semantic(),
+            Stmt::Assign { dst: VReg::Phys(name), .. } if name == "arg0"
+        ));
+        assert_eq!(
+            f.body[0].origins(),
+            Some(&statement_owner.union(&address_owner))
+        );
+        assert!(
+            !matches!(f.body[0].semantic(), Stmt::Origin { .. }),
+            "parameter-home rewrite nested its origin carriers: {:#?}",
+            f.body[0]
+        );
+    }
+
     /// A byte-wide write into an argument slot changes one byte of it. A scalar
     /// assignment would clobber the other three, so the store form is kept.
     #[test]
