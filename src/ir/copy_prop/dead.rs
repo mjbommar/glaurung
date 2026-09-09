@@ -195,10 +195,16 @@ fn remove_dead(
             // The try path and each handler are mutually exclusive regions.
             // Recount inside each one so a spelling read in one arm cannot
             // falsely keep an unrelated dead definition in another arm.
+            // Typed-handler recovery creates these regions after value
+            // numbering, so their synthetic/rearranged nodes do not have an
+            // authoritative entry in the older identity map. Use conservative
+            // spelling identity within the newly structured region: this still
+            // removes a catch-local dead copy, while preserving a same-spelling
+            // definition read by a throw or return in that region.
             Stmt::TryCatch { try_body, catches } => {
-                changed |= eliminate_dead_copies(try_body, identities);
+                changed |= eliminate_dead_copies(try_body, None);
                 for catch in catches {
-                    changed |= eliminate_dead_copies(&mut catch.body, identities);
+                    changed |= eliminate_dead_copies(&mut catch.body, None);
                 }
             }
             _ => {}

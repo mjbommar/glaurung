@@ -602,7 +602,13 @@ mod tests {
             }],
         };
 
-        assert!(propagate_copies(&mut function));
+        // Typed exception recovery runs after value numbering, so its new
+        // structured regions are deliberately tested with the pipeline's
+        // (potentially stale for these synthetic nodes) identity map present.
+        assert!(propagate_copies_with_identities(
+            &mut function,
+            &crate::ir::value_number::ValueIdentities::default(),
+        ));
 
         let Stmt::TryCatch { try_body, catches } = function.body[0].semantic() else {
             panic!("exception region disappeared: {:#?}", function.body)
