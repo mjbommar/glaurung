@@ -57,13 +57,12 @@ pub(super) fn fold_one_cdecl32_call(
             | Stmt::Switch { .. }
             | Stmt::Push { .. }
             | Stmt::Pop { .. } => break,
-            Stmt::Assign {
-                dst: frame,
-                src: Expr::Reg(stack),
-            } if (register_is_storage(frame, "ebp", identities)
-                || register_is_storage(frame, "rbp", identities))
-                && (register_is_storage(stack, "esp", identities)
-                    || register_is_storage(stack, "rsp", identities)) =>
+            Stmt::Assign { dst: frame, src }
+                if (register_is_storage(frame, "ebp", identities)
+                    || register_is_storage(frame, "rbp", identities))
+                    && matches!(src.semantic(), Expr::Reg(stack)
+                        if register_is_storage(stack, "esp", identities)
+                            || register_is_storage(stack, "rsp", identities)) =>
             {
                 break;
             }
@@ -73,27 +72,17 @@ pub(super) fn fold_one_cdecl32_call(
             {
                 break;
             }
-            Stmt::Store {
-                addr:
-                    Expr::Lea {
-                        base: Some(base),
-                        index: None,
-                        disp,
-                        ..
-                    },
-                src,
-                size,
-            } if (register_is_storage(base, "esp", identities)
-                || register_is_storage(base, "rsp", identities))
-                && *disp >= 0
-                && *size > 0 =>
+            Stmt::Store { addr, src, size }
+                if outgoing_stack_displacement(addr, *size, identities).is_some() =>
             {
+                let disp = outgoing_stack_displacement(addr, *size, identities)
+                    .expect("guard proved an outgoing stack displacement");
                 // Iced lowers `push X` to `sp -= width; [sp] = X`. Walking
                 // backward encounters cdecl's right-to-left pushes in source
                 // argument order: arg0, arg1, ... . Absorb both halves of each
                 // pair, but stop at an unrelated stack adjustment (alignment,
                 // local allocation, or cleanup) rather than guessing across it.
-                if *disp == 0
+                if disp == 0
                     && i > 0
                     && stack_pointer_sub_width_with_identities(&body[i - 1], identities)
                         == Some(i64::from(*size))
@@ -112,7 +101,7 @@ pub(super) fn fold_one_cdecl32_call(
                     if let Some(origins) = body[i].origins() {
                         argument.merge_origins(origins);
                     }
-                    by_offset.entry(*disp).or_insert((i, argument, *size));
+                    by_offset.entry(disp).or_insert((i, argument, *size));
                 } else {
                     break;
                 }
@@ -236,6 +225,28 @@ pub(super) fn fold_one_cdecl32_call(
         };
         body.insert(call_idx - removed_before_call, adjustment);
     }
+}
+
+fn outgoing_stack_displacement(
+    address: &Expr,
+    size: u8,
+    identities: Option<&ValueIdentities>,
+) -> Option<i64> {
+    if size == 0 {
+        return None;
+    }
+    let Expr::Lea {
+        base: Some(base),
+        index: None,
+        disp,
+        ..
+    } = address.semantic()
+    else {
+        return None;
+    };
+    ((register_is_storage(base, "esp", identities) || register_is_storage(base, "rsp", identities))
+        && *disp >= 0)
+        .then_some(*disp)
 }
 
 /// Keep the stack pointer honest after `push` setup statements are folded away.
@@ -451,27 +462,25 @@ fn proven_outgoing_cleanup(
     identities: Option<&ValueIdentities>,
 ) -> Option<i64> {
     for statement in body.iter().skip(call_idx + 1).take(16) {
-        if let Stmt::Assign {
-            dst,
-            src:
-                Expr::Bin {
-                    op: BinOp::Add,
-                    lhs,
-                    rhs,
-                },
-        } = statement.semantic()
-        {
-            let dst_is_esp = register_is_storage(dst, "esp", identities);
-            let dst_is_rsp = register_is_storage(dst, "rsp", identities);
-            if (dst_is_esp || dst_is_rsp)
-                && matches!(lhs.as_ref(), Expr::Reg(base)
-                    if (dst_is_esp && register_is_storage(base, "esp", identities))
-                        || (dst_is_rsp && register_is_storage(base, "rsp", identities)))
+        if let Stmt::Assign { dst, src } = statement.semantic() {
+            if let Expr::Bin {
+                op: BinOp::Add,
+                lhs,
+                rhs,
+            } = src.semantic()
             {
-                return match rhs.as_ref() {
-                    Expr::Const(bytes) if *bytes > 0 => Some(*bytes),
-                    _ => None,
-                };
+                let dst_is_esp = register_is_storage(dst, "esp", identities);
+                let dst_is_rsp = register_is_storage(dst, "rsp", identities);
+                if (dst_is_esp || dst_is_rsp)
+                    && matches!(lhs.semantic(), Expr::Reg(base)
+                        if (dst_is_esp && register_is_storage(base, "esp", identities))
+                            || (dst_is_rsp && register_is_storage(base, "rsp", identities)))
+                {
+                    return match rhs.semantic() {
+                        Expr::Const(bytes) if *bytes > 0 => Some(*bytes),
+                        _ => None,
+                    };
+                }
             }
         }
         match statement.semantic() {

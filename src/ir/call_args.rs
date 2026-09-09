@@ -3558,8 +3558,9 @@ mod tests {
                     scale: 1,
                     disp,
                     segment: None,
-                },
-                src: Expr::Const(value),
+                }
+                .with_origins(OriginSet::one(va - 8)),
+                src: Expr::Const(value).with_origins(OriginSet::one(va - 4)),
                 size: 4,
             }
             .with_origins(crate::ir::ast::OriginSet::one(va))
@@ -3583,8 +3584,14 @@ mod tests {
         assert_eq!(args.len(), 2);
         assert!(matches!(args[0].semantic(), Expr::Const(10)));
         assert!(matches!(args[1].semantic(), Expr::Const(20)));
-        assert_eq!(args[0].origins(), Some(&OriginSet::one(0x1014)));
-        assert_eq!(args[1].origins(), Some(&OriginSet::one(0x1010)));
+        assert_eq!(
+            args[0].origins(),
+            Some(&OriginSet::from_addresses([0x1010, 0x1014]))
+        );
+        assert_eq!(
+            args[1].origins(),
+            Some(&OriginSet::from_addresses([0x100c, 0x1010]))
+        );
         assert_eq!(
             f.body[0].origins().expect("folded call owner").addresses(),
             &[0x1010, 0x1014, 0x1018]
@@ -4687,9 +4694,10 @@ mod tests {
             dst: reg("rsp"),
             src: Expr::Bin {
                 op: BinOp::Add,
-                lhs: Box::new(Expr::Reg(reg("rsp"))),
-                rhs: Box::new(Expr::Const(8)),
-            },
+                lhs: Box::new(Expr::Reg(reg("rsp")).with_origins(OriginSet::one(0x1040))),
+                rhs: Box::new(Expr::Const(8).with_origins(OriginSet::one(0x1044))),
+            }
+            .with_origins(OriginSet::one(0x1048)),
         });
         let mut f = Function {
             name: "caller".into(),
