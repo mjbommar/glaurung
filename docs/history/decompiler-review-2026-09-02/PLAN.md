@@ -5343,6 +5343,15 @@ relevant ratchet's accepted-regression record.
    exact clean release build. The immediately preceding green six-cell Hello
    checkpoint was not repeated. See
    `results/wp3-zero-setup-call-target-origins.md`.
+   Commit `4b03122e` closes the MinGW implicit-runtime target sibling.
+   Expression ownership on `__main`/`___main` no longer leaks the
+   compiler-inserted initialization call into recovered source. The exact
+   main-name, direct-target, zero-argument, and result-free deletion gates
+   remain, and deleted ownership is not reassigned. The observed-red ownership
+   contract, all four MinGW-focused Rust tests, and the directly owning real
+   PE32 `main` round trip pass against an exact clean release build. The recent
+   green six-cell Hello checkpoint was not repeated. See
+   `results/wp3-mingw-runtime-target-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
