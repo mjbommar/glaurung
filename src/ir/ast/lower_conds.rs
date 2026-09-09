@@ -403,43 +403,37 @@ pub(super) fn hoist_inline_flag_conds(
     for stmt in stmts {
         let (stmt, mut origins) = stmt.into_semantic_with_origins();
         let stmt = match stmt {
-            Stmt::Assign {
-                dst,
-                src:
-                    Expr::Select {
-                        mut cond,
-                        if_true,
-                        if_false,
-                        width,
-                    },
-            } => {
-                let flag = match cond.as_ref() {
-                    Expr::Reg(flag) => Some(flag.clone()),
-                    _ => None,
-                };
-                if let Some(flag) = flag {
-                    let arm_reads = count_reg_uses_in_expr(&if_true, &flag)
-                        + count_reg_uses_in_expr(&if_false, &flag);
-                    if arm_reads == 0 {
-                        if let Some((cmp, contributing)) =
-                            take_reaching_cmp(&mut out, &flag, identities)
-                        {
-                            cond = Box::new(cmp);
-                            origins
-                                .get_or_insert_with(OriginSet::empty)
-                                .merge(&contributing);
+            Stmt::Assign { dst, mut src } => {
+                if let Expr::Select {
+                    cond,
+                    if_true,
+                    if_false,
+                    ..
+                } = src.semantic_mut()
+                {
+                    if let Some((flag, was_inverted)) = flag_condition(cond) {
+                        let arm_reads = count_reg_uses_in_expr(if_true, &flag)
+                            + count_reg_uses_in_expr(if_false, &flag);
+                        let condition_origins = cond.origins().cloned();
+                        if arm_reads == 0 {
+                            if let Some((cmp, contributing)) =
+                                take_reaching_cmp(&mut out, &flag, identities)
+                            {
+                                let replacement = if was_inverted {
+                                    negate_cmp_expr(cmp)
+                                } else {
+                                    cmp
+                                }
+                                .with_optional_origins(condition_origins);
+                                **cond = replacement;
+                                origins
+                                    .get_or_insert_with(OriginSet::empty)
+                                    .merge(&contributing);
+                            }
                         }
                     }
                 }
-                Stmt::Assign {
-                    dst,
-                    src: Expr::Select {
-                        cond,
-                        if_true,
-                        if_false,
-                        width,
-                    },
-                }
+                Stmt::Assign { dst, src }
             }
             other => other,
         };
@@ -1130,6 +1124,58 @@ mod tests {
         assert_eq!(
             hoisted[0].origins(),
             Some(&comparison_owner.union(&branch_owner))
+        );
+    }
+
+    #[test]
+    fn inline_flag_hoist_preserves_attributed_select_and_condition() {
+        let comparison_owner = OriginSet::one(0x2000);
+        let condition_owner = OriginSet::one(0x2002);
+        let select_owner = OriginSet::one(0x2004);
+        let assignment_owner = OriginSet::one(0x2008);
+        let flag = VReg::phys("predicate");
+        let statements = vec![
+            Stmt::Assign {
+                dst: flag.clone(),
+                src: Expr::Cmp {
+                    op: CmpOp::Eq,
+                    lhs: Box::new(Expr::Reg(VReg::phys("value"))),
+                    rhs: Box::new(Expr::Const(0)),
+                }
+                .with_origins(comparison_owner.clone()),
+            }
+            .with_origins(comparison_owner.clone()),
+            Stmt::Assign {
+                dst: VReg::phys("selected"),
+                src: Expr::Select {
+                    width: 4,
+                    cond: Box::new(Expr::Reg(flag).with_origins(condition_owner.clone())),
+                    if_true: Box::new(Expr::Const(1)),
+                    if_false: Box::new(Expr::Const(2)),
+                }
+                .with_origins(select_owner.clone()),
+            }
+            .with_origins(assignment_owner.clone()),
+        ];
+
+        let hoisted = super::hoist_inline_flag_conds(statements, None);
+
+        assert_eq!(hoisted.len(), 1);
+        let Stmt::Assign { src, .. } = hoisted[0].semantic() else {
+            unreachable!()
+        };
+        assert_eq!(src.origins(), Some(&select_owner));
+        let Expr::Select { cond, .. } = src.semantic() else {
+            unreachable!()
+        };
+        assert!(matches!(cond.semantic(), Expr::Cmp { op: CmpOp::Eq, .. }));
+        assert_eq!(
+            cond.origins(),
+            Some(&comparison_owner.union(&condition_owner))
+        );
+        assert_eq!(
+            hoisted[0].origins(),
+            Some(&comparison_owner.union(&assignment_owner))
         );
     }
 
