@@ -2167,8 +2167,15 @@ provenance through lowering.
   expression owners. Both strengthened contracts were observed red, all 10
   readonly-fold tests pass, and the directly owning AArch64 optimized readonly
   switch round trip is green after a clean release build. The sampled AMD64
-  non-PIE Hello cells remain known-red at their separate direct-address
-  resolution boundary. See `results/wp3-readonly-expression-origins.md`.
+  non-PIE Hello cells exposed a separate direct-address resolution boundary.
+  See `results/wp3-readonly-expression-origins.md`.
+  Commit `54ff918b` closes that boundary for authoritative character-pointer
+  calls: attributed named targets still select their call contract, and
+  attributed constant arguments fold to string literals without losing their
+  instruction owner. The contract was observed red, all 11 string-fold tests
+  pass, and the formerly-red AMD64 GCC symbols/non-PIE Hello O0/O2 cells are
+  canonical after a clean release build. See
+  `results/wp3-string-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
