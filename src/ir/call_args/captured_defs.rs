@@ -255,17 +255,23 @@ pub(super) fn substitute_exact_reg(expr: &mut Expr, target: &VReg, replacement: 
         }
         Expr::Reg(_) | Expr::StackAddr { .. } => false,
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
-            let Expr::Reg(replacement) = replacement else {
+            let Expr::Reg(replacement_register) = replacement.semantic() else {
                 return false;
             };
+            let replacement_origins = replacement.origins().cloned();
             let mut changed = false;
             if base.as_ref() == Some(target) {
-                *base = Some(replacement.clone());
+                *base = Some(replacement_register.clone());
                 changed = true;
             }
             if index.as_ref() == Some(target) {
-                *index = Some(replacement.clone());
+                *index = Some(replacement_register.clone());
                 changed = true;
+            }
+            if changed {
+                if let Some(origins) = replacement_origins.as_ref() {
+                    expr.merge_origins(origins);
+                }
             }
             changed
         }

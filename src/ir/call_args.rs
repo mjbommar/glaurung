@@ -7785,6 +7785,28 @@ mod tests {
     }
 
     #[test]
+    fn attributed_register_definition_substitutes_into_address_with_its_owner() {
+        let old = reg("r0#1");
+        let new = reg("r4#2");
+        let owner = OriginSet::one(0x1010);
+        let mut address = Expr::Lea {
+            base: Some(old.clone()),
+            index: None,
+            scale: 1,
+            disp: 4,
+            segment: None,
+        };
+        let replacement = Expr::Reg(new.clone()).with_origins(owner.clone());
+
+        assert!(substitute_exact_reg(&mut address, &old, &replacement));
+        assert!(matches!(
+            address.semantic(),
+            Expr::Lea { base: Some(base), .. } if base == &new
+        ));
+        assert_eq!(address.origins(), Some(&owner));
+    }
+
+    #[test]
     fn rsp_relative_argument_load_stays_before_tail_epilogue() {
         // GCC saves an incoming value in its local frame, reloads it into the
         // fourth SysV argument register, restores rsp, and only then performs
