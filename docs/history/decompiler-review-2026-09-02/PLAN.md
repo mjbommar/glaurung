@@ -2077,6 +2077,14 @@ provenance through lowering.
   and exact x86-64 GCC symbols/PIE Hello World O0 and O2 cells remain canonical
   after a clean release rebuild. See
   `results/wp3-x86-prologue-expression-origins.md`.
+  Commit `e26e43f2` completes the adjacent cdecl32 aligned-entry-frame
+  transaction. Alignment operands, saved-frame moves and pushes, promoted
+  parameter addresses, allocation widths, and both restore expressions now use
+  their semantic views while the existing balance and liveness proof remains
+  mandatory. The strengthened ownership transaction was observed red, all 45
+  owning `x86_prologue` tests pass, and the exact PE32 cdecl
+  decompile/recompile/execute round trip passes after a clean release rebuild.
+  See `results/wp3-cdecl32-frame-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
