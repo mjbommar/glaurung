@@ -2282,6 +2282,16 @@ provenance through lowering.
   after the catch return, and its verifier count falls from five undefined reads
   to three; audit those remaining exception-region identity/dataflow findings
   next. See `results/wp3-exception-unreachable-tails.md`.
+  Commit `c2e9e225` closes that verifier audit. The definition census,
+  unstructured-flow selection, poison tracking, and dangerous frame-address
+  scan now cover every recovered try/catch region; frame-address classification
+  is also expression-origin transparent. Three exact positive/refusal contracts
+  and all 48 verifier tests pass. The exact GCC-O2 specimen moves from three
+  definition findings to zero while all four exception execution cells and the
+  pipeline-profile transparency check remain green. The immediately preceding
+  exact release build supplied the six-cell Hello checkpoint, so it was not
+  repeated for this verifier-only increment. See
+  `results/wp3-exception-verifier-coverage.md`.
   Commit `54ff918b` closes that boundary for authoritative character-pointer
   calls: attributed named targets still select their call contract, and
   attributed constant arguments fold to string literals without losing their
