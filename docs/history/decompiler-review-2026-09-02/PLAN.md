@@ -3011,7 +3011,14 @@ provenance through lowering.
   from hiding an ABI live-in. Three exact Rust tests, one of 838 fixture lanes,
   and the six-cell x86-64/AArch64/ARMv7 GCC O0/O2 Hello sample pass on an exact
   release build; no broad suite ran. See
-  `results/wp3-call-live-in-expression-census.md`. Universal production
+  `results/wp3-call-live-in-expression-census.md`. Commit `71123306` then makes
+  recovered direct-callee and relocation-proven table-layout selection inspect
+  attributed call targets semantically. Two behavioral contracts were observed
+  red and five focused tests pass; exact-release ARM mixed-call and GCC-O0 table
+  fixtures plus the three-architecture O2 Hello sample pass. The GCC-O2 table
+  cell's zero-argument call reproduces identically at the exact parent and stays
+  open as separate call-contract work. See
+  `results/wp3-call-target-layout-expression-origins.md`. Universal production
   attribution remains open.
 - [~] Thread origins through lowering, expression rewrites, structuring, tail
   duplication, and rendering. Commit `8cb7d171` makes enabled statement
