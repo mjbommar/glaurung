@@ -312,6 +312,10 @@ fn mentions_stack_pointer(expr: &Expr, identities: Option<&ValueIdentities>) -> 
             Expr::Lea {
                 base: Some(register),
                 ..
+            }
+            | Expr::PdbFieldAddr {
+                base: Some(register),
+                ..
             } => Some(register),
             _ => None,
         };
@@ -328,12 +332,19 @@ fn mentions_stack_pointer(expr: &Expr, identities: Option<&ValueIdentities>) -> 
 fn visit_expr(expr: &Expr, f: &mut impl FnMut(&Expr)) {
     f(expr);
     match expr {
+        Expr::Origin { expr, .. } => visit_expr(expr, f),
         Expr::Deref { addr, .. } => visit_expr(addr, f),
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             visit_expr(lhs, f);
             visit_expr(rhs, f);
         }
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => visit_expr(src, f),
+        Expr::Un { src, .. }
+        | Expr::Cast { expr: src, .. }
+        | Expr::NumericConvert { expr: src, .. } => visit_expr(src, f),
+        Expr::Call { target, args, .. } => {
+            visit_expr(target, f);
+            args.iter().for_each(|arg| visit_expr(arg, f));
+        }
         Expr::Select {
             cond,
             if_true,
@@ -353,12 +364,19 @@ fn visit_expr(expr: &Expr, f: &mut impl FnMut(&Expr)) {
 fn visit_expr_mut(expr: &mut Expr, f: &mut impl FnMut(&mut Expr)) {
     f(expr);
     match expr {
+        Expr::Origin { expr, .. } => visit_expr_mut(expr, f),
         Expr::Deref { addr, .. } => visit_expr_mut(addr, f),
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             visit_expr_mut(lhs, f);
             visit_expr_mut(rhs, f);
         }
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => visit_expr_mut(src, f),
+        Expr::Un { src, .. }
+        | Expr::Cast { expr: src, .. }
+        | Expr::NumericConvert { expr: src, .. } => visit_expr_mut(src, f),
+        Expr::Call { target, args, .. } => {
+            visit_expr_mut(target, f);
+            args.iter_mut().for_each(|arg| visit_expr_mut(arg, f));
+        }
         Expr::Select {
             cond,
             if_true,
@@ -484,6 +502,7 @@ fn is_pure_register_value(statement: &Stmt, identities: Option<&ValueIdentities>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ast::OriginSet;
 
     fn reg(name: &str) -> VReg {
         VReg::phys(name)
@@ -542,5 +561,45 @@ mod tests {
         assert!(
             matches!(&misleading[..], [Stmt::Store { .. }, Stmt::Call { args, .. }] if args.is_empty())
         );
+    }
+
+    #[test]
+    fn cdecl_stack_visitors_are_expression_origin_transparent() {
+        let address = Expr::Cast {
+            signed: false,
+            width: 4,
+            expr: Box::new(Expr::Lea {
+                base: Some(reg("esp")),
+                index: None,
+                scale: 1,
+                disp: 12,
+                segment: None,
+            }),
+        }
+        .with_origins(OriginSet::one(0x1010));
+
+        assert!(mentions_stack_pointer(&address, None));
+
+        let mut statement = Stmt::Assign {
+            dst: reg("eax"),
+            src: address,
+        };
+        shift_stack_pointer_displacements(&mut statement, 8, None);
+
+        let Stmt::Assign { src, .. } = &statement else {
+            unreachable!("fixture is an assignment")
+        };
+        assert_eq!(src.origins().expect("address owner").addresses(), &[0x1010]);
+        let Expr::Cast { expr, .. } = src.semantic() else {
+            panic!("cast disappeared: {src:?}")
+        };
+        assert!(matches!(
+            expr.semantic(),
+            Expr::Lea {
+                base: Some(base),
+                disp: 4,
+                ..
+            } if base == &reg("esp")
+        ));
     }
 }
