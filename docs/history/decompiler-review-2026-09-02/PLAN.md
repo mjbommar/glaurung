@@ -2251,6 +2251,13 @@ provenance through lowering.
   pass. The exact release-built four-lane GCC/Clang O0/O2
   `se189_select_one_arm` family remains green. See
   `results/wp3-one-armed-select-expression-origins.md`.
+  Commit `a50e583f` closes the next producer-to-condition boundary: both
+  inline-flag lookup paths recognize attributed comparison definitions, move
+  the owned comparison into the source condition, and union the removed
+  definition statement owner with the surviving branch. The observed-red
+  ownership contract and all 12 focused condition-lowering tests pass; the
+  exact release-built four-lane polarity canary remains green. See
+  `results/wp3-inline-flag-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
