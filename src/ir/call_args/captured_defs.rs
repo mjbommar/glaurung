@@ -213,7 +213,7 @@ fn fixed_frame_address(expr: &Expr, identities: Option<&ValueIdentities>) -> Opt
         index: None,
         disp,
         ..
-    } = expr
+    } = expr.semantic()
     else {
         return None;
     };

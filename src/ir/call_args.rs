@@ -6984,15 +6984,21 @@ mod tests {
 
     #[test]
     fn stable_frame_load_uses_exact_identity_not_display_spelling() {
-        let frame_load = |base| Expr::Deref {
-            addr: Box::new(Expr::Lea {
-                base: Some(VReg::phys(base)),
-                index: None,
-                scale: 1,
-                disp: -8,
-                segment: None,
-            }),
-            size: 4,
+        let frame_load = |base| {
+            Expr::Deref {
+                addr: Box::new(
+                    Expr::Lea {
+                        base: Some(VReg::phys(base)),
+                        index: None,
+                        scale: 1,
+                        disp: -8,
+                        segment: None,
+                    }
+                    .with_origins(OriginSet::one(0x1000)),
+                ),
+                size: 4,
+            }
+            .with_origins(OriginSet::one(0x1004))
         };
         let mut identities = crate::ir::value_number::ValueIdentities::default();
         identities.record(
