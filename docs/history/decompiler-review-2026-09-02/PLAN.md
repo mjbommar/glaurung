@@ -2226,6 +2226,15 @@ provenance through lowering.
   `while (100 < n)`, while the same GCC signed-return inference and Clang
   unsigned-return-cast failures remain open at both revisions. See
   `results/wp3-comparison-fusion-expression-origins.md`.
+  Commit `1e424109` closes those concrete return-output failures through
+  attributed expressions: destination typing and ABI-transport cleanup now
+  inspect semantic casts through origin carriers and transfer every removed
+  cast owner to the surviving expression. The focused return-type module has
+  all six tests green. On a clean release build the signed-loop checkpoint
+  moves from 0/2 at `edd529a6` to 2/2 across GCC/Clang, debug/stripped syntax
+  and execution checks; both render signed `int`, the clean
+  `while (100 < n)`, and direct `return -1`, while the unsigned control remains
+  unsigned. See `results/wp3-signed-return-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
