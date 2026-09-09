@@ -108,11 +108,10 @@ fn fold_body(
                     fold_modular_expression(src, width);
                 }
             }
-            Stmt::Store {
-                addr: Expr::Reg(destination),
-                src,
-                ..
-            } => {
+            Stmt::Store { addr, src, .. } => {
+                let Expr::Reg(destination) = addr.semantic() else {
+                    continue;
+                };
                 let promoted = identities.map_or_else(
                     || is_promoted_local_reg(destination),
                     |identities| identities.is_promoted_stack_object(destination),
@@ -123,8 +122,7 @@ fn fold_body(
                     }
                 }
             }
-            Stmt::Store { .. }
-            | Stmt::Call { .. }
+            Stmt::Call { .. }
             | Stmt::Return { .. }
             | Stmt::IndirectGoto { .. }
             | Stmt::Push { .. }
@@ -262,6 +260,32 @@ mod tests {
                 src: Expr::Bin { lhs, .. },
                 ..
             } if matches!(lhs.as_ref(), Expr::Cast { width: 4, .. })
+        ));
+    }
+
+    #[test]
+    fn attributed_promoted_store_address_still_consumes_machine_extension() {
+        let object_name = "frame_object".to_string();
+        let destination = VReg::phys(&object_name);
+        let mut function = extended_store(destination.clone());
+        let Stmt::Store { addr, .. } = &mut function.body[0] else {
+            unreachable!("extended_store always builds a store")
+        };
+        *addr = addr.clone().with_origins(OriginSet::one(0x1010));
+        let mut types = TypeMap::default();
+        int32_type(&mut types, destination);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object_name]);
+
+        fold_consumed_extensions_with_identities(&mut function, &types, Some(&identities));
+
+        let Stmt::Store { addr, src, .. } = &function.body[0] else {
+            panic!("expected promoted store: {function:#?}")
+        };
+        assert_eq!(addr.origins(), Some(&OriginSet::one(0x1010)));
+        assert!(matches!(
+            src.semantic(),
+            Expr::Bin { lhs, .. } if matches!(lhs.semantic(), Expr::Cast { width: 4, .. })
         ));
     }
 
