@@ -2996,7 +2996,10 @@ provenance through lowering.
   attribution is insufficient. Commit `9b10f06e` adds the corresponding
   expression carrier, deterministic union-without-nesting, semantic access,
   and explicit transparency at every exhaustive expression consumer. It does
-  not yet attach origins to production expression nodes.
+  not yet attach origins to every production expression node. Follow-on
+  bounded consumer migrations now include canary classification, lazy-call
+  selects, cdecl32 stack walkers, ARM32 frame anchors, and format-proven printf
+  arity; universal production attribution remains open.
 - [~] Thread origins through lowering, expression rewrites, structuring, tail
   duplication, and rendering. Commit `8cb7d171` makes enabled statement
   consumers and all three renderers preserve or ignore the carrier without
@@ -5233,6 +5236,15 @@ relevant ratchet's accepted-regression record.
    pass, together with both exact release-built real ARM frame controls.
    Continue the remaining enabled expression-consumer audit. See
    `results/wp3-arm-frame-anchor-expression-origins.md`.
+   Commit `6aa84209` closes the format-proven printf arity sibling. Attributed
+   `printf` targets and recursively attributed cast/literal format sources no
+   longer hide an otherwise valid arity proof, so the `%d` value is retained
+   instead of truncating the recovered call. The observed-red unit contract,
+   all seven printf-focused Rust tests, and the GCC/Clang inlined-printf defect
+   fixture pass against an exact clean release build. Continue the remaining
+   enabled expression-consumer audit; this does not broaden the function
+   whitelist or weaken fail-closed format parsing. See
+   `results/wp3-printf-arity-expression-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
