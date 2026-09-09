@@ -2138,6 +2138,14 @@ provenance through lowering.
   SysV GCC O0 four-word aggregate-return lane reports no regression after a
   clean release rebuild. See
   `results/wp3-pair-return-expression-origins.md`.
+  Commit `e9c64a87` then closes guarded-call false-edge recovery across
+  attributed guards, operands, copied results, and store addresses. The
+  synthesized zero edge receives the union of the guarded statement and guard
+  expression owners. The strengthened contract was observed red, all three
+  owning tests pass, and the directly owning release-built binary round trip is
+  green. The periodic six-cell GCC symbols/PIE Hello checkpoint is canonical
+  for AMD64 and AArch64 at O0/O2; ARMv7 remains known-red at both levels. See
+  `results/wp3-guarded-call-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
