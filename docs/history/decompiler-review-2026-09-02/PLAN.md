@@ -552,6 +552,18 @@ name syntax. The observed-red opaque-bound case and three adjacent refusal and
 legacy contracts pass exactly, with 4,415 unrelated tests filtered out. See the
 follow-up in `results/wp3-unsigned-literal-identities.md`.
 
+Commit `20364f46` migrates that shared rendered-integer declaration query from
+one exact SSA value to one unambiguous physical storage base. Coalesced versions
+of the same carrier now retain their recovered integer width and signedness;
+mixed carriers still fall back to the conservative machine-word declaration.
+Its observed-red positive contract, mixed-storage refusal, and 122 focused
+tests across declaration typing, widening, constant folding, and typed
+simplification pass. An exact detached release build also passes six Hello
+controls across x86-64, AArch64, and ARMv7 at O0/O2. The attempted fixture-194
+control stopped at a separately recorded harness/native-package mismatch and
+is not counted as semantic evidence. See
+`results/wp3-coalesced-integer-declaration-types.md`.
+
 ## Authority and relationship to the roadmaps
 
 `docs/development/roadmap/README.md` remains the canonical roadmap index, and
@@ -5725,6 +5737,14 @@ relevant ratchet's accepted-regression record.
    contract, three focused controls, all 130 `call_args` tests, and the exact-
    release GCC O2 effectful-select nested-call canary pass. See
    `results/wp3-coalesced-enclosing-reaching-values.md`.
+   Commit `20364f46` then migrates shared integer declaration typing from one
+   exact SSA identity to one unambiguous physical storage base. Same-carrier
+   coalesced versions retain recovered narrow signedness and width, while mixed
+   carriers remain machine-wide. Its observed-red positive and refusal
+   contracts, 122 focused consumer tests, and exact-release x86-64/AArch64/
+   ARMv7 O0/O2 Hello controls pass. Fixture-194 was attempted but stopped at a
+   harness/native-package mismatch and supplies no semantic verdict. See
+   `results/wp3-coalesced-integer-declaration-types.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
