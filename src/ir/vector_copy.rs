@@ -118,11 +118,15 @@ fn load_batch_at(
     let batch = body.get(start..start + 4)?;
     let Stmt::Assign {
         dst: first_dst,
-        src: Expr::Deref {
-            addr: first_addr,
-            size: 4,
-        },
+        src: first_src,
     } = batch[0].semantic()
+    else {
+        return None;
+    };
+    let Expr::Deref {
+        addr: first_addr,
+        size: 4,
+    } = first_src.semantic()
     else {
         return None;
     };
@@ -131,11 +135,10 @@ fn load_batch_at(
         return None;
     }
     for (lane, statement) in batch.iter().enumerate() {
-        let Stmt::Assign {
-            dst,
-            src: Expr::Deref { addr, size: 4 },
-        } = statement.semantic()
-        else {
+        let Stmt::Assign { dst, src } = statement.semantic() else {
+            return None;
+        };
+        let Expr::Deref { addr, size: 4 } = src.semantic() else {
             return None;
         };
         if lane_name(dst, identities) != Some((wide.clone(), lane))
@@ -158,10 +161,13 @@ fn lane_store_batch_at(
     let batch = body.get(start..start + 4)?;
     let Stmt::Store {
         addr: first_addr,
-        src: Expr::Reg(first_src),
+        src: first_value,
         size: 4,
     } = batch[0].semantic()
     else {
+        return None;
+    };
+    let Expr::Reg(first_src) = first_value.semantic() else {
         return None;
     };
     let (wide_name, first_lane) = lane_name(first_src, identities)?;
@@ -171,10 +177,13 @@ fn lane_store_batch_at(
     for (lane, statement) in batch.iter().enumerate() {
         let Stmt::Store {
             addr,
-            src: Expr::Reg(src),
+            src: value,
             size: 4,
         } = statement.semantic()
         else {
+            return None;
+        };
+        let Expr::Reg(src) = value.semantic() else {
             return None;
         };
         if lane_name(src, identities) != Some((wide_name.clone(), lane))
@@ -1057,6 +1066,50 @@ mod tests {
             function.body[1].origins(),
             Some(&OriginSet::from_addresses(
                 [0x1220, 0x1224, 0x1228, 0x122c,]
+            ))
+        );
+    }
+
+    #[test]
+    fn attributed_lane_values_rejoin_and_union_every_consumed_owner() {
+        let mut body = Vec::new();
+        for lane in 0..4 {
+            body.push(Stmt::Assign {
+                dst: VReg::phys(format!("xmm0_d{lane}")),
+                src: Expr::Deref {
+                    addr: Box::new(address("rsi", lane * 4)),
+                    size: 4,
+                }
+                .with_origins(OriginSet::one(0x1240 + lane as u64 * 4)),
+            });
+        }
+        for lane in 0..4 {
+            body.push(Stmt::Store {
+                addr: address("rdi", lane * 4),
+                src: Expr::Reg(VReg::phys(format!("xmm0_d{lane}")))
+                    .with_origins(OriginSet::one(0x1260 + lane as u64 * 4)),
+                size: 4,
+            });
+        }
+        let mut function = Function {
+            name: "attributed_values".into(),
+            entry_va: 0,
+            body,
+        };
+
+        recover_wide_copies(&mut function);
+
+        assert_eq!(function.body.len(), 2, "{:#?}", function.body);
+        assert_eq!(
+            function.body[0].origins(),
+            Some(&OriginSet::from_addresses(
+                [0x1240, 0x1244, 0x1248, 0x124c,]
+            ))
+        );
+        assert_eq!(
+            function.body[1].origins(),
+            Some(&OriginSet::from_addresses(
+                [0x1260, 0x1264, 0x1268, 0x126c,]
             ))
         );
     }
