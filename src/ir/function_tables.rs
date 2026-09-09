@@ -14,7 +14,7 @@ use object::{
     RelocationTarget, SymbolKind,
 };
 
-use crate::ir::ast::{Expr, Function, FunctionTableTarget, Stmt};
+use crate::ir::ast::{Expr, Function, FunctionTableTarget, OriginSet, Stmt};
 use crate::ir::types::{BinOp, VReg};
 
 const MIN_ENTRIES: usize = 2;
@@ -673,26 +673,44 @@ fn resolve_expr(
 }
 
 fn promote_table_copy(expression: &mut Expr, definitions: &HashMap<VReg, Expr>) {
-    let Some(replacement) = copied_table_entry(expression, definitions, 0) else {
+    let Some((replacement, origins)) = copied_table_entry(expression, definitions, 0) else {
         return;
     };
-    *expression = replacement;
+    *expression = replacement.with_optional_origins(origins);
 }
 
 fn copied_table_entry(
     expression: &Expr,
     definitions: &HashMap<VReg, Expr>,
     depth: usize,
-) -> Option<Expr> {
+) -> Option<(Expr, Option<OriginSet>)> {
     if depth >= 16 {
         return None;
     }
-    match strip_cast(expression) {
-        entry @ Expr::FunctionTableEntry { .. } => Some(entry.clone()),
+    let own_origins = expression.origins().cloned();
+    match expression.semantic() {
+        entry @ Expr::FunctionTableEntry { .. } => Some((entry.clone(), own_origins)),
+        Expr::Cast { expr, .. } => {
+            let (entry, nested_origins) = copied_table_entry(expr, definitions, depth + 1)?;
+            Some((entry, union_optional_origins(own_origins, nested_origins)))
+        }
         Expr::Reg(register) => {
-            copied_table_entry(definitions.get(register)?, definitions, depth + 1)
+            let (entry, definition_origins) =
+                copied_table_entry(definitions.get(register)?, definitions, depth + 1)?;
+            Some((
+                entry,
+                union_optional_origins(own_origins, definition_origins),
+            ))
         }
         _ => None,
+    }
+}
+
+fn union_optional_origins(left: Option<OriginSet>, right: Option<OriginSet>) -> Option<OriginSet> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.union(&right)),
+        (Some(origins), None) | (None, Some(origins)) => Some(origins),
+        (None, None) => None,
     }
 }
 
@@ -1151,6 +1169,46 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn copied_table_call_target_composes_definition_and_use_origins() {
+        let table = ops_table();
+        let entry = VReg::phys("entry");
+        let mut function = Function {
+            name: "dispatch".into(),
+            entry_va: 0x11c5,
+            body: vec![
+                Stmt::Assign {
+                    dst: entry.clone(),
+                    src: Expr::FunctionTableEntry {
+                        table_va: table.va,
+                        table_name: table.name.clone(),
+                        pointer_size: table.pointer_size,
+                        index: Box::new(Expr::Reg(VReg::phys("which"))),
+                        targets: table.targets.clone(),
+                    }
+                    .with_origins(OriginSet::one(0x11b0)),
+                },
+                Stmt::Call {
+                    target: Expr::Reg(entry).with_origins(OriginSet::one(0x11b4)),
+                    args: Vec::new(),
+                    dst: None,
+                    call_spec: None,
+                },
+            ],
+        };
+
+        resolve_function_table_entries(&mut function, &[table]);
+
+        let Stmt::Call { target, .. } = function.body[1].semantic() else {
+            panic!("call shape changed: {function:#?}")
+        };
+        assert!(matches!(target.semantic(), Expr::FunctionTableEntry { .. }));
+        assert_eq!(
+            target.origins(),
+            Some(&OriginSet::from_iter([0x11b0, 0x11b4]))
+        );
     }
 
     #[test]
