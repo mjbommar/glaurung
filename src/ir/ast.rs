@@ -2223,6 +2223,39 @@ mod tests {
     }
 
     #[test]
+    fn attributed_select_nested_under_control_flow_is_render_byte_neutral() {
+        let render_nested = |src| {
+            let function = Function {
+                name: "nested_select".into(),
+                entry_va: 0x1000,
+                body: vec![Stmt::If {
+                    cond: Expr::Reg(VReg::phys("outer")),
+                    then_body: vec![Stmt::Assign {
+                        dst: VReg::phys("result"),
+                        src,
+                    }],
+                    else_body: None,
+                }],
+            };
+            (render(&function), render_c(&function))
+        };
+        let select = Expr::Select {
+            cond: Box::new(Expr::Reg(VReg::phys("inner"))),
+            if_true: Box::new(Expr::Reg(VReg::phys("yes"))),
+            if_false: Box::new(Expr::Reg(VReg::phys("no"))),
+            width: 8,
+        };
+
+        let plain = render_nested(select.clone());
+        let attributed = render_nested(select.with_origins(OriginSet::one(0x1004)));
+
+        assert_eq!(
+            attributed, plain,
+            "an expression owner must not change either nested-select renderer"
+        );
+    }
+
+    #[test]
     fn a_select_with_a_memory_arm_is_not_eagerly_evaluated() {
         let f = Function {
             name: "memory_select".into(),

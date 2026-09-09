@@ -278,7 +278,7 @@ fn write_stmt_c(s: &Stmt, out: &mut String, level: usize) {
                     if_true,
                     if_false,
                     ..
-                } = src
+                } = src.semantic()
                 {
                     indent(out, level);
                     out.push_str("if (");

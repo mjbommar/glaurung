@@ -338,7 +338,7 @@ fn write_stmt_ctx(s: &Stmt, tm: Option<&TypeMap>, out: &mut String, level: usize
                     if_true,
                     if_false,
                     ..
-                } = src
+                } = src.semantic()
                 {
                     indent(out, level);
                     out.push_str("if (");
