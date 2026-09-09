@@ -2999,7 +2999,8 @@ provenance through lowering.
   not yet attach origins to every production expression node. Follow-on
   bounded consumer migrations now include canary classification, lazy-call
   selects, cdecl32 stack walkers, ARM32 frame anchors, and format-proven printf
-  arity; universal production attribution remains open.
+  arity. Caller-derived fixed-arity target recognition is also transparent to
+  expression owners; universal production attribution remains open.
 - [~] Thread origins through lowering, expression rewrites, structuring, tail
   duplication, and rendering. Commit `8cb7d171` makes enabled statement
   consumers and all three renderers preserve or ignore the carrier without
@@ -5245,6 +5246,14 @@ relevant ratchet's accepted-regression record.
    enabled expression-consumer audit; this does not broaden the function
    whitelist or weaken fail-closed format parsing. See
    `results/wp3-printf-arity-expression-origins.md`.
+   Commit `ed4e1eee` closes the caller-derived fixed-arity target sibling. An
+   expression owner around a requested literal or named direct-call target no
+   longer erases otherwise valid balanced-stack arity evidence. Its
+   observed-red contract, all four owning Rust tests, and the dedicated real
+   stripped caller-arity fixture pass against an exact clean release build.
+   Continue the remaining enabled expression-consumer audit; the architecture,
+   target, cleanup, and multi-caller agreement gates remain unchanged. See
+   `results/wp3-caller-arity-target-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
