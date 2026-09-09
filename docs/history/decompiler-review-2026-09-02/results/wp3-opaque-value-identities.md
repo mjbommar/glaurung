@@ -154,3 +154,31 @@ strict xfail as the other unresolved variadic register-save-area lanes. The
 complete variadic module passes with eleven expected xfails; only the already
 repaired GCC O2 forwarding cell remains an ordinary pass. This is an honest
 defect reclassification, not a claimed variadic-lowering repair.
+
+## Follow-on: deterministic typed `ValueId`
+
+Commit `e633ca41` interns one deterministic, opaque `ValueId` for every
+recorded `SsaValue`. The numeric payload has no register, ABI, or presentation
+meaning. Exact values expose one ID; coalesced values expose the complete ID
+set and continue to refuse an exact answer.
+
+The lookup derives through the existing authoritative candidate relation, so
+rename, coalescing, and render-role projection preserve IDs without adding a
+second per-name identity map. The only new persistent structure is the
+`SsaValue -> ValueId` interning table.
+
+Focused validation passed:
+
+```text
+opaque_ssa_identity_survives_llir_to_ast_lowering: 1 passed
+coalesced_value_with_multiple_ssa_candidates_is_not_exact: 1 passed
+opaque_value_ids_: 2 passed
+```
+
+This follow-on is a WP3 foundation, not an output-quality claim. No production
+consumer reads `ValueId` yet, `tag_phys` remains, and rendered text is unchanged
+by construction. No broad suite, fixture corpus, release rebuild, or Hello
+matrix ran. The recent output-affecting pipeline work already retained selected
+O2 Hello cells on x86-64, ARMv7, and AArch64, and the canonical 72-cell Hello
+grid remains 72/72. A targeted cross-architecture Hello slice is due when the
+first production consumer migrates to `ValueId`.

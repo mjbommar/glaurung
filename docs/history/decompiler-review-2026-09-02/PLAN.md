@@ -1008,9 +1008,15 @@ provenance through lowering.
   and remaining consumers are still open. Commit `97f65ae6` moves identity
   candidates through both final presentation-name maps before typed rendering;
   name collisions union candidates and remain explicitly ambiguous rather than
-  selecting one. See
+  selecting one. Commit `e633ca41` gives every recorded `SsaValue` a
+  deterministic opaque `ValueId` at the sidecar boundary. Exact and coalesced
+  queries derive from the existing authoritative candidate relation, so role
+  projection and rename transactions preserve IDs without a second per-name
+  identity map. This establishes the typed key but does not yet migrate
+  production consumers or remove `tag_phys`. See
   `results/wp3-multi-output-identities.md` and
-  `results/wp3-ast-identity-renames.md`.
+  `results/wp3-ast-identity-renames.md`, and
+  `results/wp3-opaque-value-identities.md`.
 - [~] Add a compositional instruction-origin set to expressions/statements;
   unions must be deterministic and deduplicated. `7bea3314` defines the
   canonical set and `59840017` adds transparent statement ownership with
@@ -5083,6 +5089,14 @@ relevant ratchet's accepted-regression record.
    exact release build. Next remove the mutating compatibility surface together
    with the final `tag_phys` dependency rather than reintroducing semantic name
    readers.
+   Commit `e633ca41` adds the opaque typed key needed for that migration. IDs
+   are deterministic, independent of display spelling, and remain exact or
+   explicitly many-valued after coalescing and role projection. Its four
+   focused assertions pass; rendered output is intentionally unchanged because
+   no production consumer reads the new ID yet. Next migrate one remaining
+   typed `tag_phys` consumer to `ValueId`, retaining the compatibility parser
+   only where no identity sidecar exists. See
+   `results/wp3-opaque-value-identities.md`.
    Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
