@@ -473,9 +473,11 @@ fn frame_pointer_assignment(
         {
             continue;
         }
-        return Some(matches!(src, Expr::Reg(stack) if ["rsp", "esp", "sp"]
+        return Some(
+            matches!(src.semantic(), Expr::Reg(stack) if ["rsp", "esp", "sp"]
             .into_iter()
-            .any(|base| register_has_storage(stack, base, identities))));
+            .any(|base| register_has_storage(stack, base, identities))),
+        );
     }
     None
 }
@@ -3386,7 +3388,7 @@ mod tests {
             },
             Stmt::Assign {
                 dst: reg("opaque_frame"),
-                src: Expr::Reg(reg("opaque_stack")),
+                src: Expr::Reg(reg("opaque_stack")).with_origins(OriginSet::one(0x100c)),
             },
         ];
         let arm = vec![Stmt::Assign {
