@@ -134,7 +134,9 @@ fn refine_exact_unsigned_constants(
                     signed: true,
                     width,
                 },
-            ) if exact_value_role(name, identities) && *width < 8 => Some((name.clone(), *width)),
+            ) if identity_value_role(name, identities) && *width < 8 => {
+                Some((name.clone(), *width))
+            }
             _ => None,
         })
         .collect();
@@ -158,12 +160,14 @@ fn refine_exact_unsigned_constants(
     }
 }
 
-fn exact_value_role(
+fn identity_value_role(
     name: &str,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> bool {
     match identities {
-        Some(identities) => identities.exact(&VReg::phys(name)).is_some(),
+        Some(identities) => identities
+            .unambiguous_physical_base(&VReg::phys(name))
+            .is_some(),
         None => is_high_variable(name),
     }
 }
@@ -1131,7 +1135,9 @@ fn is_source_value_local_with_identities(
         return true;
     }
     match identities {
-        Some(identities) => identities.exact(&VReg::phys(name)).is_some(),
+        Some(identities) => identities
+            .unambiguous_physical_base(&VReg::phys(name))
+            .is_some(),
         None => is_high_variable(name),
     }
 }

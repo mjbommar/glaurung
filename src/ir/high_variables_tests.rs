@@ -1,5 +1,5 @@
 use super::{
-    exact_value_role, is_source_value_local_with_identities, refine_pointer_high_variables,
+    identity_value_role, is_source_value_local_with_identities, refine_pointer_high_variables,
     refine_pointer_high_variables_with_identities,
 };
 use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
@@ -14,16 +14,33 @@ fn pointer_width(types: &TypeMap, name: &str) -> Option<u8> {
     }
 }
 
+fn coalesced_same_storage_identities(
+    value: &VReg,
+    base: &str,
+) -> crate::ir::value_number::ValueIdentities {
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
+    for version in [1, 2] {
+        identities.record(
+            value.clone(),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys(base),
+                version,
+            },
+        );
+    }
+    identities
+}
+
 #[test]
 fn installed_identity_authority_does_not_trust_var_spelling_for_type_refinement() {
     let identities = crate::ir::value_number::ValueIdentities::default();
 
-    assert!(!exact_value_role("var12", Some(&identities)));
+    assert!(!identity_value_role("var12", Some(&identities)));
     assert!(!is_source_value_local_with_identities(
         "var12",
         Some(&identities)
     ));
-    assert!(exact_value_role("var12", None));
+    assert!(identity_value_role("var12", None));
     assert!(is_source_value_local_with_identities("var12", None));
     assert!(is_source_value_local_with_identities(
         "local_8",
@@ -54,6 +71,28 @@ fn exact_opaque_identity_is_eligible_for_pointer_refinement() {
     );
     let mut types = TypeMap::default();
 
+    refine_pointer_high_variables_with_identities(&function, &mut types, Some(&identities));
+
+    assert_eq!(pointer_width(&types, "opaque-value"), Some(1));
+}
+
+#[test]
+fn coalesced_same_storage_identity_is_eligible_for_pointer_refinement() {
+    let value = VReg::phys("opaque-value");
+    let function = Function {
+        name: "coalesced_pointer".into(),
+        entry_va: 0,
+        body: vec![Stmt::Assign {
+            dst: value.clone(),
+            src: Expr::StringLit {
+                value: "coalesced".into(),
+            },
+        }],
+    };
+    let identities = coalesced_same_storage_identities(&value, "rax");
+    let mut types = TypeMap::default();
+
+    assert!(identities.exact(&value).is_none());
     refine_pointer_high_variables_with_identities(&function, &mut types, Some(&identities));
 
     assert_eq!(pointer_width(&types, "opaque-value"), Some(1));
@@ -213,6 +252,53 @@ fn exact_opaque_high_bit_constant_used_unsigned_is_retyped() {
         },
     );
 
+    refine_pointer_high_variables_with_identities(&function, &mut types, Some(&identities));
+
+    assert_eq!(
+        types.get(&value),
+        Some(TypeHint::Int {
+            signed: false,
+            width: 4,
+        })
+    );
+}
+
+#[test]
+fn coalesced_same_storage_high_bit_constant_used_unsigned_is_retyped() {
+    let value = VReg::phys("opaque_constant");
+    let function = Function {
+        name: "coalesced_divide_by_ten".into(),
+        entry_va: 0,
+        body: vec![
+            Stmt::Assign {
+                dst: value.clone(),
+                src: Expr::Const(0xcccc_cccd),
+            },
+            Stmt::Assign {
+                dst: VReg::phys("result"),
+                src: Expr::Bin {
+                    op: BinOp::Mul,
+                    lhs: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 8,
+                        expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                    }),
+                    rhs: Box::new(Expr::Reg(value.clone())),
+                },
+            },
+        ],
+    };
+    let mut types = TypeMap::default();
+    types.upsert_public(
+        value.clone(),
+        TypeHint::Int {
+            signed: true,
+            width: 4,
+        },
+    );
+    let identities = coalesced_same_storage_identities(&value, "eax");
+
+    assert!(identities.exact(&value).is_none());
     refine_pointer_high_variables_with_identities(&function, &mut types, Some(&identities));
 
     assert_eq!(
