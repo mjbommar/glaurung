@@ -2103,6 +2103,16 @@ provenance through lowering.
   the exact AArch64 GCC symbols/PIE Hello World O0 canonical round trip remains
   green after a clean release rebuild. See
   `results/wp3-aarch64-frame-expression-origins.md`.
+  Commit `4b748faa` closes the ARM32 frame-expression surface next. A32 and
+  Thumb save values/addresses, stack adjustments, frame-pointer setup and
+  teardown, promoted-record locations, and restored values now inspect their
+  semantic expressions while retaining exact width, identity, ordering, and
+  all-return-path balance requirements. The strengthened Thumb transaction
+  was observed red and all 12 owning `arm32_prologue` tests pass. A clean
+  release run of the exact ARMv7 GCC symbols/PIE Hello World O0 cell reproduces
+  its previously recorded non-canonical frame/local output; it is a known-red
+  canary, not a green closure claim. See
+  `results/wp3-arm32-frame-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
