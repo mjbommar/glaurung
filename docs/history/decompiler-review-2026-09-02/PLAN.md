@@ -1976,6 +1976,15 @@ provenance through lowering.
   adjacent destination/boolean contracts pass, the release extension rebuilds,
   and the single real pointer-word-select compile/decompile/recompile test
   passes. See `results/wp3-destination-select-expression-origins.md`.
+  Commit `8b27c665` closes the promoted-home expression side of structured
+  reaching analysis. Attributed store addresses and sources now preserve the
+  distinction between a harmless `home = arg0` initializer and a later
+  mutation, in both structured and label/goto bodies. The strengthened
+  initializer-plus-mutation contract was observed red on a clean committed-tree
+  build; all eight owning reaching tests and four parameter-spill consumer
+  tests pass, the release extension rebuilds, and the single GCC-O0
+  `spill_combine` lane retains its green baseline. See
+  `results/wp3-structured-reaching-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
