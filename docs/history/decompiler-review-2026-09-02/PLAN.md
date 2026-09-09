@@ -2292,6 +2292,15 @@ provenance through lowering.
   exact release build supplied the six-cell Hello checkpoint, so it was not
   repeated for this verifier-only increment. See
   `results/wp3-exception-verifier-coverage.md`.
+  Commit `ffb5d009` completes the adjacent dangerous-frame-address expression
+  audit. The verifier now traverses every current expression variant, including
+  attributed nested value calls, PDB field addresses, function-table indices,
+  and wide arithmetic, while retaining its narrow address-use root policy. Its
+  contract was observed red, all 49 verifier tests pass, and an exact release
+  build keeps the GCC-O2 exception specimen verifier-clean and the pipeline
+  profile output-transparent. This verifier-only increment does not repeat the
+  immediately preceding Hello checkpoint. See
+  `results/wp3-verifier-expression-coverage.md`.
   Commit `54ff918b` closes that boundary for authoritative character-pointer
   calls: attributed named targets still select their call contract, and
   attributed constant arguments fold to string literals without losing their
