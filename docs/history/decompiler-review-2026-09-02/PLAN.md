@@ -2069,6 +2069,14 @@ provenance through lowering.
   was observed red, all 12 owning `stack_idiom` tests pass, and the exact
   x86-64 GCC O0 symbols/PIE Hello World canonical round trip remains green on a
   clean release build. See `results/wp3-stack-idiom-expression-origins.md`.
+  Commit `ef95b49a` closes the canonical x86 frame-prologue consumer. Push
+  values, frame-pointer sources, promoted save slots, stack-adjust bases, and
+  allocation widths are now classified through their semantic expression, so
+  provenance cannot strand a machine prologue in rendered C. The complete
+  prologue contract was observed red, all 45 owning `x86_prologue` tests pass,
+  and exact x86-64 GCC symbols/PIE Hello World O0 and O2 cells remain canonical
+  after a clean release rebuild. See
+  `results/wp3-x86-prologue-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
