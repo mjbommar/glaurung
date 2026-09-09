@@ -131,7 +131,7 @@ fn origin_wrapped_high_bit_constant_used_by_unsigned_widening_is_unsigned() {
         body: vec![
             Stmt::Assign {
                 dst: VReg::phys("var12"),
-                src: Expr::Const(0xcccc_cccd),
+                src: Expr::Const(0xcccc_cccd).with_origins(OriginSet::one(0x1001)),
             }
             .with_origins(OriginSet::one(0x1000)),
             Stmt::Assign {
@@ -143,7 +143,9 @@ fn origin_wrapped_high_bit_constant_used_by_unsigned_widening_is_unsigned() {
                         width: 8,
                         expr: Box::new(Expr::Reg(VReg::phys("var16"))),
                     }),
-                    rhs: Box::new(Expr::Reg(VReg::phys("var12"))),
+                    rhs: Box::new(
+                        Expr::Reg(VReg::phys("var12")).with_origins(OriginSet::one(0x1005)),
+                    ),
                 },
             }
             .with_origins(OriginSet::one(0x1004)),
@@ -437,7 +439,8 @@ fn known_call_and_literal_flow_through_exact_copy_chain() {
                 target: Expr::Named {
                     va: 0,
                     name: "getenv@plt".into(),
-                },
+                }
+                .with_origins(OriginSet::one(0x2000)),
                 args: vec![Expr::StringLit {
                     value: "PATH".into(),
                 }],
@@ -445,15 +448,16 @@ fn known_call_and_literal_flow_through_exact_copy_chain() {
                 call_spec: None,
             },
             Stmt::Store {
-                addr: Expr::Reg(VReg::phys("local_8")),
-                src: Expr::Reg(VReg::phys("var1")),
+                addr: Expr::Reg(VReg::phys("local_8")).with_origins(OriginSet::one(0x2004)),
+                src: Expr::Reg(VReg::phys("var1")).with_origins(OriginSet::one(0x2008)),
                 size: 8,
             },
             Stmt::Assign {
                 dst: VReg::phys("var2"),
                 src: Expr::StringLit {
                     value: "/tmp/fallback".into(),
-                },
+                }
+                .with_origins(OriginSet::one(0x200c)),
             },
         ],
     };
@@ -1314,10 +1318,13 @@ fn pointer_stored_through_width_only_memory_is_explicitly_represented() {
 #[test]
 fn proven_aggregate_cursor_becomes_a_byte_pointer_without_scaling_its_stride() {
     let cursor = VReg::phys("local_8");
-    let offset = |value| Expr::Bin {
-        op: BinOp::Add,
-        lhs: Box::new(Expr::Reg(cursor.clone())),
-        rhs: Box::new(Expr::Const(value)),
+    let offset = |value| {
+        Expr::Bin {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::Reg(cursor.clone()).with_origins(OriginSet::one(0x3000))),
+            rhs: Box::new(Expr::Const(value).with_origins(OriginSet::one(0x3004))),
+        }
+        .with_origins(OriginSet::one(0x3008))
     };
     let function = Function {
         name: "walk_records".into(),

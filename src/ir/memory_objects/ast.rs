@@ -307,9 +307,9 @@ fn record_access(
 }
 
 fn affine_address(expression: &Expr) -> Option<(VReg, i64)> {
-    match expression {
+    match expression.semantic() {
         Expr::Reg(register) => Some((register.clone(), 0)),
-        Expr::Bin { op, lhs, rhs } => match (op, lhs.as_ref(), rhs.as_ref()) {
+        Expr::Bin { op, lhs, rhs } => match (op, lhs.semantic(), rhs.semantic()) {
             (BinOp::Add, base, Expr::Const(displacement)) => {
                 let (base, offset) = affine_address(base)?;
                 Some((base, offset.checked_add(*displacement)?))
@@ -343,8 +343,8 @@ fn affine_address(expression: &Expr) -> Option<(VReg, i64)> {
 }
 
 fn object_origin(expression: &Expr, source: AccessSource) -> Option<ObjectOrigin> {
-    match expression {
-        Expr::Deref { addr, .. } => match addr.as_ref() {
+    match expression.semantic() {
+        Expr::Deref { addr, .. } => match addr.semantic() {
             Expr::Addr(address) | Expr::Named { va: address, .. } => {
                 Some(ObjectOrigin::GlobalPointerSlot(*address))
             }

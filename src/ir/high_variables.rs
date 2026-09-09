@@ -265,23 +265,27 @@ fn object_cursor_definitions_are_compatible(
             continue;
         }
         match definition {
-            Definition::Assignment(Expr::Bin {
-                op: BinOp::Add | BinOp::Sub,
-                lhs,
-                rhs,
-            }) if matches!(lhs.as_ref(), Expr::Reg(VReg::Phys(source)) if source == name)
-                && matches!(rhs.as_ref(), Expr::Const(_)) => {}
-            Definition::Assignment(
-                Expr::Deref { .. } | Expr::Addr(_) | Expr::Named { .. } | Expr::StackAddr { .. },
-            ) => has_origin = true,
-            Definition::Assignment(Expr::Reg(source))
-                if matches!(
-                    types.get(source),
-                    Some(TypeHint::Pointer { .. } | TypeHint::CodePointer)
-                ) =>
-            {
-                has_origin = true;
-            }
+            Definition::Assignment(expression) => match expression.semantic() {
+                Expr::Bin {
+                    op: BinOp::Add | BinOp::Sub,
+                    lhs,
+                    rhs,
+                } if matches!(lhs.semantic(), Expr::Reg(VReg::Phys(source)) if source == name)
+                    && matches!(rhs.semantic(), Expr::Const(_)) => {}
+                Expr::Deref { .. }
+                | Expr::Addr(_)
+                | Expr::Named { .. }
+                | Expr::StackAddr { .. } => has_origin = true,
+                Expr::Reg(source)
+                    if matches!(
+                        types.get(source),
+                        Some(TypeHint::Pointer { .. } | TypeHint::CodePointer)
+                    ) =>
+                {
+                    has_origin = true;
+                }
+                _ => return false,
+            },
             Definition::Call { return_type, .. }
                 if return_type.as_ref().is_none_or(|(c_type, authority)| {
                     pointer_width_from_c_type(c_type).is_some()
@@ -467,18 +471,19 @@ fn definitions_accept_authoritative_pointer_use(
         if definition.is_null_initializer() {
             return true;
         }
-        if width == 1
-            && matches!(
-                definition,
-                Definition::Assignment(Expr::Bin {
-                    op: BinOp::Add | BinOp::Sub,
-                    lhs,
-                    rhs,
-                }) if matches!(lhs.as_ref(), Expr::Reg(VReg::Phys(source)) if source == name)
-                    && matches!(rhs.as_ref(), Expr::Const(_))
-            )
-        {
-            return true;
+        if width == 1 {
+            if let Some(Expr::Bin {
+                op: BinOp::Add | BinOp::Sub,
+                lhs,
+                rhs,
+            }) = definition.assignment_semantic()
+            {
+                if matches!(lhs.semantic(), Expr::Reg(VReg::Phys(source)) if source == name)
+                    && matches!(rhs.semantic(), Expr::Const(_))
+                {
+                    return true;
+                }
+            }
         }
         match (
             definition.classify_with_identities(types, identities),
@@ -487,10 +492,13 @@ fn definitions_accept_authoritative_pointer_use(
             (ValueClass::Pointer(candidate), _) => {
                 candidate == 0 || width == 0 || candidate == width
             }
-            (
-                ValueClass::Scalar | ValueClass::Unknown,
-                Definition::Assignment(Expr::Reg(VReg::Phys(source))),
-            ) if is_trusted_copy_source_with_identities(source, identities) => {
+            (ValueClass::Scalar | ValueClass::Unknown, Definition::Assignment(expression))
+                if matches!(expression.semantic(), Expr::Reg(VReg::Phys(source))
+                    if is_trusted_copy_source_with_identities(source, identities)) =>
+            {
+                let Expr::Reg(VReg::Phys(source)) = expression.semantic() else {
+                    unreachable!("guard accepts only a physical-register copy");
+                };
                 let Some(source_definitions) = all_definitions.get(source) else {
                     return false;
                 };
@@ -551,6 +559,13 @@ enum Definition {
 }
 
 impl Definition {
+    fn assignment_semantic(&self) -> Option<&Expr> {
+        match self {
+            Self::Assignment(expression) => Some(expression.semantic()),
+            Self::Call { .. } => None,
+        }
+    }
+
     fn classify_with_identities(
         &self,
         types: &TypeMap,
@@ -571,18 +586,16 @@ impl Definition {
     }
 
     fn is_null_initializer(&self) -> bool {
-        matches!(self, Self::Assignment(Expr::Const(0)))
+        matches!(self.assignment_semantic(), Some(Expr::Const(0)))
     }
 
     fn transports_unsafe_source(&self, unsafe_uses: &HashSet<String>) -> bool {
-        matches!(
-            self,
-            Self::Assignment(Expr::Reg(VReg::Phys(source))) if unsafe_uses.contains(source)
-        )
+        matches!(self.assignment_semantic(), Some(Expr::Reg(VReg::Phys(source)))
+            if unsafe_uses.contains(source))
     }
 
     fn is_unsigned_high_bit_literal(&self, width: u8) -> bool {
-        let Self::Assignment(Expr::Const(value)) = self else {
+        let Some(Expr::Const(value)) = self.assignment_semantic() else {
             return false;
         };
         if *value < 0 || width == 0 || width >= 8 {
@@ -625,7 +638,7 @@ fn single_exact_parameter_origin(
             let value_definitions = definitions.get(name)?;
             let mut origin: Option<String> = None;
             for definition in value_definitions {
-                let Definition::Assignment(Expr::Reg(VReg::Phys(source))) = definition else {
+                let Some(Expr::Reg(VReg::Phys(source))) = definition.assignment_semantic() else {
                     return None;
                 };
                 if !is_trusted_copy_source_with_identities(source, identities) {
@@ -660,14 +673,15 @@ fn collect_definitions(body: &[Stmt], out: &mut HashMap<String, Vec<Definition>>
             // address is the promoted identity. The C renderer emits this as a
             // plain assignment, so it is a definition here as well. A `varN`
             // address remains a genuine memory write and must not define varN.
-            Stmt::Store {
-                addr: Expr::Reg(VReg::Phys(name)),
-                src,
-                ..
-            } if is_promoted_local(name) => out
-                .entry(name.clone())
-                .or_default()
-                .push(Definition::Assignment(src.clone())),
+            Stmt::Store { addr, src, .. } => {
+                if let Expr::Reg(VReg::Phys(name)) = addr.semantic() {
+                    if is_promoted_local(name) {
+                        out.entry(name.clone())
+                            .or_default()
+                            .push(Definition::Assignment(src.clone()));
+                    }
+                }
+            }
             Stmt::Call {
                 target,
                 dst: Some(VReg::Phys(name)),
@@ -908,7 +922,7 @@ fn expr_uses_preserve_positive_value(
 }
 
 fn wide_signed_integer(expression: &Expr, types: &TypeMap) -> bool {
-    match expression {
+    match expression.semantic() {
         Expr::Cast {
             signed: true,
             width: 8,
@@ -923,7 +937,7 @@ fn wide_signed_integer(expression: &Expr, types: &TypeMap) -> bool {
 
 fn unsigned_widening_cast(expression: &Expr, width: u8) -> bool {
     matches!(
-        expression,
+        expression.semantic(),
         Expr::Cast {
             signed: false,
             width: cast_width,
@@ -1052,7 +1066,7 @@ fn merge_selected_values(
 }
 
 fn is_null_pointer_constant(expression: &Expr) -> bool {
-    matches!(expression, Expr::Const(0))
+    matches!(expression.semantic(), Expr::Const(0))
 }
 
 fn classify_call(
@@ -1070,7 +1084,7 @@ fn classify_call(
         // the source result was scalar. A locked pointer use may refine it.
         return ValueClass::Unknown;
     }
-    let Expr::Named { name, .. } = target else {
+    let Expr::Named { name, .. } = target.semantic() else {
         return ValueClass::Unknown;
     };
     let Some(contract) = crate::ir::call_contracts::lookup(name) else {
@@ -1304,7 +1318,7 @@ fn collect_unsafe_expr(
 
 fn additive_pointer_use_is_safe(op: BinOp, lhs: &Expr, rhs: &Expr, types: &TypeMap) -> bool {
     fn is_character_pointer(expression: &Expr, types: &TypeMap) -> bool {
-        let Expr::Reg(VReg::Phys(name)) = expression else {
+        let Expr::Reg(VReg::Phys(name)) = expression.semantic() else {
             return false;
         };
         is_promoted_local(name)
@@ -1316,12 +1330,12 @@ fn additive_pointer_use_is_safe(op: BinOp, lhs: &Expr, rhs: &Expr, types: &TypeM
 
     match op {
         BinOp::Add => {
-            (is_character_pointer(lhs, types) && matches!(rhs, Expr::Const(_)))
-                || (matches!(lhs, Expr::Const(_)) && is_character_pointer(rhs, types))
+            (is_character_pointer(lhs, types) && matches!(rhs.semantic(), Expr::Const(_)))
+                || (matches!(lhs.semantic(), Expr::Const(_)) && is_character_pointer(rhs, types))
         }
         BinOp::Sub => {
             is_character_pointer(lhs, types)
-                && (matches!(rhs, Expr::Const(_)) || is_character_pointer(rhs, types))
+                && (matches!(rhs.semantic(), Expr::Const(_)) || is_character_pointer(rhs, types))
         }
         _ => false,
     }
