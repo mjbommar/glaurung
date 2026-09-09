@@ -21,7 +21,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use crate::ir::ssa::{SsaInfo, SsaValue};
+use crate::ir::ssa::{SsaInfo, SsaValue, ValueId};
 use crate::ir::types::{BinOp, LlirFunction, Op, VReg, Value};
 use crate::ir::use_def::{def_uses, use_is_proven_input, InstrAddr};
 
@@ -304,22 +304,87 @@ impl TypeMap {
 /// prevents unrelated register lifetimes from poisoning each other's types.
 #[derive(Debug, Default, Clone)]
 pub struct TypeMapV {
-    inner: HashMap<SsaValue, TypeHint>,
-    parameter_refinements: HashMap<SsaValue, TypeHint>,
-    strong_parameter_refinements: HashSet<SsaValue>,
+    inner: HashMap<ValueId, TypeHint>,
+    parameter_refinements: HashMap<ValueId, TypeHint>,
+    strong_parameter_refinements: HashSet<ValueId>,
+    value_ids: HashMap<SsaValue, ValueId>,
+    values_by_id: HashMap<ValueId, SsaValue>,
+    #[cfg(test)]
+    next_test_value_id: u32,
 }
 
 impl TypeMapV {
+    /// Create a type store bound to one authoritative SSA snapshot.
+    fn for_ssa(ssa: &SsaInfo) -> Self {
+        let value_ids = ssa
+            .values_with_ids()
+            .map(|(value, id)| (value.clone(), id))
+            .collect();
+        let values_by_id = ssa
+            .values_with_ids()
+            .map(|(value, id)| (id, value.clone()))
+            .collect();
+        let mut map = Self {
+            value_ids,
+            values_by_id,
+            ..Self::default()
+        };
+        #[cfg(test)]
+        {
+            map.next_test_value_id = ssa
+                .values_with_ids()
+                .map(|(_, id)| id.index())
+                .max()
+                .and_then(|id| id.checked_add(1))
+                .unwrap_or(0);
+        }
+        map
+    }
+
+    fn value_id(&self, value: &SsaValue) -> Option<ValueId> {
+        self.value_ids.get(value).copied()
+    }
+
+    fn ensure_value_id(&mut self, value: &SsaValue) -> Option<ValueId> {
+        if let Some(id) = self.value_id(value) {
+            return Some(id);
+        }
+        #[cfg(test)]
+        {
+            let id = ValueId::from_index(self.next_test_value_id);
+            self.next_test_value_id = self.next_test_value_id.checked_add(1)?;
+            self.value_ids.insert(value.clone(), id);
+            self.values_by_id.insert(id, value.clone());
+            return Some(id);
+        }
+        #[cfg(not(test))]
+        None
+    }
+
     pub fn get(&self, value: &SsaValue) -> Option<TypeHint> {
-        self.inner.get(value).copied()
+        self.inner.get(&self.value_id(value)?).copied()
+    }
+
+    /// Read a fact through the opaque identity owned by the originating SSA.
+    pub(crate) fn get_by_id(&self, value_id: ValueId) -> Option<TypeHint> {
+        self.inner.get(&value_id).copied()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&SsaValue, &TypeHint)> {
-        self.inner.iter()
+        self.inner
+            .iter()
+            .filter_map(|(id, hint)| self.values_by_id.get(id).map(|value| (value, hint)))
     }
 
     fn upsert(&mut self, value: SsaValue, hint: TypeHint) -> bool {
-        let before = self.inner.get(&value).copied();
+        let Some(value_id) = self.ensure_value_id(&value) else {
+            debug_assert!(
+                false,
+                "type fact references a value outside its SSA snapshot"
+            );
+            return false;
+        };
+        let before = self.inner.get(&value_id).copied();
         // Exact values may legitimately serve as byte and word buffers (for
         // example memset's destination). A register-keyed map has to choose a
         // widest machine view, but an SSA-keyed semantic fact can preserve the
@@ -336,14 +401,21 @@ impl TypeMapV {
             ) if current != incoming => TypeHint::Pointer { pointee_width: 0 },
             _ => merge_type_hint(before, hint),
         };
-        self.inner.insert(value, merged);
+        self.inner.insert(value_id, merged);
         before != Some(merged)
     }
 
     fn upsert_parameter_refinement(&mut self, value: SsaValue, hint: TypeHint) -> bool {
-        let before = self.parameter_refinements.get(&value).copied();
+        let Some(value_id) = self.ensure_value_id(&value) else {
+            debug_assert!(
+                false,
+                "parameter fact references a value outside its SSA snapshot"
+            );
+            return false;
+        };
+        let before = self.parameter_refinements.get(&value_id).copied();
         let merged = merge_type_hint(before, hint);
-        self.parameter_refinements.insert(value, merged);
+        self.parameter_refinements.insert(value_id, merged);
         before != Some(merged)
     }
 
@@ -353,8 +425,15 @@ impl TypeMapV {
     /// while a compiler-derived SysV parameter home has already passed its
     /// own provenance and ambiguity checks.
     fn upsert_strong_parameter_refinement(&mut self, value: SsaValue, hint: TypeHint) -> bool {
-        let was_strong = self.strong_parameter_refinements.contains(&value);
-        let before = self.parameter_refinements.get(&value).copied();
+        let Some(value_id) = self.ensure_value_id(&value) else {
+            debug_assert!(
+                false,
+                "strong parameter fact references a value outside its SSA snapshot"
+            );
+            return false;
+        };
+        let was_strong = self.strong_parameter_refinements.contains(&value_id);
+        let before = self.parameter_refinements.get(&value_id).copied();
         let merged = match (before, hint) {
             // GCC may zero-extend a signed byte/word merely to transport its
             // bits into another same-width object, then sign-extend a later
@@ -378,8 +457,8 @@ impl TypeMapV {
             }
             _ => merge_type_hint(before, hint),
         };
-        self.parameter_refinements.insert(value.clone(), merged);
-        let inserted = self.strong_parameter_refinements.insert(value);
+        self.parameter_refinements.insert(value_id, merged);
+        let inserted = self.strong_parameter_refinements.insert(value_id);
         before != Some(merged) || inserted
     }
 
@@ -388,7 +467,10 @@ impl TypeMapV {
     /// caller-supplied value, while later scratch lifetimes remain excluded.
     pub fn live_in_types(&self) -> TypeMap {
         let mut out = TypeMap::default();
-        for (value, hint) in &self.inner {
+        for (value_id, hint) in &self.inner {
+            let Some(value) = self.values_by_id.get(value_id) else {
+                continue;
+            };
             if value.version == 0 {
                 out.upsert(value.base.clone(), *hint);
             }
@@ -408,20 +490,29 @@ impl TypeMapV {
         let live_in_count = self
             .parameter_refinements
             .keys()
-            .filter(|value| value.version == 0)
+            .filter(|value_id| {
+                self.values_by_id
+                    .get(value_id)
+                    .is_some_and(|value| value.version == 0)
+            })
             .count();
         let pointer_count = self
             .parameter_refinements
             .iter()
-            .filter(|(value, hint)| {
-                value.version == 0
+            .filter(|(value_id, hint)| {
+                self.values_by_id
+                    .get(value_id)
+                    .is_some_and(|value| value.version == 0)
                     && matches!(hint, TypeHint::Pointer { .. } | TypeHint::CodePointer)
             })
             .count();
         let pointers_corroborated = pointer_count >= 2 || live_in_count >= 3;
         let scalars_corroborated = live_in_count >= 2;
-        for (value, hint) in &self.parameter_refinements {
-            let visible = self.strong_parameter_refinements.contains(value)
+        for (value_id, hint) in &self.parameter_refinements {
+            let Some(value) = self.values_by_id.get(value_id) else {
+                continue;
+            };
+            let visible = self.strong_parameter_refinements.contains(value_id)
                 || match hint {
                     TypeHint::Pointer { .. } | TypeHint::CodePointer => pointers_corroborated,
                     TypeHint::Int {
@@ -446,8 +537,9 @@ impl TypeMapV {
         if value.version != 0 {
             return None;
         }
-        let hint = self.parameter_refinements.get(value).copied()?;
-        if self.strong_parameter_refinements.contains(value) {
+        let value_id = self.value_id(value)?;
+        let hint = self.parameter_refinements.get(&value_id).copied()?;
+        if self.strong_parameter_refinements.contains(&value_id) {
             return Some(hint);
         }
         if matches!(
@@ -462,13 +554,19 @@ impl TypeMapV {
         let live_in_count = self
             .parameter_refinements
             .keys()
-            .filter(|candidate| candidate.version == 0)
+            .filter(|candidate| {
+                self.values_by_id
+                    .get(candidate)
+                    .is_some_and(|value| value.version == 0)
+            })
             .count();
         let pointer_count = self
             .parameter_refinements
             .iter()
             .filter(|(candidate, candidate_hint)| {
-                candidate.version == 0
+                self.values_by_id
+                    .get(candidate)
+                    .is_some_and(|value| value.version == 0)
                     && matches!(
                         candidate_hint,
                         TypeHint::Pointer { .. } | TypeHint::CodePointer
@@ -2165,6 +2263,37 @@ mod tests {
                 succs: vec![],
             }],
         }
+    }
+
+    #[test]
+    fn valued_type_facts_use_snapshot_owned_value_ids() {
+        let function = mk_block(vec![Op::Assign {
+            dst: VReg::phys("eax"),
+            src: Value::Const(7),
+        }]);
+        let ssa = compute_ssa(&function);
+        let value = ssa
+            .def_value(
+                &function,
+                InstrAddr {
+                    block_idx: 0,
+                    instr_idx: 0,
+                },
+            )
+            .expect("assignment has an SSA definition");
+        let value_id = ssa.value_id(&value).expect("SSA snapshot owns the ID");
+        let types = recover_types_valued(&function, &ssa);
+
+        assert_eq!(
+            types.inner.get(&value_id),
+            Some(&TypeHint::Int {
+                signed: true,
+                width: 4,
+            })
+        );
+        assert_eq!(types.get(&value), types.inner.get(&value_id).copied());
+        assert_eq!(types.get_by_id(value_id), types.get(&value));
+        assert_eq!(types.value_ids.get(&value), Some(&value_id));
     }
 
     /// An `xmm` argument register is the same eight bytes for a `float` and for

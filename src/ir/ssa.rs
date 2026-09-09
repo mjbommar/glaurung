@@ -315,6 +315,11 @@ impl SsaInfo {
         self.value_ids.get(value).copied()
     }
 
+    /// Enumerate every semantic value and opaque ID owned by this snapshot.
+    pub(crate) fn values_with_ids(&self) -> impl Iterator<Item = (&SsaValue, ValueId)> {
+        self.value_ids.iter().map(|(value, id)| (value, *id))
+    }
+
     /// Return the SSA value defined by the instruction at `addr`.
     pub fn def_value(&self, lf: &LlirFunction, addr: InstrAddr) -> Option<SsaValue> {
         self.def_value_ref(lf, addr).cloned()

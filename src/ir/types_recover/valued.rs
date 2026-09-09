@@ -236,7 +236,7 @@ fn low_mask_width(value: i64) -> Option<u8> {
 /// therefore be demoted without erasing an earlier pointer in the same
 /// architectural register.
 pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
-    let mut tm = TypeMapV::default();
+    let mut tm = TypeMapV::for_ssa(ssa);
     let mut constant_defs: HashMap<SsaValue, TypeHint> = HashMap::new();
     let mut copy_edges: Vec<(SsaValue, SsaValue)> = Vec::new();
     // Narrow SysV parameter homes are sometimes fed through a compiler copy
@@ -947,7 +947,10 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
     // Constants demote only the definition that received the constant. They do
     // not erase an earlier pointer/code-pointer lifetime in the same storage.
     for (value, hint) in constant_defs {
-        tm.inner.insert(value, hint);
+        let value_id = tm
+            .value_id(&value)
+            .expect("constant definition must belong to the SSA snapshot");
+        tm.inner.insert(value_id, hint);
     }
 
     tm
