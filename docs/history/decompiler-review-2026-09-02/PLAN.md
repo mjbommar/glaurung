@@ -2246,6 +2246,13 @@ provenance through lowering.
   exact parent and this commit on `INT_MIN`, so they remain pre-existing
   exception execution debt rather than a regression from this increment. See
   `results/wp3-exception-constant-folding.md`.
+  Commit `d5d3b8dd` closes that measured O0 debt. Exception recovery now tracks
+  direct caught-pointer aliases through expression-origin carriers and replaces
+  an attributed four-byte dereference with the typed catch binding while
+  retaining the load/address ownership union. The contract was observed red;
+  its exact test passes, and the four GCC/Clang O0/O2 `cpp_exception` cells are
+  now all execution-differential passes on an exact release build. See
+  `results/wp3-attributed-catch-values.md`.
   Commit `54ff918b` closes that boundary for authoritative character-pointer
   calls: attributed named targets still select their call contract, and
   attributed constant arguments fold to string literals without losing their

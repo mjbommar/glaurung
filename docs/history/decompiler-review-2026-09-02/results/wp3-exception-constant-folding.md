@@ -43,5 +43,6 @@ Both O0 executions crash on `INT_MIN` because the recovered catch path reads an
 invalid call-lifetime value. An exact release rebuild of parent `3a1c798c`
 produces the same output and the same two failures, proving this increment did
 not introduce them. They contradict the currently committed passing baseline
-and remain explicit exception-recovery/execution debt. No broad Rust, Python,
-fixture, architecture, DecBench, or Joern suite ran.
+and were explicit exception-recovery/execution debt at this commit. Follow-up
+`d5d3b8dd` resolves both; see `wp3-attributed-catch-values.md`. No broad Rust,
+Python, fixture, architecture, DecBench, or Joern suite ran.
