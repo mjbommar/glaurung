@@ -2282,6 +2282,14 @@ provenance through lowering.
   The observed-red ownership contract and all 14 focused condition-lowering
   tests pass; the exact release-built four-lane polarity canary remains green.
   See `results/wp3-structured-condition-expression-origins.md`.
+  Commit `c61c32e0` closes a scored-text renderer sibling: an attributed
+  `Select` nested under control flow now retains the same structurally faithful
+  two-arm `if`/`else` form as its plain counterpart in both generic AST
+  renderers, instead of changing into an eager initializer plus one-arm `if`.
+  The observed-red dual-renderer contract and five adjacent select tests pass;
+  the exact release-built fixture-189 pure/one-arm slice remains green across
+  all four GCC/Clang O0/O2 lanes. See
+  `results/wp3-nested-select-rendering-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
