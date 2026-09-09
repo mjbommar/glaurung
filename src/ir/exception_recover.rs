@@ -707,13 +707,11 @@ fn replace_caught_value(body: &mut [Stmt], pointer: &VReg, binding: &VReg) {
     loop {
         let before = aliases.len();
         for statement in body.iter() {
-            if let Stmt::Assign {
-                dst,
-                src: Expr::Reg(source),
-            } = statement.semantic()
-            {
-                if aliases.contains(source) {
-                    aliases.insert(dst.clone());
+            if let Stmt::Assign { dst, src } = statement.semantic() {
+                if let Expr::Reg(source) = src.semantic() {
+                    if aliases.contains(source) {
+                        aliases.insert(dst.clone());
+                    }
                 }
             }
         }
@@ -723,20 +721,33 @@ fn replace_caught_value(body: &mut [Stmt], pointer: &VReg, binding: &VReg) {
     }
 
     fn rewrite(expr: &mut Expr, aliases: &std::collections::HashSet<VReg>, binding: &VReg) {
-        let is_catch_deref = matches!(expr, Expr::Deref { addr, size: 4 }
-            if matches!(addr.as_ref(), Expr::Reg(reg) if aliases.contains(reg))
-                || matches!(addr.as_ref(), Expr::Lea {
+        let catch_origins = match expr.semantic() {
+            Expr::Deref { addr, size: 4 }
+                if matches!(addr.semantic(), Expr::Reg(reg) if aliases.contains(reg))
+                    || matches!(addr.semantic(), Expr::Lea {
                     base: Some(reg),
                     index: None,
                     disp: 0,
                     segment: None,
                     ..
-                } if aliases.contains(reg)));
-        if is_catch_deref {
-            *expr = Expr::Reg(binding.clone());
+                } if aliases.contains(reg)) =>
+            {
+                Some(
+                    expr.origins()
+                        .into_iter()
+                        .chain(addr.origins())
+                        .fold(OriginSet::empty(), |origins, next| origins.union(next)),
+                )
+            }
+            _ => None,
+        };
+        if let Some(origins) = catch_origins {
+            *expr = Expr::Reg(binding.clone())
+                .with_optional_origins((!origins.is_empty()).then_some(origins));
             return;
         }
         match expr {
+            Expr::Origin { expr: inner, .. } => rewrite(inner, aliases, binding),
             Expr::Deref { addr, .. }
             | Expr::Un { src: addr, .. }
             | Expr::Cast { expr: addr, .. } => rewrite(addr, aliases, binding),
@@ -1021,6 +1032,63 @@ mod tests {
             matches!(stmt, Stmt::Assign { src: Expr::Reg(reg), .. }
                 if reg == &VReg::phys("exception_0"))
         }));
+    }
+
+    #[test]
+    fn typed_handler_tracks_attributed_caught_pointer_values() {
+        let pointer = VReg::phys("caught_ptr");
+        let alias = VReg::phys("caught_alias");
+        let alias_owner = OriginSet::one(0x1038);
+        let address_owner = OriginSet::one(0x103c);
+        let load_owner = OriginSet::one(0x1040);
+        let mut function = Function {
+            name: "f".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Return {
+                    value: Some(Expr::Const(7)),
+                },
+                Stmt::Label(0x1030),
+                abi_call("__cxa_begin_catch@plt", Some(pointer.clone())),
+                Stmt::Assign {
+                    dst: alias.clone(),
+                    src: Expr::Reg(pointer).with_origins(alias_owner),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("ret"),
+                    src: Expr::Deref {
+                        addr: Box::new(Expr::Reg(alias).with_origins(address_owner.clone())),
+                        size: 4,
+                    }
+                    .with_origins(load_owner.clone()),
+                },
+                abi_call("__cxa_end_catch@plt", None),
+            ],
+        };
+        let sites = [ExceptionCallSite {
+            function_start: 0x1000,
+            protected_start: 0x1004,
+            protected_end: 0x1010,
+            landing_pad: 0x1030,
+            action: ExceptionAction::Catch,
+            catch_type: Some(CatchType::Int),
+            type_info_location: Some(0x4000),
+        }];
+
+        recover_typed_handlers(&mut function, &sites);
+
+        let Stmt::TryCatch { catches, .. } = function.body[0].semantic() else {
+            panic!("expected typed try/catch")
+        };
+        let Stmt::Assign { src, .. } = catches[0].body[1].semantic() else {
+            panic!("expected attributed catch load: {:#?}", catches[0].body)
+        };
+        assert_eq!(src.semantic(), &Expr::Reg(VReg::phys("exception_0")));
+        assert_eq!(
+            src.origins(),
+            Some(&load_owner.union(&address_owner)),
+            "replacing the load must retain every consumed instruction owner"
+        );
     }
 
     #[test]
