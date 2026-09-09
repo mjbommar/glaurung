@@ -2996,6 +2996,13 @@ provenance through lowering.
   `branches.c:nested` integration test recovers two nested `if`s and three
   direct returns without a ternary or join temporary. See
   `results/wp3-guarded-select-expression-origins.md`.
+  Commit `7beb26f9` closes the adjacent created-select return fold. Attributed
+  register and promoted-local selects now fold into an attributed terminal
+  result read; the select expression moves intact, while consumed return-value
+  and promoted-address owners transfer to the surviving return statement. Its
+  observed-red register contract, promoted-local sibling, all 24 select-fold
+  tests, and both exact release-built `arith.c:signs` O0/O2 controls pass. See
+  `results/wp3-created-select-return-origins.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
