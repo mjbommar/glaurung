@@ -2377,6 +2377,14 @@ provenance through lowering.
   all 16 dynamic ARMv7 Hello cells and the complete periodic x86-64/AArch64/
   ARMv7 Hello checkpoint moves from 54/72 to 72/72. See
   `results/wp3-wp6-arm-alignment-return-values.md`.
+  Commit `1e6f4743` closes the stack-canary pass's expression-owner sibling.
+  AArch64 split-GOT save recovery, structured exit checks, TLS/GOT
+  classification, and the ordinary save/reload paths now inspect semantic
+  expressions through origin carriers. Synthesized canary comments union all
+  consumed statement and expression owners. The observed-red contract and all
+  24 canary tests pass; an exact clean release build retains the AArch64 O2
+  `graph_bfs` lane and both stack-protected return cases. See
+  `results/wp3-canary-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
@@ -5171,7 +5179,13 @@ relevant ratchet's accepted-regression record.
    have the same one pass and three failures, including the same two stale
    baseline regressions. Do not count those lanes green; repair their current
    output separately under the appropriate WP9/WP10 capability queue.
-   Keep expression ownership behind completion of that audit.
+   Commit `1e6f4743` then resumes the remaining expression-consumer audit at
+   the canary boundary. All canary classifiers are origin-transparent and
+   replacement comments retain the exact union of consumed expression and
+   statement owners. Its 24 module tests and exact AArch64 O2 `graph_bfs` plus
+   two stack-protected return checks pass on a clean release build. Continue
+   the enabled wildcard/expression audit; universal production attribution is
+   still open. See `results/wp3-canary-expression-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
