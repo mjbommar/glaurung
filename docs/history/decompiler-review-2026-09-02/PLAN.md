@@ -3001,8 +3001,9 @@ provenance through lowering.
   selects, cdecl32 stack walkers, ARM32 frame anchors, and format-proven printf
   arity. Caller-derived fixed-arity target recognition is also transparent to
   expression owners. Shared call-target naming and identifier census now retain
-  prototype and stack-protector evidence through expression owners; universal
-  production attribution remains open.
+  prototype and stack-protector evidence through expression owners. Wide-load
+  and portable-global declaration evidence is likewise origin-transparent;
+  universal production attribution remains open.
 - [~] Thread origins through lowering, expression rewrites, structuring, tail
   duplication, and rendering. Commit `8cb7d171` makes enabled statement
   consumers and all three renderers preserve or ignore the carrier without
@@ -5264,6 +5265,15 @@ relevant ratchet's accepted-regression record.
    checks, and the six-cell GCC symbols/PIE Hello checkpoint pass against an
    exact clean release build at O0/O2 across x86-64, AArch64, and ARMv7. See
    `results/wp3-render-call-target-origins.md`.
+   Commit `79bcb911` closes the adjacent declaration-evidence family. An
+   attributed 16-byte load retains its wide-vector declaration, and an
+   attributed direct global address retains portable named storage instead of
+   rendering a raw process address. The observed-red contracts, five adjacent
+   renderer checks, and all four real writable-global GCC/Clang O0/O2 round
+   trips pass against an exact clean release build. Commit `82fb7456` also
+   removes the fixture's stale byte-array-only spelling assumption while
+   preserving its named-storage and no-raw-address contract. See
+   `results/wp3-declaration-expression-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
