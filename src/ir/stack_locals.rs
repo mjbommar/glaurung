@@ -392,7 +392,7 @@ fn arm_frame_register(
         src: &Expr,
         identities: Option<&crate::ir::value_number::ValueIdentities>,
     ) -> bool {
-        match src {
+        match src.semantic() {
             Expr::Reg(register) => register_has_storage(register, "sp", identities),
             Expr::Lea {
                 base: Some(register),
@@ -404,7 +404,7 @@ fn arm_frame_register(
                 lhs,
                 rhs,
             } => {
-                matches!(rhs.as_ref(), Expr::Const(_))
+                matches!(rhs.semantic(), Expr::Const(_))
                     && derived_from_the_stack_pointer(lhs, identities)
             }
             _ => false,
@@ -3391,7 +3391,14 @@ mod tests {
         ];
         let arm = vec![Stmt::Assign {
             dst: reg("opaque_arm_frame"),
-            src: Expr::Reg(reg("opaque_arm_stack")),
+            src: Expr::Bin {
+                op: crate::ir::types::BinOp::Add,
+                lhs: Box::new(
+                    Expr::Reg(reg("opaque_arm_stack")).with_origins(OriginSet::one(0x1000)),
+                ),
+                rhs: Box::new(Expr::Const(0).with_origins(OriginSet::one(0x1004))),
+            }
+            .with_origins(OriginSet::one(0x1008)),
         }];
 
         assert_eq!(
