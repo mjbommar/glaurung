@@ -115,3 +115,43 @@ SCOPED: 1 lane of 838 - no regressions in scope
 
 The initial main-checkout invocation was rejected as stale by `build_guard.py`
 and is not evidence. No broad suite, corpus, or DecBench run was performed.
+
+## Naming after AST finalization
+
+Commit `5555d85d` moves the remaining mutation out of `run_ast_passes` and to
+the end of `finalize_prepared_ast`. Exception recovery, architecture-specific
+frame cleanup, DWARF local merging, and PDB field annotation now all operate on
+the unrenamed semantic AST with the projected identity sidecar. The mutation is
+still required by the current renderers, but no semantic AST pass precedes it
+in the shared pipeline anymore.
+
+Focused Rust checks retained the read-only mapping and revised order contracts:
+
+```text
+cargo test --features python-ext --lib ast_pass_order_ --quiet
+2 passed; 0 failed; 4715 filtered out
+
+cargo test --features python-ext --lib ir::naming::tests:: --quiet
+22 passed; 0 failed; 4695 filtered out
+```
+
+The release extension came from a clean detached worktree at `5555d85d`.
+`build_guard.py` reported that exact worktree extension fresh, with SHA-256
+`42bf4fe42b4da3eb943396b467eef40538784f09a0ef832247234fafb2ed956c`.
+Targeted output checks were:
+
+```text
+# GCC O2, x86-64, symbol-bearing PIE and non-PIE
+2 passed
+
+# GCC O2, ARMv7 and AArch64, symbol-bearing PIE and non-PIE
+4 passed
+
+python tools/dectest.py \
+  11_call_shapes:gcc:O2:call_result_unused \
+  10_cpp_runtime_shapes:clang:O2:cpp_exception --show
+SCOPED: 2 lanes of 838 - no regressions in scope
+```
+
+No full Hello matrix, broad suite, fixture corpus, or DecBench run was needed
+for this bounded ordering change.

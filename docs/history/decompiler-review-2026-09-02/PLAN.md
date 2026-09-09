@@ -2909,8 +2909,11 @@ provenance through lowering.
   later semantic passes. Commit `0be1594d` then moves that mutation behind the
   common pipeline's dead-store, canary/frame, stack-idiom, and label cleanup;
   the pass-order contract prevents those semantic passes from moving back
-  behind naming. Finalization and renderer preparation still consume the named
-  AST, so deleting the mutation remains open. See
+  behind naming. Commit `5555d85d` moves the mutation past exception recovery,
+  architecture frame cleanup, DWARF local merging, and PDB field annotation as
+  well. Every shared semantic AST pass now sees the unrenamed identity space;
+  renderer preparation still consumes the named AST, so deleting the mutation
+  remains open. See
   `results/wp3-return-role-naming-identities.md`.
 
 ### Origin and mapping surface
@@ -5066,6 +5069,11 @@ relevant ratchet's accepted-regression record.
    build retains the two selected GCC O2 x86-64 Hello cells and the exact
    effect-only-call lane. Next move the mapping across finalization and typed
    renderer preparation one identity-aware consumer batch at a time.
+   Commit `5555d85d` moves it across finalization. The two ordering and 22
+   naming tests pass; an exact fresh release build retains six selected O2
+   Hello cells across x86-64, ARMv7, and AArch64 plus the effect-only-call and
+   C++ exception lanes. Next make renderer preparation consume the immutable
+   map so the AST rewrite itself can be deleted.
    Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
