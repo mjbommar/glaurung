@@ -5695,6 +5695,14 @@ relevant ratchet's accepted-regression record.
    focused float-gate tests, and the exact-release GCC O2 homogeneous-float
    tagged control pass. See
    `results/wp3-coalesced-float-storage-identity.md`.
+   Commit `eed616e3` migrates ABI return refinement's storage-role lookup to
+   the identity sidecar's unambiguous physical base while retaining the
+   independent unambiguous definition-width gate. A coalesced narrow result can
+   now override a stale pointer interpretation when every candidate agrees on
+   return storage and width; mixed storage still declines. Its observed-red
+   behavior contract, two adjacent return controls, one exact-release fixture-
+   194 narrow-return lane, and x86-64 GCC O0/O2 symbols/PIE Hello cells pass.
+   See `results/wp3-coalesced-return-storage-types.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
