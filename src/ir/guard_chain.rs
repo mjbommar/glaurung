@@ -184,13 +184,13 @@ pub fn collapse_matching_terminal_return_guard(function: &mut Function) {
             let [early_return] = then_body.as_slice() else {
                 continue;
             };
-            if early_return.semantic() != final_return.semantic() {
+            if !semantic_terminal_statement_eq(early_return, &final_return) {
                 continue;
             }
             (
                 cond.clone(),
                 body[index].origins().cloned(),
-                early_return.origins().cloned(),
+                terminal_statement_origins(early_return),
             )
         };
         let Some(continuation_condition) = negate_exact_condition(condition) else {
@@ -318,6 +318,21 @@ fn semantic_terminal_statement_eq(left: &Stmt, right: &Stmt) -> bool {
         },
         _ => false,
     }
+}
+
+fn terminal_statement_origins(statement: &Stmt) -> Option<OriginSet> {
+    let mut origins = statement.origins().cloned();
+    let Stmt::Return { value: Some(value) } = statement.semantic() else {
+        return origins;
+    };
+    let Some(value_origins) = value.origins() else {
+        return origins;
+    };
+    match &mut origins {
+        Some(origins) => origins.merge(value_origins),
+        None => origins = Some(value_origins.clone()),
+    }
+    origins
 }
 
 fn merge_corresponding_origins(primary: &[Stmt], duplicate: &[Stmt]) -> Vec<Stmt> {
@@ -1046,6 +1061,9 @@ fn merge_statement_origin(origins: &mut Option<OriginSet>, statement: &Stmt) {
 /// make recovery fail closed rather than turning both zero and one into true.
 fn negate_exact_condition(condition: Expr) -> Option<Expr> {
     match condition {
+        Expr::Origin { origins, expr } => {
+            Some(negate_exact_condition(*expr)?.with_origins(origins))
+        }
         comparison @ Expr::Cmp {
             op: CmpOp::Eq | CmpOp::Ne | CmpOp::Ult | CmpOp::Ule | CmpOp::Slt | CmpOp::Sle,
             ..
@@ -1577,7 +1595,6 @@ mod tests {
 
     #[test]
     fn attributed_matching_returns_preserve_guard_and_both_terminal_origins() {
-        let result = Expr::Reg(reg("result"));
         let mut function = Function {
             name: "attributed_shared_terminal".into(),
             entry_va: 0x1370,
@@ -1587,9 +1604,10 @@ mod tests {
                         op: CmpOp::Eq,
                         lhs: Box::new(Expr::Reg(reg("pointer"))),
                         rhs: Box::new(Expr::Const(0)),
-                    },
+                    }
+                    .with_origins(OriginSet::one(0x1372)),
                     then_body: vec![Stmt::Return {
-                        value: Some(result.clone()),
+                        value: Some(Expr::Reg(reg("result")).with_origins(OriginSet::one(0x1376))),
                     }
                     .with_origins(OriginSet::one(0x1374))],
                     else_body: None,
@@ -1601,7 +1619,7 @@ mod tests {
                 }
                 .with_origins(OriginSet::one(0x1378)),
                 Stmt::Return {
-                    value: Some(result),
+                    value: Some(Expr::Reg(reg("result")).with_origins(OriginSet::one(0x137e))),
                 }
                 .with_origins(OriginSet::one(0x137c)),
             ],
@@ -1622,14 +1640,33 @@ mod tests {
                 .origins()
                 .expect("shared terminal origins")
                 .addresses(),
-            &[0x1374, 0x137c]
+            &[0x1374, 0x1376, 0x137c]
         );
-        let Stmt::If { then_body, .. } = function.body[0].semantic() else {
+        let Stmt::If {
+            cond, then_body, ..
+        } = function.body[0].semantic()
+        else {
             panic!("expected attributed continuation guard")
         };
         assert_eq!(
+            cond.origins()
+                .expect("negated condition origin")
+                .addresses(),
+            &[0x1372]
+        );
+        assert_eq!(
             then_body[0].origins().expect("work origin").addresses(),
             &[0x1378]
+        );
+        let Stmt::Return { value: Some(value) } = function.body[1].semantic() else {
+            panic!("expected shared terminal")
+        };
+        assert_eq!(
+            value
+                .origins()
+                .expect("surviving return origin")
+                .addresses(),
+            &[0x137e]
         );
     }
 
