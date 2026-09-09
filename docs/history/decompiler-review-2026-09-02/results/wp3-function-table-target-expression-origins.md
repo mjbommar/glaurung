@@ -40,6 +40,6 @@ pytest -q \
 1 passed
 ```
 
-No broad Rust, Python, fixture, architecture, DecBench, or Joern suite ran. The
-periodic 12-cell cross-architecture Hello checkpoint remained recent and was
-not repeated for this provenance-only expression replacement.
+No broad Rust, Python, fixture, DecBench, or Joern suite ran. After this fourth
+small WP3 increment, the periodic symbol-bearing O0/O2 Hello checkpoint was
+repeated: all 16 selected x86-64, AArch64, and ARMv7 PIE/non-PIE cells passed.
