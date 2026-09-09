@@ -2130,6 +2130,14 @@ provenance through lowering.
   exact AArch64 GCC O0 three-float homogeneous-aggregate return lane reports no
   regression after a clean release rebuild. See
   `results/wp3-bank-return-expression-origins.md`.
+  Commit `8acf4d08` closes the adjacent paired-integer return expression
+  surface. Explicit SSE conflicts and final pair-composition validation now
+  inspect semantic expressions, while a synthesized double-word result carries
+  the original low-result expression owner at its root. The ownership contract
+  was observed red, all 10 owning `callee_return_pair` tests pass, and the exact
+  SysV GCC O0 four-word aggregate-return lane reports no regression after a
+  clean release rebuild. See
+  `results/wp3-pair-return-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
