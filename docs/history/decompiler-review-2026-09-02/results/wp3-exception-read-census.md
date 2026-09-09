@@ -19,11 +19,11 @@ catch (int exception_0) {
 }
 ```
 
-The remaining `stack_0` assignment is deliberate for now. Its four-byte store
-is the only explicit truncation fact on an otherwise widthless arithmetic AST;
-deleting it without materialising an equivalent conversion could change the
-program. That follow-up belongs to WP3 value-width identity, not traversal or
-spelling cleanup.
+At this commit, the remaining `stack_0` assignment is deliberate: its four-byte
+store is the only explicit truncation fact on an otherwise widthless arithmetic
+AST. Commit `57a6b936` subsequently closes that follow-up by materialising the
+assignment conversion before removing the temporary; see
+`wp3-promoted-store-conversion.md`.
 
 ## Focused evidence
 

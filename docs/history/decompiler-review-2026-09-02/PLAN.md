@@ -5632,6 +5632,17 @@ relevant ratchet's accepted-regression record.
    build. The remaining four-byte promoted-store temporary requires explicit
    value-width preservation and remains a WP3 task rather than being erased by
    a traversal-only rewrite. See `results/wp3-exception-read-census.md`.
+   Commit `57a6b936` closes that width-preservation follow-up. The typed
+   promoted-store proof now moves the authoritative scalar assignment
+   conversion with a one-use value, so wider or widthless arithmetic can lose
+   a fake storage temporary without losing truncation or signedness. The proof
+   remains gated by promoted-object identity, integer type, store width,
+   adjacency, single use, and effect-free evaluation; boolean normalization
+   remains conservative. Its observed-red catch contract, the wider-source
+   truncation control, all 28 adjacent-copy tests, all four GCC/Clang O0/O2
+   exception cells, and the periodic six-cell x86-64/AArch64/ARMv7 O0/O2 Hello
+   checkpoint pass against an exact release build. See
+   `results/wp3-promoted-store-conversion.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
