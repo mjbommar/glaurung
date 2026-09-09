@@ -137,17 +137,36 @@ fn fold_body(body: &mut [Stmt], targets: &HashMap<u64, u64>) {
 }
 
 fn fold_expr(expr: &mut Expr, targets: &HashMap<u64, u64>) {
+    if let Expr::Origin {
+        origins,
+        expr: semantic,
+    } = expr
+    {
+        fold_expr(semantic, targets);
+        let origins = origins.clone();
+        let semantic = std::mem::replace(
+            semantic.as_mut(),
+            Expr::Unknown("temporary GOT-fold expression".into()),
+        );
+        *expr = semantic.with_origins(origins);
+        return;
+    }
+
     // The slot itself is pointer-sized. A narrower read of the same address is
     // reading part of a pointer, which is not the value this fold knows.
     if let Expr::Deref { addr, size } = expr {
-        if matches!(**addr, Expr::Addr(_) | Expr::Named { .. }) && matches!(size, 4 | 8) {
-            let slot = match addr.as_ref() {
+        if matches!(addr.semantic(), Expr::Addr(_) | Expr::Named { .. }) && matches!(size, 4 | 8) {
+            let slot = match addr.semantic() {
                 Expr::Addr(address) => Some(*address),
                 Expr::Named { va, .. } => Some(*va),
                 _ => None,
             };
             if let Some(target) = slot.and_then(|slot| targets.get(&slot)).copied() {
-                *expr = Expr::Addr(target);
+                let replacement = Expr::Addr(target);
+                *expr = match addr.origins().cloned() {
+                    Some(origins) => replacement.with_origins(origins),
+                    None => replacement,
+                };
                 return;
             }
         }
@@ -230,22 +249,22 @@ mod tests {
         let mut f = function(vec![Stmt::Assign {
             dst: VReg::phys("rax"),
             src: Expr::Deref {
-                addr: Box::new(Expr::Addr(0x3fe8)),
+                addr: Box::new(Expr::Addr(0x3fe8).with_origins(OriginSet::one(0x100c))),
                 size: 8,
-            },
-        }
-        .with_origins(OriginSet::one(0x1010))]);
+            }
+            .with_origins(OriginSet::one(0x1010)),
+        }]);
 
         fold_got_pointer_loads(&mut f, &targets);
 
-        assert!(matches!(
-            f.body[0].semantic(),
-            Stmt::Assign {
-                src: Expr::Addr(0x4028),
-                ..
-            }
-        ));
-        assert_eq!(f.body[0].origins(), Some(&OriginSet::one(0x1010)));
+        let Stmt::Assign { src, .. } = f.body[0].semantic() else {
+            unreachable!()
+        };
+        assert!(matches!(src.semantic(), Expr::Addr(0x4028)));
+        assert_eq!(
+            src.origins(),
+            Some(&OriginSet::from_addresses([0x100c, 0x1010]))
+        );
     }
 
     #[test]
