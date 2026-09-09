@@ -537,19 +537,10 @@ fn fold_one_adjacent_promoted_value(
                 addr: Expr::Reg(dst),
                 src,
                 size,
-            } if promoted(dst)
-                && types.is_some_and(|types| {
-                    matches!(
-                        types.get(dst),
-                        Some(TypeHint::Int { width, .. })
-                            if width > 0 && width <= *size
-                    ) || matches!(types.get(dst), Some(TypeHint::BoolLike))
-                })
-                && is_deferable_promoted_value(src)
-                && !contains_reg(src, dst)
-                && promoted_value_width(src).is_some_and(|width| width <= *size) =>
-            {
-                Some((dst.clone(), src.clone()))
+            } if promoted(dst) && is_deferable_promoted_value(src) && !contains_reg(src, dst) => {
+                types
+                    .and_then(|types| typed_promoted_store_value(dst, src, *size, types))
+                    .map(|value| (dst.clone(), value))
             }
             _ => None,
         };
@@ -627,6 +618,12 @@ fn fold_one_adjacent_promoted_value(
                         fold_one_adjacent_promoted_value(body, types, identities)
                     })
             }
+            Stmt::TryCatch { try_body, catches } => {
+                fold_one_adjacent_promoted_value(try_body, types, identities)
+                    || catches.iter_mut().any(|catch| {
+                        fold_one_adjacent_promoted_value(&mut catch.body, types, identities)
+                    })
+            }
             _ => false,
         };
         if changed {
@@ -634,6 +631,43 @@ fn fold_one_adjacent_promoted_value(
         }
     }
     false
+}
+
+/// The scalar assignment conversion represented by one promoted-object store.
+///
+/// Moving a store's source into its sole consumer must also move the conversion
+/// performed by assignment to the declared object. A known source no wider
+/// than the store already preserves that conversion. A widthless or wider
+/// integer expression needs an explicit cast to the authoritative destination
+/// type; otherwise deleting a four-byte store could silently delete a
+/// truncation. Boolean-like storage stays on the older, known-width-only path
+/// because an integer cast cannot model `_Bool` normalization.
+fn typed_promoted_store_value(
+    destination: &crate::ir::types::VReg,
+    source: &Expr,
+    store_width: u8,
+    types: &TypeMap,
+) -> Option<Expr> {
+    match types.get(destination)? {
+        TypeHint::Int { signed, width } if width > 0 && width <= store_width => {
+            if promoted_value_width(source).is_some_and(|source_width| source_width <= width) {
+                Some(source.clone())
+            } else {
+                Some(Expr::Cast {
+                    signed,
+                    width,
+                    expr: Box::new(source.clone()),
+                })
+            }
+        }
+        TypeHint::BoolLike
+            if promoted_value_width(source)
+                .is_some_and(|source_width| source_width <= store_width) =>
+        {
+            Some(source.clone())
+        }
+        _ => None,
+    }
 }
 
 fn promoted_value_width(e: &Expr) -> Option<u8> {
@@ -1073,6 +1107,67 @@ mod tests {
     }
 
     #[test]
+    fn typed_scalar_store_preserves_truncation_when_folded_inside_a_catch() {
+        let arithmetic = Expr::Bin {
+            op: BinOp::Sub,
+            lhs: Box::new(Expr::Const(9000)),
+            rhs: Box::new(Expr::Reg(reg("exception_0"))),
+        };
+        let object = "stack_0".to_string();
+        let mut function = Function {
+            name: "caught_value".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::TryCatch {
+                try_body: vec![],
+                catches: vec![crate::ir::ast::CatchClause {
+                    type_name: "int".into(),
+                    binding: reg("exception_0"),
+                    body: vec![
+                        Stmt::Store {
+                            addr: Expr::Reg(reg(&object)),
+                            src: arithmetic.clone(),
+                            size: 4,
+                        },
+                        Stmt::Return {
+                            value: Some(Expr::Reg(reg(&object))),
+                        },
+                    ],
+                }],
+            }],
+        };
+        let mut types = crate::ir::types_recover::TypeMap::default();
+        types.upsert_public(
+            reg(&object),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object]);
+
+        propagate_adjacent_typed_promoted_values_with_identities(
+            &mut function,
+            &types,
+            &identities,
+        );
+
+        let Stmt::TryCatch { catches, .. } = function.body[0].semantic() else {
+            panic!("expected recovered handler")
+        };
+        assert_eq!(
+            catches[0].body,
+            vec![Stmt::Return {
+                value: Some(Expr::Cast {
+                    signed: true,
+                    width: 4,
+                    expr: Box::new(arithmetic),
+                }),
+            }]
+        );
+    }
+
+    #[test]
     fn typed_promoted_store_accepts_opaque_owned_storage() {
         let object = "frame_object".to_string();
         let predicate = Expr::Cmp {
@@ -1218,7 +1313,6 @@ mod tests {
                 },
             ],
         };
-        let expected = function.clone();
         let mut types = crate::ir::types_recover::TypeMap::default();
         types.upsert_public(
             reg("local_4"),
@@ -1230,7 +1324,21 @@ mod tests {
 
         propagate_adjacent_typed_promoted_values(&mut function, &types);
 
-        assert_eq!(function, expected);
+        assert_eq!(
+            function.body,
+            vec![Stmt::Return {
+                value: Some(Expr::Cast {
+                    signed: true,
+                    width: 4,
+                    expr: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 8,
+                        expr: Box::new(Expr::Reg(reg("wide"))),
+                    }),
+                }),
+            }],
+            "the temporary may disappear only when its four-byte assignment conversion moves with it"
+        );
     }
 
     #[test]
