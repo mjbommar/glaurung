@@ -5643,6 +5643,15 @@ relevant ratchet's accepted-regression record.
    exception cells, and the periodic six-cell x86-64/AArch64/ARMv7 O0/O2 Hello
    checkpoint pass against an exact release build. See
    `results/wp3-promoted-store-conversion.md`.
+   Commit `716ccce5` applies the same width-preserving proof after throw
+   recovery and allows `Throw` as the sole adjacent consumer. The negative path
+   of the exact GCC-O2 exception specimen is now `throw (int)(x);`; together
+   with the preceding catch-return fold, the function has no artificial locals.
+   The observed-red throw contract, all 29 adjacent-copy tests, all four
+   GCC/Clang O0/O2 exception cells, and the real pipeline-profile transparency
+   test pass against an exact release build. The immediately preceding periodic
+   six-cell Hello checkpoint remains the cross-architecture control. See
+   `results/wp3-recovered-throw-values.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
