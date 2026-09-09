@@ -5703,6 +5703,13 @@ relevant ratchet's accepted-regression record.
    behavior contract, two adjacent return controls, one exact-release fixture-
    194 narrow-return lane, and x86-64 GCC O0/O2 symbols/PIE Hello cells pass.
    See `results/wp3-coalesced-return-storage-types.md`.
+   Commit `a9e9b0ab` closes partial call-layout folding's coalesced SSE write
+   boundary. Packed-lane candidates that all map to one ABI SSE slot now block
+   the stale enclosing carrier value; candidates spanning different slots fail
+   closed. Its observed-red stale-argument contract, all 130 focused
+   `call_args` tests, and the exact-release GCC O2 fixture-197 pair-of-doubles
+   round-trip control pass. See
+   `results/wp3-coalesced-sse-slot-blocking.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
