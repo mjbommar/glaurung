@@ -578,7 +578,7 @@ fn fold_one_adjacent_promoted_value(
                 subst(src, &copies);
                 true
             }
-            Stmt::Return { value: Some(value) } | Stmt::Push { value } => {
+            Stmt::Return { value: Some(value) } | Stmt::Push { value } | Stmt::Throw { value } => {
                 let copies = Copies::single(dst, selected);
                 subst(value, &copies);
                 true
@@ -1163,6 +1163,52 @@ mod tests {
                     width: 4,
                     expr: Box::new(arithmetic),
                 }),
+            }]
+        );
+    }
+
+    #[test]
+    fn typed_scalar_store_preserves_conversion_when_folded_into_throw() {
+        let object = "local_c".to_string();
+        let mut function = Function {
+            name: "throw_value".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(reg(&object)),
+                    src: Expr::Reg(reg("wide_input")),
+                    size: 4,
+                },
+                Stmt::Throw {
+                    value: Expr::Reg(reg(&object)),
+                },
+            ],
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            reg(&object),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object]);
+
+        propagate_adjacent_typed_promoted_values_with_identities(
+            &mut function,
+            &types,
+            &identities,
+        );
+
+        assert_eq!(
+            function.body,
+            vec![Stmt::Throw {
+                value: Expr::Cast {
+                    signed: true,
+                    width: 4,
+                    expr: Box::new(Expr::Reg(reg("wide_input"))),
+                },
             }]
         );
     }

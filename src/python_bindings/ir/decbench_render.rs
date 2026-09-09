@@ -571,6 +571,20 @@ fn decbench_text_with_installed_environment(
             &value_identities,
         )
     );
+    // A recovered Throw is created after the ordinary typed promoted-value
+    // pass. Give it the same adjacent, single-use proof now: if a scalar stack
+    // assignment feeds only the throw, move the declaration-proven assignment
+    // conversion into the thrown expression and retire the fake temporary.
+    if let Some(tm) = refined_decl.as_ref() {
+        pass!(
+            "fold_recovered_throw_values",
+            crate::ir::copy_prop::propagate_adjacent_typed_promoted_values_with_identities(
+                &mut prepared,
+                tm,
+                &value_identities,
+            )
+        );
+    }
     // Handler and throw recovery happen after the ordinary unreachable-tail
     // cleanup. Reapply that origin-transparent pass now that the exception
     // regions and their unconditional transfers exist, so a recovered catch
