@@ -835,7 +835,7 @@ fn phase_sensitive_stack_read(
     arch: CallConv,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> bool {
-    let Expr::Deref { addr, .. } = source else {
+    let Expr::Deref { addr, .. } = source.semantic() else {
         return false;
     };
     let stack_names: &[&str] = match arch {

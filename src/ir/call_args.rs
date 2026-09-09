@@ -7798,7 +7798,8 @@ mod tests {
             src: Expr::Deref {
                 addr: Box::new(local_address()),
                 size: 8,
-            },
+            }
+            .with_origins(OriginSet::one(0x1010)),
         };
         let mut f = Function {
             name: "format_wrapper".to_string(),
