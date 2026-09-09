@@ -546,6 +546,20 @@ fn merge_identity_definition_widths(
     merge_definition_width_facts(tm, facts, cc, param_slots);
 }
 
+fn recover_numbered_types(
+    lf_numbered: &crate::ir::types::LlirFunction,
+    cc: crate::ir::call_args::CallConv,
+    value_identities: &crate::ir::value_number::ValueIdentities,
+    valued_types: &crate::ir::types_recover::TypeMapV,
+) -> crate::ir::types_recover::TypeMap {
+    crate::ir::types_recover::recover_types_for_with_identities(
+        lf_numbered,
+        cc,
+        value_identities,
+        valued_types,
+    )
+}
+
 pub(super) fn decbench_type_maps(
     f: &crate::ir::ast::Function,
     lf_raw: &crate::ir::types::LlirFunction,
@@ -559,6 +573,7 @@ pub(super) fn decbench_type_maps(
     dwarf_type_env: Option<&crate::ir::dwarf_type_env::DwarfTypeEnv<'_>>,
     role_names: &std::collections::HashMap<String, String>,
     value_identities: &crate::ir::value_number::ValueIdentities,
+    valued_types: &crate::ir::types_recover::TypeMapV,
     max_refinement_rounds: usize,
 ) -> (
     crate::ir::types_recover::TypeMap,
@@ -567,8 +582,9 @@ pub(super) fn decbench_type_maps(
 ) {
     use crate::ir::types_recover::recover_types_for;
     let raw = recover_types_for(lf_raw, cc);
+    let numbered_types = recover_numbered_types(lf_numbered, cc, value_identities, valued_types);
     let numbered = remap_type_map_impl(
-        &recover_types_for(lf_numbered, cc),
+        &numbered_types,
         cc,
         param_slots,
         false,
@@ -779,8 +795,8 @@ fn refine_numbered_declaration(
 mod tests {
     use super::{
         integer_widths_by_role, merge_exact_definition_widths, merge_identity_definition_widths,
-        refine_float_copy_types, refine_numbered_declaration, remap_type_map_impl,
-        remap_type_map_with_roles,
+        recover_numbered_types, refine_float_copy_types, refine_numbered_declaration,
+        remap_type_map_impl, remap_type_map_with_roles,
     };
     use crate::ir::ast::{Expr, Stmt};
     use crate::ir::call_args::CallConv;
@@ -788,6 +804,65 @@ mod tests {
     use crate::ir::types::VReg;
     use crate::ir::types_recover::{TypeHint, TypeMap};
     use std::collections::HashMap;
+
+    #[test]
+    fn numbered_renderer_types_retain_raw_use_width_by_identity() {
+        let raw = crate::ir::types::LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![crate::ir::types::LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1004,
+                instrs: vec![crate::ir::types::LlirInstr {
+                    va: 0x1000,
+                    op: crate::ir::types::Op::Bin {
+                        dst: VReg::phys("eax"),
+                        op: crate::ir::types::BinOp::Add,
+                        lhs: crate::ir::types::Value::Reg(VReg::phys("edi")),
+                        rhs: crate::ir::types::Value::Const(1),
+                    },
+                }],
+                succs: vec![],
+            }],
+        };
+        let ssa = crate::ir::ssa::compute_ssa(&raw);
+        let valued_types = crate::ir::types_recover::recover_types_valued(&raw, &ssa);
+        let (numbered, _, _, identities) =
+            crate::ir::value_number::value_number_with_parameter_slots_lifetimes_and_identities(
+                &raw,
+                &ssa,
+                CallConv::SysVAmd64,
+                &[],
+            );
+        let crate::ir::types::Op::Bin {
+            lhs: crate::ir::types::Value::Reg(source),
+            ..
+        } = &numbered.blocks[0].instrs[0].op
+        else {
+            panic!("expected numbered binary operation")
+        };
+
+        let compatibility =
+            crate::ir::types_recover::recover_types_for(&numbered, CallConv::SysVAmd64);
+        let exact =
+            recover_numbered_types(&numbered, CallConv::SysVAmd64, &identities, &valued_types);
+
+        assert_eq!(
+            compatibility.get(source),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 8,
+            }),
+            "the identity-free path demonstrates the raw subregister width loss"
+        );
+        assert_eq!(
+            exact.get(source),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            }),
+            "the renderer must consume the SSA-owned raw-use width"
+        );
+    }
 
     #[test]
     fn float_role_projection_uses_opaque_identity_instead_of_numbered_spelling() {

@@ -1319,6 +1319,7 @@ pub(super) fn render_prepared_ast(
                 debug_type_env,
                 &prepared.role_names,
                 &prepared.ast_value_identities,
+                &prepared.valued_types,
                 type_budget.max_refinement_rounds,
             )
         });
