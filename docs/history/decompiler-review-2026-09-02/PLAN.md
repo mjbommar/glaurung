@@ -2258,6 +2258,13 @@ provenance through lowering.
   ownership contract and all 12 focused condition-lowering tests pass; the
   exact release-built four-lane polarity canary remains green. See
   `results/wp3-inline-flag-expression-origins.md`.
+  Commit `c16a9a36` completes the adjacent branch-condition half of that
+  bounded audit: bare, negated, and `flag == 0` conditions are classified
+  semantically through expression carriers, with the original condition owner
+  composed onto the recovered comparison. The extended exact ownership
+  contract and all 12 focused condition-lowering tests pass; the exact
+  release-built four-lane polarity canary remains green. See
+  `results/wp3-flag-condition-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
