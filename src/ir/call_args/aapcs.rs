@@ -31,10 +31,10 @@ use super::{register_is_storage, ssa_base, CallConv};
 /// evidence-only path until the ABI layout model can describe them exactly.
 pub(super) fn known_arm_core_register_arity(statement: &Stmt) -> Option<usize> {
     let name = match statement.semantic() {
-        Stmt::Call {
-            target: Expr::Named { name, .. },
-            ..
-        } => name,
+        Stmt::Call { target, .. } => match target.semantic() {
+            Expr::Named { name, .. } => name,
+            _ => return None,
+        },
         _ => return None,
     };
     let contract = crate::ir::call_contracts::lookup(name)?;
@@ -63,10 +63,10 @@ pub(super) fn known_arm_core_register_arity(statement: &Stmt) -> Option<usize> {
 /// outgoing storage explicitly.
 pub(super) fn known_arm_hard_float_layout(statement: &Stmt) -> Option<Vec<VReg>> {
     let name = match statement.semantic() {
-        Stmt::Call {
-            target: Expr::Named { name, .. },
-            ..
-        } => name,
+        Stmt::Call { target, .. } => match target.semantic() {
+            Expr::Named { name, .. } => name,
+            _ => return None,
+        },
         _ => return None,
     };
     let contract = crate::ir::call_contracts::lookup(name)?;
@@ -366,7 +366,7 @@ pub(super) fn outgoing_aapcs_stack_area_with_identities(
         match body[index].semantic() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Store { addr, src, size: 4 } => {
-                let disp = match addr {
+                let disp = match addr.semantic() {
                     Expr::Reg(base) if register_is_storage(base, "sp", identities) => 0,
                     Expr::Lea {
                         base: Some(base),
@@ -437,10 +437,23 @@ mod tests {
 
     #[test]
     fn attributed_calls_retain_their_locked_aapcs_contracts() {
-        let memset = call_to("memset@plt").with_origins(OriginSet::one(0x1000));
+        let attributed_call = |name: &str, target_va, call_va| {
+            Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: name.into(),
+                }
+                .with_origins(OriginSet::one(target_va)),
+                args: vec![],
+                dst: None,
+                call_spec: None,
+            }
+            .with_origins(OriginSet::one(call_va))
+        };
+        let memset = attributed_call("memset@plt", 0x0ffc, 0x1000);
         assert_eq!(known_arm_core_register_arity(&memset), Some(3));
 
-        let asinf = call_to("asinf").with_origins(OriginSet::one(0x1004));
+        let asinf = attributed_call("asinf", 0x1004, 0x1008);
         assert_eq!(known_arm_hard_float_layout(&asinf), Some(vec![reg("s0")]));
     }
 
@@ -547,8 +560,9 @@ mod tests {
                     scale: 1,
                     disp,
                     segment: None,
-                },
-                src: Expr::Const(value),
+                }
+                .with_origins(OriginSet::one(va - 8)),
+                src: Expr::Const(value).with_origins(OriginSet::one(va - 4)),
                 size: 4,
             }
             .with_origins(OriginSet::one(va))
@@ -563,8 +577,8 @@ mod tests {
             outgoing_aapcs_stack_area(&body, 2, 2),
             Some((
                 vec![
-                    Expr::Const(5).with_origins(OriginSet::one(0x1024)),
-                    Expr::Const(6).with_origins(OriginSet::one(0x1020)),
+                    Expr::Const(5).with_origins(OriginSet::from_addresses([0x1020, 0x1024])),
+                    Expr::Const(6).with_origins(OriginSet::from_addresses([0x101c, 0x1020])),
                 ],
                 vec![1, 0],
             ))
