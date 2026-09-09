@@ -162,7 +162,7 @@ fn fold_body(body: &mut [Stmt], pool: &HashMap<u64, String>) {
                 fold_expr(src, pool);
             }
             Stmt::Call { target, args, .. } => {
-                let character_pointer_params = match target {
+                let character_pointer_params = match target.semantic() {
                     Expr::Named { name, .. } => crate::ir::call_contracts::lookup(name)
                         .map(|contract| {
                             contract
@@ -250,6 +250,10 @@ fn is_character_pointer(c_type: &str) -> bool {
 }
 
 fn fold_constant_string(expr: &mut Expr, pool: &HashMap<u64, String>) {
+    if let Expr::Origin { expr, .. } = expr {
+        fold_constant_string(expr, pool);
+        return;
+    }
     let Expr::Const(value) = expr else {
         return;
     };
@@ -450,6 +454,40 @@ mod tests {
             panic!("expected memset call");
         };
         assert_eq!(args[0], Expr::Const(0x402004));
+    }
+
+    #[test]
+    fn originated_constant_character_pointer_folds_and_preserves_ownership() {
+        let mut pool = HashMap::new();
+        pool.insert(0x402004, "hello, world\n".to_string());
+        let owner = crate::ir::ast::OriginSet::one(0x401040);
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x1060,
+                    name: "puts".into(),
+                }
+                .with_origins(crate::ir::ast::OriginSet::one(0x401038)),
+                args: vec![Expr::Const(0x402004).with_origins(owner.clone())],
+                dst: None,
+                call_spec: None,
+            }],
+        };
+
+        fold_string_literals(&mut f, &pool);
+
+        let Stmt::Call { args, .. } = &f.body[0] else {
+            panic!("expected puts call");
+        };
+        assert_eq!(args[0].origins(), Some(&owner));
+        assert_eq!(
+            args[0].semantic(),
+            &Expr::StringLit {
+                value: "hello, world\n".to_string(),
+            }
+        );
     }
 
     #[test]
