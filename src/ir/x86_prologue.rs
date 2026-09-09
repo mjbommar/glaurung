@@ -56,16 +56,15 @@ pub fn drop_implicit_main_runtime_call(f: &mut Function) {
     if !matches!(f.name.as_str(), "main" | "_main") {
         return;
     }
-    f.body.retain(|statement| {
-        !matches!(
-            statement.semantic(),
-            Stmt::Call {
-                target: Expr::Named { name, .. },
-                args,
-                dst: None,
-                ..
-            } if matches!(name.as_str(), "__main" | "___main") && args.is_empty()
-        )
+    f.body.retain(|statement| match statement.semantic() {
+        Stmt::Call {
+            target,
+            args,
+            dst: None,
+            ..
+        } => !matches!(target.semantic(), Expr::Named { name, .. }
+                if matches!(name.as_str(), "__main" | "___main") && args.is_empty()),
+        _ => true,
     });
 }
 
@@ -2033,7 +2032,8 @@ mod tests {
                     target: Expr::Named {
                         va: 0x402000,
                         name: "___main".into(),
-                    },
+                    }
+                    .with_origins(OriginSet::one(0x40100c)),
                     args: Vec::new(),
                     dst: None,
                     call_spec: None,
