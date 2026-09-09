@@ -1958,31 +1958,31 @@
   },
   "157_symbol_visibility:clang:O0": {
     "vis_call_both": "pass",
-    "vis_fold_with_biases": "fail",
+    "vis_fold_with_biases": "pass",
     "vis_public_helper": "pass",
-    "vis_read_bias": "fail",
-    "vis_set_biases": "fail"
+    "vis_read_bias": "pass",
+    "vis_set_biases": "pass"
   },
   "157_symbol_visibility:clang:O2": {
     "vis_call_both": "pass",
-    "vis_fold_with_biases": "fail",
+    "vis_fold_with_biases": "pass",
     "vis_public_helper": "pass",
-    "vis_read_bias": "fail",
-    "vis_set_biases": "fail"
+    "vis_read_bias": "pass",
+    "vis_set_biases": "pass"
   },
   "157_symbol_visibility:gcc:O0": {
     "vis_call_both": "pass",
-    "vis_fold_with_biases": "fail",
+    "vis_fold_with_biases": "pass",
     "vis_public_helper": "pass",
-    "vis_read_bias": "fail",
-    "vis_set_biases": "fail"
+    "vis_read_bias": "pass",
+    "vis_set_biases": "pass"
   },
   "157_symbol_visibility:gcc:O2": {
     "vis_call_both": "pass",
-    "vis_fold_with_biases": "fail",
+    "vis_fold_with_biases": "pass",
     "vis_public_helper": "pass",
-    "vis_read_bias": "fail",
-    "vis_set_biases": "fail"
+    "vis_read_bias": "pass",
+    "vis_set_biases": "pass"
   },
   "158_weak_symbols:clang:O0": {
     "weak_absent_probe": "fail",
