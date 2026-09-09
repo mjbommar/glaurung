@@ -2047,6 +2047,14 @@ provenance through lowering.
   was observed red, all 118 owning `stack_locals` tests pass, and the exact i386
   O0 `cond_side_effect` fixture remains green after an isolated release rebuild.
   See `results/wp3-parameter-home-expression-origins.md`.
+  Commit `00b1e612` closes escaping stack-address replacement. An attributed
+  ARM frame anchor remains a single machine-word object instead of expanding
+  across the full frame, and every successful replacement in that promotion
+  routine now changes only the semantic payload so its expression owner
+  survives. The focused contract was observed red, all 119 owning
+  `stack_locals` tests pass, and the exact ARMv7 A32 O0 `kmp_search` fixture
+  remains green after an isolated release rebuild. See
+  `results/wp3-escaping-stack-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
