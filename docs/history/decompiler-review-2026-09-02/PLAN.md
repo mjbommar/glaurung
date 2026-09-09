@@ -5621,6 +5621,17 @@ relevant ratchet's accepted-regression record.
    observed-red ownership contract, the adjacent arithmetic-refusal and
    value-numbered controls, and the exact-release ARM hard-float three-argument
    regression pass. See `results/wp3-address-substitution-origin-transfer.md`.
+   Commit `29b202a9` closes the recovered-exception read-census omission.
+   `TryCatch` bodies and `Throw` values now participate in the same shared
+   register-read accounting as ordinary structured statements. This lets the
+   existing single-use expression proof remove a redundant catch-local scratch
+   without adding a name rule, while keeping thrown values observable. Both
+   focused contracts, all 38 copy-propagation entry-point tests, all four
+   GCC/Clang O0/O2 exception cells, and the periodic six-cell
+   x86-64/AArch64/ARMv7 O0/O2 Hello checkpoint pass against an exact release
+   build. The remaining four-byte promoted-store temporary requires explicit
+   value-width preservation and remains a WP3 task rather than being erased by
+   a traversal-only rewrite. See `results/wp3-exception-read-census.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
