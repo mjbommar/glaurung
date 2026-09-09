@@ -2013,6 +2013,16 @@ provenance through lowering.
   the existing `suspicious_linux` GCC O0 `main` adds both annotations while its
   generated C remains syntax-valid. See
   `results/wp3-symbolic-constant-expression-origins.md`.
+  Commit `e1e3784e` closes the adjacent frame-address consumer family.
+  Stack-coordinate propagation, scalar and indexed memory resolution,
+  escaping-address recovery, and coordinate-liveness checks now classify the
+  semantic expression beneath an origin carrier. An attributed `rsp + 64`
+  alias therefore still promotes the same bounded stack object instead of
+  losing its coordinate before rewriting. The end-to-end stack-promotion
+  contract was observed red, all 115 `stack_locals` tests pass, a clean
+  isolated release extension rebuild succeeds, and the exact GCC-O2
+  `20_graph_bfs:graph_bfs` fixture remains green. See
+  `results/wp3-stack-address-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
