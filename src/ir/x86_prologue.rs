@@ -107,15 +107,18 @@ fn collapse_cdecl32_realign_frame(
     if body.len().saturating_sub(start) < 7 {
         return;
     }
-    let aligned = matches!(
-        body[start].semantic(),
-        Stmt::Assign {
-            dst,
-            src: Expr::Bin { op: BinOp::And, lhs, rhs },
-        } if is_rsp(dst)
-            && matches!(lhs.semantic(), Expr::Reg(source) if source == dst)
-            && matches!(rhs.semantic(), Expr::Const(-16))
-    );
+    let aligned = match body[start].semantic() {
+        Stmt::Assign { dst, src } if is_rsp(dst) => matches!(
+            src.semantic(),
+            Expr::Bin {
+                op: BinOp::And,
+                lhs,
+                rhs,
+            } if matches!(lhs.semantic(), Expr::Reg(source) if source == dst)
+                && matches!(rhs.semantic(), Expr::Const(-16))
+        ),
+        _ => false,
+    };
     if !aligned {
         return;
     }
@@ -206,10 +209,12 @@ fn collapse_cdecl32_realign_frame(
         _ => return,
     };
     let entry_stack = match body[restore_stack_index].semantic() {
-        Stmt::Assign {
-            dst,
-            src: Expr::Bin { lhs, .. },
-        } if is_rsp(dst) && stack_adjustment(&body[restore_stack_index]) == Some(-4) => {
+        Stmt::Assign { dst, src }
+            if is_rsp(dst) && stack_adjustment(&body[restore_stack_index]) == Some(-4) =>
+        {
+            let Expr::Bin { lhs, .. } = src.semantic() else {
+                return;
+            };
             match lhs.semantic() {
                 Expr::Reg(saved) => saved.clone(),
                 _ => return,
@@ -264,12 +269,12 @@ fn collapse_cdecl32_realign_frame(
 
 fn stack_adjustment(statement: &Stmt) -> Option<i64> {
     match statement.semantic() {
-        Stmt::Assign {
-            src: Expr::Bin { op, rhs, .. },
-            ..
-        } => match (op, rhs.semantic()) {
-            (BinOp::Add, Expr::Const(amount)) => Some(*amount),
-            (BinOp::Sub, Expr::Const(amount)) => amount.checked_neg(),
+        Stmt::Assign { src, .. } => match src.semantic() {
+            Expr::Bin { op, rhs, .. } => match (op, rhs.semantic()) {
+                (BinOp::Add, Expr::Const(amount)) => Some(*amount),
+                (BinOp::Sub, Expr::Const(amount)) => amount.checked_neg(),
+                _ => None,
+            },
             _ => None,
         },
         _ => None,
@@ -281,11 +286,10 @@ fn stack_adjust_from_base(
     destination: fn(&VReg) -> bool,
     base: fn(&VReg) -> bool,
 ) -> Option<i64> {
-    let Stmt::Assign {
-        dst,
-        src: Expr::Bin { lhs, .. },
-    } = statement.semantic()
-    else {
+    let Stmt::Assign { dst, src } = statement.semantic() else {
+        return None;
+    };
+    let Expr::Bin { lhs, .. } = src.semantic() else {
         return None;
     };
     (destination(dst) && matches!(lhs.semantic(), Expr::Reg(source) if base(source)))
@@ -401,12 +405,10 @@ fn collapse_omit_frame_pointer_frame(
         let Some(width) = rsp_sub_width(&body[cursor]).and_then(|n| u8::try_from(n).ok()) else {
             break;
         };
-        let Stmt::Store {
-            addr,
-            src: Expr::Reg(value),
-            size,
-        } = body[cursor + 1].semantic()
-        else {
+        let Stmt::Store { addr, src, size } = body[cursor + 1].semantic() else {
+            break;
+        };
+        let Expr::Reg(value) = src.semantic() else {
             break;
         };
         let Some((object, offset, object_size)) = fixed_promoted_stack_address(addr) else {
@@ -433,8 +435,9 @@ fn collapse_omit_frame_pointer_frame(
     if cursor < body.len()
         && matches!(
             body[cursor].semantic(),
-            Stmt::Assign { dst, src: Expr::Reg(source) }
-                if is_rbp(dst) && is_rsp(source)
+            Stmt::Assign { dst, src }
+                if is_rbp(dst)
+                    && matches!(src.semantic(), Expr::Reg(source) if is_rsp(source))
         )
     {
         return;
@@ -551,13 +554,13 @@ fn is_sysv_callee_saved(
 }
 
 fn fixed_promoted_stack_address(expression: &Expr) -> Option<(VReg, i64, u16)> {
-    match expression {
+    match expression.semantic() {
         Expr::StackAddr { object, size } => Some((object.clone(), 0, *size)),
         Expr::Bin {
             op: BinOp::Add,
             lhs,
             rhs,
-        } => match (lhs.as_ref(), rhs.as_ref()) {
+        } => match (lhs.semantic(), rhs.semantic()) {
             (Expr::StackAddr { object, size }, Expr::Const(offset)) => {
                 Some((object.clone(), *offset, *size))
             }
@@ -571,15 +574,18 @@ fn fixed_promoted_stack_address(expression: &Expr) -> Option<(VReg, i64, u16)> {
 }
 
 fn is_rsp_add_width(statement: &Stmt, width: u8) -> bool {
-    matches!(
-        statement.semantic(),
-        Stmt::Assign {
-            dst,
-            src: Expr::Bin { op: BinOp::Add, lhs, rhs },
-        } if is_rsp(dst)
-            && matches!(lhs.as_ref(), Expr::Reg(register) if register == dst)
-            && matches!(rhs.as_ref(), Expr::Const(amount) if *amount == i64::from(width))
-    )
+    match statement.semantic() {
+        Stmt::Assign { dst, src } if is_rsp(dst) => matches!(
+            src.semantic(),
+            Expr::Bin {
+                op: BinOp::Add,
+                lhs,
+                rhs,
+            } if matches!(lhs.semantic(), Expr::Reg(register) if register == dst)
+                && matches!(rhs.semantic(), Expr::Const(amount) if *amount == i64::from(width))
+        ),
+        _ => false,
+    }
 }
 
 fn is_restore_load(
@@ -589,9 +595,12 @@ fn is_restore_load(
 ) -> bool {
     let Stmt::Assign {
         dst: VReg::Phys(destination),
-        src: Expr::Deref { addr, size },
+        src,
     } = statement.semantic()
     else {
+        return false;
+    };
+    let Expr::Deref { addr, size } = src.semantic() else {
         return false;
     };
     if value_base(&VReg::Phys(destination.clone()), identities)
@@ -612,9 +621,12 @@ fn is_padding_restore_load(
 ) -> bool {
     let Stmt::Assign {
         dst: VReg::Phys(destination),
-        src: Expr::Deref { addr, size },
+        src,
     } = statement.semantic()
     else {
+        return false;
+    };
+    let Expr::Deref { addr, size } = src.semantic() else {
         return false;
     };
     if value_base(&VReg::Phys(destination.clone()), identities) == Some("rsp")
@@ -944,14 +956,14 @@ fn is_parameter_slot(
 }
 
 fn rsp_sub_width(stmt: &Stmt) -> Option<i64> {
-    let Stmt::Assign {
-        dst,
-        src: Expr::Bin {
-            op: BinOp::Sub,
-            lhs,
-            rhs,
-        },
-    } = stmt.semantic()
+    let Stmt::Assign { dst, src } = stmt.semantic() else {
+        return None;
+    };
+    let Expr::Bin {
+        op: BinOp::Sub,
+        lhs,
+        rhs,
+    } = src.semantic()
     else {
         return None;
     };
@@ -965,14 +977,14 @@ fn rsp_sub_width(stmt: &Stmt) -> Option<i64> {
 }
 
 fn rsp_add_width(stmt: &Stmt) -> Option<i64> {
-    let Stmt::Assign {
-        dst,
-        src: Expr::Bin {
-            op: BinOp::Add,
-            lhs,
-            rhs,
-        },
-    } = stmt.semantic()
+    let Stmt::Assign { dst, src } = stmt.semantic() else {
+        return None;
+    };
+    let Expr::Bin {
+        op: BinOp::Add,
+        lhs,
+        rhs,
+    } = src.semantic()
     else {
         return None;
     };
@@ -997,18 +1009,21 @@ fn dead_rsp_sub_predicate(predicate: &Stmt, sub: &Stmt, suffix: &[Stmt]) -> Opti
     let width = rsp_sub_width(sub)?;
     let Stmt::Assign {
         dst: VReg::Temp(temp),
-        src:
-            Expr::Cmp {
-                op: CmpOp::Ult | CmpOp::Slt,
-                lhs,
-                rhs,
-            },
+        src,
     } = predicate.semantic()
     else {
         return None;
     };
-    if !matches!(lhs.as_ref(), Expr::Reg(reg) if is_rsp(reg))
-        || !matches!(rhs.as_ref(), Expr::Const(n) if *n == width)
+    let Expr::Cmp {
+        op: CmpOp::Ult | CmpOp::Slt,
+        lhs,
+        rhs,
+    } = src.semantic()
+    else {
+        return None;
+    };
+    if !matches!(lhs.semantic(), Expr::Reg(reg) if is_rsp(reg))
+        || !matches!(rhs.semantic(), Expr::Const(n) if *n == width)
     {
         return None;
     }
@@ -1077,24 +1092,19 @@ fn collapse_prologue(
         }
     }
     if frame_size.is_none() && end < body.len() {
-        if let Stmt::Assign {
-            dst,
-            src: Expr::Bin { op, lhs, rhs },
-        } = body[end].semantic()
-        {
-            if is_rsp(dst)
-                && matches!(lhs.semantic(), Expr::Reg(r) if r == dst)
-                && matches!(rhs.semantic(), Expr::Const(_))
-            {
-                if let Expr::Const(n) = rhs.semantic() {
-                    let delta = match op {
-                        BinOp::Sub if *n > 0 => Some(*n),
-                        BinOp::Add if *n < 0 => Some(-*n),
-                        _ => None,
-                    };
-                    if let Some(d) = delta {
-                        frame_size = Some(d);
-                        end += 1;
+        if let Stmt::Assign { dst, src } = body[end].semantic() {
+            if let Expr::Bin { op, lhs, rhs } = src.semantic() {
+                if is_rsp(dst) && matches!(lhs.semantic(), Expr::Reg(r) if r == dst) {
+                    if let Expr::Const(n) = rhs.semantic() {
+                        let delta = match op {
+                            BinOp::Sub if *n > 0 => Some(*n),
+                            BinOp::Add if *n < 0 => Some(-*n),
+                            _ => None,
+                        };
+                        if let Some(d) = delta {
+                            frame_size = Some(d);
+                            end += 1;
+                        }
                     }
                 }
             }
@@ -1235,15 +1245,18 @@ fn collapse_epilogue(
             && is_rsp_add(&body[ret_idx - 1])
             && matches!(
                 body[ret_idx - 2].semantic(),
-                Stmt::Assign { dst, src: Expr::Reg(slot) }
-                    if is_rbp(dst) && is_promoted_stack_slot(slot, identities)
+                Stmt::Assign { dst, src }
+                    if is_rbp(dst)
+                        && matches!(src.semantic(), Expr::Reg(slot)
+                            if is_promoted_stack_slot(slot, identities))
             )
         {
             let start = if ret_idx >= 3
                 && matches!(
                     body[ret_idx - 3].semantic(),
-                    Stmt::Assign { dst, src: Expr::Reg(s) }
-                        if is_rsp(dst) && is_rbp(s)
+                    Stmt::Assign { dst, src }
+                        if is_rsp(dst)
+                            && matches!(src.semantic(), Expr::Reg(s) if is_rbp(s))
                 ) {
                 ret_idx - 3
             } else {
@@ -1257,7 +1270,9 @@ fn collapse_epilogue(
             && matches!(body[ret_idx - 1].semantic(), Stmt::Pop { target: t } if is_rbp(t))
             && matches!(
                 body[ret_idx - 2].semantic(),
-                Stmt::Assign { dst, src: Expr::Reg(s) } if is_rsp(dst) && is_rbp(s)
+                Stmt::Assign { dst, src }
+                    if is_rsp(dst)
+                        && matches!(src.semantic(), Expr::Reg(s) if is_rbp(s))
             )
         {
             replace_with_epilogue_comment(
@@ -1287,8 +1302,10 @@ fn collapse_epilogue(
         if ret_idx >= 1
             && matches!(
                 body[ret_idx - 1].semantic(),
-                Stmt::Assign { dst, src: Expr::Reg(slot) }
-                    if is_rbp(dst) && is_promoted_stack_slot(slot, identities)
+                Stmt::Assign { dst, src }
+                    if is_rbp(dst)
+                        && matches!(src.semantic(), Expr::Reg(slot)
+                            if is_promoted_stack_slot(slot, identities))
             )
         {
             let mut start = ret_idx - 1;
@@ -1325,15 +1342,18 @@ fn replace_with_epilogue_comment(body: &mut Vec<Stmt>, start: usize, end: usize,
 }
 
 fn is_rsp_add(s: &Stmt) -> bool {
-    matches!(
-        s.semantic(),
-        Stmt::Assign {
-            dst,
-            src: Expr::Bin { op: BinOp::Add, lhs, rhs },
-        } if is_rsp(dst)
-            && matches!(lhs.as_ref(), Expr::Reg(r) if r == dst)
-            && matches!(rhs.as_ref(), Expr::Const(k) if *k > 0)
-    )
+    match s.semantic() {
+        Stmt::Assign { dst, src } if is_rsp(dst) => matches!(
+            src.semantic(),
+            Expr::Bin {
+                op: BinOp::Add,
+                lhs,
+                rhs,
+            } if matches!(lhs.semantic(), Expr::Reg(r) if r == dst)
+                && matches!(rhs.semantic(), Expr::Const(k) if *k > 0)
+        ),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -2653,7 +2673,7 @@ mod tests {
             body: vec![
                 Stmt::Assign {
                     dst: reg("rsp"),
-                    src: Expr::Reg(reg("rbp")),
+                    src: Expr::Reg(reg("rbp")).with_origins(OriginSet::one(0x2010)),
                 },
                 Stmt::Assign {
                     dst: reg("rbp"),
@@ -2765,7 +2785,7 @@ mod tests {
             body: vec![
                 Stmt::Assign {
                     dst: reg("rsp"),
-                    src: Expr::Reg(reg("rbp")),
+                    src: Expr::Reg(reg("rbp")).with_origins(OriginSet::one(0x2010)),
                 }
                 .with_origins(OriginSet::one(0x1010)),
                 Stmt::Pop { target: reg("rbp") }.with_origins(OriginSet::one(0x1014)),
@@ -2794,7 +2814,15 @@ mod tests {
             name: "f".into(),
             entry_va: 0x1000,
             body: vec![
-                rsp_add(0x20).with_origins(OriginSet::one(0x1010)),
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(reg("rsp")).with_origins(OriginSet::one(0x2010))),
+                        rhs: Box::new(Expr::Const(0x20).with_origins(OriginSet::one(0x2010))),
+                    },
+                }
+                .with_origins(OriginSet::one(0x1010)),
                 Stmt::Pop { target: reg("rbp") }.with_origins(OriginSet::one(0x1014)),
                 Stmt::Return { value: None }.with_origins(OriginSet::one(0x1018)),
             ],
@@ -2816,10 +2844,18 @@ mod tests {
             name: "f".into(),
             entry_va: 0x1000,
             body: vec![
-                rsp_add(0x20).with_origins(OriginSet::one(0x1010)),
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(reg("rsp")).with_origins(OriginSet::one(0x2010))),
+                        rhs: Box::new(Expr::Const(0x20).with_origins(OriginSet::one(0x2010))),
+                    },
+                }
+                .with_origins(OriginSet::one(0x1010)),
                 Stmt::Assign {
                     dst: reg("rbp"),
-                    src: Expr::Reg(reg("stack_0")),
+                    src: Expr::Reg(reg("stack_0")).with_origins(OriginSet::one(0x2014)),
                 }
                 .with_origins(OriginSet::one(0x1014)),
                 Stmt::Return { value: None }.with_origins(OriginSet::one(0x1018)),
