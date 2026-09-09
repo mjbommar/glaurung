@@ -2393,6 +2393,14 @@ provenance through lowering.
   release build retains all 20 fixture-189 function verdicts across GCC/Clang
   O0/O2 plus the dedicated Python round trip. See
   `results/wp3-lazy-call-select-expression-origins.md`.
+  Commit `da766b86` closes the cdecl32 stack-walker expression boundary.
+  Provenance can no longer hide an `esp`/`rsp` read from the unsafe-hoist
+  refusal or prevent a surviving displacement from being rebased after folded
+  pushes. The observed-red contract and all 31 cdecl-focused tests pass; an
+  exact clean release build retains both i386 `call_into_spill` lanes, the
+  PE32 execution round trip, and the periodic three-cell O2 Hello sample across
+  x86-64, AArch64, and ARMv7. See
+  `results/wp3-cdecl-stack-walker-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
@@ -5202,6 +5210,15 @@ relevant ratchet's accepted-regression record.
    does the dedicated Python round trip. Continue the remaining enabled
    expression-consumer audit. See
    `results/wp3-lazy-call-select-expression-origins.md`.
+   Commit `da766b86` closes the adjacent cdecl32 recursive stack-expression
+   walkers. Origin, numeric-conversion, and call-expression children are now
+   visited for stack-read refusal and displacement rebasing; PDB-backed frame
+   addresses receive the same storage check as ordinary `Lea`. Its observed-red
+   contract, 31 cdecl-focused tests, two exact i386 spill lanes, and PE32
+   execution round trip pass. The periodic exact-release symbols/PIE GCC-O2
+   Hello cells also pass on x86-64, AArch64, and ARMv7. Continue the remaining
+   enabled expression-consumer audit. See
+   `results/wp3-cdecl-stack-walker-expression-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
