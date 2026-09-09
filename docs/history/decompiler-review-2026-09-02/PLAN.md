@@ -2265,6 +2265,15 @@ provenance through lowering.
   contract and all 12 focused condition-lowering tests pass; the exact
   release-built four-lane polarity canary remains green. See
   `results/wp3-flag-condition-expression-origins.md`.
+  Commit `77839599` completes the select-condition sibling: an attributed
+  select and independently attributed flag condition now accept the reaching
+  comparison by replacing only the semantic condition. Comparison and
+  condition owners compose on that replacement, while the outer select and
+  assignment retain their separate owners. The observed-red ownership
+  contract and all 13 focused condition-lowering tests pass; the exact
+  release-built pure/one-arm fixture-189 slice is green for all eight function
+  verdicts across four GCC/Clang O0/O2 lanes. See
+  `results/wp3-select-condition-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
