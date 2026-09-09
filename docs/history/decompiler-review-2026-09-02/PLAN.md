@@ -2236,6 +2236,16 @@ provenance through lowering.
   ownership transfer as ordinary bodies. Its observed-red contract, all 13
   reconstruction tests, and four exact release-built `classify` lanes pass.
   See `results/wp3-exception-expression-reconstruction.md`.
+  Commit `826571a8` closes the adjacent purely syntactic constant-fold
+  boundary. Throw values and each try/catch body now receive the same
+  bottom-up algebraic simplification as ordinary control flow without
+  changing the exception owner. Its contract was observed red first, all 82
+  constant-fold tests pass, and six exact-release symbol/PIE Hello cells pass
+  at O0/O2 across x86-64, AArch64, and ARMv7. The directly relevant C++
+  exception sample remains green at O2; both O0 cells fail identically at the
+  exact parent and this commit on `INT_MIN`, so they remain pre-existing
+  exception execution debt rather than a regression from this increment. See
+  `results/wp3-exception-constant-folding.md`.
   Commit `54ff918b` closes that boundary for authoritative character-pointer
   calls: attributed named targets still select their call contract, and
   attributed constant arguments fold to string literals without losing their
