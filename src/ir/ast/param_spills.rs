@@ -1020,6 +1020,32 @@ mod tests {
     }
 
     #[test]
+    fn parameter_restore_from_immutable_home_does_not_block_coalescing() {
+        let mut body = vec![
+            Stmt::Store {
+                addr: Expr::Reg(VReg::phys("local_4")),
+                src: Expr::Reg(VReg::phys("arg0")),
+                size: 4,
+            },
+            Stmt::Assign {
+                dst: VReg::phys("arg0"),
+                src: Expr::Reg(VReg::phys("local_4")),
+            },
+            Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("local_4"))),
+            },
+        ];
+
+        coalesce_named_param_spills(&mut body, &std::collections::HashSet::new(), None);
+
+        assert_eq!(body.len(), 2);
+        assert!(matches!(body[0].semantic(), Stmt::Nop));
+        assert!(matches!(body[1].semantic(), Stmt::Return {
+            value: Some(value)
+        } if matches!(value.semantic(), Expr::Reg(register) if register == &VReg::phys("arg0"))));
+    }
+
+    #[test]
     fn attributed_frame_object_parameter_home_is_coalesced() {
         let frame = VReg::phys("frame_10");
         let address = Expr::StackAddr {

@@ -89,7 +89,13 @@ fn analyze_statement(
         Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { dst, src } => {
             saw_read |= observed(src, read_value, written);
-            written |= dst == written_value;
+            // Restoring one alias from the other (`arg = home`) preserves
+            // equality and therefore is not the conflicting write this query
+            // is looking for. A later independent assignment still marks the
+            // value written and blocks substitution as before.
+            let restores_alias = dst == written_value
+                && matches!(src.semantic(), Expr::Reg(register) if register == read_value);
+            written |= dst == written_value && !restores_alias;
         }
         Stmt::Store { addr, src, .. } => {
             let semantic_addr = addr.semantic();
@@ -278,6 +284,11 @@ fn unstructured_has_both_events(body: &[Stmt], read: &VReg, written: &VReg) -> b
                     unreachable!("semantic statement cannot be an origin wrapper")
                 }
                 Stmt::Assign { dst, src } => {
+                    if dst == written
+                        && matches!(src.semantic(), Expr::Reg(register) if register == read)
+                    {
+                        continue;
+                    }
                     events.0 |= dst == written;
                     events.1 |= expression_reads(src, read);
                 }
@@ -575,6 +586,25 @@ mod tests {
             ],
             &reg("arg0"),
             &reg("home")
+        ));
+    }
+
+    #[test]
+    fn restoring_an_argument_from_its_home_is_not_a_conflicting_write() {
+        let body = vec![
+            Stmt::Assign {
+                dst: reg("arg0"),
+                src: Expr::Reg(reg("home")).with_origins(crate::ir::ast::OriginSet::one(0x1020)),
+            },
+            Stmt::Return {
+                value: Some(Expr::Reg(reg("home"))),
+            },
+        ];
+
+        assert!(!read_may_observe_prior_write(
+            &body,
+            &reg("home"),
+            &reg("arg0")
         ));
     }
 
