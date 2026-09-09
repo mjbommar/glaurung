@@ -5652,6 +5652,14 @@ relevant ratchet's accepted-regression record.
    test pass against an exact release build. The immediately preceding periodic
    six-cell Hello checkpoint remains the cross-architecture control. See
    `results/wp3-recovered-throw-values.md`.
+   Commit `81c33138` migrates call-result attribution from exact-single-value
+   lookup to the identity sidecar's unambiguous physical-storage fact.
+   Phi-coalesced values whose candidates all belong to the ABI return register
+   now retain the call destination; mixed physical bases still decline, and
+   production identity-aware paths do not parse display spelling. All three
+   focused identity/refusal tests pass, while exact-release GCC O0/O2
+   `call_result_drives_branch` controls remain green and byte-identical to the
+   parent. See `results/wp3-coalesced-call-result-identity.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
