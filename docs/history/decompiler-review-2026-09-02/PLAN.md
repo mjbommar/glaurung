@@ -2976,6 +2976,15 @@ provenance through lowering.
   around the lane dereferences and stored lane values themselves; all eleven
   owning tests and the same exact release canary pass. See
   `results/wp3-vector-address-origins.md`.
+  Commit `3739f0e3` then closes the contextual-widening expression boundary.
+  Provenance around a narrow register value no longer suppresses the explicit
+  machine-width zero extension required by rebuilt C, and provenance around a
+  signed input to a logical right shift no longer suppresses its unsigned
+  reinterpretation. Both value owners remain attached to the rewritten
+  expression. The observed-red contract, its logical-shift sibling, all 25
+  widening tests, eight directly affected GCC/Clang O0/O2 function checks, and
+  12 symbol-bearing Hello checks across x86-64, AArch64, and ARMv7 pass against
+  an exact release build. See `results/wp3-widen-expression-origins.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
