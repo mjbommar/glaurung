@@ -508,7 +508,11 @@ fn is_identity_value(
     if is_high_variable(name) {
         return true;
     }
-    identities.is_some_and(|identities| identities.exact(&VReg::phys(name)).is_some())
+    identities.is_some_and(|identities| {
+        identities
+            .unambiguous_physical_base(&VReg::phys(name))
+            .is_some()
+    })
 }
 
 fn is_parameter_role(
@@ -664,7 +668,7 @@ mod identity_tests {
     }
 
     #[test]
-    fn ambiguous_opaque_identity_is_not_declaration_eligible() {
+    fn mixed_storage_identity_is_not_declaration_eligible() {
         let value = VReg::phys("opaque_value");
         let mut identities = crate::ir::value_number::ValueIdentities::default();
         for (base, version) in [("rax", 1), ("rbx", 2)] {
@@ -678,6 +682,24 @@ mod identity_tests {
         }
 
         assert!(!is_identity_value("opaque_value", Some(&identities)));
+    }
+
+    #[test]
+    fn coalesced_same_storage_identity_uses_recovered_declaration() {
+        let value = VReg::phys("opaque_value");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for version in [1, 2] {
+            identities.record(
+                value.clone(),
+                crate::ir::ssa::SsaValue {
+                    base: VReg::phys("rax"),
+                    version,
+                },
+            );
+        }
+
+        assert!(identities.exact(&value).is_none());
+        assert_eq!(planned_opaque_type(&identities), "char *");
     }
 
     #[test]
@@ -738,7 +760,7 @@ mod identity_tests {
     }
 
     #[test]
-    fn ambiguous_opaque_identity_keeps_machine_word_declaration() {
+    fn mixed_storage_identity_keeps_machine_word_declaration() {
         let value = VReg::phys("opaque_value");
         let mut identities = crate::ir::value_number::ValueIdentities::default();
         for (base, version) in [("rax", 1), ("rbx", 2)] {
