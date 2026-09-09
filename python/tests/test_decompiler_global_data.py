@@ -45,7 +45,10 @@ def test_writable_global_load_round_trips_in_every_lane() -> None:
     # when one is present, so this fixture recovers `g_counter` -- which is
     # what the C source calls it (09_memory_effects.c:33).
     assert re.search(
-        r"^static unsigned char [A-Za-z_]\w*\[\d+\]", code, re.MULTILINE
+        r"^static (?:unsigned char [A-Za-z_]\w*\[\d+\]|"
+        r"(?:signed |unsigned )?(?:char|short|int|long(?: long)?) [A-Za-z_]\w*);",
+        code,
+        re.MULTILINE,
     ), code
     # ...and the whole point: never a raw process VA.
     assert "*(int *)(0x" not in code, code
