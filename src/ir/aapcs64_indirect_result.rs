@@ -105,7 +105,7 @@ fn frame_address(
     known: &HashMap<String, (String, i64)>,
     identities: Option<&ValueIdentities>,
 ) -> Option<(String, i64)> {
-    match expr {
+    match expr.semantic() {
         Expr::Reg(register) => frame_base(register, identities)
             .map(|base| (base.to_string(), 0))
             .or_else(|| storage_key(register, identities).and_then(|key| known.get(&key).cloned())),
@@ -120,7 +120,7 @@ fn frame_address(
             op: BinOp::Add,
             lhs,
             rhs,
-        } => match (frame_address(lhs, known, identities), rhs.as_ref()) {
+        } => match (frame_address(lhs, known, identities), rhs.semantic()) {
             (Some((base, offset)), Expr::Const(delta)) => {
                 Some((base, offset.saturating_add(*delta)))
             }
@@ -136,7 +136,7 @@ fn promoted_object(
     known: &HashMap<String, VReg>,
     identities: Option<&ValueIdentities>,
 ) -> Option<VReg> {
-    match expr {
+    match expr.semantic() {
         Expr::StackAddr { object, .. } => Some(object.clone()),
         Expr::Reg(register) => {
             storage_key(register, identities).and_then(|key| known.get(&key).cloned())
@@ -223,7 +223,7 @@ fn sysv_entry_frame_address(
     stack_delta: i64,
     identities: Option<&ValueIdentities>,
 ) -> Option<(String, i64)> {
-    match expr {
+    match expr.semantic() {
         Expr::Reg(register) if register_is_storage(register, "rsp", identities) => {
             Some(("entry_rsp".to_string(), stack_delta))
         }
@@ -243,17 +243,20 @@ fn sysv_entry_frame_address(
 fn sysv_stack_adjustment(statement: &Stmt, identities: Option<&ValueIdentities>) -> Option<i64> {
     let Stmt::Assign {
         dst: VReg::Phys(dst),
-        src: Expr::Bin { op, lhs, rhs },
+        src,
     } = statement.semantic()
     else {
         return None;
     };
+    let Expr::Bin { op, lhs, rhs } = src.semantic() else {
+        return None;
+    };
     if !register_is_storage(&VReg::Phys(dst.clone()), "rsp", identities)
-        || !matches!(lhs.as_ref(), Expr::Reg(src) if register_is_storage(src, "rsp", identities))
+        || !matches!(lhs.semantic(), Expr::Reg(src) if register_is_storage(src, "rsp", identities))
     {
         return None;
     }
-    let Expr::Const(width) = rhs.as_ref() else {
+    let Expr::Const(width) = rhs.semantic() else {
         return None;
     };
     match op {
@@ -500,14 +503,17 @@ mod tests {
                     dst: VReg::phys("x0"),
                     src: Expr::Bin {
                         op: BinOp::Add,
-                        lhs: Box::new(Expr::Reg(VReg::phys("sp"))),
-                        rhs: Box::new(Expr::Const(16)),
-                    },
+                        lhs: Box::new(
+                            Expr::Reg(VReg::phys("sp")).with_origins(OriginSet::one(0x2000)),
+                        ),
+                        rhs: Box::new(Expr::Const(16).with_origins(OriginSet::one(0x2000))),
+                    }
+                    .with_origins(OriginSet::one(0x2000)),
                 }
                 .with_origins(OriginSet::one(0x1000)),
                 Stmt::Assign {
                     dst: VReg::phys("x8"),
-                    src: Expr::Reg(VReg::phys("x0")),
+                    src: Expr::Reg(VReg::phys("x0")).with_origins(OriginSet::one(0x2004)),
                 }
                 .with_origins(OriginSet::one(0x1004)),
                 call(indirect_spec(20), None).with_origins(OriginSet::one(0x1008)),
@@ -541,16 +547,33 @@ mod tests {
         let Stmt::Call { args, .. } = &mut hidden_call else {
             unreachable!()
         };
-        *args = vec![Expr::Reg(VReg::phys("rsp")), Expr::Reg(VReg::phys("rsi"))];
+        *args = vec![
+            Expr::Reg(VReg::phys("rsp")).with_origins(OriginSet::one(0x2010)),
+            Expr::Reg(VReg::phys("rsi")),
+        ];
         let f = Function {
             name: "caller".to_string(),
             entry_va: 0x1000,
-            body: vec![hidden_call.with_origins(OriginSet::one(0x1010))],
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(
+                            Expr::Reg(VReg::phys("rsp")).with_origins(OriginSet::one(0x200c)),
+                        ),
+                        rhs: Box::new(Expr::Const(64).with_origins(OriginSet::one(0x200c))),
+                    }
+                    .with_origins(OriginSet::one(0x200c)),
+                }
+                .with_origins(OriginSet::one(0x100c)),
+                hidden_call.with_origins(OriginSet::one(0x1010)),
+            ],
         };
 
         let hints = indirect_result_buffer_hints(&f, CallConv::SysVAmd64);
         assert_eq!(hints.len(), 1);
-        assert_eq!((hints[0].base.as_str(), hints[0].disp), ("entry_rsp", 0));
+        assert_eq!((hints[0].base.as_str(), hints[0].disp), ("entry_rsp", -64));
         assert_eq!(hints[0].size, 32);
         assert!(hints[0].aggregate);
     }
@@ -749,7 +772,8 @@ mod tests {
                     src: Expr::StackAddr {
                         object: VReg::phys("local_30"),
                         size: 20,
-                    },
+                    }
+                    .with_origins(OriginSet::one(0x2020)),
                 }
                 .with_origins(OriginSet::one(0x1020)),
                 call(spec, None).with_origins(OriginSet::one(0x1024)),
