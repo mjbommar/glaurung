@@ -17,10 +17,7 @@ fn physical_base<'a>(
     identities: Option<&'a ValueIdentities>,
 ) -> Option<&'a str> {
     match identities {
-        Some(identities) => match &identities.exact(register)?.base {
-            VReg::Phys(base) => Some(base),
-            _ => None,
-        },
+        Some(identities) => identities.unambiguous_physical_base(register),
         None => match register {
             VReg::Phys(name) => Some(crate::ir::abi::ssa_base(name)),
             _ => None,
@@ -438,9 +435,9 @@ fn float_registers_are_all_caller_saved(
 
 /// Whether any physical register defined or used in `lf` satisfies `predicate`.
 ///
-/// Production lowering resolves the canonical register from the exact value
-/// identity. The spelling fallback is reserved for compatibility callers that
-/// do not own the sidecar.
+/// Production lowering resolves one unambiguous physical register base from
+/// value identity. The spelling fallback is reserved for compatibility callers
+/// that do not own the sidecar.
 fn any_physical_register(
     lf: &LlirFunction,
     identities: Option<&ValueIdentities>,
@@ -575,7 +572,7 @@ mod tests {
     }
 
     #[test]
-    fn float_register_roles_use_exact_identity_not_display_spelling() {
+    fn float_register_roles_use_unambiguous_identity_not_display_spelling() {
         let misleading = VReg::phys("xmm0#looks_float");
         let opaque_float = VReg::phys("opaque_value");
         let ambiguous = VReg::phys("xmm1#ambiguous");
@@ -587,13 +584,15 @@ mod tests {
                 version: 3,
             },
         );
-        identities.record(
-            opaque_float.clone(),
-            crate::ir::ssa::SsaValue {
-                base: VReg::phys("xmm0"),
-                version: 7,
-            },
-        );
+        for version in [7, 9] {
+            identities.record(
+                opaque_float.clone(),
+                crate::ir::ssa::SsaValue {
+                    base: VReg::phys("xmm0"),
+                    version,
+                },
+            );
+        }
         for base in ["xmm1", "rcx"] {
             identities.record(
                 ambiguous.clone(),
