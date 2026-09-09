@@ -2253,6 +2253,16 @@ provenance through lowering.
   its exact test passes, and the four GCC/Clang O0/O2 `cpp_exception` cells are
   now all execution-differential passes on an exact release build. See
   `results/wp3-attributed-catch-values.md`.
+  Commit `15c9734c` makes the already-migrated cleanup consumers effective on
+  production handlers rather than merely capable in isolation. Copy
+  propagation now treats each try and catch as an independent region, handles
+  throw uses, and the renderer schedules copy propagation, temporary
+  reconstruction, and constant folding immediately after typed-handler
+  recovery. The GCC O0 `cpp_exception` output drops from 12 to 6 local
+  declarations and from 16 to 9 body statements while all four GCC/Clang
+  O0/O2 execution cells remain green. All 35 owning copy-propagation tests pass
+  and the 16-cell exception-only fixture slice has no baseline regressions. See
+  `results/wp3-recovered-exception-preparation.md`.
   Commit `54ff918b` closes that boundary for authoritative character-pointer
   calls: attributed named targets still select their call contract, and
   attributed constant arguments fold to string literals without losing their
