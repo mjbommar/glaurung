@@ -1402,10 +1402,24 @@ fn fold_one_recovered_layout_call_with_live_ins(
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, .. } => {
                 let sse_slot = match identities {
-                    Some(identities) => identities.exact(dst).and_then(|identity| {
-                        let name = identity.canonical_physical_base()?;
-                        crate::ir::abi::sse_argument_slot_of(arch, name)
-                    }),
+                    Some(identities) => {
+                        let Some(candidates) = identities.candidates(dst) else {
+                            continue;
+                        };
+                        let classifications = candidates
+                            .iter()
+                            .map(|identity| {
+                                identity.canonical_physical_base().and_then(|name| {
+                                    crate::ir::abi::sse_argument_slot_of(arch, name)
+                                })
+                            })
+                            .collect::<std::collections::BTreeSet<_>>();
+                        if classifications.len() != 1 {
+                            blocked_storage.fill(true);
+                            continue;
+                        }
+                        classifications.first().copied().flatten()
+                    }
                     None => {
                         let VReg::Phys(name) = dst else {
                             continue;
@@ -6150,6 +6164,78 @@ mod tests {
             body[0].origins().expect("folded call owner").addresses(),
             &[0x1020, 0x1024]
         );
+    }
+
+    #[test]
+    fn coalesced_sse_lane_write_blocks_stale_enclosing_layout_value() {
+        let mut body = vec![
+            assign("opaque_lane", 99),
+            assign("opaque_integer", 7),
+            call_to("mixed_float"),
+        ];
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for (base, version) in [("xmm0_d0", 1), ("xmm0_d1", 2)] {
+            identities.record(
+                reg("opaque_lane"),
+                crate::ir::ssa::SsaValue {
+                    base: reg(base),
+                    version,
+                },
+            );
+        }
+        identities.record(
+            reg("opaque_integer"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi"),
+                version: 1,
+            },
+        );
+        let mut enclosing = EnclosingSlots::entry(
+            CallConv::SysVAmd64,
+            &vec![None; arg_slots(CallConv::SysVAmd64).len()],
+            vec![false; arg_slots(CallConv::SysVAmd64).len()],
+        );
+        enclosing.reaching[arg_slots(CallConv::SysVAmd64).len()] =
+            Some(Expr::Reg(reg("earlier_xmm0")));
+        let original = body.clone();
+
+        assert!(!fold_one_recovered_layout_call_with_live_ins(
+            &mut body,
+            2,
+            CallConv::SysVAmd64,
+            &[reg("rdi"), reg("xmm0")],
+            &std::collections::HashSet::from([0]),
+            &enclosing,
+            Some(&identities),
+        ));
+        assert_eq!(body, original, "a declined fold must not edit the body");
+
+        let mut ambiguous = crate::ir::value_number::ValueIdentities::default();
+        for (base, version) in [("xmm0_d0", 1), ("xmm1_d0", 2)] {
+            ambiguous.record(
+                reg("opaque_lane"),
+                crate::ir::ssa::SsaValue {
+                    base: reg(base),
+                    version,
+                },
+            );
+        }
+        ambiguous.record(
+            reg("opaque_integer"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rdi"),
+                version: 1,
+            },
+        );
+        assert!(!fold_one_recovered_layout_call_with_live_ins(
+            &mut body,
+            2,
+            CallConv::SysVAmd64,
+            &[reg("rdi"), reg("xmm0")],
+            &std::collections::HashSet::from([0]),
+            &enclosing,
+            Some(&ambiguous),
+        ));
     }
 
     #[test]
