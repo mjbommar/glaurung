@@ -329,12 +329,12 @@ fn refine_authoritative_pointer_values(
                     let recovered = call_spec
                         .as_ref()
                         .and_then(|spec| spec.callee_prototype.as_ref());
-                    let catalog = match target {
+                    let catalog = match target.semantic() {
                         Expr::Named { name, .. } => crate::ir::call_contracts::lookup(name),
                         _ => None,
                     };
                     for (index, argument) in args.iter().enumerate() {
-                        let Expr::Reg(VReg::Phys(argument_name)) = argument else {
+                        let Expr::Reg(VReg::Phys(argument_name)) = argument.semantic() else {
                             continue;
                         };
                         if !is_trusted_copy_source_with_identities(argument_name, identities) {

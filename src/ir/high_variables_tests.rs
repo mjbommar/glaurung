@@ -546,12 +546,14 @@ fn authoritative_call_parameter_refines_a_direct_function_argument() {
             target: Expr::Named {
                 va: 0,
                 name: "strcmp@plt".into(),
-            },
+            }
+            .with_origins(OriginSet::one(0x2000)),
             args: vec![
-                Expr::Reg(VReg::phys("arg0")),
+                Expr::Reg(VReg::phys("arg0")).with_origins(OriginSet::one(0x2004)),
                 Expr::StringLit {
                     value: "known".into(),
-                },
+                }
+                .with_origins(OriginSet::one(0x2008)),
             ],
             dst: Some(VReg::phys("var1")),
             call_spec: None,
@@ -648,8 +650,9 @@ fn attributed_authoritative_callee_refines_a_forwarded_argument() {
             target: Expr::Named {
                 va: 0x2000,
                 name: "read_first".into(),
-            },
-            args: vec![Expr::Reg(VReg::phys("arg0"))],
+            }
+            .with_origins(OriginSet::one(0x1008)),
+            args: vec![Expr::Reg(VReg::phys("arg0")).with_origins(OriginSet::one(0x100c))],
             dst: Some(VReg::phys("ret")),
             call_spec: Some(CallSiteSpec {
                 call_prototype: recovered.clone(),
