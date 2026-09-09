@@ -32,17 +32,28 @@ pub fn fold_consumed_extensions_with_identities(
 }
 
 fn narrow_machine_parent(expression: &mut Expr, observed_width: u8) {
-    let replacement = match expression {
+    let replacement = match expression.semantic() {
         Expr::Cast {
             signed: false,
             width: outer_width,
             expr: inner,
-        } if *outer_width > observed_width => match inner.as_ref() {
+        } if *outer_width > observed_width => match inner.semantic() {
             inner_cast @ Expr::Cast {
                 signed: false,
                 width: inner_width,
                 ..
-            } if *inner_width == observed_width => Some(inner_cast.clone()),
+            } if *inner_width == observed_width => {
+                let origins = expression
+                    .origins()
+                    .cloned()
+                    .unwrap_or_default()
+                    .union(&inner.origins().cloned().unwrap_or_default());
+                Some(
+                    inner_cast
+                        .clone()
+                        .with_optional_origins((!origins.is_empty()).then_some(origins)),
+                )
+            }
             _ => None,
         },
         _ => None,
@@ -53,6 +64,10 @@ fn narrow_machine_parent(expression: &mut Expr, observed_width: u8) {
 }
 
 fn fold_modular_expression(expression: &mut Expr, observed_width: u8) {
+    if let Expr::Origin { expr, .. } = expression {
+        fold_modular_expression(expr, observed_width);
+        return;
+    }
     let Expr::Bin { op, lhs, rhs } = expression else {
         return;
     };
@@ -169,6 +184,7 @@ fn fold_body(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ast::OriginSet;
     use crate::ir::types_recover::TypeHint;
 
     fn extended_add(destination: VReg) -> Function {
@@ -381,5 +397,58 @@ mod tests {
             ),
             "the four-byte destination must consume the low word directly: {function:#?}"
         );
+    }
+
+    #[test]
+    fn attributed_machine_extension_folds_and_preserves_consumed_origins() {
+        let destination = VReg::phys("local_c");
+        let mut function = Function {
+            name: "sum".into(),
+            entry_va: 0,
+            body: vec![Stmt::Assign {
+                dst: destination.clone(),
+                src: Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(
+                        Expr::Cast {
+                            signed: false,
+                            width: 8,
+                            expr: Box::new(
+                                Expr::Cast {
+                                    signed: false,
+                                    width: 4,
+                                    expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                                }
+                                .with_origins(OriginSet::one(0x1004)),
+                            ),
+                        }
+                        .with_origins(OriginSet::one(0x1000)),
+                    ),
+                    rhs: Box::new(Expr::Reg(destination.clone())),
+                }
+                .with_origins(OriginSet::one(0x0ffc)),
+            }],
+        };
+        let mut types = TypeMap::default();
+        int32_type(&mut types, destination);
+
+        fold_consumed_extensions(&mut function, &types);
+
+        let Stmt::Assign { src, .. } = &function.body[0] else {
+            panic!("expected attributed modular assignment: {function:#?}");
+        };
+        assert_eq!(src.origins(), Some(&OriginSet::one(0x0ffc)));
+        let Expr::Bin { lhs, .. } = src.semantic() else {
+            panic!("expected modular expression: {function:#?}");
+        };
+        assert!(matches!(
+            lhs.semantic(),
+            Expr::Cast {
+                signed: false,
+                width: 4,
+                ..
+            }
+        ));
+        assert_eq!(lhs.origins(), Some(&OriginSet::from_iter([0x1000, 0x1004])));
     }
 }
