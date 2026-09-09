@@ -2290,6 +2290,14 @@ provenance through lowering.
   the exact release-built fixture-189 pure/one-arm slice remains green across
   all four GCC/Clang O0/O2 lanes. See
   `results/wp3-nested-select-rendering-origins.md`.
+  Commit `bd2b8486` closes the adjacent frame-renderer boundary: attributed
+  `sp`/`esp`/`rsp` arithmetic now retains the same frame-size summary and
+  narrow unannotated prologue spelling as the identical plain expression.
+  The observed-red dual-renderer contract and all three frame-focused tests
+  pass. The periodic exact-release Hello checkpoint remains 54/72: all x86-64
+  and AArch64 nodes pass, while the same 18 separately tracked ARMv7 ABI,
+  frame, and string nodes remain red. See
+  `results/wp3-frame-rendering-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
