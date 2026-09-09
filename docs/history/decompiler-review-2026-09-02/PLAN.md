@@ -2326,6 +2326,16 @@ provenance through lowering.
   `test_real_arm_hard_float_call_round_trip` green, removing the redundant
   `local_c`/integer-float union path and recovering the source parameter at the
   call boundary. See `results/wp3-parameter-alias-restores.md`.
+  Commit `78b31b39` closes the next ARM32 frame-storage identity defect and
+  supersedes the ineffective presentation-prefix attempt in `47c5eb0b`.
+  Structural `sp` deliberately carries several SSA versions under one spelling;
+  ARM frame recognition now consumes the sidecar's unambiguous physical-base
+  fact instead of requiring an impossible single exact value. Conflicting bases
+  still decline. All 13 ARM32 frame tests and the real Thumb frame-spill test
+  pass. On an exact release build, the four dynamic ARMv7 O0 Hello cells across
+  PIE/non-PIE and symbols/stripped move from fail to pass; the remaining 12
+  dynamic cells have canonical bodies but retain false `arg0`..`arg3`
+  signatures. See `results/wp3-arm32-structural-storage-identities.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
@@ -5005,6 +5015,12 @@ relevant ratchet's accepted-regression record.
    explicit no-sidecar tests retain the compatibility rule. Opaque chained
    components and a misleading-spelling refusal pass, along with the exact A32
    O0 KMP fixture; see `results/wp3-stack-address-alias-identities.md`.
+   Commit `78b31b39` then fixes the adjacent ARM32 frame recognizer's treatment
+   of structural stack-pointer identities. The exact ARMv7 dynamic Hello slice
+   improves from 0/16 to 4/16 by closing every O0 frame-leak cell; the 12 O1-O3
+   failures are now isolated to false inferred parameters and belong to the
+   next WP6 prototype/signature boundary. See
+   `results/wp3-arm32-structural-storage-identities.md`.
    Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
