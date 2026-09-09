@@ -5293,6 +5293,15 @@ relevant ratchet's accepted-regression record.
    build. Clang-O2 byte-stride remains its pre-existing unresolved-vector fail,
    with no regression in scope. See
    `results/wp3-pointer-access-expression-origins.md`.
+   Commit `b3110f25` closes the high-half and wide-mask sibling. Independent
+   origins on a wide shift, its count, its source value, and a 64-bit mask no
+   longer hide the complete SysV eightbyte needed by a packed aggregate
+   parameter. The observed-red contract, five `high_half` tests, seven
+   `decbench_abi_` tests, and all four real by-value-pair GCC/Clang O0/O2 lanes
+   pass; the latter retain their recovered aggregate signature. Validation used
+   an exact clean release build and did not repeat the immediately preceding
+   green six-cell Hello checkpoint. See
+   `results/wp3-high-half-expression-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
