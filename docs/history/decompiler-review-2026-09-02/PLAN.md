@@ -2146,6 +2146,14 @@ provenance through lowering.
   green. The periodic six-cell GCC symbols/PIE Hello checkpoint is canonical
   for AMD64 and AArch64 at O0/O2; ARMv7 remains known-red at both levels. See
   `results/wp3-guarded-call-expression-origins.md`.
+  Commit `570e505f` next closes the prepared high-variable type graph and its
+  affine memory-object input across expression origins. Attributed high-bit
+  literals retain use-proven unsignedness, attributed calls/literals/copies
+  retain exact pointer types, and attributed aggregate cursor arithmetic
+  retains its byte-pointer model. Three strengthened contracts were observed
+  red; all 35 high-variable tests, 33 active memory-object tests, and two
+  directly owning release-built binary round trips pass. See
+  `results/wp3-high-variable-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
