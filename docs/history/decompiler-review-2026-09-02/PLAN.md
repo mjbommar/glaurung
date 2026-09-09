@@ -2094,6 +2094,15 @@ provenance through lowering.
   `x86_prologue` tests pass, and the exact x86-64 GCC symbols/PIE Hello World
   O0 canonical round trip remains green after a clean release rebuild. See
   `results/wp3-x86-frame-expression-origins.md`.
+  Commit `a66033bc` closes the corresponding AArch64 frame-expression
+  surface. Scalar and promoted frame saves, stack allocation/teardown,
+  frame-pointer setup, promoted-record addresses, and paired restores now
+  inspect semantic expressions without weakening their exact register,
+  offset, width, identity, or pairing proofs. The strengthened canonical
+  prologue was observed red, all 16 owning `arm64_prologue` tests pass, and
+  the exact AArch64 GCC symbols/PIE Hello World O0 canonical round trip remains
+  green after a clean release rebuild. See
+  `results/wp3-aarch64-frame-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
