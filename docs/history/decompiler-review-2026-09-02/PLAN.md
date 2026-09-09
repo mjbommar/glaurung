@@ -5322,6 +5322,17 @@ relevant ratchet's accepted-regression record.
    O0/O2 call-shape functions pass against an exact clean release build. The
    immediately preceding green six-cell Hello checkpoint was not repeated. See
    `results/wp3-cdecl32-proof-expression-origins.md`.
+   Commit `bf8718e9` closes the AAPCS locked-target and outgoing-stack-address
+   siblings. Provenance on a catalogued callee or exact `sp` address no longer
+   hides its otherwise valid contract/layout proof; all existing variadic,
+   representability, storage, width, contiguity, clobber, and control-boundary
+   refusals remain. Both observed-red contracts, all six AAPCS module tests,
+   two real mixed hard-float checks, and the periodic six-cell Hello checkpoint
+   pass on an exact clean release build. Three of four ARM `call_into_spill`
+   lanes pass; ARMv7 O0 retains a real uninitialized-frame-slot failure that an
+   exact parent build reproduces identically, so it is not attributed to this
+   increment and remains in the ARM storage lane. See
+   `results/wp3-aapcs-proof-expression-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
