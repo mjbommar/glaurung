@@ -49,14 +49,14 @@ fn is_self_arith_on_stack_ptr(dst: &VReg, src: &Expr) -> bool {
     if !matches!(dst, VReg::Phys(n) if n == "rsp" || n == "esp" || n == "sp") {
         return false;
     }
-    match src {
+    match src.semantic() {
         Expr::Bin {
             op: BinOp::Add | BinOp::Sub,
             lhs,
             rhs,
         } => {
-            matches!(lhs.as_ref(), Expr::Reg(r) if r == dst)
-                && matches!(rhs.as_ref(), Expr::Const(_))
+            matches!(lhs.semantic(), Expr::Reg(r) if r == dst)
+                && matches!(rhs.semantic(), Expr::Const(_))
         }
         _ => false,
     }
@@ -656,40 +656,22 @@ pub fn compute_frame_size(body: &[Stmt]) -> Option<i64> {
     for s in body {
         match s.semantic() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
-            Stmt::Assign {
-                dst,
-                src:
-                    Expr::Bin {
-                        op: BinOp::Sub,
-                        lhs,
-                        rhs,
-                    },
-            } if is_stack_reg(dst) => {
-                if let (Expr::Reg(r), Expr::Const(n)) = (lhs.as_ref(), rhs.as_ref()) {
-                    if r == dst {
-                        total = total.saturating_add(*n);
-                        continue;
+            Stmt::Assign { dst, src } if is_stack_reg(dst) => match src.semantic() {
+                Expr::Bin { op, lhs, rhs } if matches!(op, BinOp::Add | BinOp::Sub) => {
+                    if let (Expr::Reg(r), Expr::Const(n)) = (lhs.semantic(), rhs.semantic()) {
+                        if r == dst {
+                            total = match op {
+                                BinOp::Sub => total.saturating_add(*n),
+                                BinOp::Add => total.saturating_sub(*n),
+                                _ => unreachable!("guard admits only stack add/sub"),
+                            };
+                            continue;
+                        }
                     }
+                    break;
                 }
-                break;
-            }
-            Stmt::Assign {
-                dst,
-                src:
-                    Expr::Bin {
-                        op: BinOp::Add,
-                        lhs,
-                        rhs,
-                    },
-            } if is_stack_reg(dst) => {
-                if let (Expr::Reg(r), Expr::Const(n)) = (lhs.as_ref(), rhs.as_ref()) {
-                    if r == dst {
-                        total = total.saturating_sub(*n);
-                        continue;
-                    }
-                }
-                break;
-            }
+                _ => continue,
+            },
             Stmt::Nop
             | Stmt::Label(_)
             | Stmt::Unknown(_)

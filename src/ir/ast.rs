@@ -3732,6 +3732,40 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn attributed_stack_adjustment_preserves_frame_rendering() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let render_frame = |src| {
+            let function = Function {
+                name: "f".into(),
+                entry_va: 0x1000,
+                body: vec![Stmt::Assign {
+                    dst: VReg::phys("rsp"),
+                    src,
+                }],
+            };
+            let mut types = TypeMap::default();
+            types.upsert_public(VReg::phys("rsp"), TypeHint::Pointer { pointee_width: 1 });
+            (render(&function), render_with_types(&function, &types))
+        };
+        let adjustment = Expr::Bin {
+            op: BinOp::Sub,
+            lhs: Box::new(Expr::Reg(VReg::phys("rsp"))),
+            rhs: Box::new(Expr::Const(0x20)),
+        };
+
+        let plain = render_frame(adjustment.clone());
+        let attributed = render_frame(adjustment.with_origins(OriginSet::one(0x1000)));
+
+        assert_eq!(
+            attributed, plain,
+            "an expression owner must not hide frame arithmetic from either renderer"
+        );
+        assert!(plain.0.contains("// frame: 32 bytes"), "{}", plain.0);
+        assert!(plain.1.contains("// frame: 32 bytes"), "{}", plain.1);
+    }
+
+    #[test]
     fn frame_size_absent_when_no_stack_adjustment() {
         let lf = mk_cfg(vec![(0x1000, vec![Op::Return], vec![])]);
         let text = lower_and_render(&lf, "f");
