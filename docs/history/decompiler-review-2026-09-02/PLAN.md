@@ -2176,6 +2176,13 @@ provenance through lowering.
   pass, and the formerly-red AMD64 GCC symbols/non-PIE Hello O0/O2 cells are
   canonical after a clean release build. See
   `results/wp3-string-expression-origins.md`.
+  Commit `00cb555d` closes the adjacent ARM-style split-address case:
+  attributed page and offset operands still fold, and the literal receives
+  their deterministic ownership union. The contract was observed red and all
+  12 string-fold tests pass. A six-cell release-built Hello checkpoint remains
+  canonical for AMD64 and AArch64 at O0/O2; ARMv7 recovers the string in both
+  cells but remains red for its known O0 frame and O2 signature defects. See
+  `results/wp3-split-string-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
