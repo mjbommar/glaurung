@@ -1,0 +1,59 @@
+{
+  "schema": "glaurung-capstone-mc-v1",
+  "upstream": {
+    "project": "capstone",
+    "version": "5.0.0",
+    "crate": "capstone-sys 0.16.0",
+    "path": "suite/MC/AArch64/neon-scalar-reduce-pairwise.s.cs",
+    "licenses": [
+      "BSD-3-Clause",
+      "NCSA"
+    ]
+  },
+  "vectors": [
+    {
+      "line": 2,
+      "bytes": [
+        32,
+        184,
+        241,
+        94
+      ],
+      "mnemonic": "addp",
+      "operands": [
+        {
+          "register": "d0"
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 2,
+            "element_bits": 64
+          }
+        }
+      ]
+    },
+    {
+      "line": 3,
+      "bytes": [
+        52,
+        216,
+        112,
+        126
+      ],
+      "mnemonic": "faddp",
+      "operands": [
+        {
+          "register": "d20"
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 2,
+            "element_bits": 64
+          }
+        }
+      ]
+    }
+  ]
+}

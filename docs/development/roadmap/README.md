@@ -67,6 +67,7 @@ record, carrying the commit for every landed item.
 | [real-binary-decompiler.md](real-binary-decompiler.md) | the product-facing ordering, non-goals, and the items carried from the 2026-08-13 roadmap |
 | [distribution.md](distribution.md) | getting Glaurung installable — the never-fired release matrix, the 104-package base install, and what a wheel costs |
 | [source-semantics.md](source-semantics.md) | what to build on the source front end now the dependence graphs exist — declared types, interprocedural flow, and the solver-backed path feasibility the lowering's 18.7% coverage currently gates |
+| [native-decoders.md](native-decoders.md) | replace Capstone with portable, optimized Glaurung-native Rust decoders and a ported upstream QA/QC estate |
 | [../test-estate/README.md](../test-estate/README.md) | R7 — the estate-hygiene layer these sit on top of |
 
 ## Progress

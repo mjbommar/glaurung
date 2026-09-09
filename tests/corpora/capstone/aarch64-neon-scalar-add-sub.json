@@ -1,0 +1,57 @@
+{
+  "schema": "glaurung-capstone-mc-v1",
+  "upstream": {
+    "project": "capstone",
+    "version": "5.0.0",
+    "crate": "capstone-sys 0.16.0",
+    "path": "suite/MC/AArch64/neon-scalar-add-sub.s.cs",
+    "licenses": [
+      "BSD-3-Clause",
+      "NCSA"
+    ]
+  },
+  "vectors": [
+    {
+      "line": 2,
+      "bytes": [
+        31,
+        132,
+        240,
+        94
+      ],
+      "mnemonic": "add",
+      "operands": [
+        {
+          "register": "d31"
+        },
+        {
+          "register": "d0"
+        },
+        {
+          "register": "d16"
+        }
+      ]
+    },
+    {
+      "line": 3,
+      "bytes": [
+        225,
+        132,
+        232,
+        126
+      ],
+      "mnemonic": "sub",
+      "operands": [
+        {
+          "register": "d1"
+        },
+        {
+          "register": "d7"
+        },
+        {
+          "register": "d8"
+        }
+      ]
+    }
+  ]
+}

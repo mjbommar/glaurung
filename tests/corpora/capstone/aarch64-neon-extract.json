@@ -1,0 +1,87 @@
+{
+  "schema": "glaurung-capstone-mc-v1",
+  "upstream": {
+    "project": "capstone",
+    "version": "5.0.0",
+    "crate": "capstone-sys 0.16.0",
+    "path": "suite/MC/AArch64/neon-extract.s.cs",
+    "licenses": [
+      "BSD-3-Clause",
+      "NCSA"
+    ]
+  },
+  "vectors": [
+    {
+      "line": 2,
+      "bytes": [
+        32,
+        24,
+        2,
+        46
+      ],
+      "mnemonic": "ext",
+      "operands": [
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 8,
+            "element_bits": 8
+          }
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 8,
+            "element_bits": 8
+          }
+        },
+        {
+          "register": "v2",
+          "vector_shape": {
+            "lanes": 8,
+            "element_bits": 8
+          }
+        },
+        {
+          "immediate": 3
+        }
+      ]
+    },
+    {
+      "line": 3,
+      "bytes": [
+        32,
+        24,
+        2,
+        110
+      ],
+      "mnemonic": "ext",
+      "operands": [
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 16,
+            "element_bits": 8
+          }
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 16,
+            "element_bits": 8
+          }
+        },
+        {
+          "register": "v2",
+          "vector_shape": {
+            "lanes": 16,
+            "element_bits": 8
+          }
+        },
+        {
+          "immediate": 3
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,246 @@
+{
+  "schema": "glaurung-capstone-mc-v1",
+  "upstream": {
+    "project": "capstone",
+    "version": "5.0.0",
+    "crate": "capstone-sys 0.16.0",
+    "path": "suite/MC/AArch64/neon-scalar-compare.s.cs",
+    "licenses": [
+      "BSD-3-Clause",
+      "NCSA"
+    ]
+  },
+  "vectors": [
+    {
+      "line": 2,
+      "bytes": [
+        180,
+        142,
+        246,
+        126
+      ],
+      "mnemonic": "cmeq",
+      "operands": [
+        {
+          "register": "d20"
+        },
+        {
+          "register": "d21"
+        },
+        {
+          "register": "d22"
+        }
+      ]
+    },
+    {
+      "line": 3,
+      "bytes": [
+        180,
+        154,
+        224,
+        94
+      ],
+      "mnemonic": "cmeq",
+      "operands": [
+        {
+          "register": "d20"
+        },
+        {
+          "register": "d21"
+        },
+        {
+          "immediate": 0
+        }
+      ]
+    },
+    {
+      "line": 4,
+      "bytes": [
+        180,
+        62,
+        246,
+        126
+      ],
+      "mnemonic": "cmhs",
+      "operands": [
+        {
+          "register": "d20"
+        },
+        {
+          "register": "d21"
+        },
+        {
+          "register": "d22"
+        }
+      ]
+    },
+    {
+      "line": 5,
+      "bytes": [
+        180,
+        62,
+        246,
+        94
+      ],
+      "mnemonic": "cmge",
+      "operands": [
+        {
+          "register": "d20"
+        },
+        {
+          "register": "d21"
+        },
+        {
+          "register": "d22"
+        }
+      ]
+    },
+    {
+      "line": 6,
+      "bytes": [
+        180,
+        138,
+        224,
+        126
+      ],
+      "mnemonic": "cmge",
+      "operands": [
+        {
+          "register": "d20"
+        },
+        {
+          "register": "d21"
+        },
+        {
+          "immediate": 0
+        }
+      ]
+    },
+    {
+      "line": 7,
+      "bytes": [
+        180,
+        54,
+        246,
+        126
+      ],
+      "mnemonic": "cmhi",
+      "operands": [
+        {
+          "register": "d20"
+        },
+        {
+          "register": "d21"
+        },
+        {
+          "register": "d22"
+        }
+      ]
+    },
+    {
+      "line": 8,
+      "bytes": [
+        180,
+        54,
+        246,
+        94
+      ],
+      "mnemonic": "cmgt",
+      "operands": [
+        {
+          "register": "d20"
+        },
+        {
+          "register": "d21"
+        },
+        {
+          "register": "d22"
+        }
+      ]
+    },
+    {
+      "line": 9,
+      "bytes": [
+        180,
+        138,
+        224,
+        94
+      ],
+      "mnemonic": "cmgt",
+      "operands": [
+        {
+          "register": "d20"
+        },
+        {
+          "register": "d21"
+        },
+        {
+          "immediate": 0
+        }
+      ]
+    },
+    {
+      "line": 10,
+      "bytes": [
+        180,
+        154,
+        224,
+        126
+      ],
+      "mnemonic": "cmle",
+      "operands": [
+        {
+          "register": "d20"
+        },
+        {
+          "register": "d21"
+        },
+        {
+          "immediate": 0
+        }
+      ]
+    },
+    {
+      "line": 11,
+      "bytes": [
+        180,
+        170,
+        224,
+        94
+      ],
+      "mnemonic": "cmlt",
+      "operands": [
+        {
+          "register": "d20"
+        },
+        {
+          "register": "d21"
+        },
+        {
+          "immediate": 0
+        }
+      ]
+    },
+    {
+      "line": 12,
+      "bytes": [
+        180,
+        142,
+        246,
+        94
+      ],
+      "mnemonic": "cmtst",
+      "operands": [
+        {
+          "register": "d20"
+        },
+        {
+          "register": "d21"
+        },
+        {
+          "register": "d22"
+        }
+      ]
+    }
+  ]
+}

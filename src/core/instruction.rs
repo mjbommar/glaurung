@@ -16,6 +16,8 @@ use crate::core::address::Address;
 pub enum OperandKind {
     /// Register operand
     Register,
+    /// An architecturally grouped, ordered register list.
+    RegisterList,
     /// Immediate value operand
     Immediate,
     /// Memory reference operand
@@ -39,6 +41,7 @@ impl fmt::Display for OperandKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             OperandKind::Register => write!(f, "Register"),
+            OperandKind::RegisterList => write!(f, "RegisterList"),
             OperandKind::Immediate => write!(f, "Immediate"),
             OperandKind::Memory => write!(f, "Memory"),
             OperandKind::Displacement => write!(f, "Displacement"),
@@ -148,6 +151,9 @@ pub struct Operand {
     pub text: String,
     /// Register name (for Register operands)
     pub register: Option<String>,
+    /// Ordered names for a grouped register-list operand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub register_list: Option<Vec<String>>,
     /// Immediate value (for Immediate operands)
     pub immediate: Option<i64>,
     /// Memory displacement (for Memory operands)
@@ -181,6 +187,7 @@ impl Operand {
             access,
             text: name.clone(),
             register: Some(name),
+            register_list: None,
             immediate: None,
             displacement: None,
             segment: None,
@@ -202,6 +209,7 @@ impl Operand {
             access: Access::Read,
             text: format!("0x{:x}", value),
             register: None,
+            register_list: None,
             immediate: Some(value),
             displacement: None,
             segment: None,
@@ -271,6 +279,7 @@ impl Operand {
             access,
             text,
             register: None,
+            register_list: None,
             immediate: None,
             displacement,
             segment: None,
@@ -310,6 +319,10 @@ impl Operand {
     fn get_register(&self) -> Option<String> {
         self.register.clone()
     }
+    #[getter(register_list)]
+    fn get_register_list(&self) -> Option<Vec<String>> {
+        self.register_list.clone()
+    }
     #[getter(immediate)]
     fn get_immediate(&self) -> Option<i64> {
         self.immediate
@@ -339,6 +352,10 @@ impl Operand {
     #[pyo3(name = "is_register")]
     fn is_register_py(&self) -> bool {
         Operand::is_register(self)
+    }
+    #[pyo3(name = "is_register_list")]
+    fn is_register_list_py(&self) -> bool {
+        Operand::is_register_list(self)
     }
     #[pyo3(name = "is_immediate")]
     fn is_immediate_py(&self) -> bool {
@@ -371,6 +388,7 @@ impl Operand {
             access,
             text: name.clone(),
             register: Some(name),
+            register_list: None,
             immediate: None,
             displacement: None,
             segment: None,
@@ -389,6 +407,7 @@ impl Operand {
             access: Access::Read,
             text: format!("0x{:x}", value),
             register: None,
+            register_list: None,
             immediate: Some(value),
             displacement: None,
             segment: None,
@@ -447,6 +466,7 @@ impl Operand {
             access,
             text,
             register: None,
+            register_list: None,
             immediate: None,
             displacement,
             segment: None,
@@ -457,11 +477,41 @@ impl Operand {
             vector_index: None,
         }
     }
+
+    /// Construct one ordered register-list operand. `size` and `vector_shape`
+    /// describe each member, avoiding overflow for lists wider than 255 bits.
+    pub fn register_list(
+        registers: Vec<String>,
+        size: u8,
+        access: Access,
+        vector_shape: Option<VectorShape>,
+    ) -> Self {
+        let text = format!("{{{}}}", registers.join(", "));
+        Self {
+            kind: OperandKind::RegisterList,
+            size,
+            access,
+            text,
+            register: None,
+            register_list: Some(registers),
+            immediate: None,
+            displacement: None,
+            segment: None,
+            scale: None,
+            base: None,
+            index: None,
+            vector_shape,
+            vector_index: None,
+        }
+    }
 }
 
 impl Operand {
     pub fn is_register(&self) -> bool {
         self.kind == OperandKind::Register
+    }
+    pub fn is_register_list(&self) -> bool {
+        self.kind == OperandKind::RegisterList
     }
     pub fn is_immediate(&self) -> bool {
         self.kind == OperandKind::Immediate
@@ -830,6 +880,7 @@ mod tests {
     #[test]
     fn test_operand_kind_display() {
         assert_eq!(format!("{}", OperandKind::Register), "Register");
+        assert_eq!(format!("{}", OperandKind::RegisterList), "RegisterList");
         assert_eq!(format!("{}", OperandKind::Immediate), "Immediate");
         assert_eq!(format!("{}", OperandKind::Memory), "Memory");
         assert_eq!(format!("{}", OperandKind::Displacement), "Displacement");
@@ -862,6 +913,26 @@ mod tests {
         assert!(reg.is_read());
         assert!(reg.is_write());
         assert_eq!(reg.size_bytes(), 8);
+    }
+
+    #[test]
+    fn test_operand_register_list_creation() {
+        let shape = VectorShape {
+            lanes: 16,
+            element_bits: 8,
+        };
+        let list = Operand::register_list(
+            vec!["v31".to_string(), "v0".to_string()],
+            128,
+            Access::Read,
+            Some(shape),
+        );
+        assert_eq!(list.kind, OperandKind::RegisterList);
+        assert_eq!(list.register_list, Some(vec!["v31".into(), "v0".into()]));
+        assert_eq!(list.vector_shape, Some(shape));
+        assert_eq!(list.size, 128);
+        assert_eq!(list.to_string(), "{v31, v0}");
+        assert!(list.is_register_list());
     }
 
     #[test]

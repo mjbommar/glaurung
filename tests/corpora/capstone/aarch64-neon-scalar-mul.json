@@ -1,0 +1,267 @@
+{
+  "schema": "glaurung-capstone-mc-v1",
+  "upstream": {
+    "project": "capstone",
+    "version": "5.0.0",
+    "crate": "capstone-sys 0.16.0",
+    "path": "suite/MC/AArch64/neon-scalar-mul.s.cs",
+    "licenses": [
+      "BSD-3-Clause",
+      "NCSA"
+    ]
+  },
+  "vectors": [
+    {
+      "line": 2,
+      "bytes": [
+        106,
+        181,
+        108,
+        94
+      ],
+      "mnemonic": "sqdmulh",
+      "operands": [
+        {
+          "register": "h10"
+        },
+        {
+          "register": "h11"
+        },
+        {
+          "register": "h12"
+        }
+      ]
+    },
+    {
+      "line": 3,
+      "bytes": [
+        180,
+        182,
+        162,
+        94
+      ],
+      "mnemonic": "sqdmulh",
+      "operands": [
+        {
+          "register": "s20"
+        },
+        {
+          "register": "s21"
+        },
+        {
+          "register": "s2"
+        }
+      ]
+    },
+    {
+      "line": 4,
+      "bytes": [
+        106,
+        181,
+        108,
+        126
+      ],
+      "mnemonic": "sqrdmulh",
+      "operands": [
+        {
+          "register": "h10"
+        },
+        {
+          "register": "h11"
+        },
+        {
+          "register": "h12"
+        }
+      ]
+    },
+    {
+      "line": 5,
+      "bytes": [
+        180,
+        182,
+        162,
+        126
+      ],
+      "mnemonic": "sqrdmulh",
+      "operands": [
+        {
+          "register": "s20"
+        },
+        {
+          "register": "s21"
+        },
+        {
+          "register": "s2"
+        }
+      ]
+    },
+    {
+      "line": 6,
+      "bytes": [
+        212,
+        222,
+        47,
+        94
+      ],
+      "mnemonic": "fmulx",
+      "operands": [
+        {
+          "register": "s20"
+        },
+        {
+          "register": "s22"
+        },
+        {
+          "register": "s15"
+        }
+      ]
+    },
+    {
+      "line": 7,
+      "bytes": [
+        119,
+        221,
+        97,
+        94
+      ],
+      "mnemonic": "fmulx",
+      "operands": [
+        {
+          "register": "d23"
+        },
+        {
+          "register": "d11"
+        },
+        {
+          "register": "d1"
+        }
+      ]
+    },
+    {
+      "line": 8,
+      "bytes": [
+        113,
+        147,
+        108,
+        94
+      ],
+      "mnemonic": "sqdmlal",
+      "operands": [
+        {
+          "register": "s17"
+        },
+        {
+          "register": "h27"
+        },
+        {
+          "register": "h12"
+        }
+      ]
+    },
+    {
+      "line": 9,
+      "bytes": [
+        19,
+        147,
+        172,
+        94
+      ],
+      "mnemonic": "sqdmlal",
+      "operands": [
+        {
+          "register": "d19"
+        },
+        {
+          "register": "s24"
+        },
+        {
+          "register": "s12"
+        }
+      ]
+    },
+    {
+      "line": 10,
+      "bytes": [
+        142,
+        177,
+        121,
+        94
+      ],
+      "mnemonic": "sqdmlsl",
+      "operands": [
+        {
+          "register": "s14"
+        },
+        {
+          "register": "h12"
+        },
+        {
+          "register": "h25"
+        }
+      ]
+    },
+    {
+      "line": 11,
+      "bytes": [
+        236,
+        178,
+        173,
+        94
+      ],
+      "mnemonic": "sqdmlsl",
+      "operands": [
+        {
+          "register": "d12"
+        },
+        {
+          "register": "s23"
+        },
+        {
+          "register": "s13"
+        }
+      ]
+    },
+    {
+      "line": 12,
+      "bytes": [
+        204,
+        210,
+        108,
+        94
+      ],
+      "mnemonic": "sqdmull",
+      "operands": [
+        {
+          "register": "s12"
+        },
+        {
+          "register": "h22"
+        },
+        {
+          "register": "h12"
+        }
+      ]
+    },
+    {
+      "line": 13,
+      "bytes": [
+        207,
+        210,
+        172,
+        94
+      ],
+      "mnemonic": "sqdmull",
+      "operands": [
+        {
+          "register": "d15"
+        },
+        {
+          "register": "s22"
+        },
+        {
+          "register": "s12"
+        }
+      ]
+    }
+  ]
+}

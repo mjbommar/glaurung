@@ -1,0 +1,13 @@
+[package]
+name = "glaurung-disasm"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+description = "Dependency-free portable instruction decoding core for Glaurung"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []

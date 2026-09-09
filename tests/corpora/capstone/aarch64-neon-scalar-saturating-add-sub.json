@@ -1,0 +1,495 @@
+{
+  "schema": "glaurung-capstone-mc-v1",
+  "upstream": {
+    "project": "capstone",
+    "version": "5.0.0",
+    "crate": "capstone-sys 0.16.0",
+    "path": "suite/MC/AArch64/neon-scalar-saturating-add-sub.s.cs",
+    "licenses": [
+      "BSD-3-Clause",
+      "NCSA"
+    ]
+  },
+  "vectors": [
+    {
+      "line": 2,
+      "bytes": [
+        32,
+        12,
+        34,
+        94
+      ],
+      "mnemonic": "sqadd",
+      "operands": [
+        {
+          "register": "b0"
+        },
+        {
+          "register": "b1"
+        },
+        {
+          "register": "b2"
+        }
+      ]
+    },
+    {
+      "line": 3,
+      "bytes": [
+        106,
+        13,
+        108,
+        94
+      ],
+      "mnemonic": "sqadd",
+      "operands": [
+        {
+          "register": "h10"
+        },
+        {
+          "register": "h11"
+        },
+        {
+          "register": "h12"
+        }
+      ]
+    },
+    {
+      "line": 4,
+      "bytes": [
+        180,
+        14,
+        162,
+        94
+      ],
+      "mnemonic": "sqadd",
+      "operands": [
+        {
+          "register": "s20"
+        },
+        {
+          "register": "s21"
+        },
+        {
+          "register": "s2"
+        }
+      ]
+    },
+    {
+      "line": 5,
+      "bytes": [
+        241,
+        15,
+        232,
+        94
+      ],
+      "mnemonic": "sqadd",
+      "operands": [
+        {
+          "register": "d17"
+        },
+        {
+          "register": "d31"
+        },
+        {
+          "register": "d8"
+        }
+      ]
+    },
+    {
+      "line": 6,
+      "bytes": [
+        32,
+        12,
+        34,
+        126
+      ],
+      "mnemonic": "uqadd",
+      "operands": [
+        {
+          "register": "b0"
+        },
+        {
+          "register": "b1"
+        },
+        {
+          "register": "b2"
+        }
+      ]
+    },
+    {
+      "line": 7,
+      "bytes": [
+        106,
+        13,
+        108,
+        126
+      ],
+      "mnemonic": "uqadd",
+      "operands": [
+        {
+          "register": "h10"
+        },
+        {
+          "register": "h11"
+        },
+        {
+          "register": "h12"
+        }
+      ]
+    },
+    {
+      "line": 8,
+      "bytes": [
+        180,
+        14,
+        162,
+        126
+      ],
+      "mnemonic": "uqadd",
+      "operands": [
+        {
+          "register": "s20"
+        },
+        {
+          "register": "s21"
+        },
+        {
+          "register": "s2"
+        }
+      ]
+    },
+    {
+      "line": 9,
+      "bytes": [
+        241,
+        15,
+        232,
+        126
+      ],
+      "mnemonic": "uqadd",
+      "operands": [
+        {
+          "register": "d17"
+        },
+        {
+          "register": "d31"
+        },
+        {
+          "register": "d8"
+        }
+      ]
+    },
+    {
+      "line": 10,
+      "bytes": [
+        32,
+        44,
+        34,
+        94
+      ],
+      "mnemonic": "sqsub",
+      "operands": [
+        {
+          "register": "b0"
+        },
+        {
+          "register": "b1"
+        },
+        {
+          "register": "b2"
+        }
+      ]
+    },
+    {
+      "line": 11,
+      "bytes": [
+        106,
+        45,
+        108,
+        94
+      ],
+      "mnemonic": "sqsub",
+      "operands": [
+        {
+          "register": "h10"
+        },
+        {
+          "register": "h11"
+        },
+        {
+          "register": "h12"
+        }
+      ]
+    },
+    {
+      "line": 12,
+      "bytes": [
+        180,
+        46,
+        162,
+        94
+      ],
+      "mnemonic": "sqsub",
+      "operands": [
+        {
+          "register": "s20"
+        },
+        {
+          "register": "s21"
+        },
+        {
+          "register": "s2"
+        }
+      ]
+    },
+    {
+      "line": 13,
+      "bytes": [
+        241,
+        47,
+        232,
+        94
+      ],
+      "mnemonic": "sqsub",
+      "operands": [
+        {
+          "register": "d17"
+        },
+        {
+          "register": "d31"
+        },
+        {
+          "register": "d8"
+        }
+      ]
+    },
+    {
+      "line": 14,
+      "bytes": [
+        32,
+        44,
+        34,
+        126
+      ],
+      "mnemonic": "uqsub",
+      "operands": [
+        {
+          "register": "b0"
+        },
+        {
+          "register": "b1"
+        },
+        {
+          "register": "b2"
+        }
+      ]
+    },
+    {
+      "line": 15,
+      "bytes": [
+        106,
+        45,
+        108,
+        126
+      ],
+      "mnemonic": "uqsub",
+      "operands": [
+        {
+          "register": "h10"
+        },
+        {
+          "register": "h11"
+        },
+        {
+          "register": "h12"
+        }
+      ]
+    },
+    {
+      "line": 16,
+      "bytes": [
+        180,
+        46,
+        162,
+        126
+      ],
+      "mnemonic": "uqsub",
+      "operands": [
+        {
+          "register": "s20"
+        },
+        {
+          "register": "s21"
+        },
+        {
+          "register": "s2"
+        }
+      ]
+    },
+    {
+      "line": 17,
+      "bytes": [
+        241,
+        47,
+        232,
+        126
+      ],
+      "mnemonic": "uqsub",
+      "operands": [
+        {
+          "register": "d17"
+        },
+        {
+          "register": "d31"
+        },
+        {
+          "register": "d8"
+        }
+      ]
+    },
+    {
+      "line": 18,
+      "bytes": [
+        211,
+        57,
+        32,
+        94
+      ],
+      "mnemonic": "suqadd",
+      "operands": [
+        {
+          "register": "b19"
+        },
+        {
+          "register": "b14"
+        }
+      ]
+    },
+    {
+      "line": 19,
+      "bytes": [
+        244,
+        57,
+        96,
+        94
+      ],
+      "mnemonic": "suqadd",
+      "operands": [
+        {
+          "register": "h20"
+        },
+        {
+          "register": "h15"
+        }
+      ]
+    },
+    {
+      "line": 20,
+      "bytes": [
+        149,
+        57,
+        160,
+        94
+      ],
+      "mnemonic": "suqadd",
+      "operands": [
+        {
+          "register": "s21"
+        },
+        {
+          "register": "s12"
+        }
+      ]
+    },
+    {
+      "line": 21,
+      "bytes": [
+        210,
+        58,
+        224,
+        94
+      ],
+      "mnemonic": "suqadd",
+      "operands": [
+        {
+          "register": "d18"
+        },
+        {
+          "register": "d22"
+        }
+      ]
+    },
+    {
+      "line": 22,
+      "bytes": [
+        211,
+        57,
+        32,
+        126
+      ],
+      "mnemonic": "usqadd",
+      "operands": [
+        {
+          "register": "b19"
+        },
+        {
+          "register": "b14"
+        }
+      ]
+    },
+    {
+      "line": 23,
+      "bytes": [
+        244,
+        57,
+        96,
+        126
+      ],
+      "mnemonic": "usqadd",
+      "operands": [
+        {
+          "register": "h20"
+        },
+        {
+          "register": "h15"
+        }
+      ]
+    },
+    {
+      "line": 24,
+      "bytes": [
+        149,
+        57,
+        160,
+        126
+      ],
+      "mnemonic": "usqadd",
+      "operands": [
+        {
+          "register": "s21"
+        },
+        {
+          "register": "s12"
+        }
+      ]
+    },
+    {
+      "line": 25,
+      "bytes": [
+        210,
+        58,
+        224,
+        126
+      ],
+      "mnemonic": "usqadd",
+      "operands": [
+        {
+          "register": "d18"
+        },
+        {
+          "register": "d22"
+        }
+      ]
+    }
+  ]
+}

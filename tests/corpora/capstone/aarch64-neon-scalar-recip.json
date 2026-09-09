@@ -1,0 +1,207 @@
+{
+  "schema": "glaurung-capstone-mc-v1",
+  "upstream": {
+    "project": "capstone",
+    "version": "5.0.0",
+    "crate": "capstone-sys 0.16.0",
+    "path": "suite/MC/AArch64/neon-scalar-recip.s.cs",
+    "licenses": [
+      "BSD-3-Clause",
+      "NCSA"
+    ]
+  },
+  "vectors": [
+    {
+      "line": 2,
+      "bytes": [
+        21,
+        254,
+        45,
+        94
+      ],
+      "mnemonic": "frecps",
+      "operands": [
+        {
+          "register": "s21"
+        },
+        {
+          "register": "s16"
+        },
+        {
+          "register": "s13"
+        }
+      ]
+    },
+    {
+      "line": 3,
+      "bytes": [
+        214,
+        255,
+        117,
+        94
+      ],
+      "mnemonic": "frecps",
+      "operands": [
+        {
+          "register": "d22"
+        },
+        {
+          "register": "d30"
+        },
+        {
+          "register": "d21"
+        }
+      ]
+    },
+    {
+      "line": 4,
+      "bytes": [
+        181,
+        252,
+        172,
+        94
+      ],
+      "mnemonic": "frsqrts",
+      "operands": [
+        {
+          "register": "s21"
+        },
+        {
+          "register": "s5"
+        },
+        {
+          "register": "s12"
+        }
+      ]
+    },
+    {
+      "line": 5,
+      "bytes": [
+        200,
+        254,
+        242,
+        94
+      ],
+      "mnemonic": "frsqrts",
+      "operands": [
+        {
+          "register": "d8"
+        },
+        {
+          "register": "d22"
+        },
+        {
+          "register": "d18"
+        }
+      ]
+    },
+    {
+      "line": 6,
+      "bytes": [
+        211,
+        217,
+        161,
+        94
+      ],
+      "mnemonic": "frecpe",
+      "operands": [
+        {
+          "register": "s19"
+        },
+        {
+          "register": "s14"
+        }
+      ]
+    },
+    {
+      "line": 7,
+      "bytes": [
+        173,
+        217,
+        225,
+        94
+      ],
+      "mnemonic": "frecpe",
+      "operands": [
+        {
+          "register": "d13"
+        },
+        {
+          "register": "d13"
+        }
+      ]
+    },
+    {
+      "line": 8,
+      "bytes": [
+        82,
+        249,
+        161,
+        94
+      ],
+      "mnemonic": "frecpx",
+      "operands": [
+        {
+          "register": "s18"
+        },
+        {
+          "register": "s10"
+        }
+      ]
+    },
+    {
+      "line": 9,
+      "bytes": [
+        112,
+        250,
+        225,
+        94
+      ],
+      "mnemonic": "frecpx",
+      "operands": [
+        {
+          "register": "d16"
+        },
+        {
+          "register": "d19"
+        }
+      ]
+    },
+    {
+      "line": 10,
+      "bytes": [
+        182,
+        217,
+        161,
+        126
+      ],
+      "mnemonic": "frsqrte",
+      "operands": [
+        {
+          "register": "s22"
+        },
+        {
+          "register": "s13"
+        }
+      ]
+    },
+    {
+      "line": 11,
+      "bytes": [
+        149,
+        217,
+        225,
+        126
+      ],
+      "mnemonic": "frsqrte",
+      "operands": [
+        {
+          "register": "d21"
+        },
+        {
+          "register": "d12"
+        }
+      ]
+    }
+  ]
+}

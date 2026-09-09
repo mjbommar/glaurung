@@ -1,5 +1,5 @@
-use glaurung::core::binary::{Arch, Endianness, Format};
-use glaurung::disasm::registry::{for_arch_with, Backend, BackendKind};
+use glaurung::core::binary::{Arch, Endianness};
+use glaurung::disasm::registry::{for_arch_with, Backend};
 
 fn select_arch_from_artifact(art: &glaurung::core::triage::TriagedArtifact) -> (Arch, Endianness) {
     let arch = art
@@ -42,7 +42,7 @@ fn triage_selects_iced_for_x86_64() {
 }
 
 #[test]
-fn triage_selects_capstone_for_arm64() {
+fn triage_selects_native_first_hybrid_for_arm64() {
     let path = std::path::Path::new(
         "samples/binaries/platforms/linux/arm64/export/cross/arm64/hello-asm-arm64-as",
     );
@@ -57,8 +57,11 @@ fn triage_selects_capstone_for_arm64() {
     let (arch, end) = select_arch_from_artifact(&art);
     assert!(matches!(arch, Arch::AArch64 | Arch::ARM));
     let backend = for_arch_with(arch.into(), end, None).expect("backend");
-    match backend {
-        Backend::Cap(_) => {}
-        _ => panic!("expected capstone backend for ARM/ARM64, got different engine"),
+    match (arch, backend) {
+        (Arch::AArch64, Backend::Aarch64Hybrid { .. }) => {}
+        // The fixture should be AArch64, but retain the assertion's historical
+        // allowance for an ARM classification without lying about its backend.
+        (Arch::ARM, Backend::Cap(_)) => {}
+        _ => panic!("expected the architecture's production decoder backend"),
     }
 }

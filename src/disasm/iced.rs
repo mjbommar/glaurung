@@ -133,6 +133,7 @@ fn memory_operand(
         access,
         text,
         register: None,
+        register_list: None,
         immediate: None,
         displacement,
         segment: None,

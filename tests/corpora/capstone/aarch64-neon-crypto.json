@@ -1,0 +1,380 @@
+{
+  "schema": "glaurung-capstone-mc-v1",
+  "upstream": {
+    "project": "capstone",
+    "version": "5.0.0",
+    "crate": "capstone-sys 0.16.0",
+    "path": "suite/MC/AArch64/neon-crypto.s.cs",
+    "licenses": [
+      "BSD-3-Clause",
+      "NCSA"
+    ]
+  },
+  "vectors": [
+    {
+      "line": 2,
+      "bytes": [
+        32,
+        72,
+        40,
+        78
+      ],
+      "mnemonic": "aese",
+      "operands": [
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 16,
+            "element_bits": 8
+          }
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 16,
+            "element_bits": 8
+          }
+        }
+      ]
+    },
+    {
+      "line": 3,
+      "bytes": [
+        32,
+        88,
+        40,
+        78
+      ],
+      "mnemonic": "aesd",
+      "operands": [
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 16,
+            "element_bits": 8
+          }
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 16,
+            "element_bits": 8
+          }
+        }
+      ]
+    },
+    {
+      "line": 4,
+      "bytes": [
+        32,
+        104,
+        40,
+        78
+      ],
+      "mnemonic": "aesmc",
+      "operands": [
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 16,
+            "element_bits": 8
+          }
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 16,
+            "element_bits": 8
+          }
+        }
+      ]
+    },
+    {
+      "line": 5,
+      "bytes": [
+        32,
+        120,
+        40,
+        78
+      ],
+      "mnemonic": "aesimc",
+      "operands": [
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 16,
+            "element_bits": 8
+          }
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 16,
+            "element_bits": 8
+          }
+        }
+      ]
+    },
+    {
+      "line": 6,
+      "bytes": [
+        32,
+        8,
+        40,
+        94
+      ],
+      "mnemonic": "sha1h",
+      "operands": [
+        {
+          "register": "s0"
+        },
+        {
+          "register": "s1"
+        }
+      ]
+    },
+    {
+      "line": 7,
+      "bytes": [
+        32,
+        24,
+        40,
+        94
+      ],
+      "mnemonic": "sha1su1",
+      "operands": [
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        }
+      ]
+    },
+    {
+      "line": 8,
+      "bytes": [
+        32,
+        40,
+        40,
+        94
+      ],
+      "mnemonic": "sha256su0",
+      "operands": [
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        }
+      ]
+    },
+    {
+      "line": 9,
+      "bytes": [
+        32,
+        0,
+        2,
+        94
+      ],
+      "mnemonic": "sha1c",
+      "operands": [
+        {
+          "register": "q0"
+        },
+        {
+          "register": "s1"
+        },
+        {
+          "register": "v2",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        }
+      ]
+    },
+    {
+      "line": 10,
+      "bytes": [
+        32,
+        16,
+        2,
+        94
+      ],
+      "mnemonic": "sha1p",
+      "operands": [
+        {
+          "register": "q0"
+        },
+        {
+          "register": "s1"
+        },
+        {
+          "register": "v2",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        }
+      ]
+    },
+    {
+      "line": 11,
+      "bytes": [
+        32,
+        32,
+        2,
+        94
+      ],
+      "mnemonic": "sha1m",
+      "operands": [
+        {
+          "register": "q0"
+        },
+        {
+          "register": "s1"
+        },
+        {
+          "register": "v2",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        }
+      ]
+    },
+    {
+      "line": 12,
+      "bytes": [
+        32,
+        48,
+        2,
+        94
+      ],
+      "mnemonic": "sha1su0",
+      "operands": [
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        },
+        {
+          "register": "v2",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        }
+      ]
+    },
+    {
+      "line": 13,
+      "bytes": [
+        32,
+        64,
+        2,
+        94
+      ],
+      "mnemonic": "sha256h",
+      "operands": [
+        {
+          "register": "q0"
+        },
+        {
+          "register": "q1"
+        },
+        {
+          "register": "v2",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        }
+      ]
+    },
+    {
+      "line": 14,
+      "bytes": [
+        32,
+        80,
+        2,
+        94
+      ],
+      "mnemonic": "sha256h2",
+      "operands": [
+        {
+          "register": "q0"
+        },
+        {
+          "register": "q1"
+        },
+        {
+          "register": "v2",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        }
+      ]
+    },
+    {
+      "line": 15,
+      "bytes": [
+        32,
+        96,
+        2,
+        94
+      ],
+      "mnemonic": "sha256su1",
+      "operands": [
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        },
+        {
+          "register": "v2",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        }
+      ]
+    }
+  ]
+}

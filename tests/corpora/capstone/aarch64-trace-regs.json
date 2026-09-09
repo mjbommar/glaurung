@@ -1,0 +1,6891 @@
+{
+  "schema": "glaurung-capstone-mc-v1",
+  "upstream": {
+    "project": "capstone",
+    "version": "5.0.0",
+    "crate": "capstone-sys 0.16.0",
+    "path": "suite/MC/AArch64/trace-regs.s.cs",
+    "licenses": [
+      "BSD-3-Clause",
+      "NCSA"
+    ]
+  },
+  "vectors": [
+    {
+      "line": 2,
+      "bytes": [
+        8,
+        3,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x8"
+        },
+        {
+          "register": "trcstatr"
+        }
+      ]
+    },
+    {
+      "line": 3,
+      "bytes": [
+        201,
+        0,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x9"
+        },
+        {
+          "register": "trcidr8"
+        }
+      ]
+    },
+    {
+      "line": 4,
+      "bytes": [
+        203,
+        1,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x11"
+        },
+        {
+          "register": "trcidr9"
+        }
+      ]
+    },
+    {
+      "line": 5,
+      "bytes": [
+        217,
+        2,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x25"
+        },
+        {
+          "register": "trcidr10"
+        }
+      ]
+    },
+    {
+      "line": 6,
+      "bytes": [
+        199,
+        3,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x7"
+        },
+        {
+          "register": "trcidr11"
+        }
+      ]
+    },
+    {
+      "line": 7,
+      "bytes": [
+        199,
+        4,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x7"
+        },
+        {
+          "register": "trcidr12"
+        }
+      ]
+    },
+    {
+      "line": 8,
+      "bytes": [
+        198,
+        5,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x6"
+        },
+        {
+          "register": "trcidr13"
+        }
+      ]
+    },
+    {
+      "line": 9,
+      "bytes": [
+        251,
+        8,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x27"
+        },
+        {
+          "register": "trcidr0"
+        }
+      ]
+    },
+    {
+      "line": 10,
+      "bytes": [
+        253,
+        9,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "fp"
+        },
+        {
+          "register": "trcidr1"
+        }
+      ]
+    },
+    {
+      "line": 11,
+      "bytes": [
+        228,
+        10,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x4"
+        },
+        {
+          "register": "trcidr2"
+        }
+      ]
+    },
+    {
+      "line": 12,
+      "bytes": [
+        232,
+        11,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x8"
+        },
+        {
+          "register": "trcidr3"
+        }
+      ]
+    },
+    {
+      "line": 13,
+      "bytes": [
+        239,
+        12,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x15"
+        },
+        {
+          "register": "trcidr4"
+        }
+      ]
+    },
+    {
+      "line": 14,
+      "bytes": [
+        244,
+        13,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x20"
+        },
+        {
+          "register": "trcidr5"
+        }
+      ]
+    },
+    {
+      "line": 15,
+      "bytes": [
+        230,
+        14,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x6"
+        },
+        {
+          "register": "trcidr6"
+        }
+      ]
+    },
+    {
+      "line": 16,
+      "bytes": [
+        230,
+        15,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x6"
+        },
+        {
+          "register": "trcidr7"
+        }
+      ]
+    },
+    {
+      "line": 17,
+      "bytes": [
+        152,
+        17,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x24"
+        },
+        {
+          "register": "trcoslsr"
+        }
+      ]
+    },
+    {
+      "line": 18,
+      "bytes": [
+        146,
+        21,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x18"
+        },
+        {
+          "register": "trcpdsr"
+        }
+      ]
+    },
+    {
+      "line": 19,
+      "bytes": [
+        220,
+        122,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x28"
+        },
+        {
+          "register": "trcdevaff0"
+        }
+      ]
+    },
+    {
+      "line": 20,
+      "bytes": [
+        197,
+        123,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x5"
+        },
+        {
+          "register": "trcdevaff1"
+        }
+      ]
+    },
+    {
+      "line": 21,
+      "bytes": [
+        197,
+        125,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x5"
+        },
+        {
+          "register": "trclsr"
+        }
+      ]
+    },
+    {
+      "line": 22,
+      "bytes": [
+        203,
+        126,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x11"
+        },
+        {
+          "register": "trcauthstatus"
+        }
+      ]
+    },
+    {
+      "line": 23,
+      "bytes": [
+        205,
+        127,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x13"
+        },
+        {
+          "register": "trcdevarch"
+        }
+      ]
+    },
+    {
+      "line": 24,
+      "bytes": [
+        242,
+        114,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x18"
+        },
+        {
+          "register": "trcdevid"
+        }
+      ]
+    },
+    {
+      "line": 25,
+      "bytes": [
+        246,
+        115,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x22"
+        },
+        {
+          "register": "trcdevtype"
+        }
+      ]
+    },
+    {
+      "line": 26,
+      "bytes": [
+        238,
+        116,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x14"
+        },
+        {
+          "register": "trcpidr4"
+        }
+      ]
+    },
+    {
+      "line": 27,
+      "bytes": [
+        229,
+        117,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x5"
+        },
+        {
+          "register": "trcpidr5"
+        }
+      ]
+    },
+    {
+      "line": 28,
+      "bytes": [
+        229,
+        118,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x5"
+        },
+        {
+          "register": "trcpidr6"
+        }
+      ]
+    },
+    {
+      "line": 29,
+      "bytes": [
+        233,
+        119,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x9"
+        },
+        {
+          "register": "trcpidr7"
+        }
+      ]
+    },
+    {
+      "line": 30,
+      "bytes": [
+        239,
+        120,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x15"
+        },
+        {
+          "register": "trcpidr0"
+        }
+      ]
+    },
+    {
+      "line": 31,
+      "bytes": [
+        230,
+        121,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x6"
+        },
+        {
+          "register": "trcpidr1"
+        }
+      ]
+    },
+    {
+      "line": 32,
+      "bytes": [
+        235,
+        122,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x11"
+        },
+        {
+          "register": "trcpidr2"
+        }
+      ]
+    },
+    {
+      "line": 33,
+      "bytes": [
+        244,
+        123,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x20"
+        },
+        {
+          "register": "trcpidr3"
+        }
+      ]
+    },
+    {
+      "line": 34,
+      "bytes": [
+        241,
+        124,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x17"
+        },
+        {
+          "register": "trccidr0"
+        }
+      ]
+    },
+    {
+      "line": 35,
+      "bytes": [
+        226,
+        125,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x2"
+        },
+        {
+          "register": "trccidr1"
+        }
+      ]
+    },
+    {
+      "line": 36,
+      "bytes": [
+        244,
+        126,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x20"
+        },
+        {
+          "register": "trccidr2"
+        }
+      ]
+    },
+    {
+      "line": 37,
+      "bytes": [
+        228,
+        127,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x4"
+        },
+        {
+          "register": "trccidr3"
+        }
+      ]
+    },
+    {
+      "line": 38,
+      "bytes": [
+        11,
+        1,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x11"
+        },
+        {
+          "register": "trcprgctlr"
+        }
+      ]
+    },
+    {
+      "line": 39,
+      "bytes": [
+        23,
+        2,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x23"
+        },
+        {
+          "register": "trcprocselr"
+        }
+      ]
+    },
+    {
+      "line": 40,
+      "bytes": [
+        13,
+        4,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x13"
+        },
+        {
+          "register": "trcconfigr"
+        }
+      ]
+    },
+    {
+      "line": 41,
+      "bytes": [
+        23,
+        6,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x23"
+        },
+        {
+          "register": "trcauxctlr"
+        }
+      ]
+    },
+    {
+      "line": 42,
+      "bytes": [
+        9,
+        8,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x9"
+        },
+        {
+          "register": "trceventctl0r"
+        }
+      ]
+    },
+    {
+      "line": 43,
+      "bytes": [
+        16,
+        9,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x16"
+        },
+        {
+          "register": "trceventctl1r"
+        }
+      ]
+    },
+    {
+      "line": 44,
+      "bytes": [
+        4,
+        11,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x4"
+        },
+        {
+          "register": "trcstallctlr"
+        }
+      ]
+    },
+    {
+      "line": 45,
+      "bytes": [
+        14,
+        12,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x14"
+        },
+        {
+          "register": "trctsctlr"
+        }
+      ]
+    },
+    {
+      "line": 46,
+      "bytes": [
+        24,
+        13,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x24"
+        },
+        {
+          "register": "trcsyncpr"
+        }
+      ]
+    },
+    {
+      "line": 47,
+      "bytes": [
+        28,
+        14,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x28"
+        },
+        {
+          "register": "trcccctlr"
+        }
+      ]
+    },
+    {
+      "line": 48,
+      "bytes": [
+        15,
+        15,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x15"
+        },
+        {
+          "register": "trcbbctlr"
+        }
+      ]
+    },
+    {
+      "line": 49,
+      "bytes": [
+        33,
+        0,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x1"
+        },
+        {
+          "register": "trctraceidr"
+        }
+      ]
+    },
+    {
+      "line": 50,
+      "bytes": [
+        52,
+        1,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x20"
+        },
+        {
+          "register": "trcqctlr"
+        }
+      ]
+    },
+    {
+      "line": 51,
+      "bytes": [
+        66,
+        0,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x2"
+        },
+        {
+          "register": "trcvictlr"
+        }
+      ]
+    },
+    {
+      "line": 52,
+      "bytes": [
+        76,
+        1,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x12"
+        },
+        {
+          "register": "trcviiectlr"
+        }
+      ]
+    },
+    {
+      "line": 53,
+      "bytes": [
+        80,
+        2,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x16"
+        },
+        {
+          "register": "trcvissctlr"
+        }
+      ]
+    },
+    {
+      "line": 54,
+      "bytes": [
+        72,
+        3,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x8"
+        },
+        {
+          "register": "trcvipcssctlr"
+        }
+      ]
+    },
+    {
+      "line": 55,
+      "bytes": [
+        91,
+        8,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x27"
+        },
+        {
+          "register": "trcvdctlr"
+        }
+      ]
+    },
+    {
+      "line": 56,
+      "bytes": [
+        73,
+        9,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x9"
+        },
+        {
+          "register": "trcvdsacctlr"
+        }
+      ]
+    },
+    {
+      "line": 57,
+      "bytes": [
+        64,
+        10,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x0"
+        },
+        {
+          "register": "trcvdarcctlr"
+        }
+      ]
+    },
+    {
+      "line": 58,
+      "bytes": [
+        141,
+        0,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x13"
+        },
+        {
+          "register": "trcseqevr0"
+        }
+      ]
+    },
+    {
+      "line": 59,
+      "bytes": [
+        139,
+        1,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x11"
+        },
+        {
+          "register": "trcseqevr1"
+        }
+      ]
+    },
+    {
+      "line": 60,
+      "bytes": [
+        154,
+        2,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x26"
+        },
+        {
+          "register": "trcseqevr2"
+        }
+      ]
+    },
+    {
+      "line": 61,
+      "bytes": [
+        142,
+        6,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x14"
+        },
+        {
+          "register": "trcseqrstevr"
+        }
+      ]
+    },
+    {
+      "line": 62,
+      "bytes": [
+        132,
+        7,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x4"
+        },
+        {
+          "register": "trcseqstr"
+        }
+      ]
+    },
+    {
+      "line": 63,
+      "bytes": [
+        145,
+        8,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x17"
+        },
+        {
+          "register": "trcextinselr"
+        }
+      ]
+    },
+    {
+      "line": 64,
+      "bytes": [
+        181,
+        0,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x21"
+        },
+        {
+          "register": "trccntrldvr0"
+        }
+      ]
+    },
+    {
+      "line": 65,
+      "bytes": [
+        170,
+        1,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x10"
+        },
+        {
+          "register": "trccntrldvr1"
+        }
+      ]
+    },
+    {
+      "line": 66,
+      "bytes": [
+        180,
+        2,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x20"
+        },
+        {
+          "register": "trccntrldvr2"
+        }
+      ]
+    },
+    {
+      "line": 67,
+      "bytes": [
+        165,
+        3,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x5"
+        },
+        {
+          "register": "trccntrldvr3"
+        }
+      ]
+    },
+    {
+      "line": 68,
+      "bytes": [
+        177,
+        4,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x17"
+        },
+        {
+          "register": "trccntctlr0"
+        }
+      ]
+    },
+    {
+      "line": 69,
+      "bytes": [
+        161,
+        5,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x1"
+        },
+        {
+          "register": "trccntctlr1"
+        }
+      ]
+    },
+    {
+      "line": 70,
+      "bytes": [
+        177,
+        6,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x17"
+        },
+        {
+          "register": "trccntctlr2"
+        }
+      ]
+    },
+    {
+      "line": 71,
+      "bytes": [
+        166,
+        7,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x6"
+        },
+        {
+          "register": "trccntctlr3"
+        }
+      ]
+    },
+    {
+      "line": 72,
+      "bytes": [
+        188,
+        8,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x28"
+        },
+        {
+          "register": "trccntvr0"
+        }
+      ]
+    },
+    {
+      "line": 73,
+      "bytes": [
+        183,
+        9,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x23"
+        },
+        {
+          "register": "trccntvr1"
+        }
+      ]
+    },
+    {
+      "line": 74,
+      "bytes": [
+        169,
+        10,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x9"
+        },
+        {
+          "register": "trccntvr2"
+        }
+      ]
+    },
+    {
+      "line": 75,
+      "bytes": [
+        166,
+        11,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x6"
+        },
+        {
+          "register": "trccntvr3"
+        }
+      ]
+    },
+    {
+      "line": 76,
+      "bytes": [
+        248,
+        0,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x24"
+        },
+        {
+          "register": "trcimspec0"
+        }
+      ]
+    },
+    {
+      "line": 77,
+      "bytes": [
+        248,
+        1,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x24"
+        },
+        {
+          "register": "trcimspec1"
+        }
+      ]
+    },
+    {
+      "line": 78,
+      "bytes": [
+        239,
+        2,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x15"
+        },
+        {
+          "register": "trcimspec2"
+        }
+      ]
+    },
+    {
+      "line": 79,
+      "bytes": [
+        234,
+        3,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x10"
+        },
+        {
+          "register": "trcimspec3"
+        }
+      ]
+    },
+    {
+      "line": 80,
+      "bytes": [
+        253,
+        4,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "fp"
+        },
+        {
+          "register": "trcimspec4"
+        }
+      ]
+    },
+    {
+      "line": 81,
+      "bytes": [
+        242,
+        5,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x18"
+        },
+        {
+          "register": "trcimspec5"
+        }
+      ]
+    },
+    {
+      "line": 82,
+      "bytes": [
+        253,
+        6,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "fp"
+        },
+        {
+          "register": "trcimspec6"
+        }
+      ]
+    },
+    {
+      "line": 83,
+      "bytes": [
+        226,
+        7,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x2"
+        },
+        {
+          "register": "trcimspec7"
+        }
+      ]
+    },
+    {
+      "line": 84,
+      "bytes": [
+        8,
+        18,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x8"
+        },
+        {
+          "register": "trcrsctlr2"
+        }
+      ]
+    },
+    {
+      "line": 85,
+      "bytes": [
+        0,
+        19,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x0"
+        },
+        {
+          "register": "trcrsctlr3"
+        }
+      ]
+    },
+    {
+      "line": 86,
+      "bytes": [
+        12,
+        20,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x12"
+        },
+        {
+          "register": "trcrsctlr4"
+        }
+      ]
+    },
+    {
+      "line": 87,
+      "bytes": [
+        26,
+        21,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x26"
+        },
+        {
+          "register": "trcrsctlr5"
+        }
+      ]
+    },
+    {
+      "line": 88,
+      "bytes": [
+        29,
+        22,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "fp"
+        },
+        {
+          "register": "trcrsctlr6"
+        }
+      ]
+    },
+    {
+      "line": 89,
+      "bytes": [
+        17,
+        23,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x17"
+        },
+        {
+          "register": "trcrsctlr7"
+        }
+      ]
+    },
+    {
+      "line": 90,
+      "bytes": [
+        0,
+        24,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x0"
+        },
+        {
+          "register": "trcrsctlr8"
+        }
+      ]
+    },
+    {
+      "line": 91,
+      "bytes": [
+        1,
+        25,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x1"
+        },
+        {
+          "register": "trcrsctlr9"
+        }
+      ]
+    },
+    {
+      "line": 92,
+      "bytes": [
+        17,
+        26,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x17"
+        },
+        {
+          "register": "trcrsctlr10"
+        }
+      ]
+    },
+    {
+      "line": 93,
+      "bytes": [
+        21,
+        27,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x21"
+        },
+        {
+          "register": "trcrsctlr11"
+        }
+      ]
+    },
+    {
+      "line": 94,
+      "bytes": [
+        1,
+        28,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x1"
+        },
+        {
+          "register": "trcrsctlr12"
+        }
+      ]
+    },
+    {
+      "line": 95,
+      "bytes": [
+        8,
+        29,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x8"
+        },
+        {
+          "register": "trcrsctlr13"
+        }
+      ]
+    },
+    {
+      "line": 96,
+      "bytes": [
+        24,
+        30,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x24"
+        },
+        {
+          "register": "trcrsctlr14"
+        }
+      ]
+    },
+    {
+      "line": 97,
+      "bytes": [
+        0,
+        31,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x0"
+        },
+        {
+          "register": "trcrsctlr15"
+        }
+      ]
+    },
+    {
+      "line": 98,
+      "bytes": [
+        34,
+        16,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x2"
+        },
+        {
+          "register": "trcrsctlr16"
+        }
+      ]
+    },
+    {
+      "line": 99,
+      "bytes": [
+        61,
+        17,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "fp"
+        },
+        {
+          "register": "trcrsctlr17"
+        }
+      ]
+    },
+    {
+      "line": 100,
+      "bytes": [
+        54,
+        18,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x22"
+        },
+        {
+          "register": "trcrsctlr18"
+        }
+      ]
+    },
+    {
+      "line": 101,
+      "bytes": [
+        38,
+        19,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x6"
+        },
+        {
+          "register": "trcrsctlr19"
+        }
+      ]
+    },
+    {
+      "line": 102,
+      "bytes": [
+        58,
+        20,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x26"
+        },
+        {
+          "register": "trcrsctlr20"
+        }
+      ]
+    },
+    {
+      "line": 103,
+      "bytes": [
+        58,
+        21,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x26"
+        },
+        {
+          "register": "trcrsctlr21"
+        }
+      ]
+    },
+    {
+      "line": 104,
+      "bytes": [
+        36,
+        22,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x4"
+        },
+        {
+          "register": "trcrsctlr22"
+        }
+      ]
+    },
+    {
+      "line": 105,
+      "bytes": [
+        44,
+        23,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x12"
+        },
+        {
+          "register": "trcrsctlr23"
+        }
+      ]
+    },
+    {
+      "line": 106,
+      "bytes": [
+        33,
+        24,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x1"
+        },
+        {
+          "register": "trcrsctlr24"
+        }
+      ]
+    },
+    {
+      "line": 107,
+      "bytes": [
+        32,
+        25,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x0"
+        },
+        {
+          "register": "trcrsctlr25"
+        }
+      ]
+    },
+    {
+      "line": 108,
+      "bytes": [
+        49,
+        26,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x17"
+        },
+        {
+          "register": "trcrsctlr26"
+        }
+      ]
+    },
+    {
+      "line": 109,
+      "bytes": [
+        40,
+        27,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x8"
+        },
+        {
+          "register": "trcrsctlr27"
+        }
+      ]
+    },
+    {
+      "line": 110,
+      "bytes": [
+        42,
+        28,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x10"
+        },
+        {
+          "register": "trcrsctlr28"
+        }
+      ]
+    },
+    {
+      "line": 111,
+      "bytes": [
+        57,
+        29,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x25"
+        },
+        {
+          "register": "trcrsctlr29"
+        }
+      ]
+    },
+    {
+      "line": 112,
+      "bytes": [
+        44,
+        30,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x12"
+        },
+        {
+          "register": "trcrsctlr30"
+        }
+      ]
+    },
+    {
+      "line": 113,
+      "bytes": [
+        43,
+        31,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x11"
+        },
+        {
+          "register": "trcrsctlr31"
+        }
+      ]
+    },
+    {
+      "line": 114,
+      "bytes": [
+        82,
+        16,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x18"
+        },
+        {
+          "register": "trcssccr0"
+        }
+      ]
+    },
+    {
+      "line": 115,
+      "bytes": [
+        76,
+        17,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x12"
+        },
+        {
+          "register": "trcssccr1"
+        }
+      ]
+    },
+    {
+      "line": 116,
+      "bytes": [
+        67,
+        18,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x3"
+        },
+        {
+          "register": "trcssccr2"
+        }
+      ]
+    },
+    {
+      "line": 117,
+      "bytes": [
+        66,
+        19,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x2"
+        },
+        {
+          "register": "trcssccr3"
+        }
+      ]
+    },
+    {
+      "line": 118,
+      "bytes": [
+        85,
+        20,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x21"
+        },
+        {
+          "register": "trcssccr4"
+        }
+      ]
+    },
+    {
+      "line": 119,
+      "bytes": [
+        74,
+        21,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x10"
+        },
+        {
+          "register": "trcssccr5"
+        }
+      ]
+    },
+    {
+      "line": 120,
+      "bytes": [
+        86,
+        22,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x22"
+        },
+        {
+          "register": "trcssccr6"
+        }
+      ]
+    },
+    {
+      "line": 121,
+      "bytes": [
+        87,
+        23,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x23"
+        },
+        {
+          "register": "trcssccr7"
+        }
+      ]
+    },
+    {
+      "line": 122,
+      "bytes": [
+        87,
+        24,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x23"
+        },
+        {
+          "register": "trcsscsr0"
+        }
+      ]
+    },
+    {
+      "line": 123,
+      "bytes": [
+        83,
+        25,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x19"
+        },
+        {
+          "register": "trcsscsr1"
+        }
+      ]
+    },
+    {
+      "line": 124,
+      "bytes": [
+        89,
+        26,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x25"
+        },
+        {
+          "register": "trcsscsr2"
+        }
+      ]
+    },
+    {
+      "line": 125,
+      "bytes": [
+        81,
+        27,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x17"
+        },
+        {
+          "register": "trcsscsr3"
+        }
+      ]
+    },
+    {
+      "line": 126,
+      "bytes": [
+        83,
+        28,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x19"
+        },
+        {
+          "register": "trcsscsr4"
+        }
+      ]
+    },
+    {
+      "line": 127,
+      "bytes": [
+        75,
+        29,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x11"
+        },
+        {
+          "register": "trcsscsr5"
+        }
+      ]
+    },
+    {
+      "line": 128,
+      "bytes": [
+        69,
+        30,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x5"
+        },
+        {
+          "register": "trcsscsr6"
+        }
+      ]
+    },
+    {
+      "line": 129,
+      "bytes": [
+        73,
+        31,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x9"
+        },
+        {
+          "register": "trcsscsr7"
+        }
+      ]
+    },
+    {
+      "line": 130,
+      "bytes": [
+        97,
+        16,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x1"
+        },
+        {
+          "register": "trcsspcicr0"
+        }
+      ]
+    },
+    {
+      "line": 131,
+      "bytes": [
+        108,
+        17,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x12"
+        },
+        {
+          "register": "trcsspcicr1"
+        }
+      ]
+    },
+    {
+      "line": 132,
+      "bytes": [
+        117,
+        18,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x21"
+        },
+        {
+          "register": "trcsspcicr2"
+        }
+      ]
+    },
+    {
+      "line": 133,
+      "bytes": [
+        107,
+        19,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x11"
+        },
+        {
+          "register": "trcsspcicr3"
+        }
+      ]
+    },
+    {
+      "line": 134,
+      "bytes": [
+        99,
+        20,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x3"
+        },
+        {
+          "register": "trcsspcicr4"
+        }
+      ]
+    },
+    {
+      "line": 135,
+      "bytes": [
+        105,
+        21,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x9"
+        },
+        {
+          "register": "trcsspcicr5"
+        }
+      ]
+    },
+    {
+      "line": 136,
+      "bytes": [
+        101,
+        22,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x5"
+        },
+        {
+          "register": "trcsspcicr6"
+        }
+      ]
+    },
+    {
+      "line": 137,
+      "bytes": [
+        98,
+        23,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x2"
+        },
+        {
+          "register": "trcsspcicr7"
+        }
+      ]
+    },
+    {
+      "line": 138,
+      "bytes": [
+        154,
+        20,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x26"
+        },
+        {
+          "register": "trcpdcr"
+        }
+      ]
+    },
+    {
+      "line": 139,
+      "bytes": [
+        8,
+        32,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x8"
+        },
+        {
+          "register": "trcacvr0"
+        }
+      ]
+    },
+    {
+      "line": 140,
+      "bytes": [
+        15,
+        34,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x15"
+        },
+        {
+          "register": "trcacvr1"
+        }
+      ]
+    },
+    {
+      "line": 141,
+      "bytes": [
+        19,
+        36,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x19"
+        },
+        {
+          "register": "trcacvr2"
+        }
+      ]
+    },
+    {
+      "line": 142,
+      "bytes": [
+        8,
+        38,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x8"
+        },
+        {
+          "register": "trcacvr3"
+        }
+      ]
+    },
+    {
+      "line": 143,
+      "bytes": [
+        28,
+        40,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x28"
+        },
+        {
+          "register": "trcacvr4"
+        }
+      ]
+    },
+    {
+      "line": 144,
+      "bytes": [
+        3,
+        42,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x3"
+        },
+        {
+          "register": "trcacvr5"
+        }
+      ]
+    },
+    {
+      "line": 145,
+      "bytes": [
+        25,
+        44,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x25"
+        },
+        {
+          "register": "trcacvr6"
+        }
+      ]
+    },
+    {
+      "line": 146,
+      "bytes": [
+        24,
+        46,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x24"
+        },
+        {
+          "register": "trcacvr7"
+        }
+      ]
+    },
+    {
+      "line": 147,
+      "bytes": [
+        38,
+        32,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x6"
+        },
+        {
+          "register": "trcacvr8"
+        }
+      ]
+    },
+    {
+      "line": 148,
+      "bytes": [
+        35,
+        34,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x3"
+        },
+        {
+          "register": "trcacvr9"
+        }
+      ]
+    },
+    {
+      "line": 149,
+      "bytes": [
+        56,
+        36,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x24"
+        },
+        {
+          "register": "trcacvr10"
+        }
+      ]
+    },
+    {
+      "line": 150,
+      "bytes": [
+        35,
+        38,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x3"
+        },
+        {
+          "register": "trcacvr11"
+        }
+      ]
+    },
+    {
+      "line": 151,
+      "bytes": [
+        44,
+        40,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x12"
+        },
+        {
+          "register": "trcacvr12"
+        }
+      ]
+    },
+    {
+      "line": 152,
+      "bytes": [
+        41,
+        42,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x9"
+        },
+        {
+          "register": "trcacvr13"
+        }
+      ]
+    },
+    {
+      "line": 153,
+      "bytes": [
+        46,
+        44,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x14"
+        },
+        {
+          "register": "trcacvr14"
+        }
+      ]
+    },
+    {
+      "line": 154,
+      "bytes": [
+        35,
+        46,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x3"
+        },
+        {
+          "register": "trcacvr15"
+        }
+      ]
+    },
+    {
+      "line": 155,
+      "bytes": [
+        85,
+        32,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x21"
+        },
+        {
+          "register": "trcacatr0"
+        }
+      ]
+    },
+    {
+      "line": 156,
+      "bytes": [
+        90,
+        34,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x26"
+        },
+        {
+          "register": "trcacatr1"
+        }
+      ]
+    },
+    {
+      "line": 157,
+      "bytes": [
+        72,
+        36,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x8"
+        },
+        {
+          "register": "trcacatr2"
+        }
+      ]
+    },
+    {
+      "line": 158,
+      "bytes": [
+        86,
+        38,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x22"
+        },
+        {
+          "register": "trcacatr3"
+        }
+      ]
+    },
+    {
+      "line": 159,
+      "bytes": [
+        70,
+        40,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x6"
+        },
+        {
+          "register": "trcacatr4"
+        }
+      ]
+    },
+    {
+      "line": 160,
+      "bytes": [
+        93,
+        42,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "fp"
+        },
+        {
+          "register": "trcacatr5"
+        }
+      ]
+    },
+    {
+      "line": 161,
+      "bytes": [
+        69,
+        44,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x5"
+        },
+        {
+          "register": "trcacatr6"
+        }
+      ]
+    },
+    {
+      "line": 162,
+      "bytes": [
+        82,
+        46,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x18"
+        },
+        {
+          "register": "trcacatr7"
+        }
+      ]
+    },
+    {
+      "line": 163,
+      "bytes": [
+        98,
+        32,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x2"
+        },
+        {
+          "register": "trcacatr8"
+        }
+      ]
+    },
+    {
+      "line": 164,
+      "bytes": [
+        115,
+        34,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x19"
+        },
+        {
+          "register": "trcacatr9"
+        }
+      ]
+    },
+    {
+      "line": 165,
+      "bytes": [
+        109,
+        36,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x13"
+        },
+        {
+          "register": "trcacatr10"
+        }
+      ]
+    },
+    {
+      "line": 166,
+      "bytes": [
+        121,
+        38,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x25"
+        },
+        {
+          "register": "trcacatr11"
+        }
+      ]
+    },
+    {
+      "line": 167,
+      "bytes": [
+        114,
+        40,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x18"
+        },
+        {
+          "register": "trcacatr12"
+        }
+      ]
+    },
+    {
+      "line": 168,
+      "bytes": [
+        125,
+        42,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "fp"
+        },
+        {
+          "register": "trcacatr13"
+        }
+      ]
+    },
+    {
+      "line": 169,
+      "bytes": [
+        105,
+        44,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x9"
+        },
+        {
+          "register": "trcacatr14"
+        }
+      ]
+    },
+    {
+      "line": 170,
+      "bytes": [
+        114,
+        46,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x18"
+        },
+        {
+          "register": "trcacatr15"
+        }
+      ]
+    },
+    {
+      "line": 171,
+      "bytes": [
+        157,
+        32,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "fp"
+        },
+        {
+          "register": "trcdvcvr0"
+        }
+      ]
+    },
+    {
+      "line": 172,
+      "bytes": [
+        143,
+        36,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x15"
+        },
+        {
+          "register": "trcdvcvr1"
+        }
+      ]
+    },
+    {
+      "line": 173,
+      "bytes": [
+        143,
+        40,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x15"
+        },
+        {
+          "register": "trcdvcvr2"
+        }
+      ]
+    },
+    {
+      "line": 174,
+      "bytes": [
+        143,
+        44,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x15"
+        },
+        {
+          "register": "trcdvcvr3"
+        }
+      ]
+    },
+    {
+      "line": 175,
+      "bytes": [
+        179,
+        32,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x19"
+        },
+        {
+          "register": "trcdvcvr4"
+        }
+      ]
+    },
+    {
+      "line": 176,
+      "bytes": [
+        182,
+        36,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x22"
+        },
+        {
+          "register": "trcdvcvr5"
+        }
+      ]
+    },
+    {
+      "line": 177,
+      "bytes": [
+        187,
+        40,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x27"
+        },
+        {
+          "register": "trcdvcvr6"
+        }
+      ]
+    },
+    {
+      "line": 178,
+      "bytes": [
+        161,
+        44,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x1"
+        },
+        {
+          "register": "trcdvcvr7"
+        }
+      ]
+    },
+    {
+      "line": 179,
+      "bytes": [
+        221,
+        32,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "fp"
+        },
+        {
+          "register": "trcdvcmr0"
+        }
+      ]
+    },
+    {
+      "line": 180,
+      "bytes": [
+        201,
+        36,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x9"
+        },
+        {
+          "register": "trcdvcmr1"
+        }
+      ]
+    },
+    {
+      "line": 181,
+      "bytes": [
+        193,
+        40,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x1"
+        },
+        {
+          "register": "trcdvcmr2"
+        }
+      ]
+    },
+    {
+      "line": 182,
+      "bytes": [
+        194,
+        44,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x2"
+        },
+        {
+          "register": "trcdvcmr3"
+        }
+      ]
+    },
+    {
+      "line": 183,
+      "bytes": [
+        229,
+        32,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x5"
+        },
+        {
+          "register": "trcdvcmr4"
+        }
+      ]
+    },
+    {
+      "line": 184,
+      "bytes": [
+        245,
+        36,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x21"
+        },
+        {
+          "register": "trcdvcmr5"
+        }
+      ]
+    },
+    {
+      "line": 185,
+      "bytes": [
+        229,
+        40,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x5"
+        },
+        {
+          "register": "trcdvcmr6"
+        }
+      ]
+    },
+    {
+      "line": 186,
+      "bytes": [
+        225,
+        44,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x1"
+        },
+        {
+          "register": "trcdvcmr7"
+        }
+      ]
+    },
+    {
+      "line": 187,
+      "bytes": [
+        21,
+        48,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x21"
+        },
+        {
+          "register": "trccidcvr0"
+        }
+      ]
+    },
+    {
+      "line": 188,
+      "bytes": [
+        24,
+        50,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x24"
+        },
+        {
+          "register": "trccidcvr1"
+        }
+      ]
+    },
+    {
+      "line": 189,
+      "bytes": [
+        24,
+        52,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x24"
+        },
+        {
+          "register": "trccidcvr2"
+        }
+      ]
+    },
+    {
+      "line": 190,
+      "bytes": [
+        12,
+        54,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x12"
+        },
+        {
+          "register": "trccidcvr3"
+        }
+      ]
+    },
+    {
+      "line": 191,
+      "bytes": [
+        10,
+        56,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x10"
+        },
+        {
+          "register": "trccidcvr4"
+        }
+      ]
+    },
+    {
+      "line": 192,
+      "bytes": [
+        9,
+        58,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x9"
+        },
+        {
+          "register": "trccidcvr5"
+        }
+      ]
+    },
+    {
+      "line": 193,
+      "bytes": [
+        6,
+        60,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x6"
+        },
+        {
+          "register": "trccidcvr6"
+        }
+      ]
+    },
+    {
+      "line": 194,
+      "bytes": [
+        20,
+        62,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x20"
+        },
+        {
+          "register": "trccidcvr7"
+        }
+      ]
+    },
+    {
+      "line": 195,
+      "bytes": [
+        52,
+        48,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x20"
+        },
+        {
+          "register": "trcvmidcvr0"
+        }
+      ]
+    },
+    {
+      "line": 196,
+      "bytes": [
+        52,
+        50,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x20"
+        },
+        {
+          "register": "trcvmidcvr1"
+        }
+      ]
+    },
+    {
+      "line": 197,
+      "bytes": [
+        58,
+        52,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x26"
+        },
+        {
+          "register": "trcvmidcvr2"
+        }
+      ]
+    },
+    {
+      "line": 198,
+      "bytes": [
+        33,
+        54,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x1"
+        },
+        {
+          "register": "trcvmidcvr3"
+        }
+      ]
+    },
+    {
+      "line": 199,
+      "bytes": [
+        46,
+        56,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x14"
+        },
+        {
+          "register": "trcvmidcvr4"
+        }
+      ]
+    },
+    {
+      "line": 200,
+      "bytes": [
+        59,
+        58,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x27"
+        },
+        {
+          "register": "trcvmidcvr5"
+        }
+      ]
+    },
+    {
+      "line": 201,
+      "bytes": [
+        61,
+        60,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "fp"
+        },
+        {
+          "register": "trcvmidcvr6"
+        }
+      ]
+    },
+    {
+      "line": 202,
+      "bytes": [
+        49,
+        62,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x17"
+        },
+        {
+          "register": "trcvmidcvr7"
+        }
+      ]
+    },
+    {
+      "line": 203,
+      "bytes": [
+        74,
+        48,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x10"
+        },
+        {
+          "register": "trccidcctlr0"
+        }
+      ]
+    },
+    {
+      "line": 204,
+      "bytes": [
+        68,
+        49,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x4"
+        },
+        {
+          "register": "trccidcctlr1"
+        }
+      ]
+    },
+    {
+      "line": 205,
+      "bytes": [
+        73,
+        50,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x9"
+        },
+        {
+          "register": "trcvmidcctlr0"
+        }
+      ]
+    },
+    {
+      "line": 206,
+      "bytes": [
+        75,
+        51,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x11"
+        },
+        {
+          "register": "trcvmidcctlr1"
+        }
+      ]
+    },
+    {
+      "line": 207,
+      "bytes": [
+        150,
+        112,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x22"
+        },
+        {
+          "register": "trcitctrl"
+        }
+      ]
+    },
+    {
+      "line": 208,
+      "bytes": [
+        215,
+        120,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x23"
+        },
+        {
+          "register": "trcclaimset"
+        }
+      ]
+    },
+    {
+      "line": 209,
+      "bytes": [
+        206,
+        121,
+        49,
+        213
+      ],
+      "mnemonic": "mrs",
+      "operands": [
+        {
+          "register": "x14"
+        },
+        {
+          "register": "trcclaimclr"
+        }
+      ]
+    },
+    {
+      "line": 210,
+      "bytes": [
+        156,
+        16,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcoslar"
+        },
+        {
+          "register": "x28"
+        }
+      ]
+    },
+    {
+      "line": 211,
+      "bytes": [
+        206,
+        124,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trclar"
+        },
+        {
+          "register": "x14"
+        }
+      ]
+    },
+    {
+      "line": 212,
+      "bytes": [
+        10,
+        1,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcprgctlr"
+        },
+        {
+          "register": "x10"
+        }
+      ]
+    },
+    {
+      "line": 213,
+      "bytes": [
+        27,
+        2,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcprocselr"
+        },
+        {
+          "register": "x27"
+        }
+      ]
+    },
+    {
+      "line": 214,
+      "bytes": [
+        24,
+        4,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcconfigr"
+        },
+        {
+          "register": "x24"
+        }
+      ]
+    },
+    {
+      "line": 215,
+      "bytes": [
+        8,
+        6,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcauxctlr"
+        },
+        {
+          "register": "x8"
+        }
+      ]
+    },
+    {
+      "line": 216,
+      "bytes": [
+        16,
+        8,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trceventctl0r"
+        },
+        {
+          "register": "x16"
+        }
+      ]
+    },
+    {
+      "line": 217,
+      "bytes": [
+        27,
+        9,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trceventctl1r"
+        },
+        {
+          "register": "x27"
+        }
+      ]
+    },
+    {
+      "line": 218,
+      "bytes": [
+        26,
+        11,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcstallctlr"
+        },
+        {
+          "register": "x26"
+        }
+      ]
+    },
+    {
+      "line": 219,
+      "bytes": [
+        0,
+        12,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trctsctlr"
+        },
+        {
+          "register": "x0"
+        }
+      ]
+    },
+    {
+      "line": 220,
+      "bytes": [
+        14,
+        13,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcsyncpr"
+        },
+        {
+          "register": "x14"
+        }
+      ]
+    },
+    {
+      "line": 221,
+      "bytes": [
+        8,
+        14,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcccctlr"
+        },
+        {
+          "register": "x8"
+        }
+      ]
+    },
+    {
+      "line": 222,
+      "bytes": [
+        6,
+        15,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcbbctlr"
+        },
+        {
+          "register": "x6"
+        }
+      ]
+    },
+    {
+      "line": 223,
+      "bytes": [
+        55,
+        0,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trctraceidr"
+        },
+        {
+          "register": "x23"
+        }
+      ]
+    },
+    {
+      "line": 224,
+      "bytes": [
+        37,
+        1,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcqctlr"
+        },
+        {
+          "register": "x5"
+        }
+      ]
+    },
+    {
+      "line": 225,
+      "bytes": [
+        64,
+        0,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcvictlr"
+        },
+        {
+          "register": "x0"
+        }
+      ]
+    },
+    {
+      "line": 226,
+      "bytes": [
+        64,
+        1,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcviiectlr"
+        },
+        {
+          "register": "x0"
+        }
+      ]
+    },
+    {
+      "line": 227,
+      "bytes": [
+        65,
+        2,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcvissctlr"
+        },
+        {
+          "register": "x1"
+        }
+      ]
+    },
+    {
+      "line": 228,
+      "bytes": [
+        64,
+        3,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcvipcssctlr"
+        },
+        {
+          "register": "x0"
+        }
+      ]
+    },
+    {
+      "line": 229,
+      "bytes": [
+        71,
+        8,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcvdctlr"
+        },
+        {
+          "register": "x7"
+        }
+      ]
+    },
+    {
+      "line": 230,
+      "bytes": [
+        82,
+        9,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcvdsacctlr"
+        },
+        {
+          "register": "x18"
+        }
+      ]
+    },
+    {
+      "line": 231,
+      "bytes": [
+        88,
+        10,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcvdarcctlr"
+        },
+        {
+          "register": "x24"
+        }
+      ]
+    },
+    {
+      "line": 232,
+      "bytes": [
+        156,
+        0,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcseqevr0"
+        },
+        {
+          "register": "x28"
+        }
+      ]
+    },
+    {
+      "line": 233,
+      "bytes": [
+        149,
+        1,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcseqevr1"
+        },
+        {
+          "register": "x21"
+        }
+      ]
+    },
+    {
+      "line": 234,
+      "bytes": [
+        144,
+        2,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcseqevr2"
+        },
+        {
+          "register": "x16"
+        }
+      ]
+    },
+    {
+      "line": 235,
+      "bytes": [
+        144,
+        6,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcseqrstevr"
+        },
+        {
+          "register": "x16"
+        }
+      ]
+    },
+    {
+      "line": 236,
+      "bytes": [
+        153,
+        7,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcseqstr"
+        },
+        {
+          "register": "x25"
+        }
+      ]
+    },
+    {
+      "line": 237,
+      "bytes": [
+        157,
+        8,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcextinselr"
+        },
+        {
+          "register": "fp"
+        }
+      ]
+    },
+    {
+      "line": 238,
+      "bytes": [
+        180,
+        0,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trccntrldvr0"
+        },
+        {
+          "register": "x20"
+        }
+      ]
+    },
+    {
+      "line": 239,
+      "bytes": [
+        180,
+        1,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trccntrldvr1"
+        },
+        {
+          "register": "x20"
+        }
+      ]
+    },
+    {
+      "line": 240,
+      "bytes": [
+        182,
+        2,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trccntrldvr2"
+        },
+        {
+          "register": "x22"
+        }
+      ]
+    },
+    {
+      "line": 241,
+      "bytes": [
+        172,
+        3,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trccntrldvr3"
+        },
+        {
+          "register": "x12"
+        }
+      ]
+    },
+    {
+      "line": 242,
+      "bytes": [
+        180,
+        4,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trccntctlr0"
+        },
+        {
+          "register": "x20"
+        }
+      ]
+    },
+    {
+      "line": 243,
+      "bytes": [
+        164,
+        5,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trccntctlr1"
+        },
+        {
+          "register": "x4"
+        }
+      ]
+    },
+    {
+      "line": 244,
+      "bytes": [
+        168,
+        6,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trccntctlr2"
+        },
+        {
+          "register": "x8"
+        }
+      ]
+    },
+    {
+      "line": 245,
+      "bytes": [
+        176,
+        7,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trccntctlr3"
+        },
+        {
+          "register": "x16"
+        }
+      ]
+    },
+    {
+      "line": 246,
+      "bytes": [
+        165,
+        8,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trccntvr0"
+        },
+        {
+          "register": "x5"
+        }
+      ]
+    },
+    {
+      "line": 247,
+      "bytes": [
+        187,
+        9,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trccntvr1"
+        },
+        {
+          "register": "x27"
+        }
+      ]
+    },
+    {
+      "line": 248,
+      "bytes": [
+        181,
+        10,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trccntvr2"
+        },
+        {
+          "register": "x21"
+        }
+      ]
+    },
+    {
+      "line": 249,
+      "bytes": [
+        168,
+        11,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trccntvr3"
+        },
+        {
+          "register": "x8"
+        }
+      ]
+    },
+    {
+      "line": 250,
+      "bytes": [
+        230,
+        0,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcimspec0"
+        },
+        {
+          "register": "x6"
+        }
+      ]
+    },
+    {
+      "line": 251,
+      "bytes": [
+        251,
+        1,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcimspec1"
+        },
+        {
+          "register": "x27"
+        }
+      ]
+    },
+    {
+      "line": 252,
+      "bytes": [
+        247,
+        2,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcimspec2"
+        },
+        {
+          "register": "x23"
+        }
+      ]
+    },
+    {
+      "line": 253,
+      "bytes": [
+        239,
+        3,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcimspec3"
+        },
+        {
+          "register": "x15"
+        }
+      ]
+    },
+    {
+      "line": 254,
+      "bytes": [
+        237,
+        4,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcimspec4"
+        },
+        {
+          "register": "x13"
+        }
+      ]
+    },
+    {
+      "line": 255,
+      "bytes": [
+        249,
+        5,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcimspec5"
+        },
+        {
+          "register": "x25"
+        }
+      ]
+    },
+    {
+      "line": 256,
+      "bytes": [
+        243,
+        6,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcimspec6"
+        },
+        {
+          "register": "x19"
+        }
+      ]
+    },
+    {
+      "line": 257,
+      "bytes": [
+        251,
+        7,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcimspec7"
+        },
+        {
+          "register": "x27"
+        }
+      ]
+    },
+    {
+      "line": 258,
+      "bytes": [
+        4,
+        18,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr2"
+        },
+        {
+          "register": "x4"
+        }
+      ]
+    },
+    {
+      "line": 259,
+      "bytes": [
+        0,
+        19,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr3"
+        },
+        {
+          "register": "x0"
+        }
+      ]
+    },
+    {
+      "line": 260,
+      "bytes": [
+        21,
+        20,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr4"
+        },
+        {
+          "register": "x21"
+        }
+      ]
+    },
+    {
+      "line": 261,
+      "bytes": [
+        8,
+        21,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr5"
+        },
+        {
+          "register": "x8"
+        }
+      ]
+    },
+    {
+      "line": 262,
+      "bytes": [
+        20,
+        22,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr6"
+        },
+        {
+          "register": "x20"
+        }
+      ]
+    },
+    {
+      "line": 263,
+      "bytes": [
+        11,
+        23,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr7"
+        },
+        {
+          "register": "x11"
+        }
+      ]
+    },
+    {
+      "line": 264,
+      "bytes": [
+        18,
+        24,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr8"
+        },
+        {
+          "register": "x18"
+        }
+      ]
+    },
+    {
+      "line": 265,
+      "bytes": [
+        24,
+        25,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr9"
+        },
+        {
+          "register": "x24"
+        }
+      ]
+    },
+    {
+      "line": 266,
+      "bytes": [
+        15,
+        26,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr10"
+        },
+        {
+          "register": "x15"
+        }
+      ]
+    },
+    {
+      "line": 267,
+      "bytes": [
+        21,
+        27,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr11"
+        },
+        {
+          "register": "x21"
+        }
+      ]
+    },
+    {
+      "line": 268,
+      "bytes": [
+        4,
+        28,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr12"
+        },
+        {
+          "register": "x4"
+        }
+      ]
+    },
+    {
+      "line": 269,
+      "bytes": [
+        28,
+        29,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr13"
+        },
+        {
+          "register": "x28"
+        }
+      ]
+    },
+    {
+      "line": 270,
+      "bytes": [
+        3,
+        30,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr14"
+        },
+        {
+          "register": "x3"
+        }
+      ]
+    },
+    {
+      "line": 271,
+      "bytes": [
+        20,
+        31,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr15"
+        },
+        {
+          "register": "x20"
+        }
+      ]
+    },
+    {
+      "line": 272,
+      "bytes": [
+        44,
+        16,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr16"
+        },
+        {
+          "register": "x12"
+        }
+      ]
+    },
+    {
+      "line": 273,
+      "bytes": [
+        49,
+        17,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr17"
+        },
+        {
+          "register": "x17"
+        }
+      ]
+    },
+    {
+      "line": 274,
+      "bytes": [
+        42,
+        18,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr18"
+        },
+        {
+          "register": "x10"
+        }
+      ]
+    },
+    {
+      "line": 275,
+      "bytes": [
+        43,
+        19,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr19"
+        },
+        {
+          "register": "x11"
+        }
+      ]
+    },
+    {
+      "line": 276,
+      "bytes": [
+        35,
+        20,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr20"
+        },
+        {
+          "register": "x3"
+        }
+      ]
+    },
+    {
+      "line": 277,
+      "bytes": [
+        50,
+        21,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr21"
+        },
+        {
+          "register": "x18"
+        }
+      ]
+    },
+    {
+      "line": 278,
+      "bytes": [
+        58,
+        22,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr22"
+        },
+        {
+          "register": "x26"
+        }
+      ]
+    },
+    {
+      "line": 279,
+      "bytes": [
+        37,
+        23,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr23"
+        },
+        {
+          "register": "x5"
+        }
+      ]
+    },
+    {
+      "line": 280,
+      "bytes": [
+        57,
+        24,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr24"
+        },
+        {
+          "register": "x25"
+        }
+      ]
+    },
+    {
+      "line": 281,
+      "bytes": [
+        37,
+        25,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr25"
+        },
+        {
+          "register": "x5"
+        }
+      ]
+    },
+    {
+      "line": 282,
+      "bytes": [
+        36,
+        26,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr26"
+        },
+        {
+          "register": "x4"
+        }
+      ]
+    },
+    {
+      "line": 283,
+      "bytes": [
+        52,
+        27,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr27"
+        },
+        {
+          "register": "x20"
+        }
+      ]
+    },
+    {
+      "line": 284,
+      "bytes": [
+        37,
+        28,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr28"
+        },
+        {
+          "register": "x5"
+        }
+      ]
+    },
+    {
+      "line": 285,
+      "bytes": [
+        42,
+        29,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr29"
+        },
+        {
+          "register": "x10"
+        }
+      ]
+    },
+    {
+      "line": 286,
+      "bytes": [
+        56,
+        30,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr30"
+        },
+        {
+          "register": "x24"
+        }
+      ]
+    },
+    {
+      "line": 287,
+      "bytes": [
+        52,
+        31,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcrsctlr31"
+        },
+        {
+          "register": "x20"
+        }
+      ]
+    },
+    {
+      "line": 288,
+      "bytes": [
+        87,
+        16,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcssccr0"
+        },
+        {
+          "register": "x23"
+        }
+      ]
+    },
+    {
+      "line": 289,
+      "bytes": [
+        91,
+        17,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcssccr1"
+        },
+        {
+          "register": "x27"
+        }
+      ]
+    },
+    {
+      "line": 290,
+      "bytes": [
+        91,
+        18,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcssccr2"
+        },
+        {
+          "register": "x27"
+        }
+      ]
+    },
+    {
+      "line": 291,
+      "bytes": [
+        70,
+        19,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcssccr3"
+        },
+        {
+          "register": "x6"
+        }
+      ]
+    },
+    {
+      "line": 292,
+      "bytes": [
+        67,
+        20,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcssccr4"
+        },
+        {
+          "register": "x3"
+        }
+      ]
+    },
+    {
+      "line": 293,
+      "bytes": [
+        76,
+        21,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcssccr5"
+        },
+        {
+          "register": "x12"
+        }
+      ]
+    },
+    {
+      "line": 294,
+      "bytes": [
+        71,
+        22,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcssccr6"
+        },
+        {
+          "register": "x7"
+        }
+      ]
+    },
+    {
+      "line": 295,
+      "bytes": [
+        70,
+        23,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcssccr7"
+        },
+        {
+          "register": "x6"
+        }
+      ]
+    },
+    {
+      "line": 296,
+      "bytes": [
+        84,
+        24,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcsscsr0"
+        },
+        {
+          "register": "x20"
+        }
+      ]
+    },
+    {
+      "line": 297,
+      "bytes": [
+        81,
+        25,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcsscsr1"
+        },
+        {
+          "register": "x17"
+        }
+      ]
+    },
+    {
+      "line": 298,
+      "bytes": [
+        75,
+        26,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcsscsr2"
+        },
+        {
+          "register": "x11"
+        }
+      ]
+    },
+    {
+      "line": 299,
+      "bytes": [
+        68,
+        27,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcsscsr3"
+        },
+        {
+          "register": "x4"
+        }
+      ]
+    },
+    {
+      "line": 300,
+      "bytes": [
+        78,
+        28,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcsscsr4"
+        },
+        {
+          "register": "x14"
+        }
+      ]
+    },
+    {
+      "line": 301,
+      "bytes": [
+        86,
+        29,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcsscsr5"
+        },
+        {
+          "register": "x22"
+        }
+      ]
+    },
+    {
+      "line": 302,
+      "bytes": [
+        67,
+        30,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcsscsr6"
+        },
+        {
+          "register": "x3"
+        }
+      ]
+    },
+    {
+      "line": 303,
+      "bytes": [
+        75,
+        31,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcsscsr7"
+        },
+        {
+          "register": "x11"
+        }
+      ]
+    },
+    {
+      "line": 304,
+      "bytes": [
+        98,
+        16,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcsspcicr0"
+        },
+        {
+          "register": "x2"
+        }
+      ]
+    },
+    {
+      "line": 305,
+      "bytes": [
+        99,
+        17,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcsspcicr1"
+        },
+        {
+          "register": "x3"
+        }
+      ]
+    },
+    {
+      "line": 306,
+      "bytes": [
+        101,
+        18,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcsspcicr2"
+        },
+        {
+          "register": "x5"
+        }
+      ]
+    },
+    {
+      "line": 307,
+      "bytes": [
+        103,
+        19,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcsspcicr3"
+        },
+        {
+          "register": "x7"
+        }
+      ]
+    },
+    {
+      "line": 308,
+      "bytes": [
+        107,
+        20,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcsspcicr4"
+        },
+        {
+          "register": "x11"
+        }
+      ]
+    },
+    {
+      "line": 309,
+      "bytes": [
+        109,
+        21,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcsspcicr5"
+        },
+        {
+          "register": "x13"
+        }
+      ]
+    },
+    {
+      "line": 310,
+      "bytes": [
+        113,
+        22,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcsspcicr6"
+        },
+        {
+          "register": "x17"
+        }
+      ]
+    },
+    {
+      "line": 311,
+      "bytes": [
+        119,
+        23,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcsspcicr7"
+        },
+        {
+          "register": "x23"
+        }
+      ]
+    },
+    {
+      "line": 312,
+      "bytes": [
+        131,
+        20,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcpdcr"
+        },
+        {
+          "register": "x3"
+        }
+      ]
+    },
+    {
+      "line": 313,
+      "bytes": [
+        6,
+        32,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacvr0"
+        },
+        {
+          "register": "x6"
+        }
+      ]
+    },
+    {
+      "line": 314,
+      "bytes": [
+        20,
+        34,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacvr1"
+        },
+        {
+          "register": "x20"
+        }
+      ]
+    },
+    {
+      "line": 315,
+      "bytes": [
+        25,
+        36,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacvr2"
+        },
+        {
+          "register": "x25"
+        }
+      ]
+    },
+    {
+      "line": 316,
+      "bytes": [
+        1,
+        38,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacvr3"
+        },
+        {
+          "register": "x1"
+        }
+      ]
+    },
+    {
+      "line": 317,
+      "bytes": [
+        28,
+        40,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacvr4"
+        },
+        {
+          "register": "x28"
+        }
+      ]
+    },
+    {
+      "line": 318,
+      "bytes": [
+        15,
+        42,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacvr5"
+        },
+        {
+          "register": "x15"
+        }
+      ]
+    },
+    {
+      "line": 319,
+      "bytes": [
+        25,
+        44,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacvr6"
+        },
+        {
+          "register": "x25"
+        }
+      ]
+    },
+    {
+      "line": 320,
+      "bytes": [
+        12,
+        46,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacvr7"
+        },
+        {
+          "register": "x12"
+        }
+      ]
+    },
+    {
+      "line": 321,
+      "bytes": [
+        37,
+        32,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacvr8"
+        },
+        {
+          "register": "x5"
+        }
+      ]
+    },
+    {
+      "line": 322,
+      "bytes": [
+        57,
+        34,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacvr9"
+        },
+        {
+          "register": "x25"
+        }
+      ]
+    },
+    {
+      "line": 323,
+      "bytes": [
+        45,
+        36,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacvr10"
+        },
+        {
+          "register": "x13"
+        }
+      ]
+    },
+    {
+      "line": 324,
+      "bytes": [
+        42,
+        38,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacvr11"
+        },
+        {
+          "register": "x10"
+        }
+      ]
+    },
+    {
+      "line": 325,
+      "bytes": [
+        51,
+        40,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacvr12"
+        },
+        {
+          "register": "x19"
+        }
+      ]
+    },
+    {
+      "line": 326,
+      "bytes": [
+        42,
+        42,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacvr13"
+        },
+        {
+          "register": "x10"
+        }
+      ]
+    },
+    {
+      "line": 327,
+      "bytes": [
+        51,
+        44,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacvr14"
+        },
+        {
+          "register": "x19"
+        }
+      ]
+    },
+    {
+      "line": 328,
+      "bytes": [
+        34,
+        46,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacvr15"
+        },
+        {
+          "register": "x2"
+        }
+      ]
+    },
+    {
+      "line": 329,
+      "bytes": [
+        79,
+        32,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacatr0"
+        },
+        {
+          "register": "x15"
+        }
+      ]
+    },
+    {
+      "line": 330,
+      "bytes": [
+        77,
+        34,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacatr1"
+        },
+        {
+          "register": "x13"
+        }
+      ]
+    },
+    {
+      "line": 331,
+      "bytes": [
+        72,
+        36,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacatr2"
+        },
+        {
+          "register": "x8"
+        }
+      ]
+    },
+    {
+      "line": 332,
+      "bytes": [
+        65,
+        38,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacatr3"
+        },
+        {
+          "register": "x1"
+        }
+      ]
+    },
+    {
+      "line": 333,
+      "bytes": [
+        75,
+        40,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacatr4"
+        },
+        {
+          "register": "x11"
+        }
+      ]
+    },
+    {
+      "line": 334,
+      "bytes": [
+        72,
+        42,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacatr5"
+        },
+        {
+          "register": "x8"
+        }
+      ]
+    },
+    {
+      "line": 335,
+      "bytes": [
+        88,
+        44,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacatr6"
+        },
+        {
+          "register": "x24"
+        }
+      ]
+    },
+    {
+      "line": 336,
+      "bytes": [
+        70,
+        46,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacatr7"
+        },
+        {
+          "register": "x6"
+        }
+      ]
+    },
+    {
+      "line": 337,
+      "bytes": [
+        119,
+        32,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacatr8"
+        },
+        {
+          "register": "x23"
+        }
+      ]
+    },
+    {
+      "line": 338,
+      "bytes": [
+        101,
+        34,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacatr9"
+        },
+        {
+          "register": "x5"
+        }
+      ]
+    },
+    {
+      "line": 339,
+      "bytes": [
+        107,
+        36,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacatr10"
+        },
+        {
+          "register": "x11"
+        }
+      ]
+    },
+    {
+      "line": 340,
+      "bytes": [
+        107,
+        38,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacatr11"
+        },
+        {
+          "register": "x11"
+        }
+      ]
+    },
+    {
+      "line": 341,
+      "bytes": [
+        99,
+        40,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacatr12"
+        },
+        {
+          "register": "x3"
+        }
+      ]
+    },
+    {
+      "line": 342,
+      "bytes": [
+        124,
+        42,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacatr13"
+        },
+        {
+          "register": "x28"
+        }
+      ]
+    },
+    {
+      "line": 343,
+      "bytes": [
+        121,
+        44,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacatr14"
+        },
+        {
+          "register": "x25"
+        }
+      ]
+    },
+    {
+      "line": 344,
+      "bytes": [
+        100,
+        46,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcacatr15"
+        },
+        {
+          "register": "x4"
+        }
+      ]
+    },
+    {
+      "line": 345,
+      "bytes": [
+        134,
+        32,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcdvcvr0"
+        },
+        {
+          "register": "x6"
+        }
+      ]
+    },
+    {
+      "line": 346,
+      "bytes": [
+        131,
+        36,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcdvcvr1"
+        },
+        {
+          "register": "x3"
+        }
+      ]
+    },
+    {
+      "line": 347,
+      "bytes": [
+        133,
+        40,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcdvcvr2"
+        },
+        {
+          "register": "x5"
+        }
+      ]
+    },
+    {
+      "line": 348,
+      "bytes": [
+        139,
+        44,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcdvcvr3"
+        },
+        {
+          "register": "x11"
+        }
+      ]
+    },
+    {
+      "line": 349,
+      "bytes": [
+        169,
+        32,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcdvcvr4"
+        },
+        {
+          "register": "x9"
+        }
+      ]
+    },
+    {
+      "line": 350,
+      "bytes": [
+        174,
+        36,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcdvcvr5"
+        },
+        {
+          "register": "x14"
+        }
+      ]
+    },
+    {
+      "line": 351,
+      "bytes": [
+        170,
+        40,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcdvcvr6"
+        },
+        {
+          "register": "x10"
+        }
+      ]
+    },
+    {
+      "line": 352,
+      "bytes": [
+        172,
+        44,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcdvcvr7"
+        },
+        {
+          "register": "x12"
+        }
+      ]
+    },
+    {
+      "line": 353,
+      "bytes": [
+        200,
+        32,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcdvcmr0"
+        },
+        {
+          "register": "x8"
+        }
+      ]
+    },
+    {
+      "line": 354,
+      "bytes": [
+        200,
+        36,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcdvcmr1"
+        },
+        {
+          "register": "x8"
+        }
+      ]
+    },
+    {
+      "line": 355,
+      "bytes": [
+        214,
+        40,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcdvcmr2"
+        },
+        {
+          "register": "x22"
+        }
+      ]
+    },
+    {
+      "line": 356,
+      "bytes": [
+        214,
+        44,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcdvcmr3"
+        },
+        {
+          "register": "x22"
+        }
+      ]
+    },
+    {
+      "line": 357,
+      "bytes": [
+        229,
+        32,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcdvcmr4"
+        },
+        {
+          "register": "x5"
+        }
+      ]
+    },
+    {
+      "line": 358,
+      "bytes": [
+        240,
+        36,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcdvcmr5"
+        },
+        {
+          "register": "x16"
+        }
+      ]
+    },
+    {
+      "line": 359,
+      "bytes": [
+        251,
+        40,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcdvcmr6"
+        },
+        {
+          "register": "x27"
+        }
+      ]
+    },
+    {
+      "line": 360,
+      "bytes": [
+        245,
+        44,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcdvcmr7"
+        },
+        {
+          "register": "x21"
+        }
+      ]
+    },
+    {
+      "line": 361,
+      "bytes": [
+        8,
+        48,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trccidcvr0"
+        },
+        {
+          "register": "x8"
+        }
+      ]
+    },
+    {
+      "line": 362,
+      "bytes": [
+        6,
+        50,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trccidcvr1"
+        },
+        {
+          "register": "x6"
+        }
+      ]
+    },
+    {
+      "line": 363,
+      "bytes": [
+        9,
+        52,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trccidcvr2"
+        },
+        {
+          "register": "x9"
+        }
+      ]
+    },
+    {
+      "line": 364,
+      "bytes": [
+        8,
+        54,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trccidcvr3"
+        },
+        {
+          "register": "x8"
+        }
+      ]
+    },
+    {
+      "line": 365,
+      "bytes": [
+        3,
+        56,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trccidcvr4"
+        },
+        {
+          "register": "x3"
+        }
+      ]
+    },
+    {
+      "line": 366,
+      "bytes": [
+        21,
+        58,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trccidcvr5"
+        },
+        {
+          "register": "x21"
+        }
+      ]
+    },
+    {
+      "line": 367,
+      "bytes": [
+        12,
+        60,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trccidcvr6"
+        },
+        {
+          "register": "x12"
+        }
+      ]
+    },
+    {
+      "line": 368,
+      "bytes": [
+        7,
+        62,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trccidcvr7"
+        },
+        {
+          "register": "x7"
+        }
+      ]
+    },
+    {
+      "line": 369,
+      "bytes": [
+        36,
+        48,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcvmidcvr0"
+        },
+        {
+          "register": "x4"
+        }
+      ]
+    },
+    {
+      "line": 370,
+      "bytes": [
+        35,
+        50,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcvmidcvr1"
+        },
+        {
+          "register": "x3"
+        }
+      ]
+    },
+    {
+      "line": 371,
+      "bytes": [
+        41,
+        52,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcvmidcvr2"
+        },
+        {
+          "register": "x9"
+        }
+      ]
+    },
+    {
+      "line": 372,
+      "bytes": [
+        49,
+        54,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcvmidcvr3"
+        },
+        {
+          "register": "x17"
+        }
+      ]
+    },
+    {
+      "line": 373,
+      "bytes": [
+        46,
+        56,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcvmidcvr4"
+        },
+        {
+          "register": "x14"
+        }
+      ]
+    },
+    {
+      "line": 374,
+      "bytes": [
+        44,
+        58,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcvmidcvr5"
+        },
+        {
+          "register": "x12"
+        }
+      ]
+    },
+    {
+      "line": 375,
+      "bytes": [
+        42,
+        60,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcvmidcvr6"
+        },
+        {
+          "register": "x10"
+        }
+      ]
+    },
+    {
+      "line": 376,
+      "bytes": [
+        35,
+        62,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcvmidcvr7"
+        },
+        {
+          "register": "x3"
+        }
+      ]
+    },
+    {
+      "line": 377,
+      "bytes": [
+        78,
+        48,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trccidcctlr0"
+        },
+        {
+          "register": "x14"
+        }
+      ]
+    },
+    {
+      "line": 378,
+      "bytes": [
+        86,
+        49,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trccidcctlr1"
+        },
+        {
+          "register": "x22"
+        }
+      ]
+    },
+    {
+      "line": 379,
+      "bytes": [
+        72,
+        50,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcvmidcctlr0"
+        },
+        {
+          "register": "x8"
+        }
+      ]
+    },
+    {
+      "line": 380,
+      "bytes": [
+        79,
+        51,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcvmidcctlr1"
+        },
+        {
+          "register": "x15"
+        }
+      ]
+    },
+    {
+      "line": 381,
+      "bytes": [
+        129,
+        112,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcitctrl"
+        },
+        {
+          "register": "x1"
+        }
+      ]
+    },
+    {
+      "line": 382,
+      "bytes": [
+        199,
+        120,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcclaimset"
+        },
+        {
+          "register": "x7"
+        }
+      ]
+    },
+    {
+      "line": 383,
+      "bytes": [
+        221,
+        121,
+        17,
+        213
+      ],
+      "mnemonic": "msr",
+      "operands": [
+        {
+          "register": "trcclaimclr"
+        },
+        {
+          "register": "fp"
+        }
+      ]
+    }
+  ]
+}

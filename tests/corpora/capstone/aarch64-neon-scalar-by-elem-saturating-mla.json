@@ -1,0 +1,379 @@
+{
+  "schema": "glaurung-capstone-mc-v1",
+  "upstream": {
+    "project": "capstone",
+    "version": "5.0.0",
+    "crate": "capstone-sys 0.16.0",
+    "path": "suite/MC/AArch64/neon-scalar-by-elem-saturating-mla.s.cs",
+    "licenses": [
+      "BSD-3-Clause",
+      "NCSA"
+    ]
+  },
+  "vectors": [
+    {
+      "line": 2,
+      "bytes": [
+        0,
+        48,
+        64,
+        95
+      ],
+      "mnemonic": "sqdmlal",
+      "operands": [
+        {
+          "register": "s0"
+        },
+        {
+          "register": "h0"
+        },
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 16
+          },
+          "vector_index": 0
+        }
+      ]
+    },
+    {
+      "line": 3,
+      "bytes": [
+        39,
+        48,
+        116,
+        95
+      ],
+      "mnemonic": "sqdmlal",
+      "operands": [
+        {
+          "register": "s7"
+        },
+        {
+          "register": "h1"
+        },
+        {
+          "register": "v4",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 16
+          },
+          "vector_index": 3
+        }
+      ]
+    },
+    {
+      "line": 4,
+      "bytes": [
+        11,
+        58,
+        72,
+        95
+      ],
+      "mnemonic": "sqdmlal",
+      "operands": [
+        {
+          "register": "s11"
+        },
+        {
+          "register": "h16"
+        },
+        {
+          "register": "v8",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 16
+          },
+          "vector_index": 4
+        }
+      ]
+    },
+    {
+      "line": 5,
+      "bytes": [
+        222,
+        59,
+        127,
+        95
+      ],
+      "mnemonic": "sqdmlal",
+      "operands": [
+        {
+          "register": "s30"
+        },
+        {
+          "register": "h30"
+        },
+        {
+          "register": "v15",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 16
+          },
+          "vector_index": 7
+        }
+      ]
+    },
+    {
+      "line": 6,
+      "bytes": [
+        0,
+        48,
+        131,
+        95
+      ],
+      "mnemonic": "sqdmlal",
+      "operands": [
+        {
+          "register": "d0"
+        },
+        {
+          "register": "s0"
+        },
+        {
+          "register": "v3",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 32
+          },
+          "vector_index": 0
+        }
+      ]
+    },
+    {
+      "line": 7,
+      "bytes": [
+        222,
+        59,
+        190,
+        95
+      ],
+      "mnemonic": "sqdmlal",
+      "operands": [
+        {
+          "register": "d30"
+        },
+        {
+          "register": "s30"
+        },
+        {
+          "register": "v30",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 32
+          },
+          "vector_index": 3
+        }
+      ]
+    },
+    {
+      "line": 8,
+      "bytes": [
+        40,
+        49,
+        174,
+        95
+      ],
+      "mnemonic": "sqdmlal",
+      "operands": [
+        {
+          "register": "d8"
+        },
+        {
+          "register": "s9"
+        },
+        {
+          "register": "v14",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 32
+          },
+          "vector_index": 1
+        }
+      ]
+    },
+    {
+      "line": 9,
+      "bytes": [
+        33,
+        112,
+        65,
+        95
+      ],
+      "mnemonic": "sqdmlsl",
+      "operands": [
+        {
+          "register": "s1"
+        },
+        {
+          "register": "h1"
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 16
+          },
+          "vector_index": 0
+        }
+      ]
+    },
+    {
+      "line": 10,
+      "bytes": [
+        72,
+        112,
+        85,
+        95
+      ],
+      "mnemonic": "sqdmlsl",
+      "operands": [
+        {
+          "register": "s8"
+        },
+        {
+          "register": "h2"
+        },
+        {
+          "register": "v5",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 16
+          },
+          "vector_index": 1
+        }
+      ]
+    },
+    {
+      "line": 11,
+      "bytes": [
+        172,
+        113,
+        110,
+        95
+      ],
+      "mnemonic": "sqdmlsl",
+      "operands": [
+        {
+          "register": "s12"
+        },
+        {
+          "register": "h13"
+        },
+        {
+          "register": "v14",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 16
+          },
+          "vector_index": 2
+        }
+      ]
+    },
+    {
+      "line": 12,
+      "bytes": [
+        157,
+        123,
+        123,
+        95
+      ],
+      "mnemonic": "sqdmlsl",
+      "operands": [
+        {
+          "register": "s29"
+        },
+        {
+          "register": "h28"
+        },
+        {
+          "register": "v11",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 16
+          },
+          "vector_index": 7
+        }
+      ]
+    },
+    {
+      "line": 13,
+      "bytes": [
+        33,
+        112,
+        141,
+        95
+      ],
+      "mnemonic": "sqdmlsl",
+      "operands": [
+        {
+          "register": "d1"
+        },
+        {
+          "register": "s1"
+        },
+        {
+          "register": "v13",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 32
+          },
+          "vector_index": 0
+        }
+      ]
+    },
+    {
+      "line": 14,
+      "bytes": [
+        255,
+        123,
+        159,
+        95
+      ],
+      "mnemonic": "sqdmlsl",
+      "operands": [
+        {
+          "register": "d31"
+        },
+        {
+          "register": "s31"
+        },
+        {
+          "register": "v31",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 32
+          },
+          "vector_index": 2
+        }
+      ]
+    },
+    {
+      "line": 15,
+      "bytes": [
+        80,
+        122,
+        188,
+        95
+      ],
+      "mnemonic": "sqdmlsl",
+      "operands": [
+        {
+          "register": "d16"
+        },
+        {
+          "register": "s18"
+        },
+        {
+          "register": "v28",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 32
+          },
+          "vector_index": 3
+        }
+      ]
+    }
+  ]
+}

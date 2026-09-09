@@ -1,0 +1,147 @@
+{
+  "schema": "glaurung-capstone-mc-v1",
+  "upstream": {
+    "project": "capstone",
+    "version": "5.0.0",
+    "crate": "capstone-sys 0.16.0",
+    "path": "suite/MC/AArch64/neon-scalar-abs.s.cs",
+    "licenses": [
+      "BSD-3-Clause",
+      "NCSA"
+    ]
+  },
+  "vectors": [
+    {
+      "line": 2,
+      "bytes": [
+        29,
+        187,
+        224,
+        94
+      ],
+      "mnemonic": "abs",
+      "operands": [
+        {
+          "register": "d29"
+        },
+        {
+          "register": "d24"
+        }
+      ]
+    },
+    {
+      "line": 3,
+      "bytes": [
+        29,
+        215,
+        180,
+        126
+      ],
+      "mnemonic": "fabd",
+      "operands": [
+        {
+          "register": "s29"
+        },
+        {
+          "register": "s24"
+        },
+        {
+          "register": "s20"
+        }
+      ]
+    },
+    {
+      "line": 4,
+      "bytes": [
+        29,
+        215,
+        244,
+        126
+      ],
+      "mnemonic": "fabd",
+      "operands": [
+        {
+          "register": "d29"
+        },
+        {
+          "register": "d24"
+        },
+        {
+          "register": "d20"
+        }
+      ]
+    },
+    {
+      "line": 5,
+      "bytes": [
+        211,
+        121,
+        32,
+        94
+      ],
+      "mnemonic": "sqabs",
+      "operands": [
+        {
+          "register": "b19"
+        },
+        {
+          "register": "b14"
+        }
+      ]
+    },
+    {
+      "line": 6,
+      "bytes": [
+        245,
+        121,
+        96,
+        94
+      ],
+      "mnemonic": "sqabs",
+      "operands": [
+        {
+          "register": "h21"
+        },
+        {
+          "register": "h15"
+        }
+      ]
+    },
+    {
+      "line": 7,
+      "bytes": [
+        148,
+        121,
+        160,
+        94
+      ],
+      "mnemonic": "sqabs",
+      "operands": [
+        {
+          "register": "s20"
+        },
+        {
+          "register": "s12"
+        }
+      ]
+    },
+    {
+      "line": 8,
+      "bytes": [
+        146,
+        121,
+        224,
+        94
+      ],
+      "mnemonic": "sqabs",
+      "operands": [
+        {
+          "register": "d18"
+        },
+        {
+          "register": "d12"
+        }
+      ]
+    }
+  ]
+}

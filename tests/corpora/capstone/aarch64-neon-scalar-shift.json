@@ -1,0 +1,57 @@
+{
+  "schema": "glaurung-capstone-mc-v1",
+  "upstream": {
+    "project": "capstone",
+    "version": "5.0.0",
+    "crate": "capstone-sys 0.16.0",
+    "path": "suite/MC/AArch64/neon-scalar-shift.s.cs",
+    "licenses": [
+      "BSD-3-Clause",
+      "NCSA"
+    ]
+  },
+  "vectors": [
+    {
+      "line": 2,
+      "bytes": [
+        241,
+        71,
+        232,
+        94
+      ],
+      "mnemonic": "sshl",
+      "operands": [
+        {
+          "register": "d17"
+        },
+        {
+          "register": "d31"
+        },
+        {
+          "register": "d8"
+        }
+      ]
+    },
+    {
+      "line": 3,
+      "bytes": [
+        241,
+        71,
+        232,
+        126
+      ],
+      "mnemonic": "ushl",
+      "operands": [
+        {
+          "register": "d17"
+        },
+        {
+          "register": "d31"
+        },
+        {
+          "register": "d8"
+        }
+      ]
+    }
+  ]
+}

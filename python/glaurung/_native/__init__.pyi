@@ -932,6 +932,7 @@ class Operand:
     index: Any
     kind: Any
     register: Any
+    register_list: Any
     scale: Any
     segment: Any
     size: Any
@@ -943,6 +944,7 @@ class Operand:
     def is_memory(self) -> Any: ...
     def is_read(self) -> Any: ...
     def is_register(self) -> Any: ...
+    def is_register_list(self) -> Any: ...
     def is_write(self) -> Any: ...
     @staticmethod
     def new_immediate(*args: Any, **kwargs: Any) -> Any: ...
@@ -959,6 +961,7 @@ class OperandKind:
     Immediate: OperandKind
     Memory: OperandKind
     Register: OperandKind
+    RegisterList: OperandKind
     Relative: OperandKind
 
     def __init__(self, *args: Any, **kwargs: Any) -> None: ...

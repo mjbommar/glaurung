@@ -6,6 +6,7 @@
 
 pub mod capstone;
 pub mod iced;
+pub mod native_aarch64;
 pub mod registry;
 
 #[cfg(feature = "python-ext")]

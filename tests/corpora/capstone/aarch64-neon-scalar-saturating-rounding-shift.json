@@ -1,0 +1,183 @@
+{
+  "schema": "glaurung-capstone-mc-v1",
+  "upstream": {
+    "project": "capstone",
+    "version": "5.0.0",
+    "crate": "capstone-sys 0.16.0",
+    "path": "suite/MC/AArch64/neon-scalar-saturating-rounding-shift.s.cs",
+    "licenses": [
+      "BSD-3-Clause",
+      "NCSA"
+    ]
+  },
+  "vectors": [
+    {
+      "line": 2,
+      "bytes": [
+        32,
+        92,
+        34,
+        94
+      ],
+      "mnemonic": "sqrshl",
+      "operands": [
+        {
+          "register": "b0"
+        },
+        {
+          "register": "b1"
+        },
+        {
+          "register": "b2"
+        }
+      ]
+    },
+    {
+      "line": 3,
+      "bytes": [
+        106,
+        93,
+        108,
+        94
+      ],
+      "mnemonic": "sqrshl",
+      "operands": [
+        {
+          "register": "h10"
+        },
+        {
+          "register": "h11"
+        },
+        {
+          "register": "h12"
+        }
+      ]
+    },
+    {
+      "line": 4,
+      "bytes": [
+        180,
+        94,
+        162,
+        94
+      ],
+      "mnemonic": "sqrshl",
+      "operands": [
+        {
+          "register": "s20"
+        },
+        {
+          "register": "s21"
+        },
+        {
+          "register": "s2"
+        }
+      ]
+    },
+    {
+      "line": 5,
+      "bytes": [
+        241,
+        95,
+        232,
+        94
+      ],
+      "mnemonic": "sqrshl",
+      "operands": [
+        {
+          "register": "d17"
+        },
+        {
+          "register": "d31"
+        },
+        {
+          "register": "d8"
+        }
+      ]
+    },
+    {
+      "line": 6,
+      "bytes": [
+        32,
+        92,
+        34,
+        126
+      ],
+      "mnemonic": "uqrshl",
+      "operands": [
+        {
+          "register": "b0"
+        },
+        {
+          "register": "b1"
+        },
+        {
+          "register": "b2"
+        }
+      ]
+    },
+    {
+      "line": 7,
+      "bytes": [
+        106,
+        93,
+        108,
+        126
+      ],
+      "mnemonic": "uqrshl",
+      "operands": [
+        {
+          "register": "h10"
+        },
+        {
+          "register": "h11"
+        },
+        {
+          "register": "h12"
+        }
+      ]
+    },
+    {
+      "line": 8,
+      "bytes": [
+        180,
+        94,
+        162,
+        126
+      ],
+      "mnemonic": "uqrshl",
+      "operands": [
+        {
+          "register": "s20"
+        },
+        {
+          "register": "s21"
+        },
+        {
+          "register": "s2"
+        }
+      ]
+    },
+    {
+      "line": 9,
+      "bytes": [
+        241,
+        95,
+        232,
+        126
+      ],
+      "mnemonic": "uqrshl",
+      "operands": [
+        {
+          "register": "d17"
+        },
+        {
+          "register": "d31"
+        },
+        {
+          "register": "d8"
+        }
+      ]
+    }
+  ]
+}

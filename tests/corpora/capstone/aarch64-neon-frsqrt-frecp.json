@@ -1,0 +1,213 @@
+{
+  "schema": "glaurung-capstone-mc-v1",
+  "upstream": {
+    "project": "capstone",
+    "version": "5.0.0",
+    "crate": "capstone-sys 0.16.0",
+    "path": "suite/MC/AArch64/neon-frsqrt-frecp.s.cs",
+    "licenses": [
+      "BSD-3-Clause",
+      "NCSA"
+    ]
+  },
+  "vectors": [
+    {
+      "line": 2,
+      "bytes": [
+        224,
+        255,
+        176,
+        14
+      ],
+      "mnemonic": "frsqrts",
+      "operands": [
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 2,
+            "element_bits": 32
+          }
+        },
+        {
+          "register": "v31",
+          "vector_shape": {
+            "lanes": 2,
+            "element_bits": 32
+          }
+        },
+        {
+          "register": "v16",
+          "vector_shape": {
+            "lanes": 2,
+            "element_bits": 32
+          }
+        }
+      ]
+    },
+    {
+      "line": 3,
+      "bytes": [
+        228,
+        252,
+        175,
+        78
+      ],
+      "mnemonic": "frsqrts",
+      "operands": [
+        {
+          "register": "v4",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        },
+        {
+          "register": "v7",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        },
+        {
+          "register": "v15",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        }
+      ]
+    },
+    {
+      "line": 4,
+      "bytes": [
+        93,
+        252,
+        229,
+        78
+      ],
+      "mnemonic": "frsqrts",
+      "operands": [
+        {
+          "register": "v29",
+          "vector_shape": {
+            "lanes": 2,
+            "element_bits": 64
+          }
+        },
+        {
+          "register": "v2",
+          "vector_shape": {
+            "lanes": 2,
+            "element_bits": 64
+          }
+        },
+        {
+          "register": "v5",
+          "vector_shape": {
+            "lanes": 2,
+            "element_bits": 64
+          }
+        }
+      ]
+    },
+    {
+      "line": 5,
+      "bytes": [
+        191,
+        255,
+        60,
+        78
+      ],
+      "mnemonic": "frecps",
+      "operands": [
+        {
+          "register": "v31",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        },
+        {
+          "register": "v29",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        },
+        {
+          "register": "v28",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        }
+      ]
+    },
+    {
+      "line": 6,
+      "bytes": [
+        3,
+        253,
+        44,
+        14
+      ],
+      "mnemonic": "frecps",
+      "operands": [
+        {
+          "register": "v3",
+          "vector_shape": {
+            "lanes": 2,
+            "element_bits": 32
+          }
+        },
+        {
+          "register": "v8",
+          "vector_shape": {
+            "lanes": 2,
+            "element_bits": 32
+          }
+        },
+        {
+          "register": "v12",
+          "vector_shape": {
+            "lanes": 2,
+            "element_bits": 32
+          }
+        }
+      ]
+    },
+    {
+      "line": 7,
+      "bytes": [
+        241,
+        253,
+        109,
+        78
+      ],
+      "mnemonic": "frecps",
+      "operands": [
+        {
+          "register": "v17",
+          "vector_shape": {
+            "lanes": 2,
+            "element_bits": 64
+          }
+        },
+        {
+          "register": "v15",
+          "vector_shape": {
+            "lanes": 2,
+            "element_bits": 64
+          }
+        },
+        {
+          "register": "v13",
+          "vector_shape": {
+            "lanes": 2,
+            "element_bits": 64
+          }
+        }
+      ]
+    }
+  ]
+}

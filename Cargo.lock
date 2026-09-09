@@ -784,6 +784,7 @@ dependencies = [
  "encoding_rs",
  "flate2",
  "gimli 0.33.0",
+ "glaurung-disasm",
  "goblin",
  "hex",
  "iced-x86",
@@ -822,6 +823,10 @@ dependencies = [
  "z3",
  "zstd",
 ]
+
+[[package]]
+name = "glaurung-disasm"
+version = "0.1.0"
 
 [[package]]
 name = "glob"

@@ -1,0 +1,177 @@
+{
+  "schema": "glaurung-capstone-mc-v1",
+  "upstream": {
+    "project": "capstone",
+    "version": "5.0.0",
+    "crate": "capstone-sys 0.16.0",
+    "path": "suite/MC/AArch64/neon-scalar-extract-narrow.s.cs",
+    "licenses": [
+      "BSD-3-Clause",
+      "NCSA"
+    ]
+  },
+  "vectors": [
+    {
+      "line": 2,
+      "bytes": [
+        211,
+        41,
+        33,
+        126
+      ],
+      "mnemonic": "sqxtun",
+      "operands": [
+        {
+          "register": "b19"
+        },
+        {
+          "register": "h14"
+        }
+      ]
+    },
+    {
+      "line": 3,
+      "bytes": [
+        245,
+        41,
+        97,
+        126
+      ],
+      "mnemonic": "sqxtun",
+      "operands": [
+        {
+          "register": "h21"
+        },
+        {
+          "register": "s15"
+        }
+      ]
+    },
+    {
+      "line": 4,
+      "bytes": [
+        148,
+        41,
+        161,
+        126
+      ],
+      "mnemonic": "sqxtun",
+      "operands": [
+        {
+          "register": "s20"
+        },
+        {
+          "register": "d12"
+        }
+      ]
+    },
+    {
+      "line": 5,
+      "bytes": [
+        82,
+        74,
+        33,
+        94
+      ],
+      "mnemonic": "sqxtn",
+      "operands": [
+        {
+          "register": "b18"
+        },
+        {
+          "register": "h18"
+        }
+      ]
+    },
+    {
+      "line": 6,
+      "bytes": [
+        52,
+        74,
+        97,
+        94
+      ],
+      "mnemonic": "sqxtn",
+      "operands": [
+        {
+          "register": "h20"
+        },
+        {
+          "register": "s17"
+        }
+      ]
+    },
+    {
+      "line": 7,
+      "bytes": [
+        211,
+        73,
+        161,
+        94
+      ],
+      "mnemonic": "sqxtn",
+      "operands": [
+        {
+          "register": "s19"
+        },
+        {
+          "register": "d14"
+        }
+      ]
+    },
+    {
+      "line": 8,
+      "bytes": [
+        82,
+        74,
+        33,
+        126
+      ],
+      "mnemonic": "uqxtn",
+      "operands": [
+        {
+          "register": "b18"
+        },
+        {
+          "register": "h18"
+        }
+      ]
+    },
+    {
+      "line": 9,
+      "bytes": [
+        52,
+        74,
+        97,
+        126
+      ],
+      "mnemonic": "uqxtn",
+      "operands": [
+        {
+          "register": "h20"
+        },
+        {
+          "register": "s17"
+        }
+      ]
+    },
+    {
+      "line": 10,
+      "bytes": [
+        211,
+        73,
+        161,
+        126
+      ],
+      "mnemonic": "uqxtn",
+      "operands": [
+        {
+          "register": "s19"
+        },
+        {
+          "register": "d14"
+        }
+      ]
+    }
+  ]
+}

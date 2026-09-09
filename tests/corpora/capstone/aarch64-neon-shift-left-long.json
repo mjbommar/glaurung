@@ -1,0 +1,363 @@
+{
+  "schema": "glaurung-capstone-mc-v1",
+  "upstream": {
+    "project": "capstone",
+    "version": "5.0.0",
+    "crate": "capstone-sys 0.16.0",
+    "path": "suite/MC/AArch64/neon-shift-left-long.s.cs",
+    "licenses": [
+      "BSD-3-Clause",
+      "NCSA"
+    ]
+  },
+  "vectors": [
+    {
+      "line": 2,
+      "bytes": [
+        32,
+        164,
+        11,
+        15
+      ],
+      "mnemonic": "sshll",
+      "operands": [
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 8,
+            "element_bits": 16
+          }
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 8,
+            "element_bits": 8
+          }
+        },
+        {
+          "immediate": 3
+        }
+      ]
+    },
+    {
+      "line": 3,
+      "bytes": [
+        32,
+        164,
+        19,
+        15
+      ],
+      "mnemonic": "sshll",
+      "operands": [
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 16
+          }
+        },
+        {
+          "immediate": 3
+        }
+      ]
+    },
+    {
+      "line": 4,
+      "bytes": [
+        32,
+        164,
+        35,
+        15
+      ],
+      "mnemonic": "sshll",
+      "operands": [
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 2,
+            "element_bits": 64
+          }
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 2,
+            "element_bits": 32
+          }
+        },
+        {
+          "immediate": 3
+        }
+      ]
+    },
+    {
+      "line": 5,
+      "bytes": [
+        32,
+        164,
+        11,
+        79
+      ],
+      "mnemonic": "sshll2",
+      "operands": [
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 8,
+            "element_bits": 16
+          }
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 16,
+            "element_bits": 8
+          }
+        },
+        {
+          "immediate": 3
+        }
+      ]
+    },
+    {
+      "line": 6,
+      "bytes": [
+        32,
+        164,
+        19,
+        79
+      ],
+      "mnemonic": "sshll2",
+      "operands": [
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 8,
+            "element_bits": 16
+          }
+        },
+        {
+          "immediate": 3
+        }
+      ]
+    },
+    {
+      "line": 7,
+      "bytes": [
+        32,
+        164,
+        35,
+        79
+      ],
+      "mnemonic": "sshll2",
+      "operands": [
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 2,
+            "element_bits": 64
+          }
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        },
+        {
+          "immediate": 3
+        }
+      ]
+    },
+    {
+      "line": 8,
+      "bytes": [
+        32,
+        164,
+        11,
+        47
+      ],
+      "mnemonic": "ushll",
+      "operands": [
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 8,
+            "element_bits": 16
+          }
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 8,
+            "element_bits": 8
+          }
+        },
+        {
+          "immediate": 3
+        }
+      ]
+    },
+    {
+      "line": 9,
+      "bytes": [
+        32,
+        164,
+        19,
+        47
+      ],
+      "mnemonic": "ushll",
+      "operands": [
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 16
+          }
+        },
+        {
+          "immediate": 3
+        }
+      ]
+    },
+    {
+      "line": 10,
+      "bytes": [
+        32,
+        164,
+        35,
+        47
+      ],
+      "mnemonic": "ushll",
+      "operands": [
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 2,
+            "element_bits": 64
+          }
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 2,
+            "element_bits": 32
+          }
+        },
+        {
+          "immediate": 3
+        }
+      ]
+    },
+    {
+      "line": 11,
+      "bytes": [
+        32,
+        164,
+        11,
+        111
+      ],
+      "mnemonic": "ushll2",
+      "operands": [
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 8,
+            "element_bits": 16
+          }
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 16,
+            "element_bits": 8
+          }
+        },
+        {
+          "immediate": 3
+        }
+      ]
+    },
+    {
+      "line": 12,
+      "bytes": [
+        32,
+        164,
+        19,
+        111
+      ],
+      "mnemonic": "ushll2",
+      "operands": [
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 8,
+            "element_bits": 16
+          }
+        },
+        {
+          "immediate": 3
+        }
+      ]
+    },
+    {
+      "line": 13,
+      "bytes": [
+        32,
+        164,
+        35,
+        111
+      ],
+      "mnemonic": "ushll2",
+      "operands": [
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 2,
+            "element_bits": 64
+          }
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 4,
+            "element_bits": 32
+          }
+        },
+        {
+          "immediate": 3
+        }
+      ]
+    }
+  ]
+}

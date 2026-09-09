@@ -1,0 +1,457 @@
+{
+  "schema": "glaurung-capstone-mc-v1",
+  "upstream": {
+    "project": "capstone",
+    "version": "5.0.0",
+    "crate": "capstone-sys 0.16.0",
+    "path": "suite/MC/AArch64/neon-scalar-by-elem-saturating-mul.s.cs",
+    "licenses": [
+      "BSD-3-Clause",
+      "NCSA"
+    ]
+  },
+  "vectors": [
+    {
+      "line": 2,
+      "bytes": [
+        33,
+        176,
+        81,
+        95
+      ],
+      "mnemonic": "sqdmull",
+      "operands": [
+        {
+          "register": "s1"
+        },
+        {
+          "register": "h1"
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 16
+          },
+          "vector_index": 1
+        }
+      ]
+    },
+    {
+      "line": 3,
+      "bytes": [
+        72,
+        176,
+        101,
+        95
+      ],
+      "mnemonic": "sqdmull",
+      "operands": [
+        {
+          "register": "s8"
+        },
+        {
+          "register": "h2"
+        },
+        {
+          "register": "v5",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 16
+          },
+          "vector_index": 2
+        }
+      ]
+    },
+    {
+      "line": 4,
+      "bytes": [
+        44,
+        178,
+        121,
+        95
+      ],
+      "mnemonic": "sqdmull",
+      "operands": [
+        {
+          "register": "s12"
+        },
+        {
+          "register": "h17"
+        },
+        {
+          "register": "v9",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 16
+          },
+          "vector_index": 3
+        }
+      ]
+    },
+    {
+      "line": 5,
+      "bytes": [
+        255,
+        187,
+        127,
+        95
+      ],
+      "mnemonic": "sqdmull",
+      "operands": [
+        {
+          "register": "s31"
+        },
+        {
+          "register": "h31"
+        },
+        {
+          "register": "v15",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 16
+          },
+          "vector_index": 7
+        }
+      ]
+    },
+    {
+      "line": 6,
+      "bytes": [
+        33,
+        176,
+        132,
+        95
+      ],
+      "mnemonic": "sqdmull",
+      "operands": [
+        {
+          "register": "d1"
+        },
+        {
+          "register": "s1"
+        },
+        {
+          "register": "v4",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 32
+          },
+          "vector_index": 0
+        }
+      ]
+    },
+    {
+      "line": 7,
+      "bytes": [
+        255,
+        187,
+        191,
+        95
+      ],
+      "mnemonic": "sqdmull",
+      "operands": [
+        {
+          "register": "d31"
+        },
+        {
+          "register": "s31"
+        },
+        {
+          "register": "v31",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 32
+          },
+          "vector_index": 3
+        }
+      ]
+    },
+    {
+      "line": 8,
+      "bytes": [
+        73,
+        177,
+        143,
+        95
+      ],
+      "mnemonic": "sqdmull",
+      "operands": [
+        {
+          "register": "d9"
+        },
+        {
+          "register": "s10"
+        },
+        {
+          "register": "v15",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 32
+          },
+          "vector_index": 0
+        }
+      ]
+    },
+    {
+      "line": 9,
+      "bytes": [
+        32,
+        192,
+        64,
+        95
+      ],
+      "mnemonic": "sqdmulh",
+      "operands": [
+        {
+          "register": "h0"
+        },
+        {
+          "register": "h1"
+        },
+        {
+          "register": "v0",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 16
+          },
+          "vector_index": 0
+        }
+      ]
+    },
+    {
+      "line": 10,
+      "bytes": [
+        106,
+        201,
+        74,
+        95
+      ],
+      "mnemonic": "sqdmulh",
+      "operands": [
+        {
+          "register": "h10"
+        },
+        {
+          "register": "h11"
+        },
+        {
+          "register": "v10",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 16
+          },
+          "vector_index": 4
+        }
+      ]
+    },
+    {
+      "line": 11,
+      "bytes": [
+        180,
+        202,
+        127,
+        95
+      ],
+      "mnemonic": "sqdmulh",
+      "operands": [
+        {
+          "register": "h20"
+        },
+        {
+          "register": "h21"
+        },
+        {
+          "register": "v15",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 16
+          },
+          "vector_index": 7
+        }
+      ]
+    },
+    {
+      "line": 12,
+      "bytes": [
+        89,
+        203,
+        187,
+        95
+      ],
+      "mnemonic": "sqdmulh",
+      "operands": [
+        {
+          "register": "s25"
+        },
+        {
+          "register": "s26"
+        },
+        {
+          "register": "v27",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 32
+          },
+          "vector_index": 3
+        }
+      ]
+    },
+    {
+      "line": 13,
+      "bytes": [
+        194,
+        192,
+        135,
+        95
+      ],
+      "mnemonic": "sqdmulh",
+      "operands": [
+        {
+          "register": "s2"
+        },
+        {
+          "register": "s6"
+        },
+        {
+          "register": "v7",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 32
+          },
+          "vector_index": 0
+        }
+      ]
+    },
+    {
+      "line": 14,
+      "bytes": [
+        223,
+        211,
+        110,
+        95
+      ],
+      "mnemonic": "sqrdmulh",
+      "operands": [
+        {
+          "register": "h31"
+        },
+        {
+          "register": "h30"
+        },
+        {
+          "register": "v14",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 16
+          },
+          "vector_index": 2
+        }
+      ]
+    },
+    {
+      "line": 15,
+      "bytes": [
+        33,
+        216,
+        65,
+        95
+      ],
+      "mnemonic": "sqrdmulh",
+      "operands": [
+        {
+          "register": "h1"
+        },
+        {
+          "register": "h1"
+        },
+        {
+          "register": "v1",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 16
+          },
+          "vector_index": 4
+        }
+      ]
+    },
+    {
+      "line": 16,
+      "bytes": [
+        213,
+        218,
+        127,
+        95
+      ],
+      "mnemonic": "sqrdmulh",
+      "operands": [
+        {
+          "register": "h21"
+        },
+        {
+          "register": "h22"
+        },
+        {
+          "register": "v15",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 16
+          },
+          "vector_index": 7
+        }
+      ]
+    },
+    {
+      "line": 17,
+      "bytes": [
+        197,
+        216,
+        135,
+        95
+      ],
+      "mnemonic": "sqrdmulh",
+      "operands": [
+        {
+          "register": "s5"
+        },
+        {
+          "register": "s6"
+        },
+        {
+          "register": "v7",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 32
+          },
+          "vector_index": 2
+        }
+      ]
+    },
+    {
+      "line": 18,
+      "bytes": [
+        84,
+        211,
+        187,
+        95
+      ],
+      "mnemonic": "sqrdmulh",
+      "operands": [
+        {
+          "register": "s20"
+        },
+        {
+          "register": "s26"
+        },
+        {
+          "register": "v27",
+          "vector_shape": {
+            "lanes": 1,
+            "element_bits": 32
+          },
+          "vector_index": 1
+        }
+      ]
+    }
+  ]
+}

@@ -38,6 +38,7 @@ goblin = { version = "0.10.1", optional = true, default-features = true }
 pelite = { version = "0.10", optional = true }
 iced-x86 = "1.20"
 capstone = "0.12"
+glaurung-disasm = { path = "crates/glaurung-disasm" }
 # BinaryFuse8 membership gate over known function identities (item 7 of
 # docs/history/program-measures-2026-09-02.md). Default features are
 # NON-DETERMINISTIC: `uniform-random` fills unused filter slots with entropy
@@ -193,6 +194,10 @@ harness = false
 
 [[bench]]
 name = "source_parse"
+harness = false
+
+[[bench]]
+name = "disasm_decode"
 harness = false
 
 # Examples that drive the symbolic engine only build with its feature enabled,
