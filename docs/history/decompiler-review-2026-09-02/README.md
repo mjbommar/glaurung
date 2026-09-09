@@ -85,9 +85,14 @@ three places. The detailed file now records the reconciled decisions:
 | [05-planning-docs-audit.md](05-planning-docs-audit.md) | What the planning documents decided, tried, abandoned, or left contradictory. |
 | [06-recommendations.md](06-recommendations.md) | Ten recommendations, ordered by leverage, each with the evidence it rests on, what the docs already said, and how it would be judged. |
 | [PLAN.md](PLAN.md) | Dependency-ordered implementation work packages with exact production/test paths, TDD sequence, gates, measurements, stop conditions, and milestones. |
+| [CURRENT-STATE-2026-09-09.md](CURRENT-STATE-2026-09-09.md) | Current implementation handoff: completed and partial phases, recent output improvements, exact validation boundary, remaining risks, and ordered resume point. |
 | [results/](results/) | Per-increment implementation records with exact commands, release-built measurements, regressions, limitations, and next ordered work. |
 
-The latest WP3 record is
+For current status, start with
+[`CURRENT-STATE-2026-09-09.md`](CURRENT-STATE-2026-09-09.md). The chronological
+record below predates that handoff and is retained as implementation history.
+
+The latest WP3 record at the time this chronology was written was
 [`results/wp3-arm32-frame-storage-identities.md`](results/wp3-arm32-frame-storage-identities.md):
 production ARM32 frame save, anchor, deallocation, and restore matching now
 uses producer-owned storage identity rather than `stack_` spelling. Its two
