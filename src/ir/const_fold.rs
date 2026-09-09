@@ -608,6 +608,13 @@ fn fold_body(body: &mut [Stmt], changed: &mut bool, parameter_authority: Paramet
                     fold_body(b, changed, parameter_authority);
                 }
             }
+            Stmt::Throw { value } => fold_expr(value, changed, parameter_authority),
+            Stmt::TryCatch { try_body, catches } => {
+                fold_body(try_body, changed, parameter_authority);
+                for catch in catches {
+                    fold_body(&mut catch.body, changed, parameter_authority);
+                }
+            }
             Stmt::Pop { .. }
             | Stmt::Goto { .. }
             | Stmt::Label(_)
@@ -615,9 +622,7 @@ fn fold_body(body: &mut [Stmt], changed: &mut bool, parameter_authority: Paramet
             | Stmt::Continue
             | Stmt::Nop
             | Stmt::Unknown(_)
-            | Stmt::Comment(_)
-            | Stmt::Throw { .. }
-            | Stmt::TryCatch { .. } => {}
+            | Stmt::Comment(_) => {}
         }
     }
 }
@@ -1998,6 +2003,43 @@ mod tests {
                 src,
             }],
         }
+    }
+
+    #[test]
+    fn exception_expressions_share_the_constant_fold_surface() {
+        let reducible = || bin(BinOp::Add, Expr::Const(40), Expr::Const(2));
+        let mut function = Function {
+            name: "exception_constants".into(),
+            entry_va: 0,
+            body: vec![Stmt::TryCatch {
+                try_body: vec![Stmt::Throw { value: reducible() }],
+                catches: vec![crate::ir::ast::CatchClause {
+                    type_name: "int".into(),
+                    binding: reg("caught"),
+                    body: vec![Stmt::Return {
+                        value: Some(reducible()),
+                    }],
+                }],
+            }],
+        };
+
+        assert!(fold_constants(&mut function));
+
+        let Stmt::TryCatch { try_body, catches } = &function.body[0] else {
+            panic!("exception region disappeared: {:#?}", function.body);
+        };
+        assert!(matches!(
+            &try_body[0],
+            Stmt::Throw {
+                value: Expr::Const(42)
+            }
+        ));
+        assert!(matches!(
+            &catches[0].body[0],
+            Stmt::Return {
+                value: Some(Expr::Const(42))
+            }
+        ));
     }
 
     fn extended_view(value: Expr, signed: bool, outer_width: u8, inner_width: u8) -> Expr {
