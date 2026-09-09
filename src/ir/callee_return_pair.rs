@@ -155,15 +155,19 @@ fn compose_body(
                 if is_explicit_sse_result(&low_value, cc, identities) {
                     return false;
                 }
-                *value = Some(Expr::Bin {
-                    op: BinOp::Or,
-                    lhs: Box::new(wide_cast(low_value, width)),
-                    rhs: Box::new(Expr::Bin {
-                        op: BinOp::Shl,
-                        lhs: Box::new(wide_cast(Expr::Reg(high_value), width)),
-                        rhs: Box::new(Expr::Const(i64::from(width) * 4)),
-                    }),
-                });
+                let origins = low_value.origins().cloned();
+                *value = Some(
+                    Expr::Bin {
+                        op: BinOp::Or,
+                        lhs: Box::new(wide_cast(low_value, width)),
+                        rhs: Box::new(Expr::Bin {
+                            op: BinOp::Shl,
+                            lhs: Box::new(wide_cast(Expr::Reg(high_value), width)),
+                            rhs: Box::new(Expr::Const(i64::from(width) * 4)),
+                        }),
+                    }
+                    .with_optional_origins(origins),
+                );
             }
             Stmt::If {
                 then_body,
@@ -246,7 +250,7 @@ fn is_explicit_sse_result(
     cc: CallConv,
     identities: Option<&ValueIdentities>,
 ) -> bool {
-    match expression {
+    match expression.semantic() {
         Expr::FloatConst { .. }
         | Expr::NumericConvert {
             to: crate::ir::ast::ScalarType::Float(_),
@@ -283,24 +287,26 @@ fn every_return_is_composed(body: &[Stmt], width: u8, seen: &mut bool) -> bool {
         Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Return { value } => {
             *seen = true;
-            matches!(
-                value,
-                Some(Expr::Bin {
-                    op: BinOp::Or,
-                    lhs,
-                    rhs,
-                }) if matches!(
-                    lhs.as_ref(),
-                    Expr::Cast { signed: false, width: cast, .. } if *cast == width
-                ) && matches!(
-                    rhs.as_ref(),
-                    Expr::Bin { op: BinOp::Shl, lhs, .. }
-                        if matches!(
-                            lhs.as_ref(),
-                            Expr::Cast { signed: false, width: cast, .. } if *cast == width
-                        )
+            value.as_ref().is_some_and(|value| {
+                matches!(
+                    value.semantic(),
+                    Expr::Bin {
+                        op: BinOp::Or,
+                        lhs,
+                        rhs,
+                    } if matches!(
+                        lhs.semantic(),
+                        Expr::Cast { signed: false, width: cast, .. } if *cast == width
+                    ) && matches!(
+                        rhs.semantic(),
+                        Expr::Bin { op: BinOp::Shl, lhs, .. }
+                            if matches!(
+                                lhs.semantic(),
+                                Expr::Cast { signed: false, width: cast, .. } if *cast == width
+                            )
+                    )
                 )
-            )
+            })
         }
         Stmt::If {
             then_body,
@@ -496,9 +502,16 @@ mod tests {
 
     #[test]
     fn attributed_integer_pair_result_retains_its_return_owner() {
+        let expression_owner = crate::ir::ast::OriginSet::one(0x2008);
+        let mut body = quad_body();
+        let Stmt::Return { value } = &mut body[2] else {
+            unreachable!("quad body ends in return")
+        };
+        *value = value
+            .take()
+            .map(|expression| expression.with_origins(expression_owner.clone()));
         let mut f = function(
-            quad_body()
-                .into_iter()
+            body.into_iter()
                 .enumerate()
                 .map(|(index, statement)| {
                     statement.with_origins(crate::ir::ast::OriginSet::one(
@@ -518,11 +531,14 @@ mod tests {
             returned.origins(),
             Some(&crate::ir::ast::OriginSet::one(0x1008))
         );
+        let Stmt::Return { value: Some(value) } = returned.semantic() else {
+            unreachable!("composed return retained")
+        };
+        assert_eq!(value.origins(), Some(&expression_owner));
         assert!(matches!(
             returned.semantic(),
-            Stmt::Return {
-                value: Some(Expr::Bin { op: BinOp::Or, .. })
-            }
+            Stmt::Return { value: Some(value) }
+                if matches!(value.semantic(), Expr::Bin { op: BinOp::Or, .. })
         ));
     }
 
@@ -662,15 +678,18 @@ mod tests {
             }
             .with_origins(crate::ir::ast::OriginSet::one(0x1000)),
             Stmt::Return {
-                value: Some(Expr::Cast {
-                    signed: true,
-                    width: 8,
-                    expr: Box::new(Expr::NumericConvert {
-                        from: crate::ir::ast::ScalarType::SignedInt(4),
-                        to: crate::ir::ast::ScalarType::Float(8),
-                        expr: Box::new(Expr::Const(4)),
-                    }),
-                }),
+                value: Some(
+                    Expr::Cast {
+                        signed: true,
+                        width: 8,
+                        expr: Box::new(Expr::NumericConvert {
+                            from: crate::ir::ast::ScalarType::SignedInt(4),
+                            to: crate::ir::ast::ScalarType::Float(8),
+                            expr: Box::new(Expr::Const(4)),
+                        }),
+                    }
+                    .with_origins(crate::ir::ast::OriginSet::one(0x2004)),
+                ),
             }
             .with_origins(crate::ir::ast::OriginSet::one(0x1004)),
         ]);
