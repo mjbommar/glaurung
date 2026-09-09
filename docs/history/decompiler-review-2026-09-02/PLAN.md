@@ -1013,7 +1013,11 @@ provenance through lowering.
   queries derive from the existing authoritative candidate relation, so role
   projection and rename transactions preserve IDs without a second per-name
   identity map. This establishes the typed key but does not yet migrate
-  production consumers or remove `tag_phys`. See
+  production consumers or remove `tag_phys`. Commit `d1eec606` then keys the
+  exact definition-width fact by `ValueId` and makes the production DecBench
+  type merge consume that stable fact. Coalesced values retain a width only
+  when every represented ID agrees; missing or conflicting evidence declines.
+  The broader type system and remaining consumers are still name-keyed. See
   `results/wp3-multi-output-identities.md` and
   `results/wp3-ast-identity-renames.md`, and
   `results/wp3-opaque-value-identities.md`.
@@ -3625,7 +3629,10 @@ while keeping machine width as truth.
 - [ ] Treat unsigned range comparisons as range facts.
 - [ ] Add recursive pointer and aggregate representations needed by `char **`,
   by-value structs, and hidden returns.
-- [ ] Key type facts by stable value identity from WP3.
+- [~] Key type facts by stable value identity from WP3. Commit `d1eec606`
+  migrates exact definition widths and their production declaration merge;
+  general type facts, constraints, and inferred roles remain to migrate. See
+  `results/wp3-stable-definition-widths.md`.
 - [ ] Split generated type/return reports by C vs Rust before judging movement.
 
 The first incremental constraint slice landed in
@@ -5097,6 +5104,14 @@ relevant ratchet's accepted-regression record.
    typed `tag_phys` consumer to `ValueId`, retaining the compatibility parser
    only where no identity sidecar exists. See
    `results/wp3-opaque-value-identities.md`.
+   Commit `d1eec606` completes that first consumer: exact machine definition
+   widths are now stored by `ValueId`, and the production declaration merge
+   reads those facts rather than trusting its compatibility name-keyed map.
+   The 63 value-numbering and 25 type-map module tests pass. An exact clean
+   release build retains six selected O0/O2 Hello cells across x86-64, ARMv7,
+   and AArch64 plus the directly affected GCC-O2 binary32 sign-bit lane. Next
+   migrate the remaining per-value type facts and then remove the compatibility
+   width bridge. See `results/wp3-stable-definition-widths.md`.
    Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
