@@ -117,12 +117,6 @@ pub(super) fn dead_store_runs(
                     removed |= dead_store_runs(b, identities);
                 }
             }
-            Stmt::TryCatch { try_body, catches } => {
-                removed |= dead_store_runs(try_body, identities);
-                for catch in catches {
-                    removed |= dead_store_runs(&mut catch.body, identities);
-                }
-            }
             _ => {}
         }
     }
@@ -201,8 +195,7 @@ fn remove_dead(
             // spelling identity within the newly structured region: this still
             // removes a catch-local dead copy, while preserving a same-spelling
             // definition read by a throw or return in that region.
-            Stmt::TryCatch { try_body, catches } => {
-                changed |= eliminate_dead_copies(try_body, None);
+            Stmt::TryCatch { catches, .. } => {
                 for catch in catches {
                     changed |= eliminate_dead_copies(&mut catch.body, None);
                 }
