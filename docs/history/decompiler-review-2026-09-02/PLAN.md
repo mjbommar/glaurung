@@ -5352,6 +5352,16 @@ relevant ratchet's accepted-regression record.
    PE32 `main` round trip pass against an exact clean release build. The recent
    green six-cell Hello checkpoint was not repeated. See
    `results/wp3-mingw-runtime-target-origins.md`.
+   Commit `b58c5322` closes the redundant reaching-copy guard sibling.
+   Distinct expression owners no longer make identical safe register/constant
+   copies defeat recovery of one readable short-circuit conjunction, and the
+   removed copy's statement plus source owners transfer to the survivor.
+   Same-destination, same-semantic-source, and register/constant-only gates
+   keep changed or memory-backed copies visible. The observed-red ownership
+   contract, all 25 guard-chain tests, and two exact-release guard-heavy O2
+   controls show no regression; the controls retain broader baseline failures
+   and are not claimed as proof that this fold fired. See
+   `results/wp3-redundant-copy-guard-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
