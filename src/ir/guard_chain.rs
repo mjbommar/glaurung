@@ -304,7 +304,20 @@ fn semantic_body_eq(left: &[Stmt], right: &[Stmt]) -> bool {
         && left
             .iter()
             .zip(right)
-            .all(|(left, right)| left.semantic() == right.semantic())
+            .all(|(left, right)| semantic_terminal_statement_eq(left, right))
+}
+
+fn semantic_terminal_statement_eq(left: &Stmt, right: &Stmt) -> bool {
+    match (left.semantic(), right.semantic()) {
+        (Stmt::Comment(left), Stmt::Comment(right)) => left == right,
+        (Stmt::Nop, Stmt::Nop) => true,
+        (Stmt::Return { value: left }, Stmt::Return { value: right }) => match (left, right) {
+            (Some(left), Some(right)) => left.semantic() == right.semantic(),
+            (None, None) => true,
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 fn merge_corresponding_origins(primary: &[Stmt], duplicate: &[Stmt]) -> Vec<Stmt> {
@@ -315,6 +328,11 @@ fn merge_corresponding_origins(primary: &[Stmt], duplicate: &[Stmt]) -> Vec<Stmt
             let mut merged = primary.clone();
             if let Some(origins) = duplicate.origins() {
                 merged.merge_origins(origins);
+            }
+            if let Stmt::Return { value: Some(value) } = duplicate.semantic() {
+                if let Some(origins) = value.origins() {
+                    merged.merge_origins(origins);
+                }
             }
             merged
         })
@@ -1677,8 +1695,11 @@ mod tests {
 
     #[test]
     fn attributed_terminal_pair_merges_guard_and_duplicate_tail_origins() {
-        let shared = Stmt::Return {
-            value: Some(Expr::Const(-7)),
+        let early_shared = Stmt::Return {
+            value: Some(Expr::Const(-7).with_origins(OriginSet::one(0x4086))),
+        };
+        let final_shared = Stmt::Return {
+            value: Some(Expr::Const(-7).with_origins(OriginSet::one(0x4092))),
         };
         let mut function = Function {
             name: "attributed_terminal_pair".into(),
@@ -1690,7 +1711,7 @@ mod tests {
                         lhs: Box::new(Expr::Reg(reg("length"))),
                         rhs: Box::new(Expr::Const(0)),
                     },
-                    then_body: vec![shared.clone().with_origins(OriginSet::one(0x4084))],
+                    then_body: vec![early_shared.with_origins(OriginSet::one(0x4084))],
                     else_body: None,
                 }
                 .with_origins(OriginSet::one(0x4080)),
@@ -1707,7 +1728,7 @@ mod tests {
                     else_body: None,
                 }
                 .with_origins(OriginSet::one(0x4088)),
-                shared.with_origins(OriginSet::one(0x4090)),
+                final_shared.with_origins(OriginSet::one(0x4090)),
             ],
         };
 
@@ -1729,7 +1750,17 @@ mod tests {
                 .origins()
                 .expect("merged shared return origins")
                 .addresses(),
-            &[0x4084, 0x4090]
+            &[0x4084, 0x4086, 0x4090]
+        );
+        let Stmt::Return { value: Some(value) } = then_body[0].semantic() else {
+            panic!("expected merged shared return")
+        };
+        assert_eq!(
+            value
+                .origins()
+                .expect("surviving return origin")
+                .addresses(),
+            &[0x4092]
         );
         assert_eq!(
             function.body[1]
