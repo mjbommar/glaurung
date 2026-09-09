@@ -3858,6 +3858,34 @@ function f @ 0x1000 {
         render_decbench(&prepare_for_decbench(f))
     }
 
+    #[test]
+    fn attributed_magic_constant_keeps_its_readability_annotation() {
+        let function = Function {
+            name: "protect_page".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x2000,
+                    name: "mprotect".into(),
+                },
+                args: vec![
+                    Expr::Reg(VReg::phys("arg0")),
+                    Expr::Const(4096),
+                    Expr::Const(5).with_origins(OriginSet::one(0x1010)),
+                ],
+                dst: Some(VReg::phys("ret")),
+                call_spec: None,
+            }],
+        };
+
+        let rendered = render_decbench(&function);
+
+        assert!(
+            rendered.contains("5 /* PROT_READ|PROT_EXEC */"),
+            "the attributed security-sensitive mask lost its readable name:\n{rendered}"
+        );
+    }
+
     /// The portable object is a file-scope definition, but DecBench scores one
     /// *function definition* sliced out of the submitted translation unit. A
     /// reference whose only declaration lives above the signature is undeclared

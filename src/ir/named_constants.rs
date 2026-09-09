@@ -192,7 +192,7 @@ pub fn symbolic_name(callee: &str, parameter_index: usize, value: i64) -> Option
 pub fn constant_argument_value(expr: &Expr) -> Option<i64> {
     let mut current = expr;
     loop {
-        match current {
+        match current.semantic() {
             Expr::Const(value) => return Some(*value),
             Expr::Cast { expr, .. } => current = expr,
             _ => return None,
@@ -211,6 +211,17 @@ mod tests {
             symbolic_name("mprotect", 2, 5).as_deref(),
             Some("PROT_READ|PROT_EXEC")
         );
+    }
+
+    #[test]
+    fn attributed_magic_constant_keeps_its_integer_value() {
+        let attributed = Expr::Cast {
+            signed: false,
+            width: 8,
+            expr: Box::new(Expr::Const(5).with_origins(crate::ir::ast::OriginSet::one(0x401000))),
+        };
+
+        assert_eq!(constant_argument_value(&attributed), Some(5));
     }
 
     #[test]
