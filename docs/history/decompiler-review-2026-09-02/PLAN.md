@@ -5302,6 +5302,17 @@ relevant ratchet's accepted-regression record.
    an exact clean release build and did not repeat the immediately preceding
    green six-cell Hello checkpoint. See
    `results/wp3-high-half-expression-origins.md`.
+   Commit `7e65572a` closes the tail-call expression-ownership layer left open
+   by the earlier statement-origin migration. Proven GOT and Rust-vtable tails
+   now read their target, dereference, callee, offset, and high-word extraction
+   through provenance carriers while retaining the same fail-closed target,
+   layout, alignment, return-width, clobber, and identity gates. Both
+   observed-red contracts and all 15 module tests pass. Six C O2 tail-position
+   controls pass; the Rust O2 control retains its recovered terminal vtable
+   call and its known broader baseline failure. The exact release build also
+   passes the periodic six-cell GCC symbols/PIE Hello checkpoint across
+   x86-64, AArch64, and ARMv7 at O0/O2. See
+   `results/wp3-tail-call-expression-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
