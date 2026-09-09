@@ -79,7 +79,7 @@ pub(crate) fn stack_proven_direct_call_arities_with_identities(
                 }
                 continue;
             };
-            let target = match target {
+            let target = match target.semantic() {
                 Expr::Addr(address) | Expr::Named { va: address, .. }
                     if requested_targets.contains(address) =>
                 {
@@ -380,7 +380,12 @@ mod tests {
         let mut body = Vec::new();
         body.extend(sysv_stack_push(7));
         body.extend(sysv_stack_push(6));
-        body.push(call_to("callee"));
+        let mut call = call_to("callee");
+        let Stmt::Call { target, .. } = &mut call else {
+            unreachable!("call_to must construct a call")
+        };
+        target.merge_origins(&crate::ir::ast::OriginSet::one(0x1010));
+        body.push(call);
         body.push(stack_add(16));
         let body = body
             .into_iter()
