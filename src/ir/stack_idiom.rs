@@ -97,41 +97,36 @@ fn rematerialise_body(body: &mut Vec<Stmt>) {
     while i + 1 < body.len() {
         // Push: `rsp = rsp - N;` then `store %stack_top = X;`.
         if is_rsp_sub_width(&body[i]) {
-            if let Stmt::Store {
-                addr: Expr::Reg(slot),
-                src,
-                ..
-            } = body[i + 1].semantic()
-            {
-                if is_stack_top(slot) {
-                    let mut value = src.clone();
-                    if let Some(origins) = body[i + 1].origins() {
-                        value.merge_origins(origins);
+            if let Stmt::Store { addr, src, .. } = body[i + 1].semantic() {
+                if let Expr::Reg(slot) = addr.semantic() {
+                    if is_stack_top(slot) {
+                        let mut value = src.clone();
+                        if let Some(origins) = body[i + 1].origins() {
+                            value.merge_origins(origins);
+                        }
+                        let origins = origins_of(&body[i..=i + 1]);
+                        body.remove(i + 1);
+                        body[i] = Stmt::Push { value }
+                            .with_optional_origins((!origins.is_empty()).then_some(origins));
+                        i += 1;
+                        continue;
                     }
-                    let origins = origins_of(&body[i..=i + 1]);
-                    body.remove(i + 1);
-                    body[i] = Stmt::Push { value }
-                        .with_optional_origins((!origins.is_empty()).then_some(origins));
-                    i += 1;
-                    continue;
                 }
             }
         }
         // Pop: `%X = %stack_top;` then `rsp = rsp + N;`.
-        if let Stmt::Assign {
-            dst,
-            src: Expr::Reg(slot),
-        } = body[i].semantic()
-        {
-            if is_stack_top(slot) && is_phys_reg(dst) {
-                if is_rsp_add_width(&body[i + 1]) {
-                    let target = dst.clone();
-                    let origins = origins_of(&body[i..=i + 1]);
-                    body.remove(i + 1);
-                    body[i] = Stmt::Pop { target }
-                        .with_optional_origins((!origins.is_empty()).then_some(origins));
-                    i += 1;
-                    continue;
+        if let Stmt::Assign { dst, src } = body[i].semantic() {
+            if let Expr::Reg(slot) = src.semantic() {
+                if is_stack_top(slot) && is_phys_reg(dst) {
+                    if is_rsp_add_width(&body[i + 1]) {
+                        let target = dst.clone();
+                        let origins = origins_of(&body[i..=i + 1]);
+                        body.remove(i + 1);
+                        body[i] = Stmt::Pop { target }
+                            .with_optional_origins((!origins.is_empty()).then_some(origins));
+                        i += 1;
+                        continue;
+                    }
                 }
             }
         }
@@ -163,8 +158,8 @@ fn is_rsp_sub_width(s: &Stmt) -> bool {
                 rhs,
             },
         } if is_stack_ptr(dst)
-            && matches!(lhs.as_ref(), Expr::Reg(r) if r == dst)
-            && matches!(rhs.as_ref(), Expr::Const(n) if *n > 0)
+            && matches!(lhs.semantic(), Expr::Reg(r) if r == dst)
+            && matches!(rhs.semantic(), Expr::Const(n) if *n > 0)
     )
 }
 
@@ -180,8 +175,8 @@ fn is_rsp_add_width(s: &Stmt) -> bool {
                 rhs,
             },
         } if is_stack_ptr(dst)
-            && matches!(lhs.as_ref(), Expr::Reg(r) if r == dst)
-            && matches!(rhs.as_ref(), Expr::Const(n) if *n > 0)
+            && matches!(lhs.semantic(), Expr::Reg(r) if r == dst)
+            && matches!(rhs.semantic(), Expr::Const(n) if *n > 0)
     )
 }
 
@@ -273,6 +268,39 @@ mod tests {
             f.body[0].origins().expect("push origins").addresses(),
             &[0x1000, 0x1004]
         );
+    }
+
+    #[test]
+    fn attributed_stack_operands_still_rematerialize_push_and_drop_epilogue_adjustment() {
+        let owner = OriginSet::one(0x1000);
+        let attributed_adjustment = |op| Stmt::Assign {
+            dst: reg("rsp"),
+            src: Expr::Bin {
+                op,
+                lhs: Box::new(Expr::Reg(reg("rsp")).with_origins(owner.clone())),
+                rhs: Box::new(Expr::Const(8).with_origins(owner.clone())),
+            },
+        };
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                attributed_adjustment(BinOp::Sub),
+                Stmt::Store {
+                    addr: Expr::Reg(reg("stack_top")).with_origins(owner.clone()),
+                    src: Expr::Reg(reg("rbp")),
+                    size: 8,
+                },
+                attributed_adjustment(BinOp::Add),
+                Stmt::Return { value: None },
+            ],
+        };
+
+        rematerialise_stack_ops(&mut f);
+
+        assert_eq!(f.body.len(), 2, "stack bookkeeping survived: {:#?}", f.body);
+        assert!(matches!(f.body[0].semantic(), Stmt::Push { .. }));
+        assert!(matches!(f.body[1].semantic(), Stmt::Return { .. }));
     }
 
     #[test]
