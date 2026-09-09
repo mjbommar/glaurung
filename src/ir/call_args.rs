@@ -158,15 +158,10 @@ fn is_frame_coordinate_storage(
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> bool {
     let name = match identities {
-        Some(identities) => {
-            let Some(identity) = identities.exact(register) else {
-                return false;
-            };
-            let VReg::Phys(base) = &identity.base else {
-                return false;
-            };
-            base.as_str()
-        }
+        Some(identities) => match identities.unambiguous_physical_base(register) {
+            Some(base) => base,
+            None => return false,
+        },
         None => {
             let VReg::Phys(name) = register else {
                 return false;
@@ -6941,15 +6936,26 @@ mod tests {
     }
 
     #[test]
-    fn frame_coordinate_uses_exact_identity_not_display_spelling() {
+    fn frame_coordinate_uses_unambiguous_identity_not_display_spelling() {
         let mut identities = crate::ir::value_number::ValueIdentities::default();
-        identities.record(
-            VReg::phys("opaque_stack"),
-            crate::ir::ssa::SsaValue {
-                base: VReg::phys("rsp"),
-                version: 4,
-            },
-        );
+        for version in [4, 7] {
+            identities.record(
+                VReg::phys("opaque_stack"),
+                crate::ir::ssa::SsaValue {
+                    base: VReg::phys("rsp"),
+                    version,
+                },
+            );
+        }
+        for (base, version) in [("rsp", 4), ("rax", 7)] {
+            identities.record(
+                VReg::phys("mixed_stack"),
+                crate::ir::ssa::SsaValue {
+                    base: VReg::phys(base),
+                    version,
+                },
+            );
+        }
         identities.record(
             VReg::phys("rsp#4"),
             crate::ir::ssa::SsaValue {
@@ -6965,8 +6971,29 @@ mod tests {
         ));
         assert!(!is_frame_coordinate_storage(
             CallConv::SysVAmd64,
+            &VReg::phys("mixed_stack"),
+            Some(&identities),
+        ));
+        assert!(!is_frame_coordinate_storage(
+            CallConv::SysVAmd64,
             &VReg::phys("rsp#4"),
             Some(&identities),
+        ));
+    }
+
+    #[test]
+    fn frame_coordinate_requires_identity_evidence_when_sidecar_is_present() {
+        let identities = crate::ir::value_number::ValueIdentities::default();
+
+        assert!(!is_frame_coordinate_storage(
+            CallConv::SysVAmd64,
+            &VReg::phys("rsp#4"),
+            Some(&identities),
+        ));
+        assert!(is_frame_coordinate_storage(
+            CallConv::SysVAmd64,
+            &VReg::phys("rsp#4"),
+            None,
         ));
     }
 
