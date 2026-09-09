@@ -2219,6 +2219,12 @@ provenance through lowering.
   switch round trip is green after a clean release build. The sampled AMD64
   non-PIE Hello cells exposed a separate direct-address resolution boundary.
   See `results/wp3-readonly-expression-origins.md`.
+  Commit `385a7635` closes the remaining exception traversal omission in name
+  resolution. Known addresses inside throws and every catch body now receive
+  the same readable symbol names as ordinary control flow while the enclosing
+  exception owner remains unchanged. Its observed-red contract, all 17
+  name-resolution tests, and two exact release-built x86-64 GCC O0/O2 Hello
+  controls pass. See `results/wp3-exception-name-resolution.md`.
   Commit `54ff918b` closes that boundary for authoritative character-pointer
   calls: attributed named targets still select their call contract, and
   attributed constant arguments fold to string literals without losing their
