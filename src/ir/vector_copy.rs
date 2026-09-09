@@ -99,7 +99,7 @@ fn adjacent_address(first: &Expr, candidate: &Expr, delta: i64) -> bool {
             disp,
             segment,
         },
-    ) = (first, candidate)
+    ) = (first.semantic(), candidate.semantic())
     else {
         return false;
     };
@@ -709,10 +709,21 @@ fn recover_body(
 }
 
 fn merged_origins(statements: &[Stmt]) -> OriginSet {
-    statements
-        .iter()
-        .filter_map(Stmt::origins)
-        .fold(OriginSet::empty(), |origins, next| origins.union(next))
+    let mut origins = OriginSet::empty();
+    for statement in statements {
+        if let Some(owner) = statement.origins() {
+            origins.merge(owner);
+        }
+        match statement.semantic() {
+            Stmt::Assign { src, .. } => collect_expression_origins(src, &mut origins),
+            Stmt::Store { addr, src, .. } => {
+                collect_expression_origins(addr, &mut origins);
+                collect_expression_origins(src, &mut origins);
+            }
+            _ => {}
+        }
+    }
+    origins
 }
 
 fn attach_origins(statement: Stmt, origins: OriginSet) -> Stmt {
@@ -1001,6 +1012,52 @@ mod tests {
             !function.body.iter().any(is_scalar_view_bridge),
             "the dead bridge must be removed with the lanes it read: {:#?}",
             function.body
+        );
+    }
+
+    #[test]
+    fn attributed_lane_addresses_rejoin_and_union_every_consumed_owner() {
+        let mut body = Vec::new();
+        for lane in 0..4 {
+            body.push(Stmt::Assign {
+                dst: VReg::phys(format!("xmm0_d{lane}")),
+                src: Expr::Deref {
+                    addr: Box::new(
+                        address("rsi", lane * 4)
+                            .with_origins(OriginSet::one(0x1200 + lane as u64 * 4)),
+                    ),
+                    size: 4,
+                },
+            });
+        }
+        for lane in 0..4 {
+            body.push(Stmt::Store {
+                addr: address("rdi", lane * 4)
+                    .with_origins(OriginSet::one(0x1220 + lane as u64 * 4)),
+                src: Expr::Reg(VReg::phys(format!("xmm0_d{lane}"))),
+                size: 4,
+            });
+        }
+        let mut function = Function {
+            name: "attributed_addresses".into(),
+            entry_va: 0,
+            body,
+        };
+
+        recover_wide_copies(&mut function);
+
+        assert_eq!(function.body.len(), 2, "{:#?}", function.body);
+        assert_eq!(
+            function.body[0].origins(),
+            Some(&OriginSet::from_addresses(
+                [0x1200, 0x1204, 0x1208, 0x120c,]
+            ))
+        );
+        assert_eq!(
+            function.body[1].origins(),
+            Some(&OriginSet::from_addresses(
+                [0x1220, 0x1224, 0x1228, 0x122c,]
+            ))
         );
     }
 
