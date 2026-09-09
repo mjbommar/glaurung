@@ -120,17 +120,6 @@ fn parse_prologue(
         start += 1;
     }
 
-    // Lowering emits this exact machine-frame summary before the instructions
-    // it describes. It is not a source comment and must not hide the prologue
-    // from the architecture recognizer. Keep arbitrary comments as barriers,
-    // and require the parsed width to agree with the independently recovered
-    // save/local extent below before consuming the summary.
-    let prologue_start = start;
-    let summarized_width = body.get(start).and_then(frame_size_summary);
-    if summarized_width.is_some() {
-        start += 1;
-    }
-
     let mut cursor = start;
     let mut save_groups = Vec::new();
     while let Some(width) = sp_adjust(body.get(cursor)?, BinOp::Sub, identities) {
@@ -238,27 +227,12 @@ fn parse_prologue(
         cursor += 1;
     }
 
-    let frame = Arm32Frame {
-        start: prologue_start,
+    Some(Arm32Frame {
+        start,
         end: cursor,
         local_width,
         save_groups,
-    };
-    if summarized_width.is_some_and(|width| width != frame.total_width()) {
-        return None;
-    }
-    Some(frame)
-}
-
-fn frame_size_summary(statement: &Stmt) -> Option<i64> {
-    let Stmt::Comment(text) = statement.semantic() else {
-        return None;
-    };
-    text.strip_prefix("frame: ")?
-        .strip_suffix(" bytes")?
-        .parse::<i64>()
-        .ok()
-        .filter(|width| *width > 0)
+    })
 }
 
 fn saved_register_store(
@@ -607,10 +581,12 @@ fn register_base<'a>(
     identities: Option<&'a crate::ir::value_number::ValueIdentities>,
 ) -> Option<&'a str> {
     match identities {
-        Some(identities) => match &identities.exact(register)?.base {
-            VReg::Phys(base) => Some(base),
-            _ => None,
-        },
+        // Structural registers intentionally retain one spelling across
+        // several SSA versions. Their exact value is therefore ambiguous, but
+        // the sidecar still proves one architectural storage base. Frame
+        // recognition asks which register this is, not which transient value
+        // it holds, so consume that explicit storage fact.
+        Some(identities) => identities.unambiguous_physical_base(register),
         None => match register {
             VReg::Phys(name) => Some(base_name(name)),
             _ => None,
@@ -1113,6 +1089,72 @@ mod tests {
     }
 
     #[test]
+    fn structural_sp_versions_share_one_machine_frame_storage_identity() {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for (value, base, version) in [
+            ("sp", "sp", 0),
+            ("sp", "sp", 1),
+            ("sp", "sp", 2),
+            ("r7", "r7", 0),
+            ("r7#1", "r7", 1),
+            ("r7#2", "r7", 2),
+            ("lr", "lr", 0),
+        ] {
+            identities.record(
+                reg(value),
+                crate::ir::ssa::SsaValue {
+                    base: reg(base),
+                    version,
+                },
+            );
+        }
+        let frame_object = "local_8".to_string();
+        identities.attach_promoted_stack_objects([&frame_object]);
+        let mut f = function(vec![
+            sp_sub(8),
+            Stmt::Store {
+                addr: object_addr("local_8", 0),
+                src: Expr::Reg(reg("r7")),
+                size: 4,
+            },
+            Stmt::Store {
+                addr: object_addr("local_8", 4),
+                src: Expr::Reg(reg("lr")),
+                size: 4,
+            },
+            Stmt::Assign {
+                dst: reg("r7#1"),
+                src: object_addr("local_8", 0),
+            },
+            Stmt::Nop,
+            Stmt::Assign {
+                dst: reg("r7#2"),
+                src: Expr::Deref {
+                    addr: Box::new(object_addr("local_8", 0)),
+                    size: 4,
+                },
+            },
+            sp_add(8),
+            Stmt::Return {
+                value: Some(Expr::Const(0)),
+            },
+        ]);
+
+        recognise_arm32_frame_with_identities(&mut f, &identities);
+
+        assert_eq!(f.body.len(), 4, "structural SP frame leaked: {:#?}", f.body);
+        assert!(matches!(
+            f.body.first(),
+            Some(Stmt::Comment(text))
+                if text == "arm32 prologue: save r7/lr, frame 8 bytes"
+        ));
+        assert!(matches!(
+            f.body.get(2),
+            Some(Stmt::Comment(text)) if text == "arm32 epilogue: restore machine frame"
+        ));
+    }
+
+    #[test]
     fn multi_register_core_save_and_pop_pc_collapses() {
         let mut f = function(vec![
             sp_sub(12),
@@ -1180,99 +1222,6 @@ mod tests {
             "promoted frame record leaked after collapse: {:#?}",
             f.body
         );
-    }
-
-    #[test]
-    fn frame_size_summary_does_not_hide_a_promoted_thumb_machine_frame() {
-        let mut f = function(vec![
-            Stmt::Comment("frame: 8 bytes".to_string()),
-            sp_sub(8),
-            Stmt::Store {
-                addr: object_addr("local_8", 0),
-                src: Expr::Reg(reg("r7")),
-                size: 4,
-            },
-            Stmt::Store {
-                addr: object_addr("local_8", 4),
-                src: Expr::Reg(reg("lr")),
-                size: 4,
-            },
-            Stmt::Assign {
-                dst: reg("r7#1"),
-                src: object_addr("local_8", 0),
-            },
-            Stmt::Nop,
-            Stmt::Assign {
-                dst: reg("r7#2"),
-                src: Expr::Deref {
-                    addr: Box::new(object_addr("local_8", 0)),
-                    size: 4,
-                },
-            },
-            sp_add(8),
-            Stmt::Return {
-                value: Some(Expr::Const(0)),
-            },
-        ]);
-
-        recognise_arm32_frame(&mut f);
-
-        assert!(matches!(
-            f.body.first(),
-            Some(Stmt::Comment(text))
-                if text == "arm32 prologue: save r7/lr, frame 8 bytes"
-        ));
-        assert!(matches!(f.body.get(1), Some(Stmt::Nop)));
-        assert!(matches!(
-            f.body.get(2),
-            Some(Stmt::Comment(text)) if text == "arm32 epilogue: restore machine frame"
-        ));
-        assert!(matches!(
-            f.body.last(),
-            Some(Stmt::Return {
-                value: Some(Expr::Const(0))
-            })
-        ));
-        assert_eq!(f.body.len(), 4, "machine frame leaked: {:#?}", f.body);
-    }
-
-    #[test]
-    fn mismatched_frame_size_summary_keeps_the_function_untouched() {
-        let mut f = function(vec![
-            Stmt::Comment("frame: 12 bytes".to_string()),
-            sp_sub(8),
-            Stmt::Store {
-                addr: object_addr("local_8", 0),
-                src: Expr::Reg(reg("r7")),
-                size: 4,
-            },
-            Stmt::Store {
-                addr: object_addr("local_8", 4),
-                src: Expr::Reg(reg("lr")),
-                size: 4,
-            },
-            Stmt::Assign {
-                dst: reg("r7#1"),
-                src: object_addr("local_8", 0),
-            },
-            Stmt::Nop,
-            Stmt::Assign {
-                dst: reg("r7#2"),
-                src: Expr::Deref {
-                    addr: Box::new(object_addr("local_8", 0)),
-                    size: 4,
-                },
-            },
-            sp_add(8),
-            Stmt::Return {
-                value: Some(Expr::Const(0)),
-            },
-        ]);
-        let original = f.clone();
-
-        recognise_arm32_frame(&mut f);
-
-        assert_eq!(f, original);
     }
 
     #[test]
