@@ -2385,6 +2385,14 @@ provenance through lowering.
   24 canary tests pass; an exact clean release build retains the AArch64 O2
   `graph_bfs` lane and both stack-protected return cases. See
   `results/wp3-canary-expression-origins.md`.
+  Commit `327b6734` closes the adjacent lazy-call saturation consumer. Constant
+  arms, signed range predicates, doubled call results, promoted destinations,
+  and saturation recognition now see through expression owners, while the
+  synthesized lazy select owns every consumed statement and expression. The
+  observed-red ownership contract and all 19 owning tests pass; an exact clean
+  release build retains all 20 fixture-189 function verdicts across GCC/Clang
+  O0/O2 plus the dedicated Python round trip. See
+  `results/wp3-lazy-call-select-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
@@ -5186,6 +5194,14 @@ relevant ratchet's accepted-regression record.
    two stack-protected return checks pass on a clean release build. Continue
    the enabled wildcard/expression audit; universal production attribution is
    still open. See `results/wp3-canary-expression-origins.md`.
+   Commit `327b6734` closes the lazy-call select expression sibling. Its
+   condition, sentinel, doubled-result, and promoted-destination classifiers
+   now operate on semantic expressions, and the folded statement receives the
+   complete expression/statement origin union. All 19 module tests and all 20
+   fixture-189 GCC/Clang O0/O2 verdicts pass on the exact release build, as
+   does the dedicated Python round trip. Continue the remaining enabled
+   expression-consumer audit. See
+   `results/wp3-lazy-call-select-expression-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
