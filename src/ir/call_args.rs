@@ -1503,14 +1503,14 @@ pub(super) fn stack_pointer_sub_width_with_identities(
     stmt: &Stmt,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Option<i64> {
-    let Stmt::Assign {
-        dst,
-        src: Expr::Bin {
-            op: BinOp::Sub,
-            lhs,
-            rhs,
-        },
-    } = stmt.semantic()
+    let Stmt::Assign { dst, src } = stmt.semantic() else {
+        return None;
+    };
+    let Expr::Bin {
+        op: BinOp::Sub,
+        lhs,
+        rhs,
+    } = src.semantic()
     else {
         return None;
     };
@@ -1521,10 +1521,10 @@ pub(super) fn stack_pointer_sub_width_with_identities(
     } else {
         return None;
     };
-    if !matches!(lhs.as_ref(), Expr::Reg(src) if register_is_storage(src, stack, identities)) {
+    if !matches!(lhs.semantic(), Expr::Reg(src) if register_is_storage(src, stack, identities)) {
         return None;
     }
-    match rhs.as_ref() {
+    match rhs.semantic() {
         Expr::Const(width) if *width > 0 => Some(*width),
         _ => None,
     }
@@ -1544,17 +1544,15 @@ pub(super) fn outgoing_sysv_stack_push_with_identities<'body>(
     if store_index == 0 {
         return None;
     }
-    let Stmt::Store {
-        addr:
-            Expr::Lea {
-                base: Some(base),
-                index: None,
-                disp: 0,
-                ..
-            },
-        src,
-        size: 8,
-    } = body[store_index].semantic()
+    let Stmt::Store { addr, src, size: 8 } = body[store_index].semantic() else {
+        return None;
+    };
+    let Expr::Lea {
+        base: Some(base),
+        index: None,
+        disp: 0,
+        ..
+    } = addr.semantic()
     else {
         return None;
     };
@@ -1584,21 +1582,23 @@ fn outgoing_sysv_stack_area(
         let index = cursor - 1;
         match body[index].semantic() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
-            Stmt::Store {
-                addr:
-                    Expr::Lea {
-                        base: Some(base),
-                        index: None,
-                        disp,
-                        ..
-                    },
-                src,
-                size,
-            } if register_is_storage(base, "rsp", identities)
-                && *disp >= 0
-                && *disp % 8 == 0
-                && matches!(*size, 4 | 8) =>
-            {
+            Stmt::Store { addr, src, size } => {
+                let Expr::Lea {
+                    base: Some(base),
+                    index: None,
+                    disp,
+                    ..
+                } = addr.semantic()
+                else {
+                    break;
+                };
+                if !register_is_storage(base, "rsp", identities)
+                    || *disp < 0
+                    || *disp % 8 != 0
+                    || !matches!(*size, 4 | 8)
+                {
+                    break;
+                }
                 // A `[rsp]` store paired with the immediately preceding
                 // `rsp -= 8` is the push-form handled by the balanced-cleanup
                 // path, not a preallocated outgoing area.
@@ -1638,23 +1638,23 @@ fn stack_pointer_add_width(
     stmt: &Stmt,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Option<i64> {
-    let Stmt::Assign {
-        dst,
-        src: Expr::Bin {
-            op: BinOp::Add,
-            lhs,
-            rhs,
-        },
-    } = stmt.semantic()
+    let Stmt::Assign { dst, src } = stmt.semantic() else {
+        return None;
+    };
+    let Expr::Bin {
+        op: BinOp::Add,
+        lhs,
+        rhs,
+    } = src.semantic()
     else {
         return None;
     };
     if !register_is_storage(dst, "rsp", identities)
-        || !matches!(lhs.as_ref(), Expr::Reg(src) if register_is_storage(src, "rsp", identities))
+        || !matches!(lhs.semantic(), Expr::Reg(src) if register_is_storage(src, "rsp", identities))
     {
         return None;
     }
-    match rhs.as_ref() {
+    match rhs.semantic() {
         Expr::Const(width) if *width > 0 => Some(*width),
         _ => None,
     }
@@ -1726,11 +1726,10 @@ fn lowered_stack_pop_width(
     load_index: usize,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Option<i64> {
-    let Stmt::Assign {
-        dst,
-        src: Expr::Deref { addr, size },
-    } = body.get(load_index)?.semantic()
-    else {
+    let Stmt::Assign { dst, src } = body.get(load_index)?.semantic() else {
+        return None;
+    };
+    let Expr::Deref { addr, size } = src.semantic() else {
         return None;
     };
     let Expr::Lea {
@@ -1738,7 +1737,7 @@ fn lowered_stack_pop_width(
         index: None,
         disp: 0,
         ..
-    } = addr.as_ref()
+    } = addr.semantic()
     else {
         return None;
     };
@@ -4346,9 +4345,10 @@ mod tests {
             dst: reg(name),
             src: Expr::Bin {
                 op: BinOp::Sub,
-                lhs: Box::new(Expr::Reg(reg(name))),
-                rhs: Box::new(Expr::Const(8)),
-            },
+                lhs: Box::new(Expr::Reg(reg(name)).with_origins(OriginSet::one(0x1000))),
+                rhs: Box::new(Expr::Const(8).with_origins(OriginSet::one(0x1004))),
+            }
+            .with_origins(OriginSet::one(0x1008)),
         };
         let stack_store = |name| Stmt::Store {
             addr: Expr::Lea {
@@ -4357,7 +4357,8 @@ mod tests {
                 scale: 1,
                 disp: 0,
                 segment: None,
-            },
+            }
+            .with_origins(OriginSet::one(0x100c)),
             src: Expr::Const(7),
             size: 8,
         };
@@ -4531,9 +4532,10 @@ mod tests {
                 dst: reg("rsp"),
                 src: Expr::Bin {
                     op,
-                    lhs: Box::new(Expr::Reg(reg("rsp"))),
-                    rhs: Box::new(Expr::Const(8)),
-                },
+                    lhs: Box::new(Expr::Reg(reg("rsp")).with_origins(OriginSet::one(va + 1))),
+                    rhs: Box::new(Expr::Const(8).with_origins(OriginSet::one(va + 2))),
+                }
+                .with_origins(OriginSet::one(va + 3)),
             }
             .with_origins(crate::ir::ast::OriginSet::one(va))
         };
@@ -4546,7 +4548,8 @@ mod tests {
                     scale: 1,
                     disp: 0,
                     segment: None,
-                },
+                }
+                .with_origins(OriginSet::one(0x1005)),
                 src: Expr::Const(7),
                 size: 8,
             }
@@ -4555,15 +4558,19 @@ mod tests {
             Stmt::Assign {
                 dst: reg("scratch"),
                 src: Expr::Deref {
-                    addr: Box::new(Expr::Lea {
-                        base: Some(reg("rsp")),
-                        index: None,
-                        scale: 1,
-                        disp: 0,
-                        segment: None,
-                    }),
+                    addr: Box::new(
+                        Expr::Lea {
+                            base: Some(reg("rsp")),
+                            index: None,
+                            scale: 1,
+                            disp: 0,
+                            segment: None,
+                        }
+                        .with_origins(OriginSet::one(0x100d)),
+                    ),
                     size: 8,
-                },
+                }
+                .with_origins(OriginSet::one(0x100e)),
             }
             .with_origins(crate::ir::ast::OriginSet::one(0x100c)),
             adjust(BinOp::Add, 0x1010),
