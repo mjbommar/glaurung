@@ -120,6 +120,17 @@ fn parse_prologue(
         start += 1;
     }
 
+    // Lowering emits this exact machine-frame summary before the instructions
+    // it describes. It is not a source comment and must not hide the prologue
+    // from the architecture recognizer. Keep arbitrary comments as barriers,
+    // and require the parsed width to agree with the independently recovered
+    // save/local extent below before consuming the summary.
+    let prologue_start = start;
+    let summarized_width = body.get(start).and_then(frame_size_summary);
+    if summarized_width.is_some() {
+        start += 1;
+    }
+
     let mut cursor = start;
     let mut save_groups = Vec::new();
     while let Some(width) = sp_adjust(body.get(cursor)?, BinOp::Sub, identities) {
@@ -227,12 +238,27 @@ fn parse_prologue(
         cursor += 1;
     }
 
-    Some(Arm32Frame {
-        start,
+    let frame = Arm32Frame {
+        start: prologue_start,
         end: cursor,
         local_width,
         save_groups,
-    })
+    };
+    if summarized_width.is_some_and(|width| width != frame.total_width()) {
+        return None;
+    }
+    Some(frame)
+}
+
+fn frame_size_summary(statement: &Stmt) -> Option<i64> {
+    let Stmt::Comment(text) = statement.semantic() else {
+        return None;
+    };
+    text.strip_prefix("frame: ")?
+        .strip_suffix(" bytes")?
+        .parse::<i64>()
+        .ok()
+        .filter(|width| *width > 0)
 }
 
 fn saved_register_store(
@@ -1154,6 +1180,99 @@ mod tests {
             "promoted frame record leaked after collapse: {:#?}",
             f.body
         );
+    }
+
+    #[test]
+    fn frame_size_summary_does_not_hide_a_promoted_thumb_machine_frame() {
+        let mut f = function(vec![
+            Stmt::Comment("frame: 8 bytes".to_string()),
+            sp_sub(8),
+            Stmt::Store {
+                addr: object_addr("local_8", 0),
+                src: Expr::Reg(reg("r7")),
+                size: 4,
+            },
+            Stmt::Store {
+                addr: object_addr("local_8", 4),
+                src: Expr::Reg(reg("lr")),
+                size: 4,
+            },
+            Stmt::Assign {
+                dst: reg("r7#1"),
+                src: object_addr("local_8", 0),
+            },
+            Stmt::Nop,
+            Stmt::Assign {
+                dst: reg("r7#2"),
+                src: Expr::Deref {
+                    addr: Box::new(object_addr("local_8", 0)),
+                    size: 4,
+                },
+            },
+            sp_add(8),
+            Stmt::Return {
+                value: Some(Expr::Const(0)),
+            },
+        ]);
+
+        recognise_arm32_frame(&mut f);
+
+        assert!(matches!(
+            f.body.first(),
+            Some(Stmt::Comment(text))
+                if text == "arm32 prologue: save r7/lr, frame 8 bytes"
+        ));
+        assert!(matches!(f.body.get(1), Some(Stmt::Nop)));
+        assert!(matches!(
+            f.body.get(2),
+            Some(Stmt::Comment(text)) if text == "arm32 epilogue: restore machine frame"
+        ));
+        assert!(matches!(
+            f.body.last(),
+            Some(Stmt::Return {
+                value: Some(Expr::Const(0))
+            })
+        ));
+        assert_eq!(f.body.len(), 4, "machine frame leaked: {:#?}", f.body);
+    }
+
+    #[test]
+    fn mismatched_frame_size_summary_keeps_the_function_untouched() {
+        let mut f = function(vec![
+            Stmt::Comment("frame: 12 bytes".to_string()),
+            sp_sub(8),
+            Stmt::Store {
+                addr: object_addr("local_8", 0),
+                src: Expr::Reg(reg("r7")),
+                size: 4,
+            },
+            Stmt::Store {
+                addr: object_addr("local_8", 4),
+                src: Expr::Reg(reg("lr")),
+                size: 4,
+            },
+            Stmt::Assign {
+                dst: reg("r7#1"),
+                src: object_addr("local_8", 0),
+            },
+            Stmt::Nop,
+            Stmt::Assign {
+                dst: reg("r7#2"),
+                src: Expr::Deref {
+                    addr: Box::new(object_addr("local_8", 0)),
+                    size: 4,
+                },
+            },
+            sp_add(8),
+            Stmt::Return {
+                value: Some(Expr::Const(0)),
+            },
+        ]);
+        let original = f.clone();
+
+        recognise_arm32_frame(&mut f);
+
+        assert_eq!(f, original);
     }
 
     #[test]
