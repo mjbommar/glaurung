@@ -2085,16 +2085,19 @@ fn write_unit_step(
         return false;
     }
     fn without_casts(mut expr: &Expr) -> &Expr {
-        while let Expr::Cast { expr: inner, .. } = expr {
+        loop {
+            expr = expr.semantic();
+            let Expr::Cast { expr: inner, .. } = expr else {
+                return expr;
+            };
             expr = inner;
         }
-        expr
     }
     let Expr::Bin { op, lhs, rhs } = without_casts(src) else {
         return false;
     };
     if !matches!(without_casts(lhs), Expr::Reg(read) if read == dst)
-        || !matches!(rhs.as_ref(), Expr::Const(1))
+        || !matches!(rhs.semantic(), Expr::Const(1))
     {
         return false;
     }
@@ -7409,12 +7412,16 @@ function f @ 0x1000 {
                     src: Expr::Cast {
                         signed: false,
                         width: 4,
-                        expr: Box::new(Expr::Bin {
-                            op: BinOp::Add,
-                            lhs: Box::new(Expr::Reg(i)),
-                            rhs: Box::new(Expr::Const(1)),
-                        }),
-                    },
+                        expr: Box::new(
+                            Expr::Bin {
+                                op: BinOp::Add,
+                                lhs: Box::new(Expr::Reg(i).with_origins(OriginSet::one(0x1010))),
+                                rhs: Box::new(Expr::Const(1).with_origins(OriginSet::one(0x1014))),
+                            }
+                            .with_origins(OriginSet::one(0x1018)),
+                        ),
+                    }
+                    .with_origins(OriginSet::one(0x101c)),
                 }),
                 body: Vec::new(),
             }],
