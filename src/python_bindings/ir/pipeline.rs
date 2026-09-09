@@ -1319,7 +1319,6 @@ pub(super) fn render_prepared_ast(
                 debug_type_env,
                 &prepared.role_names,
                 &prepared.ast_value_identities,
-                &prepared.definition_widths,
                 type_budget.max_refinement_rounds,
             )
         });
@@ -1550,7 +1549,6 @@ pub(super) struct PreparedLlir {
     pub(super) cfg_health: crate::ir::health::CfgHealth,
     pub(super) numbered: crate::ir::types::LlirFunction,
     pub(super) value_identities: crate::ir::value_number::ValueIdentities,
-    pub(super) definition_widths: std::collections::HashMap<crate::ir::types::VReg, u8>,
     /// Raw-occurrence facts keyed by the stable SSA value, retained so typed
     /// rendering never has to recover machine width from a numbered name.
     pub(super) valued_types: crate::ir::types_recover::TypeMapV,
@@ -1577,7 +1575,6 @@ pub(super) struct PreparedAst {
     /// The same identities projected through the exact AST role-name map.
     /// Separate storage preserves the original keys used by type recovery.
     pub(super) ast_value_identities: crate::ir::value_number::ValueIdentities,
-    pub(super) definition_widths: std::collections::HashMap<crate::ir::types::VReg, u8>,
     pub(super) valued_types: crate::ir::types_recover::TypeMapV,
     pub(super) parameter_slots: std::collections::HashSet<usize>,
     pub(super) inferred_prototype: Option<crate::ir::types_recover::RecoveredPrototype>,
@@ -1609,7 +1606,6 @@ pub(super) fn lower_and_run_ast_passes(
         cfg_health,
         numbered,
         mut value_identities,
-        definition_widths,
         valued_types,
         parameter_slots: mut param_slots,
         inferred_prototype,
@@ -1676,7 +1672,6 @@ pub(super) fn lower_and_run_ast_passes(
         numbered,
         value_identities,
         ast_value_identities,
-        definition_widths,
         valued_types,
         parameter_slots: param_slots,
         inferred_prototype,
@@ -1847,23 +1842,23 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
             crate::ir::structure_v2::render::adapt_tree(tracked.function(), report.tree.as_ref()?)
         })
         .flatten();
-    let (numbered, definition_widths, mut parameter_slots, value_identities) =
-        if recover_semantic_prototype {
-            let source_lifetimes = dwarf_source_register_lifetimes(declared, cc);
+    let (numbered, mut parameter_slots, value_identities) = if recover_semantic_prototype {
+        let source_lifetimes = dwarf_source_register_lifetimes(declared, cc);
+        let (numbered, _, parameter_slots, identities) =
             crate::ir::value_number::value_number_with_parameter_slots_lifetimes_and_identities(
                 tracked.function(),
                 &ssa,
                 cc,
                 &source_lifetimes,
-            )
-        } else {
-            (
-                tracked.function().clone(),
-                std::collections::HashMap::new(),
-                crate::ir::value_number::live_in_arg_slots_llir(tracked.function(), cc),
-                crate::ir::value_number::ValueIdentities::default(),
-            )
-        };
+            );
+        (numbered, parameter_slots, identities)
+    } else {
+        (
+            tracked.function().clone(),
+            crate::ir::value_number::live_in_arg_slots_llir(tracked.function(), cc),
+            crate::ir::value_number::ValueIdentities::default(),
+        )
+    };
     let valued_types = if recover_semantic_prototype {
         crate::ir::types_recover::recover_types_valued(tracked.function(), &ssa)
     } else {
@@ -1900,7 +1895,6 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
         cfg_health,
         numbered,
         value_identities,
-        definition_widths,
         valued_types,
         parameter_slots,
         inferred_prototype,
