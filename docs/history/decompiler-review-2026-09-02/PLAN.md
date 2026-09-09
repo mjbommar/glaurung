@@ -2900,7 +2900,12 @@ provenance through lowering.
   Commit `32698e2e` replaces the final plain-typed-render caller with numbered
   type recovery plus exact role/identity projection; the guessed remapper no
   longer exists.
-- [ ] Keep naming as a render mapping, not a program rewrite.
+- [~] Keep naming as a render mapping, not a program rewrite. Commit
+  `b6e1f92d` adds the production identity-aware naming entry point and removes
+  direct-return role classification's dependence on numbered display text.
+  `apply_role_names` still rewrites AST `VReg` spellings, so the architectural
+  separation remains incomplete. See
+  `results/wp3-return-role-naming-identities.md`.
 
 ### Origin and mapping surface
 
@@ -5035,6 +5040,14 @@ relevant ratchet's accepted-regression record.
    x86-64, AArch64, and ARMv7; continue WP3 from the remaining identity/parser
    audit rather than adding more Hello-specific rules. See
    `results/wp3-wp6-arm-alignment-return-values.md`.
+   Commit `b6e1f92d` closes the next production naming reader. A directly
+   returned carrier is now assigned the `ret` presentation role from its
+   producer-owned unambiguous physical-storage identity, not by stripping a
+   `#version` suffix from display text. An opaque exact result is accepted and
+   a misleading result-looking spelling is refused. All 22 naming tests and
+   the exact release-built GCC O2 x86-64 Hello slice pass; continue from the
+   broader naming/render separation and final `tag_phys` boundary. See
+   `results/wp3-return-role-naming-identities.md`.
    Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
