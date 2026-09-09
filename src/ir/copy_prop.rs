@@ -569,6 +569,58 @@ mod tests {
     }
 
     #[test]
+    fn exception_regions_have_independent_dead_copy_counts() {
+        let shared = reg("rbx_1");
+        let mut function = Function {
+            name: "exception_dead_copies".into(),
+            entry_va: 0,
+            body: vec![Stmt::TryCatch {
+                try_body: vec![
+                    Stmt::Call {
+                        target: Expr::Reg(reg("callee")),
+                        args: vec![],
+                        dst: Some(shared.clone()),
+                        call_spec: None,
+                    },
+                    Stmt::Return {
+                        value: Some(Expr::Reg(shared.clone())),
+                    },
+                ],
+                catches: vec![crate::ir::ast::CatchClause {
+                    type_name: "int".into(),
+                    binding: reg("exception_0"),
+                    body: vec![
+                        Stmt::Assign {
+                            dst: shared.clone(),
+                            src: Expr::Const(9),
+                        },
+                        Stmt::Return {
+                            value: Some(Expr::Const(-1)),
+                        },
+                    ],
+                }],
+            }],
+        };
+
+        assert!(propagate_copies(&mut function));
+
+        let Stmt::TryCatch { try_body, catches } = function.body[0].semantic() else {
+            panic!("exception region disappeared: {:#?}", function.body)
+        };
+        assert!(matches!(
+            try_body.as_slice(),
+            [Stmt::Call { dst: Some(dst), .. }, Stmt::Return { value: Some(Expr::Reg(value)) }]
+                if dst == &shared && value == &shared
+        ));
+        assert!(matches!(
+            catches[0].body.as_slice(),
+            [Stmt::Return {
+                value: Some(Expr::Const(-1))
+            }]
+        ));
+    }
+
+    #[test]
     fn identity_aware_copy_cleanup_removes_unowned_local_spelling() {
         let mut function = Function {
             name: "unowned_spelling".into(),

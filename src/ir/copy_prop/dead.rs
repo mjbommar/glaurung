@@ -117,6 +117,12 @@ pub(super) fn dead_store_runs(
                     removed |= dead_store_runs(b, identities);
                 }
             }
+            Stmt::TryCatch { try_body, catches } => {
+                removed |= dead_store_runs(try_body, identities);
+                for catch in catches {
+                    removed |= dead_store_runs(&mut catch.body, identities);
+                }
+            }
             _ => {}
         }
     }
@@ -184,6 +190,15 @@ fn remove_dead(
                 }
                 if let Some(b) = default {
                     changed |= remove_dead(b, reads, identities);
+                }
+            }
+            // The try path and each handler are mutually exclusive regions.
+            // Recount inside each one so a spelling read in one arm cannot
+            // falsely keep an unrelated dead definition in another arm.
+            Stmt::TryCatch { try_body, catches } => {
+                changed |= eliminate_dead_copies(try_body, identities);
+                for catch in catches {
+                    changed |= eliminate_dead_copies(&mut catch.body, identities);
                 }
             }
             _ => {}
