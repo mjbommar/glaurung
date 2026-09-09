@@ -564,6 +564,14 @@ control stopped at a separately recorded harness/native-package mismatch and
 is not counted as semantic evidence. See
 `results/wp3-coalesced-integer-declaration-types.md`.
 
+Follow-up `605cb580` migrates prepared-AST definition-width eligibility to the
+same storage proof. A scalar representing multiple versions of one physical
+carrier can now widen a stale declaration from its proved definition width;
+mixed carriers still decline. Its observed-red same-storage contract, four
+identity tests, seven ABI declaration controls, and the adjacent wide-scalar
+coalescing contract pass, with more than 4,750 unrelated tests filtered out.
+See the follow-up in `results/wp3-abi-width-identities.md`.
+
 ## Authority and relationship to the roadmaps
 
 `docs/development/roadmap/README.md` remains the canonical roadmap index, and
@@ -5745,6 +5753,11 @@ relevant ratchet's accepted-regression record.
    ARMv7 O0/O2 Hello controls pass. Fixture-194 was attempted but stopped at a
    harness/native-package mismatch and supplies no semantic verdict. See
    `results/wp3-coalesced-integer-declaration-types.md`.
+   Follow-up `605cb580` applies the same one-storage proof to prepared-AST
+   definition-width refinement. Coalesced versions of one carrier may correct a
+   stale narrow scalar type from their proved definition width; mixed carriers
+   still decline. Its observed-red contract and 12 focused ABI-width/
+   declaration checks pass. See `results/wp3-abi-width-identities.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
