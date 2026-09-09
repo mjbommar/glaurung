@@ -5717,6 +5717,14 @@ relevant ratchet's accepted-regression record.
    all 18 loop-carried and 130 focused `call_args` tests, and exact-release
    x86-64 GCC/AArch64 O2 `call_chain_in_loop` controls pass. See
    `results/wp3-coalesced-loop-carried-arguments.md`.
+   Commit `b0ba8189` migrates enclosing call-context reaching state from one
+   exact identity to one complete ABI storage slot whose candidates are all
+   non-entry versions. Same-slot coalescing can now feed nested calls;
+   mixed-slot or malformed writes actively clear stale state, while same-
+   carrier packed lanes remain derived. Its observed-red record/invalidation
+   contract, three focused controls, all 130 `call_args` tests, and the exact-
+   release GCC O2 effectful-select nested-call canary pass. See
+   `results/wp3-coalesced-enclosing-reaching-values.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
