@@ -421,9 +421,9 @@ const AST_PASS_ORDER: &[&str] = &[
     "materialize_direct_output",
     "split_argument_storage_reuse",
     "materialize_32bit_wide_parameters",
-    "apply_role_names",
     "eliminate_dead_stores",
     "stack_idiom+label_prune",
+    "apply_role_names",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -784,24 +784,20 @@ pub(super) fn run_ast_passes(
             )
         );
     }
-    let role_names = pass!("apply_role_names", {
-        let role_names = crate::ir::naming::role_names_with_identities(
-            f,
-            cc,
-            param_slots,
-            &parameter_roles,
-            &stack_facts.parameter_slots,
-            value_identities,
-        );
-        crate::ir::naming::apply_role_name_mapping(f, &role_names);
-        role_names
-    });
+    let role_names = crate::ir::naming::role_names_with_identities(
+        f,
+        cc,
+        param_slots,
+        &parameter_roles,
+        &stack_facts.parameter_slots,
+        value_identities,
+    );
     let named_value_identities = value_identities
         .with_role_aliases_and_parameter_slots(&role_names, param_slots)
         .with_source_parameter_slots(parameter_roles.values().copied());
-    // Dead-store elimination runs *after* naming so it sees the aliased return register
-    // (`ret` / `arg0`) rather than the raw physical one; that removes the common pre-call
-    // `%ret = 0` idiom entirely.
+    // Semantic cleanup stays in the machine/value identity space. The projected
+    // sidecar carries both raw and eventual role aliases, so these passes do not
+    // need the AST to be cosmetically renamed first.
     pass!("eliminate_dead_stores", {
         crate::ir::canary::collapse_canary_save_with_identities(f, &named_value_identities);
         if matches!(cc, crate::ir::call_args::CallConv::Aarch64) {
@@ -819,6 +815,9 @@ pub(super) fn run_ast_passes(
     pass!("stack_idiom+label_prune", {
         crate::ir::stack_idiom::rematerialise_stack_ops(f);
         crate::ir::label_prune::prune_unreferenced_labels(f);
+    });
+    pass!("apply_role_names", {
+        crate::ir::naming::apply_role_name_mapping(f, &role_names)
     });
     Ok((stack_facts, role_names))
 }
@@ -1969,12 +1968,14 @@ mod request_tests {
         let mut passes = AstPassOrder::default();
         passes.check("recover_wide_copies").unwrap();
         passes.check("fold_constants").unwrap();
+        passes.check("eliminate_dead_stores").unwrap();
+        passes.check("stack_idiom+label_prune").unwrap();
         passes.check("apply_role_names").unwrap();
 
         assert_eq!(
-            passes.check("fold_constants"),
+            passes.check("eliminate_dead_stores"),
             Err(AstPassOrderError::OutOfOrder {
-                pass: "fold_constants",
+                pass: "eliminate_dead_stores",
                 previous: "apply_role_names",
             })
         );
