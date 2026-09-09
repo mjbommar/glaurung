@@ -5682,6 +5682,12 @@ relevant ratchet's accepted-regression record.
    names still decline. Its observed-red same-base contract, all 129 focused
    `call_args` tests, and one exact-release Clang O0 `call_into_spill` control
    pass. See `results/wp3-coalesced-captured-frame-base.md`.
+   Commit `1f58963c` migrates x86 prologue/epilogue physical-register
+   classification to the same unambiguous-base fact. Coalesced versions of one
+   register can retain callee-save and restore matching, while mixed bases and
+   misleading names decline. Its observed-red contract, all 45 focused x86
+   prologue tests, and exact-release x86-64 GCC O0/O2 symbols/PIE Hello cells
+   pass. See `results/wp3-coalesced-x86-storage-identity.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
