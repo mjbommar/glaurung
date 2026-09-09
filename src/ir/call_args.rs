@@ -6831,15 +6831,26 @@ mod tests {
     }
 
     #[test]
-    fn enclosing_reaching_state_does_not_reparse_an_identity_base() {
+    fn enclosing_reaching_state_uses_one_authoritative_storage_slot() {
         let mut identities = crate::ir::value_number::ValueIdentities::default();
-        identities.record(
-            reg("opaque_argument"),
-            crate::ir::ssa::SsaValue {
-                base: reg("rdi"),
-                version: 1,
-            },
-        );
+        for version in [1, 4] {
+            identities.record(
+                reg("opaque_argument"),
+                crate::ir::ssa::SsaValue {
+                    base: reg("rdi"),
+                    version,
+                },
+            );
+        }
+        for (base, version) in [("rdi", 1), ("rsi", 4)] {
+            identities.record(
+                reg("mixed_argument"),
+                crate::ir::ssa::SsaValue {
+                    base: reg(base),
+                    version,
+                },
+            );
+        }
         identities.record(
             reg("malformed_identity_base"),
             crate::ir::ssa::SsaValue {
@@ -6861,7 +6872,17 @@ mod tests {
         );
         assert_eq!(exact[0], Some(Expr::Reg(reg("opaque_argument"))));
 
-        let mut malformed = vec![None; arg_slots(CallConv::SysVAmd64).len()];
+        let stale = || vec![Some(Expr::Reg(reg("stale"))); arg_slots(CallConv::SysVAmd64).len()];
+        let mut mixed = stale();
+        EnclosingSlots::advance_reaching(
+            &mut mixed,
+            &definition("mixed_argument"),
+            CallConv::SysVAmd64,
+            Some(&identities),
+        );
+        assert!(mixed.iter().all(Option::is_none));
+
+        let mut malformed = stale();
         EnclosingSlots::advance_reaching(
             &mut malformed,
             &definition("malformed_identity_base"),

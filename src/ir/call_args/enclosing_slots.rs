@@ -159,21 +159,66 @@ impl EnclosingSlots {
             return;
         }
         if let Stmt::Assign { dst, .. } = statement {
-            let storage = match identities {
-                Some(identities) => identities.exact(dst).and_then(|identity| {
-                    let name = identity.canonical_physical_base()?;
-                    Some((name.to_string(), identity.version > 0))
-                }),
-                None => {
-                    let VReg::Phys(name) = dst else {
-                        return;
-                    };
-                    Some((name.clone(), name.contains('#')))
+            if let Some(identities) = identities {
+                let Some(candidates) = identities.candidates(dst) else {
+                    return;
+                };
+                let bases = candidates
+                    .iter()
+                    .filter_map(|identity| identity.canonical_physical_base())
+                    .collect::<Vec<_>>();
+                if bases.len() != candidates.len() {
+                    reaching.iter_mut().for_each(|slot| *slot = None);
+                    return;
                 }
-            };
-            let Some((name, versioned)) = storage else {
+
+                let lane_slots = bases
+                    .iter()
+                    .map(|base| crate::ir::abi::sse_argument_slot_of(arch, base))
+                    .collect::<std::collections::BTreeSet<_>>();
+                if bases.iter().all(|base| base.contains("_d")) {
+                    if lane_slots.len() != 1 || lane_slots.first() == Some(&None) {
+                        reaching.iter_mut().for_each(|slot| *slot = None);
+                    }
+                    // Packed-view definitions derive from the complete carrier;
+                    // they do not overwrite its proven reaching value.
+                    return;
+                }
+                if bases.iter().any(|base| base.contains("_d")) {
+                    reaching.iter_mut().for_each(|slot| *slot = None);
+                    return;
+                }
+
+                let slots = bases
+                    .iter()
+                    .map(|base| storage_slot_of(arch, base))
+                    .collect::<std::collections::BTreeSet<_>>();
+                if slots.len() != 1 {
+                    reaching.iter_mut().for_each(|slot| *slot = None);
+                    return;
+                }
+                let Some(slot) = slots.first().copied().flatten() else {
+                    return;
+                };
+                if let Some(reaching) = reaching.get_mut(slot) {
+                    *reaching = candidates
+                        .iter()
+                        .all(|identity| identity.version > 0)
+                        .then(|| {
+                            let mut value = Expr::Reg(dst.clone());
+                            if let Some(origins) = statement_origins.as_ref() {
+                                value.merge_origins(origins);
+                            }
+                            value
+                        });
+                }
+                return;
+            }
+
+            let VReg::Phys(name) = dst else {
                 return;
             };
+            let versioned = name.contains('#');
             // A scalar lane is not a definition of the complete SSE argument
             // carrier. Recording `xmm1_d1` as the reaching value for an exact
             // `xmm1` parameter would pass four bytes of unrelated upper-lane
@@ -181,7 +226,7 @@ impl EnclosingSlots {
             // they simply cannot prove its complete value.
             let complete_storage = !name.contains("_d");
             if let Some(slot) = complete_storage
-                .then(|| storage_slot_of(arch, &name))
+                .then(|| storage_slot_of(arch, name))
                 .flatten()
             {
                 if let Some(reaching) = reaching.get_mut(slot) {
@@ -195,7 +240,7 @@ impl EnclosingSlots {
                 }
                 return;
             }
-            if crate::ir::abi::sse_argument_slot_of(arch, &name).is_some() {
+            if crate::ir::abi::sse_argument_slot_of(arch, name).is_some() {
                 // Packed-view decomposition defines lane identities from the
                 // complete carrier; it does not overwrite that carrier. Keep
                 // the last whole-register proof and ignore these derived defs.
