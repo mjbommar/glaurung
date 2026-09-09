@@ -27,7 +27,8 @@ GCC-O0 `95_function_pointer_table::dispatch_operation` fixture. The adjacent
 GCC-O2 table cell reports a committed-baseline regression at both `71123306`
 and its exact parent `51b07fa4`, with identical zero-argument table-call output;
 that separate pre-existing WP3/WP8 call-contract defect is not attributed to
-this change.
+this change. Follow-up `a4d8598a` identifies and closes its statement-owner
+half; see `wp3-table-call-statement-origins.md`.
 
 The periodic O2 symbol-bearing PIE Hello sample passed on x86-64, AArch64, and
 ARMv7 (**3/3**). No broad Rust, Python, fixture, DecBench, or Joern suite ran.

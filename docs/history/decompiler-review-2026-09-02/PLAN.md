@@ -3018,7 +3018,13 @@ provenance through lowering.
   fixtures plus the three-architecture O2 Hello sample pass. The GCC-O2 table
   cell's zero-argument call reproduces identically at the exact parent and stays
   open as separate call-contract work. See
-  `results/wp3-call-target-layout-expression-origins.md`. Universal production
+  `results/wp3-call-target-layout-expression-origins.md`. Commit `a4d8598a`
+  closes that immediately adjacent statement-owner boundary: the attributed
+  table call now receives the already-proven enclosing `(rdi, rsi)` values.
+  Its red-first contract and four refusal/control tests pass; exact-release GCC
+  O0 and O2 `dispatch_operation` plus the ARM mixed-call control all pass. The
+  O2 fixture therefore moves from a zero-argument baseline regression back to
+  pass. See `results/wp3-table-call-statement-origins.md`. Universal production
   attribution remains open.
 - [~] Thread origins through lowering, expression rewrites, structuring, tail
   duplication, and rendering. Commit `8cb7d171` makes enabled statement
