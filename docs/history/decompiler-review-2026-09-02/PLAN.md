@@ -2188,9 +2188,16 @@ provenance through lowering.
   to the target address. The strengthened contract was observed red and all six
   GOT-fold tests pass. The exact release-built
   `157_symbol_visibility:gcc:O0:vis_read_bias` lane remains a recorded semantic
-  failure because production still lacks a usable target-map entry for its
-  public-global slot; target-map/pipeline availability remains open. See
+  failure because production lacked a usable target-map entry for its
+  public-global slot. See
   `results/wp3-got-expression-origins.md`.
+  Commit `4f6762bc` repairs that target-map boundary: linked-image dynamic
+  relocations are now resolved against `.dynsym`, as their indices require.
+  Four focused ELF relocation tests pass. In the same exact release-built
+  visibility lane, the invalid synthetic-GOT dereference becomes the correct
+  named `vis_public_bias` object. The lane remains red because portable static
+  storage still drops its `.data` initializer value `11`; that initializer
+  closure remains separate open debt. See `results/wp3-dynamic-got-targets.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 

@@ -38,10 +38,13 @@ SCOPED: 1 lane of 838 (0%) - no regressions in scope
 The emitted C still reads through `glaurung_global_3fe8`, so production did not
 provide a usable resolved target for this load. This is a recorded pre-existing
 failure, not evidence that the origin repair closes GOT-backed public globals.
-The next boundary is the image target-map/pipeline input to this pass.
+The next boundary was the image target-map/pipeline input to this pass. Commit
+`4f6762bc` subsequently repaired dynamic-symbol target extraction; see
+`wp3-dynamic-got-targets.md`.
 
 ## Scope
 
-This closes the GOT folder's expression-origin consumer. Production GOT target
-availability, the `157_symbol_visibility` semantic failure, and universal
-expression attribution remain open.
+This closes the GOT folder's expression-origin consumer. The later target-map
+repair removes the synthetic GOT dereference, but initialized portable static
+storage, the `157_symbol_visibility` semantic failure, and universal expression
+attribution remain open.
