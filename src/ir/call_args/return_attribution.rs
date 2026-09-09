@@ -56,9 +56,7 @@ fn register_matches_storage(
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> bool {
     match identities {
-        Some(identities) => identities
-            .exact(register)
-            .is_some_and(|identity| matches!(&identity.base, VReg::Phys(base) if base == storage)),
+        Some(identities) => identities.unambiguous_physical_base(register) == Some(storage),
         None => matches!(register, VReg::Phys(name) if ssa_base(name) == storage),
     }
 }
@@ -378,6 +376,68 @@ mod tests {
         }
         assert!(return_value_is_read_with_identities(
             &exact_body,
+            0,
+            "rax",
+            Some(&identities),
+        ));
+    }
+
+    #[test]
+    fn coalesced_result_read_uses_unambiguous_physical_identity() {
+        let value = VReg::phys("coalesced_result");
+        let body = vec![
+            call(),
+            Stmt::Return {
+                value: Some(Expr::Reg(value.clone())),
+            },
+        ];
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for version in [3, 7] {
+            identities.record(
+                value.clone(),
+                crate::ir::ssa::SsaValue {
+                    base: VReg::phys("rax"),
+                    version,
+                },
+            );
+        }
+
+        assert!(register_matches_storage(&value, "rax", Some(&identities)));
+        assert!(return_value_is_read_with_identities(
+            &body,
+            0,
+            "rax",
+            Some(&identities),
+        ));
+    }
+
+    #[test]
+    fn mixed_coalesced_result_identity_remains_ambiguous() {
+        let value = VReg::phys("ambiguous_result");
+        let body = vec![
+            call(),
+            Stmt::Return {
+                value: Some(Expr::Reg(value.clone())),
+            },
+        ];
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for (base, version) in [("rax", 3), ("rdi", 7)] {
+            identities.record(
+                value.clone(),
+                crate::ir::ssa::SsaValue {
+                    base: VReg::phys(base),
+                    version,
+                },
+            );
+        }
+
+        assert!(!register_matches_storage(&value, "rax", Some(&identities)));
+        // The outer scan still follows its established conservative policy:
+        // an undecided value at lexical fallthrough counts as consumed. The
+        // identity predicate itself must not manufacture a read from this
+        // mixed-base value.
+        assert!(return_value_is_read_with_identities(
+            &body,
             0,
             "rax",
             Some(&identities),
