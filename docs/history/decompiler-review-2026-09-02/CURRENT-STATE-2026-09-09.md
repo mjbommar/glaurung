@@ -1,8 +1,11 @@
 # Decompiler roadmap current state — 2026-09-09
 
-**Branch:** `master`  
-**Implementation revision summarized:** `daf54c45`  
-**Operational authority:** [`PLAN.md`](PLAN.md)  
+**Branch:** `master`
+
+**Implementation revision summarized:** `daf54c45`
+
+**Operational authority:** [`PLAN.md`](PLAN.md)
+
 **Boundary:** internal Glaurung work only; no DecBench issue, comment, pull
 request, or other autonomous upstream interaction.
 
