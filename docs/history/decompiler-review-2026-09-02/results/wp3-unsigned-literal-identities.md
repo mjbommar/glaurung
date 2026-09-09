@@ -45,3 +45,16 @@ ambiguous candidate identities retain their existing refusals.
 The new exact opaque-bound test was observed red before the declaration query
 replaced the spelling check. It and three adjacent tests pass individually with
 4,415 unrelated tests filtered out. No broad suite or external benchmark ran.
+
+## Coalesced-storage follow-up
+
+Commit `11afa94a` also migrates the high-bit literal eligibility gate from one
+exact SSA value to one unambiguous physical storage base. When every definition
+and use already proves the positive unsigned interpretation, multiple
+non-interfering versions of the same carrier may now receive that signedness.
+Candidates spanning different carriers remain signed.
+
+The same-storage unsigned contract was observed red first. It and the pointer
+follow-up are covered by all 37 focused `ir::high_variables::tests::` tests,
+which pass with 4,727 unrelated tests filtered out. No release build, fixture,
+broad suite, DecBench, Joern, GED, performance, or corpus-wide measurement ran.

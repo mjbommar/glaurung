@@ -30,3 +30,16 @@ cargo test --features python-ext --lib ir::high_variables::tests::
 
 This is an incremental WP3 consumer migration. It does not complete identity
 invalidation, migrate signedness rules, or implement WP6's general type solver.
+
+## Coalesced-storage follow-up
+
+Commit `11afa94a` replaces pointer-local eligibility's one-exact-value check
+with one unambiguous physical storage base. A value representing multiple
+non-interfering versions of `rax` can now recover `char *` from a proven string
+origin; candidates spanning different carriers still receive no pointer type.
+The positive same-storage behavior contract was observed red first.
+
+All 37 focused `ir::high_variables::tests::` tests pass after the change, with
+4,727 unrelated tests filtered out. This includes the original exact-value and
+mixed-storage refusal contracts. No release build, fixture, broad suite,
+DecBench, Joern, GED, performance, or corpus-wide measurement ran.

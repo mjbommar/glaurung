@@ -580,6 +580,16 @@ declaration identity tests, and two adjacent pointer/cast controls pass, with
 4,755 or more unrelated tests filtered out. See the follow-up in
 `results/wp3-declaration-identities.md`.
 
+Commit `11afa94a` migrates two whole-rendered-value consumers in
+`high_variables` to the same one-storage proof. Same-carrier coalesced values
+can now recover pointer declarations from proven origins and unsigned types
+from high-bit literals whose complete definition/use surface supports that
+interpretation. Mixed carriers still decline. Both observed-red contracts and
+all 37 focused high-variable tests pass, with 4,727 unrelated tests filtered
+out. The reaching-copy consumer remains exact by design. See the follow-ups in
+`results/wp3-pointer-refinement-identities.md` and
+`results/wp3-unsigned-literal-identities.md`.
+
 ## Authority and relationship to the roadmaps
 
 `docs/development/roadmap/README.md` remains the canonical roadmap index, and
@@ -5770,6 +5780,12 @@ relevant ratchet's accepted-regression record.
    Same-carrier coalesced values retain recovered pointer/integer declarations;
    mixed carriers remain `long`. Its observed-red contract and nine focused
    declaration/cast checks pass. See `results/wp3-declaration-identities.md`.
+   Commit `11afa94a` applies it to whole-value pointer and unsigned-literal
+   refinement. Same-carrier coalesced values gain proved pointer/signedness
+   facts; mixed carriers still decline. Its two observed-red contracts and all
+   37 focused high-variable tests pass. Exact reaching-copy identity remains
+   deliberately unchanged. See `results/wp3-pointer-refinement-identities.md`
+   and `results/wp3-unsigned-literal-identities.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
