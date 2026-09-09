@@ -2263,6 +2263,15 @@ provenance through lowering.
   O0/O2 execution cells remain green. All 35 owning copy-propagation tests pass
   and the 16-cell exception-only fixture slice has no baseline regressions. See
   `results/wp3-recovered-exception-preparation.md`.
+  Final follow-on `0d8b92c8` gives each recovered catch body its own
+  conservative dead-copy census, so a register spelling used on the normal
+  path no longer keeps an unread catch-local assignment. The initially broader
+  implementation exposed a GCC-O2 execution regression; the final rule
+  deliberately leaves the normal try body alone because its post-recovery
+  identity map is not authoritative. All 36 owning tests, all four directly
+  owning GCC/Clang O0/O2 execution cells, and the periodic six-cell
+  x86-64/AArch64/ARMv7 O0/O2 Hello checkpoint pass on the exact release build.
+  See `results/wp3-catch-local-dead-copies.md`.
   Commit `54ff918b` closes that boundary for authoritative character-pointer
   calls: attributed named targets still select their call contract, and
   attributed constant arguments fold to string literals without losing their
