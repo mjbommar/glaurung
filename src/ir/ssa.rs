@@ -56,6 +56,24 @@ impl SsaValue {
     }
 }
 
+/// Deterministic opaque identity assigned by one authoritative SSA snapshot.
+///
+/// The numeric payload has no register, ABI, or presentation meaning. IDs are
+/// allocated from the sorted set of semantic [`SsaValue`]s in the snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct ValueId(u32);
+
+impl ValueId {
+    pub(crate) fn index(self) -> u32 {
+        self.0
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_index(index: u32) -> Self {
+        Self(index)
+    }
+}
+
 /// A phi node placed by SSA construction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Phi {
@@ -96,6 +114,8 @@ pub struct SsaInfo {
     /// time. This prevents queries from re-canonicalizing under a different
     /// architecture later.
     use_values_all: OperandTable,
+    /// Opaque IDs owned by this exact SSA snapshot.
+    value_ids: HashMap<SsaValue, ValueId>,
 }
 
 /// The semantic class of a mutation after SSA construction.
@@ -288,6 +308,11 @@ impl SsaInfo {
     /// Revision assigned by the pipeline-owned SSA state.
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// Return the opaque ID assigned to one semantic value in this snapshot.
+    pub(crate) fn value_id(&self, value: &SsaValue) -> Option<ValueId> {
+        self.value_ids.get(value).copied()
     }
 
     /// Return the SSA value defined by the instruction at `addr`.
@@ -958,6 +983,28 @@ fn rename(
         }
     }
 
+    let mut semantic_values = BTreeSet::new();
+    semantic_values.extend(def_values_all.slots.iter().flatten().cloned());
+    semantic_values.extend(use_values_all.slots.iter().flatten().cloned());
+    for phi in &phis {
+        semantic_values.insert(SsaValue {
+            base: phi.base.clone(),
+            version: phi.dst_version,
+        });
+        semantic_values.extend(phi.incoming.iter().map(|(_, version)| SsaValue {
+            base: phi.base.clone(),
+            version: *version,
+        }));
+    }
+    let value_ids = semantic_values
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let index = u32::try_from(index).expect("opaque SSA value identity space exhausted");
+            (value, ValueId(index))
+        })
+        .collect();
+
     let info = SsaInfo {
         revision: 0,
         idom: idom.to_vec(),
@@ -967,6 +1014,7 @@ fn rename(
         use_versions,
         def_values_all,
         use_values_all,
+        value_ids,
     };
     (info, per_block_phis)
 }
@@ -1381,6 +1429,61 @@ mod tests {
         assert_eq!(pred_blocks, vec![1, 2]);
         let versions: Vec<u32> = p.incoming.iter().map(|(_, v)| *v).collect();
         assert_ne!(versions[0], versions[1]);
+    }
+
+    #[test]
+    fn ssa_value_ids_are_deterministic_and_cover_phi_graph() {
+        let lf = mk_cfg(vec![
+            (0x1000, vec![Op::Nop], vec![0x1100, 0x1200]),
+            (0x1100, vec![assign("rax", 1)], vec![0x1300]),
+            (0x1200, vec![assign("rax", 2)], vec![0x1300]),
+            (
+                0x1300,
+                vec![Op::Assign {
+                    dst: VReg::phys("rbx"),
+                    src: Value::Reg(VReg::phys("rax")),
+                }],
+                vec![],
+            ),
+        ]);
+        let first = compute_ssa(&lf);
+        let repeated = compute_ssa(&lf);
+
+        assert_eq!(first.value_ids, repeated.value_ids);
+        for value in first.def_values_all.slots.iter().flatten() {
+            assert!(first.value_id(value).is_some(), "definition lacks value ID");
+        }
+        for value in first.use_values_all.slots.iter().flatten() {
+            assert!(first.value_id(value).is_some(), "use lacks value ID");
+        }
+        for phi in &first.phis {
+            let result = SsaValue {
+                base: phi.base.clone(),
+                version: phi.dst_version,
+            };
+            assert!(
+                first.value_id(&result).is_some(),
+                "phi result lacks value ID"
+            );
+            for (_, version) in &phi.incoming {
+                let incoming = SsaValue {
+                    base: phi.base.clone(),
+                    version: *version,
+                };
+                assert!(
+                    first.value_id(&incoming).is_some(),
+                    "phi input lacks value ID"
+                );
+            }
+        }
+
+        let ordered = first.value_ids.keys().cloned().collect::<BTreeSet<_>>();
+        for (index, value) in ordered.into_iter().enumerate() {
+            assert_eq!(
+                first.value_id(&value).map(ValueId::index),
+                Some(index as u32)
+            );
+        }
     }
 
     #[test]

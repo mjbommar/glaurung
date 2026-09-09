@@ -39,7 +39,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::ir::call_args::CallConv;
-use crate::ir::ssa::{ssa_def_width, SsaValue};
+use crate::ir::ssa::{ssa_def_width, SsaValue, ValueId};
 use crate::ir::types::{LlirFunction, LlirInstr, Op, VReg, Value};
 use crate::ir::use_def::{def_mut, def_ref, for_each_def, for_each_use, use_count, InstrAddr};
 
@@ -60,20 +60,6 @@ use coalesce::{coalesce_phi_copies_with_definition_sites, DefinitionWidthsBySite
 use tagging::{tag_op, tag_phys, VnCtx};
 use temp_remap::build_temp_remap;
 
-/// Deterministic opaque identity assigned to one SSA value on first encounter.
-///
-/// The numeric payload has no register, ABI, or presentation meaning. It is a
-/// migration bridge toward representing semantic values directly instead of
-/// encoding `register#version` in a `VReg::Phys` string.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ValueId(u32);
-
-impl ValueId {
-    pub(crate) fn index(self) -> u32 {
-        self.0
-    }
-}
-
 /// Exact SSA identities carried beside value-numbered LLIR and its lowered AST.
 ///
 /// A rendered variable may represent several non-interfering SSA values after
@@ -85,6 +71,7 @@ pub struct ValueIdentities {
     by_numbered_value: HashMap<VReg, BTreeSet<SsaValue>>,
     value_id_by_ssa: HashMap<SsaValue, ValueId>,
     definition_widths_by_value_id: HashMap<ValueId, BTreeSet<u8>>,
+    #[cfg(test)]
     next_value_id: u32,
     physical_bases_by_value: HashMap<VReg, BTreeSet<String>>,
     parameter_slots_by_value: HashMap<VReg, BTreeSet<usize>>,
@@ -224,17 +211,13 @@ impl ValueIdentities {
         }
     }
 
-    pub(crate) fn record(&mut self, numbered: VReg, identity: SsaValue) {
-        self.value_id_by_ssa
-            .entry(identity.clone())
-            .or_insert_with(|| {
-                let value_id = ValueId(self.next_value_id);
-                self.next_value_id = self
-                    .next_value_id
-                    .checked_add(1)
-                    .expect("opaque SSA value identity space exhausted");
-                value_id
-            });
+    /// Carry an SSA-snapshot-owned opaque identity into value-numbered LLIR.
+    fn record_with_value_id(&mut self, numbered: VReg, identity: SsaValue, value_id: ValueId) {
+        let previous = self.value_id_by_ssa.insert(identity.clone(), value_id);
+        debug_assert!(
+            previous.is_none() || previous == Some(value_id),
+            "one SSA value received conflicting snapshot-owned IDs"
+        );
         if let Some(base) = identity.canonical_physical_base() {
             self.physical_bases_by_value
                 .entry(numbered.clone())
@@ -245,6 +228,24 @@ impl ValueIdentities {
             .entry(numbered)
             .or_default()
             .insert(identity);
+    }
+
+    /// Test-only compatibility helper for constructing isolated identity maps.
+    #[cfg(test)]
+    pub(crate) fn record(&mut self, numbered: VReg, identity: SsaValue) {
+        let value_id = self
+            .value_id_by_ssa
+            .get(&identity)
+            .copied()
+            .unwrap_or_else(|| {
+                let value_id = ValueId::from_index(self.next_value_id);
+                self.next_value_id = self
+                    .next_value_id
+                    .checked_add(1)
+                    .expect("opaque SSA value identity space exhausted");
+                value_id
+            });
+        self.record_with_value_id(numbered, identity, value_id);
     }
 
     /// Attach a proved definition width to the stable identity already interned
@@ -627,14 +628,20 @@ pub fn value_number_with_parameter_slots_lifetimes_and_identities(
             let mut output_index = 0usize;
             for_each_def(&ins.op, |numbered| {
                 if let Some(identity) = ssa.def_value_ref_at(lf, addr, output_index) {
-                    identities.record(numbered.clone(), identity.clone());
+                    let value_id = ssa
+                        .value_id(identity)
+                        .expect("SSA definition must have a snapshot-owned value ID");
+                    identities.record_with_value_id(numbered.clone(), identity.clone(), value_id);
                 }
                 output_index += 1;
             });
             let mut use_index = 0usize;
             for_each_use(&ins.op, |numbered| {
                 if let Some(Some(identity)) = use_values.get(use_index) {
-                    identities.record(numbered.clone(), identity.clone());
+                    let value_id = ssa
+                        .value_id(identity)
+                        .expect("SSA use must have a snapshot-owned value ID");
+                    identities.record_with_value_id(numbered.clone(), identity.clone(), value_id);
                 }
                 use_index += 1;
             });
@@ -799,13 +806,14 @@ fn insert_phi_copies(
     for phi in &ssa.phis {
         let mut dst = phi.base.clone();
         tag_phys(&mut dst, phi.dst_version, ctx);
-        identities.record(
-            dst.clone(),
-            SsaValue {
-                base: phi.base.clone(),
-                version: phi.dst_version,
-            },
-        );
+        let dst_identity = SsaValue {
+            base: phi.base.clone(),
+            version: phi.dst_version,
+        };
+        let dst_value_id = ssa
+            .value_id(&dst_identity)
+            .expect("SSA phi result must have a snapshot-owned value ID");
+        identities.record_with_value_id(dst.clone(), dst_identity, dst_value_id);
         if !matches!(dst, VReg::Phys(_) | VReg::FlagValue { .. }) {
             // A temp phi would need the remap to agree across blocks, which
             // `build_temp_remap` does not guarantee, so leave it alone rather than
@@ -873,13 +881,14 @@ fn insert_phi_copies(
             }
             let mut src = phi.base.clone();
             tag_phys(&mut src, *ver, ctx);
-            identities.record(
-                src.clone(),
-                SsaValue {
-                    base: phi.base.clone(),
-                    version: *ver,
-                },
-            );
+            let src_identity = SsaValue {
+                base: phi.base.clone(),
+                version: *ver,
+            };
+            let src_value_id = ssa
+                .value_id(&src_identity)
+                .expect("SSA phi input must have a snapshot-owned value ID");
+            identities.record_with_value_id(src.clone(), src_identity, src_value_id);
             if src == dst {
                 continue; // a version kept bare on both sides: `rax = rax`
             }
@@ -989,7 +998,15 @@ mod tests {
                 version: 1,
             })
         );
-        assert!(identities.exact_value_id(numbered_use).is_some());
+        let semantic_value = SsaValue {
+            base: VReg::phys("rax"),
+            version: 1,
+        };
+        assert_eq!(
+            identities.exact_value_id(numbered_use),
+            ssa.value_id(&semantic_value),
+            "value numbering must carry the SSA snapshot's exact opaque ID"
+        );
     }
 
     #[test]
