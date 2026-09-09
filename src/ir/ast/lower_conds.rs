@@ -635,12 +635,15 @@ pub(super) fn extract_cond_and_strip<'a>(
         // the trailing-Goto body has no semantics for the structurer
         // since we're rebuilding the whole If anyway.
         let mut condition_origins = stmts.last().and_then(Stmt::origins).cloned();
+        let mut condition_expression_origins = None;
         if let Some(Stmt::If { cond, .. }) = stmts.last().map(Stmt::semantic) {
+            condition_expression_origins = cond.origins().cloned();
+            let semantic_cond = cond.semantic();
             // For a non-trivial cond (Cmp / negated form) the hoist
             // already accounted for `inverted`; just adopt it.
-            if !matches!(cond, Expr::Reg(_))
+            if !matches!(semantic_cond, Expr::Reg(_))
                 && !matches!(
-                    cond,
+                    semantic_cond,
                     Expr::Un {
                         op: UnOp::Not,
                         src: _
@@ -653,8 +656,8 @@ pub(super) fn extract_cond_and_strip<'a>(
             }
             // If the cond is still `!flag` (no Cmp was available to fold),
             // keep the negation and fall through to the lookup.
-            if let Expr::Un { op: UnOp::Not, src } = cond {
-                if matches!(src.as_ref(), Expr::Cmp { .. }) {
+            if let Expr::Un { op: UnOp::Not, src } = semantic_cond {
+                if matches!(src.semantic(), Expr::Cmp { .. }) {
                     let cond_expr = cond.clone();
                     stmts.pop();
                     return (cond_expr, stmts, condition_origins);
@@ -689,7 +692,8 @@ pub(super) fn extract_cond_and_strip<'a>(
                                         .get_or_insert_with(OriginSet::empty)
                                         .merge(&origins);
                                 }
-                                let cond_expr = if inverted { negate_cmp_expr(src) } else { src };
+                                let cond_expr = (if inverted { negate_cmp_expr(src) } else { src })
+                                    .with_optional_origins(condition_expression_origins);
                                 return (cond_expr, stmts, condition_origins);
                             }
                         }
@@ -1176,6 +1180,62 @@ mod tests {
         assert_eq!(
             hoisted[0].origins(),
             Some(&comparison_owner.union(&assignment_owner))
+        );
+    }
+
+    #[test]
+    fn structured_condition_hoist_sees_attributed_flag_and_preserves_owners() {
+        let comparison_owner = OriginSet::one(0x3000);
+        let condition_owner = OriginSet::one(0x3002);
+        let branch_owner = OriginSet::one(0x3004);
+        let flag = VReg::phys("predicate");
+        let block = LlirBlock {
+            start_va: 0x3000,
+            end_va: 0x3008,
+            instrs: vec![LlirInstr {
+                va: 0x3004,
+                op: Op::CondJump {
+                    cond: flag.clone(),
+                    target: 0x4000,
+                    inverted: false,
+                },
+            }],
+            succs: Vec::new(),
+        };
+        let statements = vec![
+            Stmt::Assign {
+                dst: flag.clone(),
+                src: Expr::Cmp {
+                    op: CmpOp::Eq,
+                    lhs: Box::new(Expr::Reg(VReg::phys("value"))),
+                    rhs: Box::new(Expr::Const(0)),
+                }
+                .with_origins(comparison_owner.clone()),
+            }
+            .with_origins(comparison_owner.clone()),
+            Stmt::If {
+                cond: Expr::Reg(flag).with_origins(condition_owner.clone()),
+                then_body: vec![Stmt::Goto { target: 0x4000 }],
+                else_body: None,
+            }
+            .with_origins(branch_owner.clone()),
+        ];
+
+        let (condition, body, statement_owners) =
+            super::extract_cond_and_strip(&block, statements, None);
+
+        assert!(body.is_empty(), "the dead flag assignment must be consumed");
+        assert!(matches!(
+            condition.semantic(),
+            Expr::Cmp { op: CmpOp::Eq, .. }
+        ));
+        assert_eq!(
+            condition.origins(),
+            Some(&comparison_owner.union(&condition_owner))
+        );
+        assert_eq!(
+            statement_owners,
+            Some(comparison_owner.union(&branch_owner))
         );
     }
 
