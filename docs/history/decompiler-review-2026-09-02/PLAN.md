@@ -5415,6 +5415,14 @@ relevant ratchet's accepted-regression record.
    contract, two adjacent ARM controls, and the original stripped
    `format_wrapper` real-binary regression pass against an exact clean release
    build. See `results/wp3-stack-coordinate-load-expression-origins.md`.
+   Commit `b0b09e5d` closes the outgoing-stack argument proof family. Exact
+   allocation, push-store, preallocated-area, cleanup, and lowered-pop readers
+   now see through child-expression ownership while retaining storage identity,
+   positive-width, aligned-slot, pointer-width, balance, and architecture
+   gates. Both observed-red ownership/identity contracts, two adjacent owner
+   and lowered-pop controls, and the exact-release i386 O2 `forward_sum6`
+   calling-convention fixture pass. See
+   `results/wp3-stack-argument-proof-expression-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
