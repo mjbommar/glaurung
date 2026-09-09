@@ -1418,7 +1418,7 @@ fn collect_idents_stmt(
         }
         Stmt::Assign { dst, src } => {
             collect_reg(dst, ids, identities);
-            if matches!(src, Expr::Deref { size: 16, .. }) {
+            if matches!(src.semantic(), Expr::Deref { size: 16, .. }) {
                 let spelling = match dst {
                     VReg::Phys(name) if parameter_index(name, identities).is_none() => {
                         Some(sanitize_c_ident(name))
@@ -1826,7 +1826,7 @@ fn dec_global_scalar_width(address: u64) -> Option<u8> {
 /// not a callable symbol, so both forms must receive the same portable backing
 /// object in generated C.
 fn direct_global_address(expr: &Expr) -> Option<u64> {
-    match expr {
+    match expr.semantic() {
         Expr::Addr(address) | Expr::Named { va: address, .. } => Some(*address),
         _ => None,
     }
@@ -2670,6 +2670,23 @@ mod tests {
         collect_idents_stmt(&statement, &mut ids, None);
 
         assert!(ids.calls_stack_check);
+    }
+
+    #[test]
+    fn attributed_wide_load_keeps_vector_declaration_evidence() {
+        let statement = Stmt::Assign {
+            dst: VReg::phys("wide_value"),
+            src: Expr::Deref {
+                addr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                size: 16,
+            }
+            .with_origins(OriginSet::one(0x1010)),
+        };
+        let mut ids = DecIdents::default();
+
+        collect_idents_stmt(&statement, &mut ids, None);
+
+        assert!(ids.wide_locals.contains("wide_value"));
     }
 
     #[test]
@@ -3984,7 +4001,7 @@ function f @ 0x1000 {
             entry_va: 0x1150,
             body: vec![Stmt::Return {
                 value: Some(Expr::Deref {
-                    addr: Box::new(Expr::Addr(0x4024)),
+                    addr: Box::new(Expr::Addr(0x4024).with_origins(OriginSet::one(0x1150))),
                     size: 4,
                 }),
             }],
