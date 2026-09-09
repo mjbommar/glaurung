@@ -2336,6 +2336,14 @@ provenance through lowering.
   PIE/non-PIE and symbols/stripped move from fail to pass; the remaining 12
   dynamic cells have canonical bodies but retain false `arg0`..`arg3`
   signatures. See `results/wp3-arm32-structural-storage-identities.md`.
+  Commit `1ce64267` closes that adjacent signature boundary. ARM's existing
+  fail-closed `push {r3, lr}` alignment-padding proof now survives prototype
+  recovery upgrading an operand-free return to `ReturnValue`, provided the
+  returned expression does not observe restored `r3`. The restored-value-use
+  and conditional-exit refusals remain green. An exact release build passes
+  all 16 dynamic ARMv7 Hello cells and the complete periodic x86-64/AArch64/
+  ARMv7 Hello checkpoint moves from 54/72 to 72/72. See
+  `results/wp3-wp6-arm-alignment-return-values.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
@@ -5021,6 +5029,12 @@ relevant ratchet's accepted-regression record.
    failures are now isolated to false inferred parameters and belong to the
    next WP6 prototype/signature boundary. See
    `results/wp3-arm32-structural-storage-identities.md`.
+   Commit `1ce64267` closes that exact prototype boundary by retaining the
+   balanced ARM alignment-padding exclusion after explicit result
+   materialization. The periodic canonical Hello grid is now 72/72 across
+   x86-64, AArch64, and ARMv7; continue WP3 from the remaining identity/parser
+   audit rather than adding more Hello-specific rules. See
+   `results/wp3-wp6-arm-alignment-return-values.md`.
    Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
