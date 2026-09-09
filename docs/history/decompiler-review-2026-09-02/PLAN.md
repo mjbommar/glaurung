@@ -5668,6 +5668,14 @@ relevant ratchet's accepted-regression record.
    tail-call tests, and the exact-release Rust O2 `rust_dyn_apply` terminal
    vtable-call control pass. See
    `results/wp3-coalesced-tail-value-identity.md`.
+   Commit `3871bcad` migrates call-argument substitution's frame-coordinate
+   classifier from exact-single-value lookup to the identity sidecar's
+   unambiguous physical-storage fact. Multiple versions of one stack/frame
+   register now preserve the stack-coordinate phase guard; mixed bases,
+   missing evidence, and misleading display names still decline. The
+   observed-red same-base contract, all 129 focused `call_args` tests, and one
+   exact-release Clang O0 `call_into_spill` control pass. See
+   `results/wp3-coalesced-frame-coordinate-identity.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
