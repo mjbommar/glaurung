@@ -53,7 +53,7 @@ pub(crate) fn refine_decbench_abi_widths_with_value_widths(
     refine_decbench_abi_widths_with_identities(f, tm, value_widths, None);
 }
 
-/// Refine declarations with exact width and opaque SSA identity evidence.
+/// Refine declarations with width and opaque SSA storage evidence.
 pub(crate) fn refine_decbench_abi_widths_with_identities(
     f: &Function,
     tm: &mut TypeMap,
@@ -156,7 +156,11 @@ fn is_width_refinement_value(
     if is_high_variable(name) {
         return true;
     }
-    identities.is_some_and(|identities| identities.exact(&VReg::phys(name)).is_some())
+    identities.is_some_and(|identities| {
+        identities
+            .unambiguous_physical_base(&VReg::phys(name))
+            .is_some()
+    })
 }
 
 /// Signed comparison operators carry source-level signedness evidence that is
@@ -499,7 +503,7 @@ mod identity_tests {
     }
 
     #[test]
-    fn ambiguous_opaque_identity_declines_definition_width_refinement() {
+    fn mixed_storage_identity_declines_definition_width_refinement() {
         let function = wide_opaque_value();
         let value = VReg::phys("opaque-value");
         let mut identities = crate::ir::value_number::ValueIdentities::default();
@@ -527,6 +531,40 @@ mod identity_tests {
             Some(TypeHint::Int {
                 signed: true,
                 width: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn coalesced_same_storage_identity_authorizes_definition_width_refinement() {
+        let function = wide_opaque_value();
+        let value = VReg::phys("opaque-value");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for version in [1, 2] {
+            identities.record(
+                value.clone(),
+                crate::ir::ssa::SsaValue {
+                    base: VReg::phys("rax"),
+                    version,
+                },
+            );
+        }
+        let widths = std::collections::HashMap::from([("opaque-value".to_string(), 8)]);
+        let mut types = narrow_types();
+
+        refine_decbench_abi_widths_with_identities(
+            &function,
+            &mut types,
+            Some(&widths),
+            Some(&identities),
+        );
+
+        assert!(identities.exact(&value).is_none());
+        assert_eq!(
+            types.get(&value),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 8,
             })
         );
     }
