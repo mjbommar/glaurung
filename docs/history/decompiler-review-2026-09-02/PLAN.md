@@ -5806,6 +5806,15 @@ relevant ratchet's accepted-regression record.
    two fixture-197 lanes, and the six-cell cross-architecture Hello sample
    pass. Exact-version vector reconstruction remains unchanged. See
    `results/wp3-coalesced-packed-lane-lowering.md`.
+   Commit `a957c94c` removes display-name parsing from production phi-plumbing
+   classification in live-in parameter discovery. The architectural-read walk
+   now recognizes a phi copy through exact SSA identities whenever the sidecar
+   exists; only the explicit no-sidecar compatibility path parses
+   `reg#version`. Its opaque-name regression was observed red and then passed,
+   two neighboring phi-parameter controls and 49 narrowly filtered coalescing
+   tests pass, and an exact release build retains one AArch64 O2 call-shape
+   lane plus the six-cell cross-architecture Hello sample. See
+   `results/wp3-phi-plumbing-identities.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
