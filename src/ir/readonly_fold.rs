@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use object::{Object, ObjectSection};
 
-use crate::ir::ast::{Expr, Function, Stmt};
+use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 use crate::ir::types::{BinOp, CmpOp, VReg};
 use crate::program::image::ProgramImage;
 use crate::program::references::{InterpretationKind, OperandRole, ReferenceResolver};
@@ -486,14 +486,25 @@ fn fold_expr(
     bounds: &HashMap<String, usize>,
     active_guard: Option<&Guard>,
 ) {
+    let consumed_origins = expression_origins(expression);
     if let Some(replacement) =
         fold_indirect_readonly_lookup(expression, data, aliases, bounds, active_guard)
     {
-        *expression = replacement;
+        *expression = replacement.with_optional_origins(consumed_origins);
         return;
     }
     match expression {
-        Expr::Origin { expr, .. } => fold_expr(expr, data, aliases, bounds, active_guard),
+        Expr::Origin { origins, expr } => {
+            fold_expr(expr, data, aliases, bounds, active_guard);
+            if matches!(expr.as_ref(), Expr::Origin { .. }) {
+                let nested = std::mem::replace(expr, Box::new(Expr::Unknown(String::new())));
+                let (semantic, nested_origins) = (*nested).into_semantic_with_origins();
+                if let Some(nested_origins) = nested_origins {
+                    origins.merge(&nested_origins);
+                }
+                *expr = Box::new(semantic);
+            }
+        }
         Expr::Deref { addr, size } => {
             fold_expr(addr, data, aliases, bounds, active_guard);
             if let Some(text) =
@@ -501,13 +512,14 @@ fn fold_expr(
             {
                 *expression = Expr::StringLit {
                     value: text.to_string(),
-                };
+                }
+                .with_optional_origins(consumed_origins.clone());
                 return;
             }
             if let Some(value) =
                 constant_u64(addr).and_then(|address| data.read_integer(address, *size))
             {
-                *expression = Expr::Const(value);
+                *expression = Expr::Const(value).with_optional_origins(consumed_origins.clone());
                 return;
             }
             let Some((base, index)) = indexed_address(addr, *size) else {
@@ -556,7 +568,7 @@ fn fold_expr(
                     width: lookup_width,
                 };
             }
-            *expression = replacement;
+            *expression = replacement.with_optional_origins(consumed_origins);
         }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             fold_expr(lhs, data, aliases, bounds, active_guard);
@@ -604,6 +616,61 @@ fn fold_expr(
     }
 }
 
+fn expression_origins(expression: &Expr) -> Option<OriginSet> {
+    fn collect(expression: &Expr, origins: &mut OriginSet) {
+        if let Some(owner) = expression.origins() {
+            origins.merge(owner);
+        }
+        match expression.semantic() {
+            Expr::FunctionTableEntry { index, .. } => collect(index, origins),
+            Expr::Deref { addr, .. }
+            | Expr::Un { src: addr, .. }
+            | Expr::Cast { expr: addr, .. }
+            | Expr::NumericConvert { expr: addr, .. } => collect(addr, origins),
+            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+                collect(lhs, origins);
+                collect(rhs, origins);
+            }
+            Expr::Call { target, args, .. } => {
+                collect(target, origins);
+                for argument in args {
+                    collect(argument, origins);
+                }
+            }
+            Expr::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => {
+                collect(cond, origins);
+                collect(if_true, origins);
+                collect(if_false, origins);
+            }
+            Expr::WideArithmetic { args, .. } => {
+                for argument in args {
+                    collect(argument, origins);
+                }
+            }
+            Expr::Origin { .. } => unreachable!("semantic expression cannot be an origin wrapper"),
+            Expr::Reg(_)
+            | Expr::Const(_)
+            | Expr::FloatConst { .. }
+            | Expr::Addr(_)
+            | Expr::Named { .. }
+            | Expr::StringLit { .. }
+            | Expr::StackAddr { .. }
+            | Expr::Lea { .. }
+            | Expr::PdbFieldAddr { .. }
+            | Expr::Unknown(_) => {}
+        }
+    }
+
+    let mut origins = OriginSet::empty();
+    collect(expression, &mut origins);
+    (!origins.is_empty()).then_some(origins)
+}
+
 /// Materialise a guarded `*pointer_table[index]` when relocations prove every
 /// pointer target and each target is an exactly readable readonly scalar.
 fn fold_indirect_readonly_lookup(
@@ -616,14 +683,14 @@ fn fold_indirect_readonly_lookup(
     let Expr::Deref {
         addr: outer_addr,
         size: value_width,
-    } = expression
+    } = expression.semantic()
     else {
         return None;
     };
     let Expr::Deref {
         addr: table_addr,
         size: pointer_width,
-    } = outer_addr.as_ref()
+    } = outer_addr.semantic()
     else {
         return None;
     };
@@ -665,7 +732,7 @@ fn bounded_guard(
     aliases: &HashMap<String, String>,
     bounds: &HashMap<String, usize>,
 ) -> Option<Guard> {
-    let Expr::Cmp { op, lhs, rhs } = condition else {
+    let Expr::Cmp { op, lhs, rhs } = condition.semantic() else {
         return None;
     };
     let (index, inclusive_max) = match op {
@@ -710,7 +777,7 @@ fn bounded_fallthrough_guard(
     aliases: &HashMap<String, String>,
     nonnegative: &HashSet<String>,
 ) -> Option<Guard> {
-    let Expr::Cmp { op, lhs, rhs } = condition else {
+    let Expr::Cmp { op, lhs, rhs } = condition.semantic() else {
         return None;
     };
     let (index, inclusive_max) = match op {
@@ -846,7 +913,7 @@ fn indexed_address(address: &Expr, width: u8) -> Option<(u64, Expr)> {
         scale,
         disp,
         segment: None,
-    } = address
+    } = address.semantic()
     {
         if *scale == width && *disp >= 0 {
             return Some((*disp as u64, Expr::Reg(index.clone())));
@@ -886,10 +953,12 @@ fn scaled_index(expression: &Expr, width: u8) -> Option<Expr> {
 }
 
 fn strip_casts(mut expression: &Expr) -> &Expr {
-    while let Expr::Cast { expr, .. } = expression {
-        expression = expr;
+    loop {
+        match expression {
+            Expr::Origin { expr, .. } | Expr::Cast { expr, .. } => expression = expr,
+            _ => return expression,
+        }
     }
-    expression
 }
 
 fn source_register(expression: &Expr) -> Option<&str> {
@@ -968,20 +1037,27 @@ mod tests {
             name: "constant_lane".into(),
             entry_va: 0,
             body: vec![Stmt::Return {
-                value: Some(Expr::Deref {
-                    addr: Box::new(Expr::Addr(0x200c)),
-                    size: 4,
-                }),
+                value: Some(
+                    Expr::Deref {
+                        addr: Box::new(
+                            Expr::Addr(0x200c).with_origins(crate::ir::ast::OriginSet::one(0x1000)),
+                        ),
+                        size: 4,
+                    }
+                    .with_origins(crate::ir::ast::OriginSet::one(0x1004)),
+                ),
             }],
         };
 
         fold_guarded_readonly_lookups(&mut function, &data);
+        let Stmt::Return { value: Some(value) } = &function.body[0] else {
+            panic!("expected folded return: {:#?}", function.body);
+        };
+        assert_eq!(value.semantic(), &Expr::Const(32));
         assert_eq!(
-            function.body,
-            vec![Stmt::Return {
-                value: Some(Expr::Const(32)),
-            }],
-            "a direct .rodata load must not survive as an absolute process address"
+            value.origins(),
+            Some(&crate::ir::ast::OriginSet::from_addresses([0x1000, 0x1004])),
+            "the folded value lost its expression owner"
         );
     }
 

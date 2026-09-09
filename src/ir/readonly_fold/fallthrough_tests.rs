@@ -1,4 +1,5 @@
 use super::*;
+use crate::ir::ast::OriginSet;
 
 #[test]
 fn terminating_upper_bound_guard_materialises_the_fallthrough_lookup() {
@@ -14,23 +15,32 @@ fn terminating_upper_bound_guard_materialises_the_fallthrough_lookup() {
         ..ReadonlyData::default()
     };
     let lookup = || Expr::Deref {
-        addr: Box::new(Expr::Bin {
-            op: BinOp::Add,
-            lhs: Box::new(Expr::Addr(0xc28)),
-            rhs: Box::new(Expr::Bin {
-                op: BinOp::Mul,
-                lhs: Box::new(Expr::Reg(VReg::phys("index"))),
-                rhs: Box::new(Expr::Const(4)),
-            }),
-        }),
+        addr: Box::new(
+            Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Addr(0xc28).with_origins(OriginSet::one(0x2000))),
+                rhs: Box::new(
+                    Expr::Bin {
+                        op: BinOp::Mul,
+                        lhs: Box::new(
+                            Expr::Reg(VReg::phys("index")).with_origins(OriginSet::one(0x2004)),
+                        ),
+                        rhs: Box::new(Expr::Const(4).with_origins(OriginSet::one(0x2008))),
+                    }
+                    .with_origins(OriginSet::one(0x200c)),
+                ),
+            }
+            .with_origins(OriginSet::one(0x2010)),
+        ),
         size: 4,
     };
     let guard = Stmt::If {
         cond: Expr::Cmp {
             op: CmpOp::Ult,
-            lhs: Box::new(Expr::Const(5)),
-            rhs: Box::new(Expr::Reg(VReg::phys("index"))),
-        },
+            lhs: Box::new(Expr::Const(5).with_origins(OriginSet::one(0x2014))),
+            rhs: Box::new(Expr::Reg(VReg::phys("index")).with_origins(OriginSet::one(0x2018))),
+        }
+        .with_origins(OriginSet::one(0x201c)),
         then_body: vec![Stmt::Return {
             value: Some(Expr::Const(399)),
         }],
@@ -68,7 +78,7 @@ fn terminating_upper_bound_guard_materialises_the_fallthrough_lookup() {
     let Stmt::If { cond, .. } = &mut signed_guard else {
         unreachable!("the test guard is an if")
     };
-    let Expr::Cmp { op, .. } = cond else {
+    let Expr::Cmp { op, .. } = cond.semantic_mut() else {
         unreachable!("the test condition is a comparison")
     };
     *op = CmpOp::Slt;
