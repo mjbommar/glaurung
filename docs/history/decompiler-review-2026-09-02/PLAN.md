@@ -3000,7 +3000,9 @@ provenance through lowering.
   bounded consumer migrations now include canary classification, lazy-call
   selects, cdecl32 stack walkers, ARM32 frame anchors, and format-proven printf
   arity. Caller-derived fixed-arity target recognition is also transparent to
-  expression owners; universal production attribution remains open.
+  expression owners. Shared call-target naming and identifier census now retain
+  prototype and stack-protector evidence through expression owners; universal
+  production attribution remains open.
 - [~] Thread origins through lowering, expression rewrites, structuring, tail
   duplication, and rendering. Commit `8cb7d171` makes enabled statement
   consumers and all three renderers preserve or ignore the carrier without
@@ -5254,6 +5256,14 @@ relevant ratchet's accepted-regression record.
    Continue the remaining enabled expression-consumer audit; the architecture,
    target, cleanup, and multi-caller agreement gates remain unchanged. See
    `results/wp3-caller-arity-target-origins.md`.
+   Commit `44338752` closes the adjacent shared-render call-target family.
+   Attributed named callees retain WinAPI prototype hints, remain callees in the
+   identifier census, and preserve `__stack_chk_fail` evidence so scored C does
+   not incorrectly suppress a protector present in the original. Both
+   observed-red contracts, the directly related real prototype and emission
+   checks, and the six-cell GCC symbols/PIE Hello checkpoint pass against an
+   exact clean release build at O0/O2 across x86-64, AArch64, and ARMv7. See
+   `results/wp3-render-call-target-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
