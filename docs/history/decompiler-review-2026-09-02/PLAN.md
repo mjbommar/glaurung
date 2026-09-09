@@ -5676,6 +5676,12 @@ relevant ratchet's accepted-regression record.
    observed-red same-base contract, all 129 focused `call_args` tests, and one
    exact-release Clang O0 `call_into_spill` control pass. See
    `results/wp3-coalesced-frame-coordinate-identity.md`.
+   Commit `df7a9b46` applies the same physical-storage rule to captured fixed
+   frame loads and intervening frame writes. Coalesced versions of one
+   `rbp`/`ebp` base can retain the stable-load proof; mixed bases and misleading
+   names still decline. Its observed-red same-base contract, all 129 focused
+   `call_args` tests, and one exact-release Clang O0 `call_into_spill` control
+   pass. See `results/wp3-coalesced-captured-frame-base.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
