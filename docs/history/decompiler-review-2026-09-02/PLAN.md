@@ -2224,7 +2224,12 @@ provenance through lowering.
   the same readable symbol names as ordinary control flow while the enclosing
   exception owner remains unchanged. Its observed-red contract, all 17
   name-resolution tests, and two exact release-built x86-64 GCC O0/O2 Hello
-  controls pass. See `results/wp3-exception-name-resolution.md`.
+  controls pass. See `results/wp3-exception-name-resolution.md`. Follow-on
+  `c75604a0` extends the immediately following string fold across the same
+  throw/try/catch surface, so resolved exception values become readable
+  literals rather than raw addresses. Its observed-red contract, all 13
+  string-fold tests, and the same two exact-release Hello controls pass. See
+  `results/wp3-exception-string-folding.md`.
   Commit `54ff918b` closes that boundary for authoritative character-pointer
   calls: attributed named targets still select their call contract, and
   attributed constant arguments fold to string literals without losing their
