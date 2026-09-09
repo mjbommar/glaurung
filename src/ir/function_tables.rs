@@ -608,7 +608,17 @@ fn resolve_expr(
     definitions: &HashMap<VReg, Expr>,
 ) {
     match expression {
-        Expr::Origin { expr, .. } => resolve_expr(expr, tables, definitions),
+        Expr::Origin { origins, expr } => {
+            resolve_expr(expr, tables, definitions);
+            if matches!(expr.as_ref(), Expr::Origin { .. }) {
+                let nested = std::mem::replace(expr, Box::new(Expr::Unknown(String::new())));
+                let (semantic, nested_origins) = (*nested).into_semantic_with_origins();
+                if let Some(nested_origins) = nested_origins {
+                    origins.merge(&nested_origins);
+                }
+                *expr = Box::new(semantic);
+            }
+        }
         Expr::Deref { addr, .. } => resolve_expr(addr, tables, definitions),
         Expr::Call { target, args, .. } => {
             resolve_expr(target, tables, definitions);
@@ -651,19 +661,25 @@ fn resolve_expr(
         | Expr::Unknown(_) => {}
     }
 
+    let replacement_origins = matches!(expression.semantic(), Expr::Deref { .. })
+        .then(|| reaching_expression_origins(expression, definitions, 0))
+        .flatten();
     let replacement = match expression {
         Expr::Deref { addr, size } => tables.iter().find_map(|table| {
             if *size != table.pointer_size {
                 return None;
             }
             let index = indexed_table_address(addr, table.va, table.pointer_size, definitions, 0)?;
-            Some(Expr::FunctionTableEntry {
-                table_va: table.va,
-                table_name: table.name.clone(),
-                pointer_size: table.pointer_size,
-                index: Box::new(index),
-                targets: table.targets.clone(),
-            })
+            Some(
+                Expr::FunctionTableEntry {
+                    table_va: table.va,
+                    table_name: table.name.clone(),
+                    pointer_size: table.pointer_size,
+                    index: Box::new(index),
+                    targets: table.targets.clone(),
+                }
+                .with_optional_origins(replacement_origins.clone()),
+            )
         }),
         _ => None,
     };
@@ -1034,6 +1050,88 @@ fn expression_tree_origins(expression: &Expr) -> Option<OriginSet> {
     (!origins.is_empty()).then_some(origins)
 }
 
+fn reaching_expression_origins(
+    expression: &Expr,
+    definitions: &HashMap<VReg, Expr>,
+    depth: usize,
+) -> Option<OriginSet> {
+    fn collect(
+        expression: &Expr,
+        definitions: &HashMap<VReg, Expr>,
+        depth: usize,
+        origins: &mut OriginSet,
+    ) {
+        if depth >= 16 {
+            return;
+        }
+        if let Some(owner) = expression.origins() {
+            origins.merge(owner);
+        }
+        let mut collect_register = |register: &VReg| {
+            if let Some(definition) = definitions.get(register) {
+                collect(definition, definitions, depth + 1, origins);
+            }
+        };
+        match expression.semantic() {
+            Expr::Reg(register) => collect_register(register),
+            Expr::StackAddr { object, .. } => collect_register(object),
+            Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
+                if let Some(base) = base {
+                    collect_register(base);
+                }
+                if let Some(index) = index {
+                    collect_register(index);
+                }
+            }
+            Expr::FunctionTableEntry { index, .. } => {
+                collect(index, definitions, depth + 1, origins)
+            }
+            Expr::Deref { addr, .. }
+            | Expr::Un { src: addr, .. }
+            | Expr::Cast { expr: addr, .. }
+            | Expr::NumericConvert { expr: addr, .. } => {
+                collect(addr, definitions, depth + 1, origins)
+            }
+            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+                collect(lhs, definitions, depth + 1, origins);
+                collect(rhs, definitions, depth + 1, origins);
+            }
+            Expr::Call { target, args, .. } => {
+                collect(target, definitions, depth + 1, origins);
+                for argument in args {
+                    collect(argument, definitions, depth + 1, origins);
+                }
+            }
+            Expr::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => {
+                collect(cond, definitions, depth + 1, origins);
+                collect(if_true, definitions, depth + 1, origins);
+                collect(if_false, definitions, depth + 1, origins);
+            }
+            Expr::WideArithmetic { args, .. } => {
+                for argument in args {
+                    collect(argument, definitions, depth + 1, origins);
+                }
+            }
+            Expr::Origin { .. } => unreachable!("semantic expression cannot be an origin wrapper"),
+            Expr::Const(_)
+            | Expr::FloatConst { .. }
+            | Expr::Addr(_)
+            | Expr::Named { .. }
+            | Expr::StringLit { .. }
+            | Expr::Unknown(_) => {}
+        }
+    }
+
+    let mut origins = OriginSet::empty();
+    collect(expression, definitions, depth, &mut origins);
+    (!origins.is_empty()).then_some(origins)
+}
+
 fn is_zero(expression: &Expr, definitions: &HashMap<VReg, Expr>, depth: usize) -> bool {
     if depth >= 16 {
         return false;
@@ -1219,20 +1317,25 @@ mod tests {
                     src: Expr::Named {
                         va: 0x4004,
                         name: "ops".into(),
-                    },
+                    }
+                    .with_origins(OriginSet::one(0x11a4)),
                 },
                 Stmt::Assign {
                     dst: VReg::phys("entry"),
                     src: Expr::Deref {
-                        addr: Box::new(Expr::Lea {
-                            base: Some(VReg::phys("scaled")),
-                            index: Some(VReg::phys("table")),
-                            scale: 1,
-                            disp: 0,
-                            segment: None,
-                        }),
+                        addr: Box::new(
+                            Expr::Lea {
+                                base: Some(VReg::phys("scaled")),
+                                index: Some(VReg::phys("table")),
+                                scale: 1,
+                                disp: 0,
+                                segment: None,
+                            }
+                            .with_origins(OriginSet::one(0x11a8)),
+                        ),
                         size: 4,
-                    },
+                    }
+                    .with_origins(OriginSet::one(0x11ac)),
                 },
             ],
         };
@@ -1246,6 +1349,10 @@ mod tests {
             panic!("scaled lookup did not become a table entry: {src:#?}")
         };
         assert_eq!(index.origins(), Some(&OriginSet::one(0x11a0)));
+        assert_eq!(
+            src.origins(),
+            Some(&OriginSet::from_iter([0x11a0, 0x11a4, 0x11a8, 0x11ac]))
+        );
     }
 
     #[test]
