@@ -99,8 +99,13 @@ entry becomes an indirect call target, the defining-entry and use-site owners
 are composed on the replacement target instead of being discarded. The
 observed-red ownership contract, all 14 function-table tests, and the exact
 release-built portable `ops[5]` integration pass. See
-`results/wp3-function-table-target-expression-origins.md`. Commit `849c5a5b` then migrates direct,
-resolved GOT-indirect, and relocation-proven vtable tail-call recovery. Its
+`results/wp3-function-table-target-expression-origins.md`. Follow-on
+`3889f7e5` preserves the scaled-address provenance consumed while reconstructing
+the semantic table index. Its strengthened contract was observed red, all 14
+function-table tests pass, and the same exact release-built dispatcher remains
+green. See `results/wp3-function-table-index-expression-origins.md`. Commit
+`849c5a5b` then migrates direct, resolved GOT-indirect, and relocation-proven
+vtable tail-call recovery. Its
 stripped map is exactly neutral and its whole-Python boundary improves from 217
 to 216 failures with no addition; a controlled release A/B attributes the
 recovered Rust trait-object tail to this commit. See
