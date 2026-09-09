@@ -590,6 +590,15 @@ out. The reaching-copy consumer remains exact by design. See the follow-ups in
 `results/wp3-pointer-refinement-identities.md` and
 `results/wp3-unsigned-literal-identities.md`.
 
+Commit `27910f65` migrates packed-dword concat classification from one exact
+SSA version to one unambiguous physical lane. Same-lane coalesced operands keep
+the required 32-to-64-bit widening before the high-half shift; mixed lanes
+retain the conservative form. Its observed-red behavior contract, five focused
+lowering tests, two exact-release fixture-197 compiler lanes, and six
+x86-64/AArch64/ARMv7 O0/O2 Hello controls pass. Exact-version vector-copy
+reconstruction remains deliberately unchanged. See
+`results/wp3-coalesced-packed-lane-lowering.md`.
+
 ## Authority and relationship to the roadmaps
 
 `docs/development/roadmap/README.md` remains the canonical roadmap index, and
@@ -5786,6 +5795,12 @@ relevant ratchet's accepted-regression record.
    37 focused high-variable tests pass. Exact reaching-copy identity remains
    deliberately unchanged. See `results/wp3-pointer-refinement-identities.md`
    and `results/wp3-unsigned-literal-identities.md`.
+   Commit `27910f65` applies one-storage classification to packed-dword concat
+   lowering. Same-lane coalesced operands retain the defined 64-bit high-half
+   shift; mixed lanes decline. Its observed-red contract, five focused tests,
+   two fixture-197 lanes, and the six-cell cross-architecture Hello sample
+   pass. Exact-version vector reconstruction remains unchanged. See
+   `results/wp3-coalesced-packed-lane-lowering.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
