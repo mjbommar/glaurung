@@ -55,3 +55,30 @@ did not redundantly rerun them.
 
 No broad Rust suite, Python suite, fixture corpus, DecBench run, or Joern run
 was performed.
+
+## Follow-on: attributed lane values
+
+Commit `6490fc7d` closes the two adjacent expression shapes. Origin wrappers
+around the complete lane dereference and around the lane register stored no
+longer hide an otherwise exact four-lane transport. As with attributed
+addresses, the surviving wide statements receive the union of all consumed
+expression owners.
+
+The new contract was observed red first with all eight lane operations left
+unrecovered. Focused validation:
+
+```text
+cargo test --features python-ext --lib \
+  ir::vector_copy::tests::attributed_lane_values_rejoin_and_union_every_consumed_owner \
+  -- --exact
+1 passed; 0 failed; 4,730 filtered out
+
+cargo test --features python-ext --lib ir::vector_copy::tests::
+11 passed; 0 failed; 4,720 filtered out
+```
+
+A detached clean worktree at `6490fc7d` built the release extension. Its build
+guard reported `fresh` with native SHA-256
+`0966d1e2352bd1940aa6487675a017e2cbbdfd5635c60c2e6a4204dbacccc419`.
+The exact `188_vector_transport:clang:O2:vt188_copy_forward` canary passed.
+No broad suite or corpus ran.

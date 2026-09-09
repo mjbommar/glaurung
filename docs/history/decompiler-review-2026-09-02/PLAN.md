@@ -2972,7 +2972,10 @@ provenance through lowering.
   origin audit. Adjacent attributed lane addresses still recover as one
   16-byte transport, and both surviving statements receive the complete union
   of consumed expression owners. All ten owning tests and the exact Clang-O2
-  vector-transport canary pass; see `results/wp3-vector-address-origins.md`.
+  vector-transport canary pass. Follow-on `6490fc7d` closes origin wrappers
+  around the lane dereferences and stored lane values themselves; all eleven
+  owning tests and the same exact release canary pass. See
+  `results/wp3-vector-address-origins.md`.
 - [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
   typed consumer lands.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
