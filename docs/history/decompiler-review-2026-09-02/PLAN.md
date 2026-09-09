@@ -2298,6 +2298,14 @@ provenance through lowering.
   and AArch64 nodes pass, while the same 18 separately tracked ARMv7 ABI,
   frame, and string nodes remain red. See
   `results/wp3-frame-rendering-expression-origins.md`.
+  Commit `72b3478b` closes the declared-float call-rendering sibling: an exact
+  `float`/`double` register argument now remains byte-neutral when it carries
+  an expression owner, instead of acquiring a redundant cast. The observed-red
+  contract and five adjacent float-call/dataflow tests pass. Clean release
+  parent/tip runs of the real ARM hard-float call test reproduce the same
+  existing failure: redundant parameter spill/reload reconstruction prevents
+  `arm_hf_callee(x, y)`. That larger value/storage-identity repair remains
+  open. See `results/wp3-declared-float-call-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
