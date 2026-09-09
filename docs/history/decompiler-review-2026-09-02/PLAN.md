@@ -3004,7 +3004,9 @@ provenance through lowering.
   prototype and stack-protector evidence through expression owners. Wide-load
   and portable-global declaration evidence is likewise origin-transparent;
   the scored-C unit-step renderer also retains `++`/`--` spelling through
-  expression owners. Universal production attribution remains open.
+  expression owners. Recursive pointer-access width collection and direct-base
+  classification are origin-transparent as well. Universal production
+  attribution remains open.
 - [~] Thread origins through lowering, expression rewrites, structuring, tail
   duplication, and rendering. Commit `8cb7d171` makes enabled statement
   consumers and all three renderers preserve or ignore the carrier without
@@ -5282,6 +5284,15 @@ relevant ratchet's accepted-regression record.
    trips pass against an exact clean release build; direct output inspection
    confirms the recovered GCC-O0 loop renders `i++`. See
    `results/wp3-unit-step-render-origins.md`.
+   Commit `5e2b7fff` closes the recursive scored-C pointer-access-width sibling.
+   Attributed dereferences and addresses now retain the observed access width,
+   while attributed promoted-local stores remain excluded from pointer
+   evidence. The observed-red positive and negative contracts, all seven
+   `decbench_abi_` tests, three passing real byte-stride lanes, and the periodic
+   six-cell GCC symbols/PIE Hello checkpoint pass on an exact clean release
+   build. Clang-O2 byte-stride remains its pre-existing unresolved-vector fail,
+   with no regression in scope. See
+   `results/wp3-pointer-access-expression-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
