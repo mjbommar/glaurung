@@ -819,28 +819,36 @@ fn collect_high_half_requirements(body: &[Stmt], required: &mut std::collections
 }
 
 fn collect_high_half_expr(expr: &Expr, required: &mut std::collections::HashSet<String>) {
-    match expr {
+    match expr.semantic() {
         Expr::Bin { op, lhs, rhs } => {
             let high_shift = matches!(op, BinOp::Shl | BinOp::Shr | BinOp::Sar)
-                && matches!(rhs.as_ref(), Expr::Const(count) if *count >= 32);
+                && matches!(rhs.semantic(), Expr::Const(count) if *count >= 32);
             if high_shift {
                 require_wide_expr(lhs, required);
             }
-            if matches!(lhs.as_ref(), Expr::Const(value) if constant_needs_wide_word(*value)) {
+            if matches!(lhs.semantic(), Expr::Const(value) if constant_needs_wide_word(*value)) {
                 require_wide_expr(rhs, required);
             }
-            if matches!(rhs.as_ref(), Expr::Const(value) if constant_needs_wide_word(*value)) {
+            if matches!(rhs.semantic(), Expr::Const(value) if constant_needs_wide_word(*value)) {
                 require_wide_expr(lhs, required);
             }
             collect_high_half_expr(lhs, required);
             collect_high_half_expr(rhs, required);
         }
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } | Expr::Deref { addr: src, .. } => {
-            collect_high_half_expr(src, required)
-        }
+        Expr::Un { src, .. }
+        | Expr::Cast { expr: src, .. }
+        | Expr::NumericConvert { expr: src, .. }
+        | Expr::Deref { addr: src, .. }
+        | Expr::FunctionTableEntry { index: src, .. } => collect_high_half_expr(src, required),
         Expr::Cmp { lhs, rhs, .. } => {
             collect_high_half_expr(lhs, required);
             collect_high_half_expr(rhs, required);
+        }
+        Expr::Call { target, args, .. } => {
+            collect_high_half_expr(target, required);
+            for arg in args {
+                collect_high_half_expr(arg, required);
+            }
         }
         Expr::Select {
             cond,
@@ -852,12 +860,17 @@ fn collect_high_half_expr(expr: &Expr, required: &mut std::collections::HashSet<
             collect_high_half_expr(if_true, required);
             collect_high_half_expr(if_false, required);
         }
+        Expr::WideArithmetic { args, .. } => {
+            for arg in args {
+                collect_high_half_expr(arg, required);
+            }
+        }
         _ => {}
     }
 }
 
 fn require_wide_expr(expr: &Expr, required: &mut std::collections::HashSet<String>) {
-    match expr {
+    match expr.semantic() {
         Expr::Reg(VReg::Phys(name)) => {
             required.insert(name.clone());
         }
@@ -867,12 +880,27 @@ fn require_wide_expr(expr: &Expr, required: &mut std::collections::HashSet<Strin
                 require_wide_expr(rhs, required);
             }
         }
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => require_wide_expr(src, required),
+        Expr::Un { src, .. }
+        | Expr::Cast { expr: src, .. }
+        | Expr::NumericConvert { expr: src, .. }
+        | Expr::Deref { addr: src, .. }
+        | Expr::FunctionTableEntry { index: src, .. } => require_wide_expr(src, required),
+        Expr::Call { target, args, .. } => {
+            require_wide_expr(target, required);
+            for arg in args {
+                require_wide_expr(arg, required);
+            }
+        }
         Expr::Select {
             if_true, if_false, ..
         } => {
             require_wide_expr(if_true, required);
             require_wide_expr(if_false, required);
+        }
+        Expr::WideArithmetic { args, .. } => {
+            for arg in args {
+                require_wide_expr(arg, required);
+            }
         }
         _ => {}
     }
@@ -963,14 +991,14 @@ fn expression_value_width(
             signed: false,
             width: 8,
             expr: inner,
-        } if matches!(inner.as_ref(), Expr::Cast { width: 1..=4, .. }) => {
+        } if matches!(inner.semantic(), Expr::Cast { width: 1..=4, .. }) => {
             expression_value_width(inner, tm, defs)
         }
         Expr::Cast { width, .. } => Some(*width),
         Expr::Bin { op, lhs, rhs } => {
             let lhs_width = expression_value_width(lhs, tm, defs);
             if matches!(op, BinOp::Shl | BinOp::Shr | BinOp::Sar) {
-                if matches!(rhs.as_ref(), Expr::Const(count) if *count >= 32) {
+                if matches!(rhs.semantic(), Expr::Const(count) if *count >= 32) {
                     Some(lhs_width.unwrap_or(8).max(8))
                 } else {
                     lhs_width

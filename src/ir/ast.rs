@@ -6261,17 +6261,25 @@ function f @ 0x1000 {
                     dst: VReg::phys("var0"),
                     src: Expr::Bin {
                         op: BinOp::Shr,
-                        lhs: Box::new(Expr::Reg(VReg::phys("arg0"))),
-                        rhs: Box::new(Expr::Const(32)),
-                    },
+                        lhs: Box::new(
+                            Expr::Reg(VReg::phys("arg0")).with_origins(OriginSet::one(0x1010)),
+                        ),
+                        rhs: Box::new(Expr::Const(32).with_origins(OriginSet::one(0x1014))),
+                    }
+                    .with_origins(OriginSet::one(0x1018)),
                 },
                 Stmt::Assign {
                     dst: VReg::phys("var1"),
                     src: Expr::Bin {
                         op: BinOp::And,
-                        lhs: Box::new(Expr::Reg(VReg::phys("arg1"))),
-                        rhs: Box::new(Expr::Const(-0x1_0000_0000)),
-                    },
+                        lhs: Box::new(
+                            Expr::Reg(VReg::phys("arg1")).with_origins(OriginSet::one(0x101c)),
+                        ),
+                        rhs: Box::new(
+                            Expr::Const(-0x1_0000_0000).with_origins(OriginSet::one(0x1020)),
+                        ),
+                    }
+                    .with_origins(OriginSet::one(0x1024)),
                 },
                 Stmt::Return {
                     value: Some(Expr::Bin {
