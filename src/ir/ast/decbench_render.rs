@@ -715,11 +715,18 @@ pub(crate) fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_an
             continue;
         }
         if let Some(width) = dec_global_scalar_width(*address) {
+            let initializer = super::dec_global_initial_scalar(*address)
+                .and_then(|(initial_width, value)| {
+                    (initial_width == width && value <= i64::MAX as u64)
+                        .then(|| format!(" = {value}"))
+                })
+                .unwrap_or_default();
             let _ = writeln!(
                 out,
-                "static {} {};",
+                "static {} {}{};",
                 width_ctype(width),
-                dec_global_name(*address)
+                dec_global_name(*address),
+                initializer
             );
         } else {
             let _ = writeln!(

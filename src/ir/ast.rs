@@ -3987,6 +3987,36 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn decbench_file_backed_global_scalar_keeps_its_initializer() {
+        let function = Function {
+            name: "read_bias".to_string(),
+            entry_va: 0x1150,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Deref {
+                    addr: Box::new(Expr::Addr(0x4028)),
+                    size: 4,
+                }),
+            }],
+        };
+        let mut symbols = crate::ir::data_symbols::DataSymbols::from_entries([(
+            0x4028u64,
+            4u64,
+            "vis_public_bias",
+        )]);
+        symbols.set_initial_scalar_for_test(0x4028, 4, 11);
+        install_dec_global_names(symbols);
+
+        let rendered = render_decbench(&function);
+        clear_dec_global_names();
+
+        assert!(
+            rendered.contains("static int vis_public_bias = 11;"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("return vis_public_bias;"), "{rendered}");
+    }
+
+    #[test]
     fn dwarf_owned_static_object_renders_in_its_function_scope() {
         let function = Function {
             name: "counter".to_string(),
