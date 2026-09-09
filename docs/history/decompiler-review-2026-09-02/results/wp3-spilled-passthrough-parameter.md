@@ -34,6 +34,13 @@ different slot, any intervening store or conditional store, a call, an
 intrinsic, or an unknown operation makes the proof fail closed. Cross-block
 reaching stores remain unsupported until authoritative MemorySSA owns them.
 
+Hardening commit `cbdf4f06` closes a second alias boundary exposed immediately
+after the first increment. Equal `MemOp` spelling does not prove equal storage
+when its base register is redefined between the store and load. The proof now
+requires the same exact SSA base identity and accepts only non-indexed,
+non-segmented frame/stack-relative addresses. Arbitrary global, TLS, indexed,
+and renamed-base loads decline rather than borrowing a parameter type.
+
 ## Focused evidence
 
 All commands used `TMPDIR=/home/mjbommar/.cache/glaurung/tmp`.
@@ -53,6 +60,15 @@ cargo test --features python-ext \
   python_bindings::ir::callee_contracts::tests::different_spill_slot_blocks_passthrough_refinement \
   -- --exact --nocapture
 1 passed; 0 failed
+
+cargo test --features python-ext --lib \
+  python_bindings::ir::callee_contracts::tests::redefined_address_base_blocks_spill_passthrough_refinement \
+  -- --exact --nocapture
+RED: pointer refinement incorrectly survived the base redefinition
+
+cargo test --features python-ext --lib \
+  python_bindings::ir::callee_contracts::tests -- --nocapture
+GREEN: 10 passed; 0 failed
 
 uv run maturin develop --release
 finished release profile; editable wheel installed

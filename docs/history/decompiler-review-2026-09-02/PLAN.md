@@ -2000,6 +2000,11 @@ provenance through lowering.
   now renders `forward_pointer(int *arg0)` and `read_first(arg0)`. See
   `results/wp3-spilled-passthrough-parameter.md` and
   `results/wp3-authoritative-pointer-use-expression-origins.md`.
+  Hardening commit `cbdf4f06` additionally requires the store and load to use
+  the same SSA identity for an allowed frame/stack base; indexed, segmented,
+  non-stack, and redefined-base addresses decline. The new refusal was observed
+  red before the repair, all 10 owning tests pass, and the release-built real
+  fixture remains green.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
