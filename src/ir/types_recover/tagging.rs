@@ -383,9 +383,9 @@ fn refine_return_type(
         for ins in &block.instrs {
             if let Some(dst) = op_dst_reg(&ins.op) {
                 let is_result = match identities {
-                    Some(identities) => identities.exact(dst).is_some_and(|identity| {
-                        matches!(&identity.base, VReg::Phys(base) if ret_names.contains(&base.as_str()))
-                    }),
+                    Some(identities) => identities
+                        .unambiguous_physical_base(dst)
+                        .is_some_and(|base| ret_names.contains(&base)),
                     None => matches!(dst, VReg::Phys(name) if ret_names.contains(&name.as_str())),
                 };
                 if is_result {

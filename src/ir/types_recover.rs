@@ -5148,6 +5148,80 @@ int never_returns(void) { for (;;) {} }
     }
 
     #[test]
+    fn coalesced_return_storage_uses_unambiguous_base_and_width() {
+        use crate::ir::call_args::CallConv;
+
+        let result = VReg::phys("coalesced_result");
+        let function = mk_block(vec![
+            Op::Load {
+                dst: VReg::phys("rcx"),
+                addr: MemOp {
+                    base: Some(result.clone()),
+                    size: 1,
+                    ..Default::default()
+                },
+            },
+            Op::Bin {
+                dst: result.clone(),
+                op: BinOp::Add,
+                lhs: Value::Reg(VReg::phys("edi")),
+                rhs: Value::Const(1),
+            },
+        ]);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for version in [0, 1] {
+            let identity = SsaValue {
+                base: VReg::phys("rax"),
+                version,
+            };
+            identities.record(result.clone(), identity.clone());
+            identities.attach_definition_width(&identity, 4);
+        }
+
+        let raw = recover_types_with_identities(&function, &identities);
+        assert!(
+            matches!(raw.get(&result), Some(TypeHint::Pointer { .. })),
+            "the test must exercise return refinement after a pointer conflict: {raw:?}"
+        );
+
+        let types = recover_types_for_with_identities(
+            &function,
+            CallConv::SysVAmd64,
+            &identities,
+            &TypeMapV::default(),
+        );
+
+        assert_eq!(
+            types.get(&result),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            }),
+            "the narrow last return definition must override earlier pointer use"
+        );
+
+        let mut mixed = crate::ir::value_number::ValueIdentities::default();
+        for (base, version) in [("rax", 0), ("rdi", 1)] {
+            let identity = SsaValue {
+                base: VReg::phys(base),
+                version,
+            };
+            mixed.record(result.clone(), identity.clone());
+            mixed.attach_definition_width(&identity, 4);
+        }
+        let types = recover_types_for_with_identities(
+            &function,
+            CallConv::SysVAmd64,
+            &mixed,
+            &TypeMapV::default(),
+        );
+        assert!(
+            matches!(types.get(&result), Some(TypeHint::Pointer { .. })),
+            "mixed physical storage must decline return refinement: {types:?}"
+        );
+    }
+
+    #[test]
     fn ordinary_definition_width_comes_from_the_exact_width_sidecar() {
         use crate::ir::call_args::CallConv;
 
