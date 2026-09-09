@@ -169,6 +169,7 @@ fn rewrite_expr(
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
     match e {
+        Expr::Origin { expr, .. } => rewrite_expr(expr, want, tm, identities),
         Expr::Reg(v) => {
             let Some(want) = want else { return };
             let Some(name) = reg_name(v) else { return };
@@ -240,6 +241,10 @@ fn make_unsigned(
     tm: &TypeMap,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
+    if let Expr::Origin { expr, .. } = e {
+        make_unsigned(expr, tm, identities);
+        return;
+    }
     let Expr::Reg(v) = e else { return };
     let Some(name) = reg_name(v) else { return };
     let Some((true, w)) = declared_int(Some(name), tm, identities) else {
@@ -852,5 +857,65 @@ mod tests {
             }
         ));
         assert_eq!(f.body[0].origins(), Some(&owner));
+    }
+
+    #[test]
+    fn attributed_value_is_widened_without_losing_its_owner() {
+        let owner = OriginSet::one(0x1020);
+        let tm = tm_of(&[("arg0", true, 4), ("local_8", false, 8)]);
+        let mut f = func(vec![Stmt::Assign {
+            dst: VReg::phys("local_8"),
+            src: reg("arg0").with_origins(owner.clone()),
+        }]);
+
+        insert_widening_casts(&mut f, &tm);
+
+        let Stmt::Assign { src, .. } = f.body[0].semantic() else {
+            panic!("expected an assignment: {:#?}", f.body);
+        };
+        assert!(
+            matches!(
+                src.semantic(),
+                Expr::Cast {
+                    signed: false,
+                    width: 8,
+                    ..
+                }
+            ),
+            "the expression carrier hid the required machine widening: {src:#?}"
+        );
+        assert_eq!(src.origins(), Some(&owner));
+    }
+
+    #[test]
+    fn attributed_signed_shift_value_is_reinterpreted_without_losing_its_owner() {
+        let owner = OriginSet::one(0x1030);
+        let tm = tm_of(&[("arg0", true, 4), ("local_4", true, 4)]);
+        let mut f = func(vec![Stmt::Assign {
+            dst: VReg::phys("local_4"),
+            src: bin(
+                BinOp::Shr,
+                reg("arg0").with_origins(owner.clone()),
+                Expr::Const(8),
+            ),
+        }]);
+
+        insert_widening_casts(&mut f, &tm);
+
+        let Stmt::Assign { src, .. } = f.body[0].semantic() else {
+            panic!("expected an assignment: {:#?}", f.body);
+        };
+        let Expr::Bin { lhs, .. } = src.semantic() else {
+            panic!("expected a logical shift: {src:#?}");
+        };
+        assert!(matches!(
+            lhs.semantic(),
+            Expr::Cast {
+                signed: false,
+                width: 4,
+                ..
+            }
+        ));
+        assert_eq!(lhs.origins(), Some(&owner));
     }
 }
