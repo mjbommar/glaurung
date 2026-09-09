@@ -485,6 +485,29 @@ fn width_bytes(width: crate::ir::types::Width) -> u8 {
 /// widths without joining every definition of that spelling first.
 type DefinitionWidthsByValue = HashMap<SsaValue, u8>;
 
+/// Return the one exact machine width shared by every incoming phi value.
+///
+/// This query stays in the SSA identity space. Numbered register spellings are
+/// presentation output and may be kept bare, coalesced, or renamed independently.
+fn agreed_phi_width(
+    phi: &crate::ir::ssa::Phi,
+    definition_widths_by_value: &DefinitionWidthsByValue,
+) -> Option<u8> {
+    let mut agreed = None;
+    for (_predecessor, version) in &phi.incoming {
+        let width = definition_widths_by_value.get(&SsaValue {
+            base: phi.base.clone(),
+            version: *version,
+        })?;
+        match agreed {
+            None => agreed = Some(*width),
+            Some(existing) if existing == *width => {}
+            Some(_) => return None,
+        }
+    }
+    agreed
+}
+
 /// Materialized phi copies and the width of each incoming SSA value.
 ///
 /// `incoming_widths` is parallel to `pairs`. `None` denotes a live-in or a
@@ -834,29 +857,9 @@ fn insert_phi_copies(
                             && lane.parse::<u8>().is_ok_and(|lane| lane < 4)
                     })
         );
-        let phi_width = if scalarized_dword_lane {
-            let mut phi_width = None;
-            let mut width_is_exact = true;
-            for (_pred, version) in &phi.incoming {
-                let mut src = phi.base.clone();
-                tag_phys(&mut src, *version, ctx);
-                let Some(width) = definition_widths.get(&src).copied() else {
-                    width_is_exact = false;
-                    break;
-                };
-                match phi_width {
-                    None => phi_width = Some(width),
-                    Some(existing) if existing == width => {}
-                    Some(_) => {
-                        width_is_exact = false;
-                        break;
-                    }
-                }
-            }
-            width_is_exact.then_some(phi_width).flatten()
-        } else {
-            None
-        };
+        let phi_width = scalarized_dword_lane
+            .then(|| agreed_phi_width(phi, definition_widths_by_value))
+            .flatten();
         if let Some(width) = phi_width {
             // Phi copies are synthetic and are inserted after the ordinary
             // instruction-width scan. Propagate a width only when every
@@ -1436,6 +1439,34 @@ mod tests {
             Some(VReg::phys("rdi#2"))
         );
         assert_eq!(widths.get(&VReg::phys("rdi#2")), Some(&8));
+    }
+
+    #[test]
+    fn phi_width_agreement_uses_ssa_values_not_numbered_spellings() {
+        let phi = crate::ir::ssa::Phi {
+            block_idx: 2,
+            base: VReg::phys("opaque_lane"),
+            dst_version: 3,
+            incoming: vec![(0, 1), (1, 2)],
+        };
+        let widths = DefinitionWidthsByValue::from([
+            (
+                SsaValue {
+                    base: VReg::phys("opaque_lane"),
+                    version: 1,
+                },
+                4,
+            ),
+            (
+                SsaValue {
+                    base: VReg::phys("opaque_lane"),
+                    version: 2,
+                },
+                4,
+            ),
+        ]);
+
+        assert_eq!(agreed_phi_width(&phi, &widths), Some(4));
     }
 
     #[test]
