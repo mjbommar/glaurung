@@ -40,8 +40,8 @@ uv run maturin develop --release
 finished release profile; editable wheel installed
 ```
 
-The nearest real forwarding-caller test remains red on the repaired shared
-snapshot:
+The nearest real forwarding-caller test initially remained red on the repaired
+shared snapshot:
 
 ```text
 uv run --no-sync pytest \
@@ -49,7 +49,9 @@ uv run --no-sync pytest \
 FAILED: emitted `forward_pointer(long arg0)` and `read_first((int *)(arg0))`
 ```
 
-That production path reaches the call boundary but does not install the
-authoritative parameter identity required by the focused test. It is an open
-WP3 identity-projection defect and is not reported as success or attributed to
-this positive-only consumer repair. No broad fixture or test sweep was run.
+Subsequent pass diagnostics corrected the initial diagnosis: the AST role
+sidecar did contain the exact parameter identity. The stale `long` belonged to
+the function-level recovered prototype, whose passthrough refinement followed
+register assignments but stopped at the O0 stack reload. Commit `c41c0b6b`
+closes that separately bounded defect; see
+`wp3-spilled-passthrough-parameter.md`. No broad fixture or test sweep was run.

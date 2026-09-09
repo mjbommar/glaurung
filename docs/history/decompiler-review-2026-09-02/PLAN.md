@@ -1990,10 +1990,15 @@ provenance through lowering.
   arguments now retain catalog and recovered callee pointer-parameter facts.
   The strengthened recovered-callee contract was observed red; it and the two
   adjacent recovered/catalog contracts pass after the repair, followed by a
-  successful release rebuild. The nearest real forwarding-caller test remains
-  red because the production pipeline does not project the required parameter
-  identity; that is recorded as the next identity-authority defect rather than
-  claimed as closure. See
+  successful release rebuild. Follow-up commit `c41c0b6b` closes the real
+  forwarding-caller defect. Diagnostics proved that AST role identity was
+  already projected correctly; the stale `long` came from the earlier
+  function-level prototype refinement stopping at an O0 stack reload. The
+  refinement now follows only an exact same-block spill/reload with no
+  intervening memory writer or opaque side effect. Three focused ownership and
+  refusal tests pass, the release extension rebuilds, and the compiled fixture
+  now renders `forward_pointer(int *arg0)` and `read_first(arg0)`. See
+  `results/wp3-spilled-passthrough-parameter.md` and
   `results/wp3-authoritative-pointer-use-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
