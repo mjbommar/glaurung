@@ -275,7 +275,7 @@ impl RegisterReturnContract {
                 ResultBank::Sse if integer_first => Some(RegisterPart::High),
                 ResultBank::Sse => Some(RegisterPart::Low),
             },
-            Self::SsePair { .. } => match expression {
+            Self::SsePair { .. } => match expression.semantic() {
                 Expr::Reg(register) => self.part(register, identities),
                 _ => None,
             },
@@ -619,10 +619,13 @@ pub fn bank_return_c_type(
 fn every_return_loads_one_object(body: &[Stmt], seen: &mut Option<(VReg, u16)>) -> bool {
     body.iter().all(|statement| match statement.semantic() {
         Stmt::Return { value } => {
-            let Some(Expr::Deref { addr, .. }) = value else {
+            let Some(value) = value else {
                 return false;
             };
-            let Expr::StackAddr { object, size } = addr.as_ref() else {
+            let Expr::Deref { addr, .. } = value.semantic() else {
+                return false;
+            };
+            let Expr::StackAddr { object, size } = addr.semantic() else {
                 return false;
             };
             match seen {
@@ -690,11 +693,10 @@ fn scan_returns(
             // form `hfa197_make_trio3f` reaches its result through. A store
             // through anything else is a pointer write and defines no local,
             // so it is left alone.
-            Stmt::Store {
-                addr: Expr::Reg(destination),
-                src,
-                ..
-            } => {
+            Stmt::Store { addr, src, .. } if matches!(addr.semantic(), Expr::Reg(_)) => {
+                let Expr::Reg(destination) = addr.semantic() else {
+                    unreachable!("guard established promoted destination")
+                };
                 let promoted = identities.map_or_else(
                     || crate::ir::types::is_promoted_local_reg(destination),
                     |identities| identities.is_promoted_stack_object(destination),
@@ -718,7 +720,7 @@ fn scan_returns(
                 let Some(value) = value else {
                     return false;
                 };
-                let Some(object) = stack_object_load(value).or_else(|| match value {
+                let Some(object) = stack_object_load(value).or_else(|| match value.semantic() {
                     Expr::Reg(register) => locals.get(register).cloned(),
                     _ => None,
                 }) else {
@@ -748,16 +750,20 @@ fn rewrite_returns(body: &mut [Stmt], object: &VReg, size: u16) {
     for statement in body.iter_mut() {
         match statement.semantic_mut() {
             Stmt::Return { value } => {
-                *value = Some(Expr::Deref {
-                    addr: Box::new(Expr::StackAddr {
-                        object: object.clone(),
-                        size,
-                    }),
-                    // A machine-word access width. The pointee TYPE is the
-                    // synthesised tag and comes from the declared result, not
-                    // from here; this width only has to name a load.
-                    size: size.min(8) as u8,
-                });
+                let origins = value.as_ref().and_then(Expr::origins).cloned();
+                *value = Some(
+                    Expr::Deref {
+                        addr: Box::new(Expr::StackAddr {
+                            object: object.clone(),
+                            size,
+                        }),
+                        // A machine-word access width. The pointee TYPE is the
+                        // synthesised tag and comes from the declared result, not
+                        // from here; this width only has to name a load.
+                        size: size.min(8) as u8,
+                    }
+                    .with_optional_origins(origins),
+                );
             }
             _ => {
                 for nested in nested_bodies_mut(statement) {
@@ -788,7 +794,7 @@ fn stores_second_bank(body: &[Stmt], object: &VReg, contract: BankContract) -> b
 
 /// The stack object an expression LOADS from, with its recovered extent.
 fn stack_object_load(expr: &Expr) -> Option<(VReg, u16)> {
-    let Expr::Deref { addr, .. } = expr else {
+    let Expr::Deref { addr, .. } = expr.semantic() else {
         return None;
     };
     stack_object_offset(addr).map(|(object, size, _)| (object, size))
@@ -797,13 +803,13 @@ fn stack_object_load(expr: &Expr) -> Option<(VReg, u16)> {
 /// The stack object an ADDRESS expression names, its recovered extent, and the
 /// constant byte offset into it.
 fn stack_object_offset(expr: &Expr) -> Option<(VReg, u16, i64)> {
-    match expr {
+    match expr.semantic() {
         Expr::StackAddr { object, size } => Some((object.clone(), *size, 0)),
         Expr::Bin {
             op: BinOp::Add,
             lhs,
             rhs,
-        } => match (lhs.as_ref(), rhs.as_ref()) {
+        } => match (lhs.semantic(), rhs.semantic()) {
             (base, Expr::Const(offset)) => {
                 stack_object_offset(base).map(|(object, size, at)| (object, size, at + offset))
             }
@@ -970,7 +976,7 @@ mod tests {
             store(0, 16).with_origins(OriginSet::one(0x1000)),
             store(8, 16).with_origins(OriginSet::one(0x1008)),
             Stmt::Return {
-                value: Some(load(0, 16)),
+                value: Some(load(0, 16).with_origins(OriginSet::one(0x2030))),
             }
             .with_origins(return_owner.clone()),
         ]);
@@ -982,11 +988,15 @@ mod tests {
             Some(&declared)
         ));
         assert_eq!(f.body[2].origins(), Some(&return_owner));
+        let Stmt::Return { value: Some(value) } = f.body[2].semantic() else {
+            panic!("expected composed return")
+        };
+        assert_eq!(value.origins(), Some(&OriginSet::one(0x2030)));
         assert!(matches!(
             f.body[2].semantic(),
-            Stmt::Return {
-                value: Some(Expr::Deref { addr, .. })
-            } if matches!(addr.as_ref(), Expr::StackAddr { size: 16, .. })
+            Stmt::Return { value: Some(value) }
+                if matches!(value.semantic(), Expr::Deref { addr, .. }
+                    if matches!(addr.semantic(), Expr::StackAddr { size: 16, .. }))
         ));
         assert_eq!(
             bank_return_c_type(&f.body, CallConv::SysVAmd64, Some(&declared)),
@@ -1333,7 +1343,8 @@ mod tests {
         let mut f = function(vec![
             register_assignment("xmm0#4", 40).with_origins(high_owner.clone()),
             register_assignment("eax#5", 17).with_origins(low_owner.clone()),
-            bare_return(Expr::Reg(VReg::phys("eax#5"))).with_origins(return_owner.clone()),
+            bare_return(Expr::Reg(VReg::phys("eax#5")).with_origins(OriginSet::one(0x300c)))
+                .with_origins(return_owner.clone()),
         ]);
         let declared = split_prototype(true);
 
