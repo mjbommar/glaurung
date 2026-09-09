@@ -3299,8 +3299,13 @@ spelling, but does not complete WP3 or permit compatibility-tag deletion. See
   adds union-without-nesting and byte-identical C/scored rendering. Commit
   `9b10f06e` adds the matching expression-level union, semantic-unwrapping, and
   byte-identical C/scored-rendering contract.
-- [ ] Extend `python/tests/test_dectest_equivalence.py` for byte neutrality
-  during identity-only migrations.
+- [x] Extend `python/tests/test_dectest_equivalence.py` for byte neutrality
+  during identity-only migrations. The focused contract decompiles one real
+  fixture export both inside the whole exported-function batch and as a
+  one-function scoped batch, then compares the emitted C bytes exactly. This
+  makes batch-population leaks in names, types, or statement order a fast local
+  failure while retaining the 419-pair before/after sweep as the migration
+  gate. See `results/wp3-scoped-byte-neutrality.md`.
 - [x] Add `python/tests/test_decompiler_line_mappings.py` for one-to-many and
   non-contiguous mappings. Its exact release-built `classify` cell also proves
   legacy tuple-shape compatibility and repeated-call determinism.

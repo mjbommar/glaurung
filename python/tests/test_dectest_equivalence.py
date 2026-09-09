@@ -32,6 +32,7 @@ sys.path.insert(0, str(ROOT / "tests" / "decompiler_fixtures"))
 
 import arch_roundtrip as AR  # ty: ignore[unresolved-import]
 import dectest as D  # ty: ignore[unresolved-import]
+import diff_decompile as DD  # ty: ignore[unresolved-import]
 import fixture_harness as H  # ty: ignore[unresolved-import]
 import manifest as M  # ty: ignore[unresolved-import]
 
@@ -84,6 +85,34 @@ def test_a_filtered_run_reports_only_what_was_asked_for(whole_lane):
     two = tuple(sorted(whole_lane[key])[:2])
     scoped = H.run_lanes([(fixture, cc, opt, two)], fuzz=M.FIXTURE_FUZZ, jobs=1)
     assert set(scoped[key]) == set(two)
+
+
+def test_a_scoped_decompile_is_byte_identical_to_the_whole_lane():
+    """Identity-only migrations must not make selection change rendered C.
+
+    The full gate decompiles every executable export in one native batch, while
+    ``dectest`` normally asks that batch for only the selected function. Stable
+    value identities are internal metadata: changing the batch population must
+    not leak into presentation names, types, or statement order.
+    """
+    fixture, cc, opt = LANE
+    src = H.SRC / f"{fixture}.c"
+    so, err = H.ensure_fixture(src, cc, opt)
+    assert so is not None, err
+
+    exported = DD.exported_functions(str(so))
+    required = tuple(M.REQUIRED_FUNCTIONS[fixture])
+    assert required, f"{fixture}: no required functions to compare"
+    selected = required[0]
+    assert selected in exported, f"{selected}: not exported by {so}"
+
+    whole = DD.decompiled_many_c(str(so), list(exported.values()))
+    scoped = DD.decompiled_many_c(str(so), [exported[selected]])
+    va = exported[selected]
+    assert va in whole and va in scoped, (
+        f"{selected}: missing decompilation: whole={va in whole}, scoped={va in scoped}"
+    )
+    assert scoped[va].encode() == whole[va].encode()
 
 
 @pytest.fixture(scope="module")
