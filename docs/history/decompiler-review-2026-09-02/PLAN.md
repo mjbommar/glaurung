@@ -2211,6 +2211,13 @@ provenance through lowering.
   focused `select_fold` tests pass, and the directly owning optimized
   vectorized-max round trip recompiles and executes after a clean release
   build. See `results/wp3-boolean-mask-expression-origins.md`.
+  Commit `626b94c5` closes the next type-directed expression consumer:
+  attributed machine-parent casts no longer disable narrow-destination
+  simplification, and the removed outer-cast owner is unioned onto the retained
+  narrow cast without absorbing the enclosing arithmetic owner. All six
+  focused `typed_simplify` tests pass, and the four directly owning
+  `nrw194_u8_mix` Clang/GCC O0/O2 fixture lanes remain green on a clean release
+  build. See `results/wp3-typed-extension-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
