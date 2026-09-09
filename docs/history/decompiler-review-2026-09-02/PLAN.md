@@ -2062,6 +2062,13 @@ provenance through lowering.
   owning `stack_locals` tests pass, and the exact GCC-O0 C++ `mixed_capture`
   fixture remains green after an isolated release rebuild. See
   `results/wp3-stack-load-address-expression-origins.md`.
+  Commit `08bfcbf8` moves the next output consumer to the same semantic view.
+  Push/pop rematerialization and trailing stack-adjustment cleanup now recognize
+  attributed stack registers, slots, and widths, so provenance does not make
+  machine bookkeeping leak back into rendered C. The combined output contract
+  was observed red, all 12 owning `stack_idiom` tests pass, and the exact
+  x86-64 GCC O0 symbols/PIE Hello World canonical round trip remains green on a
+  clean release build. See `results/wp3-stack-idiom-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
