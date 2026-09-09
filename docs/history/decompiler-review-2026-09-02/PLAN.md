@@ -5380,6 +5380,15 @@ relevant ratchet's accepted-regression record.
    ownership contract, all 25 guard-chain tests, and both exact-release
    GCC/Clang O2 `validate_header` controls pass. See
    `results/wp3-matching-return-expression-origins.md`.
+   Commit `b3343fd7` closes the exact contradictory-guard sibling. Distinct
+   owners on complementary comparisons no longer preserve an impossible nested
+   `if`; semantic comparison inversion now drives the same strict proof while
+   the surviving outer condition retains its owner. Exact-comparison,
+   side-effect-free, leading-position, no-else, and no-intervening-work gates
+   remain. The observed-red ownership contract, all 25 guard-chain tests, both
+   GCC/Clang O2 dense guarded-switch controls, and the periodic six-cell
+   x86-64/AArch64/ARMv7 O0/O2 Hello checkpoint pass against an exact release
+   build. See `results/wp3-contradictory-guard-expression-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
