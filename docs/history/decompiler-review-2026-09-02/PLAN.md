@@ -3005,7 +3005,13 @@ provenance through lowering.
   and portable-global declaration evidence is likewise origin-transparent;
   the scored-C unit-step renderer also retains `++`/`--` spelling through
   expression owners. Recursive pointer-access width collection and direct-base
-  classification are origin-transparent as well. Universal production
+  classification are origin-transparent as well. Commit `0678d3fb` closes the
+  call live-in census boundary: expression owners and every current composite
+  expression/statement form are traversed exhaustively, preventing provenance
+  from hiding an ABI live-in. Three exact Rust tests, one of 838 fixture lanes,
+  and the six-cell x86-64/AArch64/ARMv7 GCC O0/O2 Hello sample pass on an exact
+  release build; no broad suite ran. See
+  `results/wp3-call-live-in-expression-census.md`. Universal production
   attribution remains open.
 - [~] Thread origins through lowering, expression rewrites, structuring, tail
   duplication, and rendering. Commit `8cb7d171` makes enabled statement
