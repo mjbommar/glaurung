@@ -2085,6 +2085,15 @@ provenance through lowering.
   owning `x86_prologue` tests pass, and the exact PE32 cdecl
   decompile/recompile/execute round trip passes after a clean release rebuild.
   See `results/wp3-cdecl32-frame-expression-origins.md`.
+  Commit `1412bdca` completes the remaining x86 frame consumer migration.
+  Epilogue `leave`, promoted restore, stack-adjustment, balanced-save/restore,
+  omit-frame-pointer, and shared cdecl32/prologue readers now classify both the
+  containing expression and its operands through their semantic views. Origin
+  wrappers therefore remain evidence instead of changing recognition. The
+  strengthened `leave` contract was observed red, all 45 owning
+  `x86_prologue` tests pass, and the exact x86-64 GCC symbols/PIE Hello World
+  O0 canonical round trip remains green after a clean release rebuild. See
+  `results/wp3-x86-frame-expression-origins.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
