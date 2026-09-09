@@ -1057,10 +1057,10 @@ fn loop_carried_arg_inputs(
 fn direct_call_target_va(statement: &Stmt) -> Option<u64> {
     match statement.semantic() {
         Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
-        Stmt::Call {
-            target: Expr::Named { va, .. } | Expr::Addr(va),
-            ..
-        } => Some(*va),
+        Stmt::Call { target, .. } => match target.semantic() {
+            Expr::Named { va, .. } | Expr::Addr(va) => Some(*va),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -1076,7 +1076,7 @@ fn direct_call_target_va(statement: &Stmt) -> Option<u64> {
 /// recovered table would not be a proof about the call at all.
 fn table_call_target_vas(statement: &Stmt) -> Option<Vec<u64>> {
     fn entry_targets(expression: &Expr) -> Option<Vec<u64>> {
-        match expression {
+        match expression.semantic() {
             Expr::FunctionTableEntry { targets, .. } => {
                 Some(targets.iter().map(|target| target.va).collect())
             }
@@ -5870,6 +5870,7 @@ mod tests {
 
     #[test]
     fn recovered_callee_layout_interleaves_arm_core_and_vfp_arguments() {
+        let target_owner = OriginSet::one(0x1010);
         let mut f = Function {
             name: "mixed_hard_float_caller".into(),
             entry_va: 0x1000,
@@ -5883,7 +5884,16 @@ mod tests {
                     },
                 },
                 assign("r0", 7),
-                call_to("mixed_float"),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "mixed_float".into(),
+                    }
+                    .with_origins(target_owner.clone()),
+                    args: vec![],
+                    dst: None,
+                    call_spec: None,
+                },
                 Stmt::Assign {
                     dst: reg("s14#1"),
                     src: Expr::Reg(reg("s0#2")),
@@ -5901,7 +5911,10 @@ mod tests {
             &layouts,
         );
 
-        let Stmt::Call { args, dst, .. } = &f.body[0] else {
+        let Stmt::Call {
+            target, args, dst, ..
+        } = &f.body[0]
+        else {
             panic!("mixed setup did not fold into the call: {:#?}", f.body);
         };
         assert_eq!(
@@ -5916,6 +5929,7 @@ mod tests {
             ]
         );
         assert_eq!(dst, &Some(reg("s0")));
+        assert_eq!(target.origins(), Some(&target_owner));
     }
 
     #[test]
@@ -8231,12 +8245,12 @@ mod tests {
     fn recovered_table_args(f: &Function) -> Vec<Expr> {
         fn find(body: &[Stmt]) -> Option<Vec<Expr>> {
             for statement in body {
-                match statement {
-                    Stmt::Call {
-                        target: Expr::FunctionTableEntry { .. },
-                        args,
-                        ..
-                    } => return Some(args.clone()),
+                match statement.semantic() {
+                    Stmt::Call { target, args, .. }
+                        if matches!(target.semantic(), Expr::FunctionTableEntry { .. }) =>
+                    {
+                        return Some(args.clone())
+                    }
                     Stmt::If {
                         then_body,
                         else_body,
@@ -8282,6 +8296,14 @@ mod tests {
     #[test]
     fn a_proven_table_call_reads_the_enclosing_reaching_definitions() {
         let mut f = guarded_table_dispatch(&[0x1100, 0x1110]);
+        let Stmt::If { then_body, .. } = &mut f.body[3] else {
+            unreachable!()
+        };
+        let Stmt::Call { target, .. } = then_body[0].semantic_mut() else {
+            unreachable!()
+        };
+        let semantic_target = std::mem::replace(target, Expr::Unknown("moved".into()));
+        *target = semantic_target.with_origins(OriginSet::one(0x1160));
         let first_owner = OriginSet::one(0x1154);
         let second_owner = OriginSet::one(0x1158);
         for (index, owner) in [(1, first_owner.clone()), (2, second_owner.clone())] {
