@@ -682,22 +682,22 @@ pub(super) fn fold_one_call(
             && !body[..call_idx]
                 .iter()
                 .any(|statement| matches!(statement.semantic(), Stmt::Call { .. }))
-            && matches!(
-                body[call_idx].semantic(),
+            && match body[call_idx].semantic() {
                 Stmt::Call {
-                    target: Expr::Named { .. },
-                    args,
-                    dst,
-                    ..
-                } if args.is_empty()
-                    && (dst.is_some()
-                        || super::return_attribution::return_value_is_read_with_identities(
-                            body,
-                            call_idx,
-                            return_reg(arch),
-                            identities,
-                        ))
-            );
+                    target, args, dst, ..
+                } => {
+                    matches!(target.semantic(), Expr::Named { .. })
+                        && args.is_empty()
+                        && (dst.is_some()
+                            || super::return_attribution::return_value_is_read_with_identities(
+                                body,
+                                call_idx,
+                                return_reg(arch),
+                                identities,
+                            ))
+                }
+                _ => false,
+            };
         if first_direct_value_call {
             // SysV integer parameter slots are contiguous. A proven slot one
             // means slot zero exists even when its only machine use was the

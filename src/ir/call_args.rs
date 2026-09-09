@@ -3200,7 +3200,16 @@ mod tests {
                     dst: reg("rbp#1"),
                     src: Expr::Reg(reg("rsi#1")),
                 },
-                call_to("signed_step"),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "signed_step".into(),
+                    }
+                    .with_origins(OriginSet::one(0x1010)),
+                    args: Vec::new(),
+                    dst: Some(reg("rax")),
+                    call_spec: None,
+                },
                 Stmt::Assign {
                     dst: reg("rbx"),
                     src: Expr::Reg(reg("rax")),
@@ -3214,11 +3223,11 @@ mod tests {
         reconstruct_args_with_params(&mut f, CallConv::SysVAmd64, &[0, 1].into_iter().collect());
 
         let args = f.body.iter().find_map(|statement| match statement {
-            Stmt::Call {
-                target: Expr::Named { name, .. },
-                args,
-                ..
-            } if name == "signed_step" => Some(args),
+            Stmt::Call { target, args, .. }
+                if matches!(target.semantic(), Expr::Named { name, .. } if name == "signed_step") =>
+            {
+                Some(args)
+            }
             _ => None,
         });
         assert_eq!(args, Some(&vec![Expr::Reg(reg("rdi"))]));
@@ -3246,7 +3255,16 @@ mod tests {
                     src: Expr::Reg(reg("lr")),
                     size: 4,
                 },
-                call_to("signed_step"),
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "signed_step".into(),
+                    }
+                    .with_origins(OriginSet::one(0x1014)),
+                    args: Vec::new(),
+                    dst: Some(reg("rax")),
+                    call_spec: None,
+                },
                 Stmt::Return {
                     value: Some(Expr::Reg(reg("r0"))),
                 },
@@ -3256,11 +3274,11 @@ mod tests {
         reconstruct_args_with_params(&mut f, CallConv::ArmHardFloat, &[0].into_iter().collect());
 
         let args = f.body.iter().find_map(|statement| match statement {
-            Stmt::Call {
-                target: Expr::Named { name, .. },
-                args,
-                ..
-            } if name == "signed_step" => Some(args),
+            Stmt::Call { target, args, .. }
+                if matches!(target.semantic(), Expr::Named { name, .. } if name == "signed_step") =>
+            {
+                Some(args)
+            }
             _ => None,
         });
         assert_eq!(args, Some(&vec![Expr::Reg(reg("r0"))]));
