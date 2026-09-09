@@ -5399,6 +5399,14 @@ relevant ratchet's accepted-regression record.
    release build. The immediately preceding green six-cell Hello checkpoint
    was not repeated. See
    `results/wp3-memory-object-store-expression-origins.md`.
+   Commit `9bcff448` closes the residual x86 frame-anchor source reader in the
+   prepared-AST stack-object pass. Expression ownership around the semantic
+   stack register no longer misclassifies `rbp = rsp` as a repurposed frame
+   register; exact calling-convention and storage-identity gates remain. The
+   observed-red identity/ownership contract, two adjacent fail-closed controls,
+   and exact-release x86-64 GCC Hello O0/O2 round trips pass. The broader
+   six-cell checkpoint was not repeated. See
+   `results/wp3-stack-frame-anchor-expression-origins.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
