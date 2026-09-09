@@ -536,10 +536,7 @@ fn value_base<'a>(
     identities: Option<&'a crate::ir::value_number::ValueIdentities>,
 ) -> Option<&'a str> {
     match identities {
-        Some(identities) => match &identities.exact(register)?.base {
-            VReg::Phys(base) => Some(base),
-            _ => None,
-        },
+        Some(identities) => identities.unambiguous_physical_base(register),
         None => base_name_of_vreg(register),
     }
 }
@@ -1406,15 +1403,26 @@ mod tests {
     }
 
     #[test]
-    fn typed_callee_save_classification_ignores_display_spelling() {
+    fn typed_callee_save_classification_accepts_one_physical_base() {
         let mut identities = crate::ir::value_number::ValueIdentities::default();
-        identities.record(
-            reg("opaque_entry"),
-            crate::ir::ssa::SsaValue {
-                base: reg("r15"),
-                version: 0,
-            },
-        );
+        for version in [0, 3] {
+            identities.record(
+                reg("opaque_entry"),
+                crate::ir::ssa::SsaValue {
+                    base: reg("r15"),
+                    version,
+                },
+            );
+        }
+        for (base, version) in [("r15", 0), ("rax", 3)] {
+            identities.record(
+                reg("mixed_entry"),
+                crate::ir::ssa::SsaValue {
+                    base: reg(base),
+                    version,
+                },
+            );
+        }
         identities.record(
             reg("r15#0"),
             crate::ir::ssa::SsaValue {
@@ -1425,6 +1433,10 @@ mod tests {
 
         assert!(is_sysv_callee_saved(
             &reg("opaque_entry"),
+            Some(&identities)
+        ));
+        assert!(!is_sysv_callee_saved(
+            &reg("mixed_entry"),
             Some(&identities)
         ));
         assert!(!is_sysv_callee_saved(&reg("r15#0"), Some(&identities)));
