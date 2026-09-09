@@ -941,10 +941,10 @@ fn rsp_sub_width(stmt: &Stmt) -> Option<i64> {
     else {
         return None;
     };
-    if !is_rsp(dst) || !matches!(lhs.as_ref(), Expr::Reg(reg) if reg == dst) {
+    if !is_rsp(dst) || !matches!(lhs.semantic(), Expr::Reg(reg) if reg == dst) {
         return None;
     }
-    match rhs.as_ref() {
+    match rhs.semantic() {
         Expr::Const(width) if *width > 0 => Some(*width),
         _ => None,
     }
@@ -962,10 +962,10 @@ fn rsp_add_width(stmt: &Stmt) -> Option<i64> {
     else {
         return None;
     };
-    if !is_rsp(dst) || !matches!(lhs.as_ref(), Expr::Reg(reg) if reg == dst) {
+    if !is_rsp(dst) || !matches!(lhs.semantic(), Expr::Reg(reg) if reg == dst) {
         return None;
     }
-    match rhs.as_ref() {
+    match rhs.semantic() {
         Expr::Const(width) if *width > 0 => Some(*width),
         _ => None,
     }
@@ -1022,21 +1022,20 @@ fn collapse_prologue(
     // two-statement form (`rsp -= 8; stack_0 = rbp`) instead of rematerialising
     // `Stmt::Push`; accept it only when the decrement exactly equals the store
     // width and is immediately followed by the canonical frame-pointer setup.
-    let set_fp_idx = if matches!(body[i].semantic(), Stmt::Push { value: Expr::Reg(v) } if is_rbp(v))
-    {
+    let pushes_rbp = matches!(
+        body[i].semantic(),
+        Stmt::Push { value }
+            if matches!(value.semantic(), Expr::Reg(register) if is_rbp(register))
+    );
+    let set_fp_idx = if pushes_rbp {
         i + 1
     } else if body.len() - i >= 3 {
         match (body[i + 1].semantic(), rsp_sub_width(&body[i])) {
-            (
-                Stmt::Store {
-                    addr: Expr::Reg(slot),
-                    src: Expr::Reg(value),
-                    size,
-                },
-                Some(width),
-            ) if is_promoted_stack_slot(slot, identities)
-                && is_rbp(value)
-                && width == i64::from(*size) =>
+            (Stmt::Store { addr, src, size }, Some(width))
+                if matches!(addr.semantic(), Expr::Reg(slot)
+                    if is_promoted_stack_slot(slot, identities))
+                    && matches!(src.semantic(), Expr::Reg(value) if is_rbp(value))
+                    && width == i64::from(*size) =>
             {
                 i + 2
             }
@@ -1048,7 +1047,9 @@ fn collapse_prologue(
     // Step 2: `%rbp = %rsp;`
     if !matches!(
         body[set_fp_idx].semantic(),
-        Stmt::Assign { dst, src: Expr::Reg(s) } if is_rbp(dst) && is_rsp(s)
+        Stmt::Assign { dst, src }
+            if is_rbp(dst)
+                && matches!(src.semantic(), Expr::Reg(source) if is_rsp(source))
     ) {
         return;
     }
@@ -1068,10 +1069,10 @@ fn collapse_prologue(
         } = body[end].semantic()
         {
             if is_rsp(dst)
-                && matches!(lhs.as_ref(), Expr::Reg(r) if r == dst)
-                && matches!(rhs.as_ref(), Expr::Const(_))
+                && matches!(lhs.semantic(), Expr::Reg(r) if r == dst)
+                && matches!(rhs.semantic(), Expr::Const(_))
             {
-                if let Expr::Const(n) = rhs.as_ref() {
+                if let Expr::Const(n) = rhs.semantic() {
                     let delta = match op {
                         BinOp::Sub if *n > 0 => Some(*n),
                         BinOp::Add if *n < 0 => Some(-*n),
@@ -2090,6 +2091,48 @@ mod tests {
         );
         assert!(matches!(f.body[1].semantic(), Stmt::Return { value: None }));
         assert_eq!(f.body[1].origins(), Some(&OriginSet::one(0x100c)));
+    }
+
+    #[test]
+    fn expression_attributed_full_prologue_still_collapses() {
+        let owner = OriginSet::one(0x1000);
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Push {
+                    value: Expr::Reg(reg("rbp")).with_origins(owner.clone()),
+                },
+                Stmt::Assign {
+                    dst: reg("rbp"),
+                    src: Expr::Reg(reg("rsp")).with_origins(owner.clone()),
+                },
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rsp")).with_origins(owner.clone())),
+                        rhs: Box::new(Expr::Const(0x20).with_origins(owner)),
+                    },
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        recognise_x86_prologue(&mut f);
+
+        assert_eq!(
+            f.body.len(),
+            2,
+            "attributed prologue survived: {:#?}",
+            f.body
+        );
+        assert!(matches!(
+            f.body[0].semantic(),
+            Stmt::Comment(text)
+                if text == "x86-64 prologue: save rbp, frame 32 bytes"
+        ));
+        assert!(matches!(f.body[1].semantic(), Stmt::Return { .. }));
     }
 
     #[test]
