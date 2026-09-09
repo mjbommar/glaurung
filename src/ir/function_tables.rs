@@ -903,20 +903,28 @@ fn scaled_index(
     if depth >= 16 {
         return None;
     }
+    let origins = expression_tree_origins(expression);
     if outer_scale == pointer_size {
-        return Some(strip_cast(expression).clone());
+        return Some(
+            strip_cast(expression)
+                .clone()
+                .with_optional_origins(origins),
+        );
     }
     if outer_scale != 1 {
         return None;
     }
     let expression = strip_cast(expression);
     match expression {
-        Expr::Reg(register) => scaled_index(
-            definitions.get(register)?,
-            1,
-            pointer_size,
-            definitions,
-            depth + 1,
+        Expr::Reg(register) => Some(
+            scaled_index(
+                definitions.get(register)?,
+                1,
+                pointer_size,
+                definitions,
+                depth + 1,
+            )?
+            .with_optional_origins(origins),
         ),
         Expr::Bin {
             op: BinOp::Mul,
@@ -924,10 +932,18 @@ fn scaled_index(
             rhs,
         } => {
             if matches!(strip_cast(lhs), Expr::Const(scale) if *scale == i64::from(pointer_size)) {
-                Some(strip_cast(rhs).clone())
+                Some(
+                    strip_cast(rhs)
+                        .clone()
+                        .with_optional_origins(origins.clone()),
+                )
             } else if matches!(strip_cast(rhs), Expr::Const(scale) if *scale == i64::from(pointer_size))
             {
-                Some(strip_cast(lhs).clone())
+                Some(
+                    strip_cast(lhs)
+                        .clone()
+                        .with_optional_origins(origins.clone()),
+                )
             } else {
                 None
             }
@@ -937,24 +953,85 @@ fn scaled_index(
             lhs,
             rhs,
         } if matches!(strip_cast(rhs), Expr::Const(shift) if (1_i64.checked_shl(*shift as u32) == Some(i64::from(pointer_size)))) => {
-            Some(strip_cast(lhs).clone())
+            Some(
+                strip_cast(lhs)
+                    .clone()
+                    .with_optional_origins(origins.clone()),
+            )
         }
         Expr::Bin {
             op: BinOp::Add,
             lhs,
             rhs,
-        } if is_zero(lhs, definitions, depth + 1) => {
-            scaled_index(rhs, 1, pointer_size, definitions, depth + 1)
-        }
+        } if is_zero(lhs, definitions, depth + 1) => Some(
+            scaled_index(rhs, 1, pointer_size, definitions, depth + 1)?
+                .with_optional_origins(origins.clone()),
+        ),
         Expr::Bin {
             op: BinOp::Add,
             lhs,
             rhs,
-        } if is_zero(rhs, definitions, depth + 1) => {
-            scaled_index(lhs, 1, pointer_size, definitions, depth + 1)
-        }
+        } if is_zero(rhs, definitions, depth + 1) => Some(
+            scaled_index(lhs, 1, pointer_size, definitions, depth + 1)?
+                .with_optional_origins(origins),
+        ),
         _ => None,
     }
+}
+
+fn expression_tree_origins(expression: &Expr) -> Option<OriginSet> {
+    fn collect(expression: &Expr, origins: &mut OriginSet) {
+        if let Some(owner) = expression.origins() {
+            origins.merge(owner);
+        }
+        match expression.semantic() {
+            Expr::FunctionTableEntry { index, .. } => collect(index, origins),
+            Expr::Deref { addr, .. }
+            | Expr::Un { src: addr, .. }
+            | Expr::Cast { expr: addr, .. }
+            | Expr::NumericConvert { expr: addr, .. } => collect(addr, origins),
+            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+                collect(lhs, origins);
+                collect(rhs, origins);
+            }
+            Expr::Call { target, args, .. } => {
+                collect(target, origins);
+                for argument in args {
+                    collect(argument, origins);
+                }
+            }
+            Expr::Select {
+                cond,
+                if_true,
+                if_false,
+                ..
+            } => {
+                collect(cond, origins);
+                collect(if_true, origins);
+                collect(if_false, origins);
+            }
+            Expr::WideArithmetic { args, .. } => {
+                for argument in args {
+                    collect(argument, origins);
+                }
+            }
+            Expr::Origin { .. } => unreachable!("semantic expression cannot be an origin wrapper"),
+            Expr::Reg(_)
+            | Expr::Const(_)
+            | Expr::FloatConst { .. }
+            | Expr::Addr(_)
+            | Expr::Named { .. }
+            | Expr::StringLit { .. }
+            | Expr::StackAddr { .. }
+            | Expr::Lea { .. }
+            | Expr::PdbFieldAddr { .. }
+            | Expr::Unknown(_) => {}
+        }
+    }
+
+    let mut origins = OriginSet::empty();
+    collect(expression, &mut origins);
+    (!origins.is_empty()).then_some(origins)
 }
 
 fn is_zero(expression: &Expr, definitions: &HashMap<VReg, Expr>, depth: usize) -> bool {
@@ -1162,13 +1239,13 @@ mod tests {
 
         resolve_function_table_entries(&mut function, &[ops_table()]);
 
-        assert!(matches!(
-            function.body[2].semantic(),
-            Stmt::Assign {
-                src: Expr::FunctionTableEntry { .. },
-                ..
-            }
-        ));
+        let Stmt::Assign { src, .. } = function.body[2].semantic() else {
+            panic!("table-load statement shape changed: {function:#?}")
+        };
+        let Expr::FunctionTableEntry { index, .. } = src.semantic() else {
+            panic!("scaled lookup did not become a table entry: {src:#?}")
+        };
+        assert_eq!(index.origins(), Some(&OriginSet::one(0x11a0)));
     }
 
     #[test]
