@@ -2906,7 +2906,11 @@ provenance through lowering.
   Follow-on `358e0408` makes role-map computation read-only and separates the
   legacy mutation into an explicit operation; its test proves the complete AST
   is unchanged while the map is built. Production still applies that map before
-  later semantic passes, so moving/deleting the mutation remains open. See
+  later semantic passes. Commit `0be1594d` then moves that mutation behind the
+  common pipeline's dead-store, canary/frame, stack-idiom, and label cleanup;
+  the pass-order contract prevents those semantic passes from moving back
+  behind naming. Finalization and renderer preparation still consume the named
+  AST, so deleting the mutation remains open. See
   `results/wp3-return-role-naming-identities.md`.
 
 ### Origin and mapping surface
@@ -5056,6 +5060,12 @@ relevant ratchet's accepted-regression record.
    O2 x86-64 Hello slice pass. Next classify and migrate the post-naming
    semantic consumers so the mapping can move to rendering without changing
    their behavior.
+   Commit `0be1594d` completes that first migration batch: every semantic pass
+   remaining in `run_ast_passes` now executes before the presentation rewrite.
+   The 22 naming, two ordering, and 49 dead-store tests pass; a clean release
+   build retains the two selected GCC O2 x86-64 Hello cells and the exact
+   effect-only-call lane. Next move the mapping across finalization and typed
+   renderer preparation one identity-aware consumer batch at a time.
    Keep expression ownership behind completion of that audit.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.

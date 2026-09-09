@@ -74,3 +74,44 @@ python -m pytest -q --tb=short \
 ```
 
 No broader suite or corpus was run for this behavior-neutral separation.
+
+## Semantic cleanup before presentation mutation
+
+Commit `0be1594d` moves the explicit role-name rewrite to the end of the common
+AST pass sequence. Dead-store elimination, canary/frame cleanup, stack-idiom
+rematerialization, and label pruning now run while the AST still carries its
+machine/value identities. They receive the projected sidecar, which contains
+both original identities and the future presentation aliases. Only after those
+semantic passes finish does the pipeline mutate names for its current renderers.
+
+The pass-order contract now rejects any attempt to put dead-store elimination
+back behind presentation naming. Focused validation was:
+
+```text
+cargo test --features python-ext --lib ir::naming::tests:: --quiet
+22 passed; 0 failed; 4695 filtered out
+
+cargo test --features python-ext --lib ast_pass_order_ --quiet
+2 passed; 0 failed; 4715 filtered out
+
+cargo test --features python-ext --lib ir::dead_stores::tests:: --quiet
+49 passed; 0 failed; 4668 filtered out
+```
+
+A clean detached worktree at `0be1594d` produced the release extension. Running
+from that exact worktree (so its package, rather than the shared checkout, was
+first on `sys.path`) proved both selected GCC O2 x86-64 Hello cells green and
+the exact effect-only-call lane regression-free:
+
+```text
+python -m pytest -q --tb=short \
+  python/tests/test_linux_x86_64_hello_canonical.py::test_dynamic_hello_is_canonical \
+  -k 'gcc and O2 and pie and symbols'
+2 passed
+
+python tools/dectest.py 11_call_shapes:gcc:O2:call_result_unused --show
+SCOPED: 1 lane of 838 - no regressions in scope
+```
+
+The initial main-checkout invocation was rejected as stale by `build_guard.py`
+and is not evidence. No broad suite, corpus, or DecBench run was performed.
