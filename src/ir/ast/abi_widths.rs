@@ -598,7 +598,8 @@ fn collect_pointer_accesses_body(
                 collect_pointer_accesses_expr(src, tm, observed)
             }
             Stmt::Store { addr, src, size } => {
-                if !matches!(addr, Expr::Reg(VReg::Phys(name)) if is_promoted_local(name)) {
+                if !matches!(addr.semantic(), Expr::Reg(VReg::Phys(name)) if is_promoted_local(name))
+                {
                     record_pointer_access(addr, *size, tm, observed);
                 }
                 collect_pointer_accesses_expr(addr, tm, observed);
@@ -662,7 +663,7 @@ fn collect_pointer_accesses_expr(
     tm: &TypeMap,
     observed: &mut std::collections::HashMap<String, std::collections::BTreeSet<u8>>,
 ) {
-    match expr {
+    match expr.semantic() {
         Expr::Deref { addr, size } => {
             record_pointer_access(addr, *size, tm, observed);
             collect_pointer_accesses_expr(addr, tm, observed);
@@ -681,8 +682,22 @@ fn collect_pointer_accesses_expr(
             collect_pointer_accesses_expr(if_true, tm, observed);
             collect_pointer_accesses_expr(if_false, tm, observed);
         }
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => {
+        Expr::Un { src, .. }
+        | Expr::Cast { expr: src, .. }
+        | Expr::NumericConvert { expr: src, .. }
+        | Expr::FunctionTableEntry { index: src, .. } => {
             collect_pointer_accesses_expr(src, tm, observed)
+        }
+        Expr::Call { target, args, .. } => {
+            collect_pointer_accesses_expr(target, tm, observed);
+            for argument in args {
+                collect_pointer_accesses_expr(argument, tm, observed);
+            }
+        }
+        Expr::WideArithmetic { args, .. } => {
+            for argument in args {
+                collect_pointer_accesses_expr(argument, tm, observed);
+            }
         }
         _ => {}
     }
@@ -702,7 +717,7 @@ fn record_pointer_access(
 fn direct_pointer_base<'a>(addr: &'a Expr, tm: &TypeMap) -> Option<&'a str> {
     let is_pointer =
         |name: &str| matches!(tm.get(&VReg::phys(name)), Some(TypeHint::Pointer { .. }));
-    match addr {
+    match addr.semantic() {
         Expr::Reg(VReg::Phys(name)) if is_pointer(name) => Some(name),
         Expr::Lea {
             base: Some(VReg::Phys(name)),
@@ -719,11 +734,11 @@ fn direct_pointer_base<'a>(addr: &'a Expr, tm: &TypeMap) -> Option<&'a str> {
             lhs,
             rhs,
         } => {
-            let lhs = match lhs.as_ref() {
+            let lhs = match lhs.semantic() {
                 Expr::Reg(VReg::Phys(name)) if is_pointer(name) => Some(name.as_str()),
                 _ => None,
             };
-            let rhs = match rhs.as_ref() {
+            let rhs = match rhs.semantic() {
                 Expr::Reg(VReg::Phys(name)) if is_pointer(name) => Some(name.as_str()),
                 _ => None,
             };

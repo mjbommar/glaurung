@@ -6485,16 +6485,22 @@ function f @ 0x1000 {
             name: "byte_at".to_string(),
             entry_va: 0x1000,
             body: vec![Stmt::Return {
-                value: Some(Expr::Deref {
-                    addr: Box::new(Expr::Lea {
-                        base: Some(VReg::phys("arg0")),
-                        index: Some(VReg::phys("arg1")),
-                        scale: 1,
-                        disp: 0,
-                        segment: None,
-                    }),
-                    size: 1,
-                }),
+                value: Some(
+                    Expr::Deref {
+                        addr: Box::new(
+                            Expr::Lea {
+                                base: Some(VReg::phys("arg0")),
+                                index: Some(VReg::phys("arg1")),
+                                scale: 1,
+                                disp: 0,
+                                segment: None,
+                            }
+                            .with_origins(OriginSet::one(0x1010)),
+                        ),
+                        size: 1,
+                    }
+                    .with_origins(OriginSet::one(0x1014)),
+                ),
             }],
         };
         let mut tm = TypeMap::default();
@@ -6526,7 +6532,7 @@ function f @ 0x1000 {
             entry_va: 0x1000,
             body: vec![
                 Stmt::Store {
-                    addr: Expr::Reg(local.clone()),
+                    addr: Expr::Reg(local.clone()).with_origins(OriginSet::one(0x1010)),
                     src: Expr::Reg(VReg::phys("arg0")),
                     size: 8,
                 },
