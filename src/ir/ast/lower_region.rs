@@ -36,6 +36,45 @@ fn strip_trailing_goto(stmts: &mut Vec<Stmt>, target_va: u64) {
     }
 }
 
+fn switch_index_from_prefix(prefix: &[Stmt]) -> Option<Expr> {
+    // Origin carriers are metadata, not semantic barriers.  Switch recovery
+    // must see the dispatch-table load after WP3 attributes that statement.
+    prefix.iter().rev().find_map(|statement| {
+        let Stmt::Assign { src, .. } = statement.semantic() else {
+            return None;
+        };
+        switch_index_of(src)
+    })
+}
+
+#[cfg(test)]
+mod switch_index_tests {
+    use super::{switch_index_from_prefix, Expr, Stmt};
+    use crate::ir::ast::OriginSet;
+    use crate::ir::types::VReg;
+
+    #[test]
+    fn attributed_dispatch_load_retains_its_switch_index() {
+        let index = VReg::phys("opaque_index");
+        let prefix = vec![Stmt::Assign {
+            dst: VReg::phys("table_entry"),
+            src: Expr::Deref {
+                addr: Box::new(Expr::Lea {
+                    base: Some(VReg::phys("got_base")),
+                    index: Some(index.clone()),
+                    scale: 4,
+                    disp: -16,
+                    segment: None,
+                }),
+                size: 4,
+            },
+        }
+        .with_origins(OriginSet::one(0x1167))];
+
+        assert_eq!(switch_index_from_prefix(&prefix), Some(Expr::Reg(index)));
+    }
+}
+
 /// Spell a direct edge from the current loop body to its distinguished exit as
 /// `break`. Recurse through conditionals only: inside a nested loop or switch,
 /// a C `break` would target that inner construct rather than this loop.
@@ -991,12 +1030,9 @@ fn lower_region_inner(
             // variable, so the recovered switch read as `switch (var6)` with
             // `var6` defined nowhere. Falls back to the placeholder when the
             // index is not recognisable, rather than inventing one.
-            let discriminant = explicit_index.or(discriminant).or_else(|| {
-                prefix.iter().rev().find_map(|st| match st {
-                    Stmt::Assign { src, .. } => switch_index_of(src),
-                    _ => None,
-                })
-            });
+            let discriminant = explicit_index
+                .or(discriminant)
+                .or_else(|| switch_index_from_prefix(&prefix));
             prefix.push(Stmt::Switch {
                 discriminant: discriminant.unwrap_or_else(|| {
                     Expr::Reg(VReg::Phys(format!(
