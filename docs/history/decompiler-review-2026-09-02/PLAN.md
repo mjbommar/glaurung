@@ -5901,9 +5901,14 @@ relevant ratchet's accepted-regression record.
    load only when its destination is the exact stable value consumed by that
    call and post-call cleanup independently proves the outgoing area; fixture
    191 consequently loses its false argument-buffer local and renders all
-   three operands. The latter execution cell remains red because target and
-   return typing are still unresolved, so it is not ratcheted. ARMv7 O2
-   failures and that separate i386 target/type defect stay open. See
+   three operands. Commit `fded1081` then runs a second relocation-proven table
+   resolver after stack promotion, using `ValueIdentities` plus the exact
+   `StackLocalFacts` extent and refusing partial or interveningly clobbered
+   stores. Fixture 191 i386 O2 consequently materialises
+   `T191_OPS[var20](...)`, moves from fail to pass, and is ratcheted after a
+   four-cell i386 O0/O2 control run with no regression. The i386 table-call
+   target/argument execution gap is therefore closed; the distinct ARMv7 and
+   ARMv7-A32 O2 failures remain open. See
    `results/wp3-flat-table-call-arguments.md`.
    Commit `20364f46` then migrates shared integer declaration typing from one
    exact SSA identity to one unambiguous physical storage base. Same-carrier

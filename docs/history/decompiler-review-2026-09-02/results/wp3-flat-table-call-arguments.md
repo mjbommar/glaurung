@@ -256,3 +256,40 @@ definedness failures and two CLI decompile-output failures. None exercises the
 i386 fixture or cdecl call-argument path. The run was stopped once broadly red
 instead of spending the remaining gate time on an unchanged decision; it is a
 partial broad-gate attempt, not a full-green claim.
+
+Commit `fded1081` closes fixture 191's remaining i386 O2 target boundary.
+Stack promotion exposes the PIC table-base spill as an exact scalar store to a
+promoted object, after the early table resolver has already run. A second
+resolver stage now runs immediately after promotion and admits that reaching
+value only when all of these facts agree:
+
+- `ValueIdentities` marks the destination as a promoted stack object;
+- `StackLocalFacts` supplies its authoritative extent;
+- the store starts at that exact object and covers the complete extent; and
+- no intervening unknown store, call, or indirect transfer invalidates it.
+
+Partial stores and unknown intervening stores remain explicit. The exact
+release output changes the raw input-image dereference into the declared table
+entry while retaining the three already-recovered cdecl arguments:
+
+```c
+var8 = ((long (*)(long, long, long))(T191_OPS[var20]))(var7, var8, var18);
+```
+
+All 19 function-table tests, all 163 call-argument tests, the canonical AST
+pass-order test, and the generated pass-reference tests pass. The exact i386
+O0/O2 four-cell control selection reports no regressions and one improvement:
+`191_indirect_table_args:i386:O2:t191_fold` moves from fail to pass, so that
+single `arch_baseline.json` entry is ratcheted. The remaining table-call work
+in this package is the distinct ARMv7/ARMv7-A32 O2 control and typing frontier;
+the i386 target/argument execution gap is closed. No DecBench or Joern run was
+made.
+
+The repository-required Python gate was started from exact commit `fded1081`
+with a fresh release extension (SHA-256
+`7238be1fdc97e30fdbe51cefbeef680175524b65c7c50ba1ddc65949766ddde4`).
+At 9% it had 603 passes and reproduced three known, unrelated
+build-configuration failures: the static-executable canary `local_10` leak and
+the static/frame-pointer undefined-local checks (`local_10` and `rbp`). It was
+stopped after those failures made the broad gate decisively red; this is a
+partial gate attempt, not a full-green claim.
