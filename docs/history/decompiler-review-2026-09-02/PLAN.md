@@ -3518,6 +3518,16 @@ or corpus ran. See `results/wp3-wp4-equal-value-loop-exits.md`. This is another
 bounded production-v1 WP3/WP4 increment, not completion of authoritative SSA
 or total-structurer promotion.
 
+Follow-on commit `7f8f25fa` closes the origin boundary exposed by that rule.
+Adjacent attributed break guards previously retained both predicate trees and
+both guard-statement owners but silently discarded the instruction owners on
+their two consumed `break` nodes. The synthesized break now owns the canonical
+union of both exit sets, independently of the combined guard and predicates.
+The new contract was observed red, all 30 guard-chain tests pass, and a fresh
+release build retains both exact BST output and execution checks. No broad
+suite or corpus ran. The same result record carries this WP3 provenance
+increment.
+
 ### New implementation boundary
 
 - [x] Create `src/ir/structure_v2/` rather than mutating the current structurer

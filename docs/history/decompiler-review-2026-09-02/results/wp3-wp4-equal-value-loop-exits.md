@@ -52,3 +52,17 @@ No broad Python/Rust suite, corpus sweep, DecBench run, or upstream interaction
 was performed. The release build included concurrent uncommitted source-metrics
 and stack-local work in the shared checkout; the committed change itself owns
 only `src/ir/guard_chain.rs` and the curriculum regression test.
+
+## Follow-on origin closure
+
+Commit `7f8f25fa` repairs the adjacent-break rule's terminal-node provenance.
+Before the change, an attributed pair retained both condition expressions and
+both enclosing guard owners but constructed a fresh unowned `break`, silently
+losing the two consumed exit instruction sets. The replacement break now owns
+their sorted, deduplicated union.
+
+The exact origin test was observed red with no owner on the synthesized break.
+After repair, all 30 guard-chain tests pass and separately prove guard origins,
+predicate origins, and the merged break origins. A fresh release extension
+build plus the same two BST output tests and exact execution round trips remain
+green. No broad suite or corpus ran.
