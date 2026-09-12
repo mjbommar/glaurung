@@ -158,3 +158,12 @@ The complete Python post-source-commit gate was attempted at the preceding
 build-configuration failures: the static-executable stack-canary `local_10`
 defect and the static/frame-pointer undefined-`rbp` defects. It was interrupted
 after `87dc4167` made that run obsolete. No broad-green claim is made.
+
+A fresh post-source gate was also started from exact documentation revision
+`070f2487`. It reached 19% before being stopped because it had already
+reproduced 16 failures outside fixtures 95 and 191, including the same
+stack-canary/frame-pointer defects and existing CLI, architecture, and
+curriculum failures. The separately rerun baseline-integrity test fails only on
+pre-existing control mismatches in fixtures 157, 172, and 81; none is one of
+the seven entries ratcheted here. This run is partial evidence, not a complete
+gate and not a broad-green claim.
