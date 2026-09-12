@@ -331,20 +331,7 @@ def test_frame_locals_occupy_disjoint_byte_ranges(built, arch, opt) -> None:
 # --------------------------------------------------------------------------
 # 2. A value read is a value assigned.
 # --------------------------------------------------------------------------
-@pytest.mark.parametrize(
-    "arch",
-    _arches_xfail(
-        "aarch64",
-        "OPEN DEFECT (aarch64, both -O0 and -O2): `signed_remainder` renders "
-        "`slt_0 ? (arg0 & 7) : (-(var3 & 7))` — the NEGATIVE arm of the "
-        "remainder reads `var3`, which nothing assigns. C truncates toward "
-        "zero, so the remainder carries the dividend's sign and that arm must "
-        "negate the same dividend the positive arm masks; the recovery loses "
-        "the operand's definition on the way through the select. -O0 loses a "
-        "second one (`var9`). Every other architecture is clean, so this is "
-        "aarch64 remainder lowering, not the select recovery itself.",
-    ),
-)
+@pytest.mark.parametrize("arch", ARCHES)
 @pytest.mark.parametrize("opt", OPTS)
 def test_no_recovered_local_is_read_without_ever_being_assigned(
     built, arch, opt
@@ -370,8 +357,16 @@ def test_no_recovered_local_is_read_without_ever_being_assigned(
     text = _decompile(built[(arch, opt)])
     problems: list[str] = []
     for name, body in _fixture_units(text).items():
+        # `varN` is the ordinary temporary spelling. Predicate identities keep
+        # their role (`slt_0`, `zf_0`, ...) so an unmodelled flag producer must
+        # not evade this gate merely because it is more descriptive than varN.
+        generated_value = r"(?:var\d+|(?:slt|sle|ule|zf|cf|of)_\d+)"
         declared = set(
-            re.findall(r"^[ \t]+[\w \*]+?\b(var\d+)\s*;", body, re.MULTILINE)
+            re.findall(
+                rf"^[ \t]+[\w \*]+?\b({generated_value})\s*;",
+                body,
+                re.MULTILINE,
+            )
         )
         for var in sorted(declared):
             if re.search(rf"^[ \t]*{var}\s*=[^=]", body, re.MULTILINE):

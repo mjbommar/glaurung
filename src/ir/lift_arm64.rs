@@ -939,9 +939,11 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                 },
             ];
         }
-        "neg" => {
-            if let Some(ops) = packed::dword_negate(ins) {
-                return ops;
+        "neg" | "negs" => {
+            if mnem == "neg" {
+                if let Some(ops) = packed::dword_negate(ins) {
+                    return ops;
+                }
             }
             if ins.operands.len() == 2 {
                 let (Some(dst), Some(src)) = (
@@ -954,10 +956,19 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
                 let mut out = Vec::new();
                 let src = modified_last_operand(ins, src, width, &mut out);
                 out.push(Op::Un {
-                    dst,
+                    dst: dst.clone(),
                     op: UnOp::Neg,
                     src,
                 });
+                // NEGS is the SUBS alias `subs dst, zr, src`: besides defining
+                // the destination it replaces NZCV.  At minimum, every
+                // condition represented by this IR as a result zero/sign test
+                // must bind to this instruction rather than a stale or live-in
+                // flag.  GCC uses exactly this shape before `csneg ..., mi`
+                // for signed remainder by a power of two.
+                if mnem == "negs" {
+                    out.extend(result_flags(ins, Value::Reg(dst), width));
+                }
                 return out;
             }
             vec![Op::Unknown { mnemonic: mnem }]
@@ -2387,6 +2398,40 @@ mod tests {
                 op: UnOp::Neg,
                 src: Value::Reg(VReg::phys("x23")),
             }
+        );
+    }
+
+    #[test]
+    fn negs_defines_its_result_and_fresh_condition_flags() {
+        // NEGS X2,X1 = SUBS X2,XZR,X1 = 0xeb0103e2.  This exact instruction
+        // occurs twice in the AArch64 signed-remainder fixture, where a
+        // following CSNEG reads its MI condition.
+        let out = lift_bytes(&0xeb0103e2u32.to_le_bytes(), 0x1000);
+        assert!(
+            out.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Un {
+                    dst,
+                    op: UnOp::Neg,
+                    src: Value::Reg(src),
+                } if *dst == VReg::phys("x2") && *src == VReg::phys("x1")
+            )),
+            "negs lost its negated result: {out:#?}"
+        );
+        assert!(
+            out.iter().any(|instruction| matches!(
+                &instruction.op,
+                Op::Cmp {
+                    dst: VReg::Flag(Flag::Slt),
+                    ..
+                }
+            )),
+            "negs left its sign condition undefined: {out:#?}"
+        );
+        assert!(
+            out.iter()
+                .all(|instruction| !matches!(instruction.op, Op::Unknown { .. })),
+            "negs still contains an opaque hole: {out:#?}"
         );
     }
 
