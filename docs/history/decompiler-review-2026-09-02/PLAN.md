@@ -5867,6 +5867,19 @@ relevant ratchet's accepted-regression record.
    fail to pass, so their two host-baseline entries are ratcheted. The scoped
    rerun has no regressions or pending improvements; this closes that measured
    fixture gap but not the remaining WP3 identity/parser audit.
+   Commits `a9001bd1` and `af320048` then close the flat-loop function-table
+   argument boundary. A CFG-aware LLIR proof carries relocation-backed table
+   bases and loaded entries to a specific indirect call before SSA/DCE,
+   attaches only a complete exact ABI-prefix contract, and preserves those
+   renamed inputs through lowering. The adjacent tail-call control also fixes
+   over-invalidation: identities belonging wholly to compiler temporaries no
+   longer clear unrelated enclosing ABI-slot facts, while mixed and malformed
+   physical identities still fail closed. Five focused producer/lowering
+   contracts and all 130 `call_args` tests pass. In an exact release verifier,
+   GCC O2 `95_function_pointer_table::fold_operations` improves from fail to
+   pass and both GCC dispatch controls remain green. Fixture 191's three-
+   argument loop remains red and is the next table-call identity boundary. See
+   `results/wp3-flat-table-call-arguments.md`.
    Commit `20364f46` then migrates shared integer declaration typing from one
    exact SSA identity to one unambiguous physical storage base. Same-carrier
    coalesced versions retain recovered narrow signedness and width, while mixed

@@ -5022,7 +5022,7 @@
   },
   "95_function_pointer_table:gcc:O2": {
     "dispatch_operation": "pass",
-    "fold_operations": "fail"
+    "fold_operations": "pass"
   },
   "96_integer_promotion:clang:O0": {
     "promote_narrow_product": "pass",
