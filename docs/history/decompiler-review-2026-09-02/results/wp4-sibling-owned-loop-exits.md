@@ -90,6 +90,28 @@ The focused Rust module after this increment reports 42 passed and 0 failed in
 0.93 seconds. The expanded Python execution regression passes as one test over
 the three rendered fixture functions.
 
+Commit `68858961` closes the remaining local shadow decline without weakening
+the post-tested-loop safety check. The enclosing conditional already owns block
+5 as its shared join, but the terminal loop inside its then-arm could not see
+that ownership. The adapter therefore tried to synthesize block 5 as a private
+terminal tail and correctly refused it because the block is nonterminal. The
+fix carries the verified lexical join only into a branch's terminal loop; it
+does not propagate that continuation through unrelated nested conditionals.
+
+The real `all_arms_break` fixture was RED before the implementation and now
+requires parseable verified shadow output. A small algebra test pins the exact
+ownership rule, and the adjacent packet-parser epilogue test caught and rejected
+an initially over-broad implementation before commit. Focused results are:
+
+- 44 `structure_v2` tests passed in 0.93 seconds;
+- the release-built four-function Python execution regression passed;
+- all four Clang O2 fixture-212 functions are now shadow-renderable and pass
+  their deterministic execution differentials;
+- `all_arms_break` improves from 6 to 4 gotos and retains its `do`/`while`, but
+  grows from 3,567 to 4,555 bytes, so expression and nesting cleanup remain;
+- the other three functions retain the previously recorded execution and goto
+  results.
+
 ## Broad-gate boundary
 
 Repository policy requires a whole-Python attempt after a source commit:
@@ -113,6 +135,11 @@ instead of 22176384 for `[0, 0]`. This is outside the structure-v2 fixture-212
 slice, but the global gate remains honestly red. The required post-`b214a053`
 attempt reproduced that same first failure at 17%; no new earlier failure was
 observed.
+
+The required post-`68858961` bounded attempt again reached 17% and stopped at
+the same first failure, `test_aarch64_optimized_call_flow_round_trips`:
+`call_chain_in_loop` returned 0 instead of 22176384 for `[0, 0]`, while
+`call_into_spill` passed 22 cases. No new earlier broad failure was observed.
 
 ## Roadmap effect
 

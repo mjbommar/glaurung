@@ -29,7 +29,13 @@ return-tail clone rather than an empty loop exit. Commit `b214a053` applies the
 same ownership boundary to loop-local conditional joins and recovers the
 70-block Clang O2 `nested_loop_returning_arm` comparison ladder with all 116
 edges represented. Its 22 execution cases remain green and gotos fall from 42
-to 35, while the 25,894-byte output remains a recorded cleanup debt. WP5, WP8,
+to 35, while the 25,894-byte output remains a recorded cleanup debt. Commit
+`68858961` closes the last local Clang O2 fixture-212 shadow decline:
+`all_arms_break` now carries its enclosing conditional join into the terminal
+post-tested loop, renders deterministically, and passes its compiled execution
+differential. Its gotos fall from 6 to 4 while text grows from 3,567 to 4,555
+bytes, so this is a verified coverage improvement with explicit readability
+debt rather than a promotion claim. WP5, WP8,
 WP9, and WP10 have
 production or shadow vertical slices
 but have not met their full exit criteria. WP6 has its first per-use signedness
@@ -5228,6 +5234,12 @@ relevant ratchet's accepted-regression record.
    regression statuses. The corpus-wide execution route is now live; still
    complete unexplained block/edge accounting, pinned GED, structure-axis
    movement, and accepted runtime/output-size budgets.
+   The four-function Clang O2 fixture-212 family is now completely renderable
+   in shadow mode at `68858961`: all four execution differentials pass, and the
+   last decline (`all_arms_break`) reduces gotos from 6 to 4. Do not mistake
+   this family closure for WP4 completion; its 28% text growth and the much
+   larger `nested_loop_returning_arm` output remain inputs to the promotion
+   budget decision.
 5. Extend the landed WP5 shared typed-case transport across the remaining
    fixture/compiler/architecture execution cells and classify every residual
    decline. At `9ad9414d`, `Cfg` is the single producer of immutable ordered
