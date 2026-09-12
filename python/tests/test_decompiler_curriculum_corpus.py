@@ -166,29 +166,14 @@ def test_dijkstra_recovers_all_three_natural_loops(tmp_path: Path) -> None:
         assert dead_copy not in code, code
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "OPEN DEFECT (gcc 11 -O2 loop rotation): `bst_search` recovers TWO "
-        "`do {` loops where the source has one. The optimiser peels the first "
-        "iteration and the structurer takes the peeled copy and the rotated "
-        "latch as separate natural loops instead of recognising them as one. "
-        "The recovery is not wrong -- it recompiles and behaves identically -- "
-        "it is duplicated, which is a readability defect the execution "
-        "differential cannot see.\n\n"
-        "This passed on gcc 15.2 (this box) and failed on the runner's gcc; "
-        "the compile now goes through the pinned toolchain image (gcc 11.4), "
-        "so it fails the same way everywhere. Deterministically red beats "
-        "machine-dependently green: a fix can be measured against this."
-    ),
-)
-def test_optimized_bst_search_recovers_latch_and_terminal_returns(
-    tmp_path: Path,
-) -> None:
-    """Clang's latch and shared epilogue must recover without duplicate exits."""
+@pytest.fixture(scope="module")
+def optimized_bst_binary(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Build the pinned Clang O2 tree fixture once for both shape checks."""
     source = FIXTURES / "src" / "15_binary_search_tree.c"
-    binary = tmp_path / "15_binary_search_tree-clang-O2.so"
+    binary = (
+        tmp_path_factory.mktemp("optimized-bst")
+        / "15_binary_search_tree-clang-O2.so"
+    )
     compiled = TC.run(
         [
             "clang",
@@ -202,17 +187,49 @@ def test_optimized_bst_search_recovers_latch_and_terminal_returns(
         ],
     )
     assert compiled.returncode == 0, compiled.stderr
+    return binary
 
-    functions = D.exported_functions(str(binary))
-    code = D.decompiled_c(str(binary), functions["bst_search"])
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+def test_optimized_bst_search_recovers_latch_and_terminal_returns(
+    optimized_bst_binary: Path,
+) -> None:
+    """Clang's loop and shared epilogue must recover without duplicate exits."""
+    functions = D.exported_functions(str(optimized_bst_binary))
+    code = D.decompiled_c(str(optimized_bst_binary), functions["bst_search"])
     assert code is not None
-    assert code.count("do {") == 1, code
+    # The historical defect was two duplicated `do` loops. A head-tested
+    # `while` is equally faithful for this optimized CFG; require one recovered
+    # loop, not one renderer spelling.
+    loop_count = code.count("do {") + code.count("while (") + code.count("for (")
+    assert loop_count == 1, code
     assert code.count("return ") == 3, code
-    validation_prefix = code.split("do {", maxsplit=1)[0]
-    assert validation_prefix.count(" && ") == 2, code
+    validation_prefix = re.split(
+        r"\b(?:do\s*\{|while\s*\(|for\s*\()", code, maxsplit=1
+    )[0]
+    assert validation_prefix.count("if (") == 1, code
+    assert validation_prefix.count(" || ") == 2, code
     assert "goto " not in code, code
 
-    inorder = D.decompiled_c(str(binary), functions["bst_inorder_checksum"])
+
+@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "OPEN DEFECT (Clang O2 inorder loop predicate): the inner traversal "
+        "loop retains two `break` guards because a loop-carried stack-depth "
+        "copy separates the `current < 0` and `n <= current` exits. Recover "
+        "their source-level compound predicate without moving the copy across "
+        "a path on which it is required."
+    ),
+)
+def test_optimized_bst_inorder_recovers_one_inner_loop_exit(
+    optimized_bst_binary: Path,
+) -> None:
+    functions = D.exported_functions(str(optimized_bst_binary))
+    inorder = D.decompiled_c(
+        str(optimized_bst_binary), functions["bst_inorder_checksum"]
+    )
     assert inorder is not None
     assert inorder.count("do {") == 2, inorder
     assert inorder.count("break;") == 1, inorder

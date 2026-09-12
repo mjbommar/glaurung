@@ -510,6 +510,7 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
     // as well; the transformation is adjacency-checked and idempotent.
     crate::ir::guard_chain::collapse_adjacent_break_guards(&mut owned);
     crate::ir::guard_chain::collapse_redundant_copy_nested_guards(&mut owned);
+    crate::ir::guard_chain::collapse_adjacent_matching_return_guards(&mut owned);
     crate::ir::guard_chain::collapse_matching_terminal_return_guard(&mut owned);
     // Late copy/guard folding can make an entry-owned do-while's initial and
     // latch predicates structurally identical only after the first loop-form
@@ -528,6 +529,10 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
         ),
         None => remove_redundant_return_constant_assignments(&mut owned.body),
     }
+    // Return normalization above is what can finally turn two machine-shaped
+    // `result = literal; return result` arms into adjacent identical source
+    // returns. Fuse at that newly exposed boundary as well.
+    crate::ir::guard_chain::collapse_adjacent_matching_return_guards(&mut owned);
     drop_machine_frame_comments(&mut owned.body);
     // A call result consumed exactly once by the immediately following scalar
     // assignment is a source expression, not a standalone temporary. Move the

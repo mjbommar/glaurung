@@ -60,6 +60,17 @@ pub fn collapse_adjacent_break_guards(function: &mut Function) {
     while collapse_break_one(&mut function.body) {}
 }
 
+/// Fuse adjacent terminal guards that return the same value.
+///
+/// `if (a) return x; if (b) return x;` and
+/// `if (a || b) return x;` have identical left-to-right evaluation: the second
+/// condition is reached exactly when the first is false. The return bodies
+/// must be semantically identical and contain no other statement, so no effect
+/// is duplicated or discarded.
+pub fn collapse_adjacent_matching_return_guards(function: &mut Function) {
+    while collapse_adjacent_matching_return_one(&mut function.body) {}
+}
+
 /// Fuse an exact nested terminal-return guard into one conjunction.
 ///
 /// `if (a) { if (b) { return x; } }` and
@@ -675,6 +686,93 @@ fn collapse_break_one(body: &mut Vec<Stmt>) -> bool {
         }
     }
     false
+}
+
+fn collapse_adjacent_matching_return_one(body: &mut Vec<Stmt>) -> bool {
+    for index in 0..body.len() {
+        if index + 1 < body.len() {
+            let left = terminal_guard(&body[index]);
+            let right = terminal_guard(&body[index + 1]);
+            if let (Some((left_cond, left_return)), Some((right_cond, right_return))) =
+                (left, right)
+            {
+                if semantic_terminal_statement_eq(left_return, right_return) {
+                    let origins = match (body[index].origins(), body[index + 1].origins()) {
+                        (Some(left), Some(right)) => Some(left.union(right)),
+                        (Some(origins), None) | (None, Some(origins)) => Some(origins.clone()),
+                        (None, None) => None,
+                    };
+                    let merged_return = merge_corresponding_origins(
+                        std::slice::from_ref(left_return),
+                        std::slice::from_ref(right_return),
+                    );
+                    body[index] = Stmt::If {
+                        cond: Expr::Bin {
+                            op: BinOp::LogicalOr,
+                            lhs: Box::new(left_cond),
+                            rhs: Box::new(right_cond),
+                        },
+                        then_body: merged_return,
+                        else_body: None,
+                    }
+                    .with_optional_origins(origins);
+                    body.remove(index + 1);
+                    return true;
+                }
+            }
+        }
+
+        let changed = match body[index].semantic_mut() {
+            Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collapse_adjacent_matching_return_one(then_body)
+                    || else_body
+                        .as_mut()
+                        .is_some_and(collapse_adjacent_matching_return_one)
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                collapse_adjacent_matching_return_one(body)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                cases
+                    .iter_mut()
+                    .any(|(_, body)| collapse_adjacent_matching_return_one(body))
+                    || default
+                        .as_mut()
+                        .is_some_and(collapse_adjacent_matching_return_one)
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                collapse_adjacent_matching_return_one(try_body)
+                    || catches
+                        .iter_mut()
+                        .any(|catch| collapse_adjacent_matching_return_one(&mut catch.body))
+            }
+            _ => false,
+        };
+        if changed {
+            return true;
+        }
+    }
+    false
+}
+
+fn terminal_guard(statement: &Stmt) -> Option<(Expr, &Stmt)> {
+    let Stmt::If {
+        cond,
+        then_body,
+        else_body: None,
+    } = statement.semantic()
+    else {
+        return None;
+    };
+    let [returned] = then_body.as_slice() else {
+        return None;
+    };
+    matches!(returned.semantic(), Stmt::Return { .. }).then(|| (cond.clone(), returned))
 }
 
 fn break_guard_condition(statement: &Stmt) -> Option<Expr> {
@@ -1436,6 +1534,87 @@ mod tests {
         assert_eq!(rendered.matches(" || ").count(), 1, "{rendered}");
         assert_eq!(rendered.matches("break;").count(), 1, "{rendered}");
         assert!(rendered.contains("iteration = 1;"), "{rendered}");
+    }
+
+    #[test]
+    fn adjacent_matching_returns_become_one_disjunction() {
+        let returned = |origin| {
+            Stmt::Return {
+                value: Some(Expr::Const(-1)),
+            }
+            .with_origins(OriginSet::one(origin))
+        };
+        let mut function = Function {
+            name: "validated".into(),
+            entry_va: 0x1350,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Reg(reg("bad_count")),
+                    then_body: vec![returned(0x1354)],
+                    else_body: None,
+                }
+                .with_origins(OriginSet::one(0x1350)),
+                Stmt::If {
+                    cond: Expr::Reg(reg("null_pointer")),
+                    then_body: vec![returned(0x135c)],
+                    else_body: None,
+                }
+                .with_origins(OriginSet::one(0x1358)),
+                returned(0x1360),
+            ],
+        };
+
+        super::collapse_adjacent_matching_return_guards(&mut function);
+
+        let rendered = render_decbench(&function);
+        assert_eq!(rendered.matches("if (").count(), 1, "{rendered}");
+        assert_eq!(rendered.matches(" || ").count(), 1, "{rendered}");
+        assert_eq!(rendered.matches("return -1;").count(), 2, "{rendered}");
+        assert_eq!(
+            function.body[0]
+                .origins()
+                .expect("merged guard origins")
+                .addresses(),
+            &[0x1350, 0x1358]
+        );
+        let Stmt::If { then_body, .. } = function.body[0].semantic() else {
+            panic!("expected merged return guard")
+        };
+        assert_eq!(
+            then_body[0]
+                .origins()
+                .expect("merged return origins")
+                .addresses(),
+            &[0x1354, 0x135c]
+        );
+    }
+
+    #[test]
+    fn adjacent_different_returns_remain_separate() {
+        let mut function = Function {
+            name: "different_exits".into(),
+            entry_va: 0x1350,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Reg(reg("first")),
+                    then_body: vec![Stmt::Return {
+                        value: Some(Expr::Const(1)),
+                    }],
+                    else_body: None,
+                },
+                Stmt::If {
+                    cond: Expr::Reg(reg("second")),
+                    then_body: vec![Stmt::Return {
+                        value: Some(Expr::Const(2)),
+                    }],
+                    else_body: None,
+                },
+            ],
+        };
+
+        super::collapse_adjacent_matching_return_guards(&mut function);
+
+        assert_eq!(function.body.len(), 2);
     }
 
     #[test]
