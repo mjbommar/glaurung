@@ -1140,6 +1140,20 @@ fn table_call_may_use_layout(
     table_entry_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
 ) -> Option<Vec<VReg>> {
     let targets = table_call_target_vas(statement)?;
+    table_target_may_use_layout(&targets, arch, table_entry_layouts)
+}
+
+/// The exact ABI prefix read by every possible target in a proven table call.
+///
+/// This LLIR-facing form shares the same fail-closed contract as AST argument
+/// reconstruction.  Keeping the proof here prevents the pre-SSA call-effect
+/// annotation and the later AST reconstruction from developing subtly
+/// different rules for incomplete or disagreeing tables.
+pub(crate) fn table_target_may_use_layout(
+    targets: &[u64],
+    arch: CallConv,
+    table_entry_layouts: &std::collections::HashMap<u64, Vec<VReg>>,
+) -> Option<Vec<VReg>> {
     if targets.is_empty() {
         return None;
     }

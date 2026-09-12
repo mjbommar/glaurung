@@ -797,6 +797,20 @@ pub(super) fn lower_op_stmt_with_identities(
             else_body: None,
         },
         Op::Call { target, effects } => {
+            let exact_indirect_args = matches!(target, CallTarget::Indirect(_))
+                .then(|| effects.as_ref())
+                .flatten()
+                .filter(|effects| effects.args_are_exact)
+                .map(|effects| {
+                    effects
+                        .args
+                        .iter()
+                        .cloned()
+                        .map(Value::Reg)
+                        .map(|value| lower_value(&value))
+                        .collect()
+                })
+                .unwrap_or_default();
             let target = match target {
                 CallTarget::Direct(a) => Expr::Addr(*a),
                 CallTarget::Indirect(v) => lower_value(v),
@@ -808,7 +822,7 @@ pub(super) fn lower_op_stmt_with_identities(
             // never meet and the AST ends up with a value nobody defines.
             Stmt::Call {
                 target,
-                args: Vec::new(),
+                args: exact_indirect_args,
                 dst: effects.as_ref().and_then(|e| e.result.clone()),
                 call_spec: None,
             }
@@ -1114,6 +1128,47 @@ pub(super) fn lower_op(op: &Op, lower_scalar_float: bool) -> Vec<Stmt> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_indirect_call_effects_become_ast_arguments() {
+        let statements = lower_op(
+            &Op::Call {
+                target: CallTarget::Indirect(Value::Reg(VReg::Temp(0))),
+                effects: Some(crate::ir::types::CallEffects {
+                    args: vec![VReg::phys("rdi#2"), VReg::phys("rsi#3")],
+                    proven_args: vec![VReg::phys("rdi#2"), VReg::phys("rsi#3")],
+                    args_are_exact: true,
+                    ..Default::default()
+                }),
+            },
+            false,
+        );
+
+        assert!(matches!(
+            statements.as_slice(),
+            [Stmt::Call { target: Expr::Reg(target), args, .. }]
+                if target == &VReg::Temp(0)
+                    && args == &[Expr::Reg(VReg::phys("rdi#2")), Expr::Reg(VReg::phys("rsi#3"))]
+        ));
+    }
+
+    #[test]
+    fn conservative_indirect_call_effects_remain_liveness_only() {
+        let statements = lower_op(
+            &Op::Call {
+                target: CallTarget::Indirect(Value::Reg(VReg::Temp(0))),
+                effects: Some(crate::ir::abi::call_effects(
+                    crate::ir::call_args::CallConv::SysVAmd64,
+                )),
+            },
+            false,
+        );
+
+        assert!(matches!(
+            statements.as_slice(),
+            [Stmt::Call { args, .. }] if args.is_empty()
+        ));
+    }
 
     #[test]
     fn opaque_multi_output_intrinsic_preserves_every_declared_definition() {

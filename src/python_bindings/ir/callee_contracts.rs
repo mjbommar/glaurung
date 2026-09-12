@@ -519,7 +519,243 @@ pub(super) fn prepare_direct_callee_facts(
         cache,
     );
     apply_recovered_direct_callee_effects(caller, cc, &facts);
+    apply_recovered_table_call_effects(caller, cc, &facts, function_tables);
     facts
+}
+
+/// Attach exact machine inputs to indirect calls whose target is proven to be
+/// an entry loaded from one complete relocation-backed function table.
+///
+/// This runs on flat LLIR, before SSA and before dead-store elimination.  The
+/// later AST-only table recognizer is too late for loops that have not yet been
+/// structured: without these uses, their argument setup can be deleted before
+/// `reconstruct_args` sees the call.
+fn apply_recovered_table_call_effects(
+    function: &mut crate::ir::types::LlirFunction,
+    cc: crate::ir::call_args::CallConv,
+    facts: &DirectCalleeFacts,
+    tables: &[crate::ir::function_tables::FunctionPointerTable],
+) {
+    use crate::ir::types::{CallTarget, Op, VReg, Value};
+    use std::collections::HashMap;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum TableValue {
+        Base(u64),
+        Entry(u64),
+    }
+
+    fn merge(states: impl Iterator<Item = HashMap<VReg, TableValue>>) -> HashMap<VReg, TableValue> {
+        let mut states = states.peekable();
+        let Some(mut joined) = states.next() else {
+            return HashMap::new();
+        };
+        for state in states {
+            joined.retain(|register, value| state.get(register) == Some(value));
+        }
+        joined
+    }
+
+    let tables_by_va = tables
+        .iter()
+        .map(|table| (table.va, table))
+        .collect::<HashMap<_, _>>();
+    let is_caller_saved = |register: &VReg| match register {
+        VReg::Phys(name) => {
+            crate::ir::abi::caller_saved_registers(cc).contains(&crate::ir::abi::ssa_base(name))
+        }
+        VReg::Temp(_) | VReg::Flag(_) | VReg::FlagValue { .. } => true,
+    };
+    if tables_by_va.is_empty() || function.blocks.is_empty() {
+        return;
+    }
+    let block_by_va = function
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| (block.start_va, index))
+        .collect::<HashMap<_, _>>();
+    let entry_index = block_by_va.get(&function.entry_va).copied().unwrap_or(0);
+    let mut predecessors = vec![Vec::new(); function.blocks.len()];
+    for (index, block) in function.blocks.iter().enumerate() {
+        for successor in &block.succs {
+            if let Some(&successor_index) = block_by_va.get(successor) {
+                predecessors[successor_index].push(index);
+            }
+        }
+    }
+
+    // `None` means that predecessor has not contributed yet.  This permits a
+    // preheader fact to enter a loop on the first iteration; when the backedge
+    // arrives, the ordinary agreement join can only retain or remove it.
+    let mut outputs: Vec<Option<HashMap<VReg, TableValue>>> = vec![None; function.blocks.len()];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for block_index in 0..function.blocks.len() {
+            let incoming = if block_index == entry_index {
+                HashMap::new()
+            } else {
+                merge(
+                    predecessors[block_index]
+                        .iter()
+                        .filter_map(|&predecessor| outputs[predecessor].clone()),
+                )
+            };
+            if block_index != entry_index
+                && !predecessors[block_index].is_empty()
+                && predecessors[block_index]
+                    .iter()
+                    .all(|&predecessor| outputs[predecessor].is_none())
+            {
+                continue;
+            }
+            let mut state = incoming;
+            for instruction in &function.blocks[block_index].instrs {
+                let definition = crate::ir::use_def::def_ref(&instruction.op).cloned();
+                if let Some(definition) = definition.as_ref() {
+                    state.remove(definition);
+                }
+                match &instruction.op {
+                    Op::Assign { dst, src } => {
+                        let value = match src {
+                            Value::Addr(address) => tables_by_va
+                                .contains_key(address)
+                                .then_some(TableValue::Base(*address)),
+                            Value::Const(address) => u64::try_from(*address)
+                                .ok()
+                                .filter(|address| tables_by_va.contains_key(address))
+                                .map(TableValue::Base),
+                            Value::Reg(source) => state.get(source).copied(),
+                        };
+                        if let Some(value) = value {
+                            state.insert(dst.clone(), value);
+                        }
+                    }
+                    Op::Load { dst, addr } => {
+                        let Some(base) = addr.base.as_ref() else {
+                            continue;
+                        };
+                        let Some(TableValue::Base(table_va)) = state.get(base).copied() else {
+                            continue;
+                        };
+                        let Some(table) = tables_by_va.get(&table_va) else {
+                            continue;
+                        };
+                        let indexed = addr.index.is_some() && addr.scale == table.pointer_size;
+                        let fixed = addr.index.is_none()
+                            && addr.disp >= 0
+                            && (addr.disp as u64) % u64::from(table.pointer_size) == 0
+                            && (addr.disp as u64) / u64::from(table.pointer_size)
+                                < table.targets.len() as u64;
+                        if addr.segment.is_none()
+                            && addr.size == table.pointer_size
+                            && (indexed || fixed)
+                        {
+                            state.insert(dst.clone(), TableValue::Entry(table_va));
+                        }
+                    }
+                    Op::Call { .. } => state.retain(|register, _| !is_caller_saved(register)),
+                    _ => {}
+                }
+            }
+            if outputs[block_index].as_ref() != Some(&state) {
+                outputs[block_index] = Some(state);
+                changed = true;
+            }
+        }
+    }
+
+    for block_index in 0..function.blocks.len() {
+        let mut state = if block_index == entry_index {
+            HashMap::new()
+        } else {
+            merge(
+                predecessors[block_index]
+                    .iter()
+                    .filter_map(|&predecessor| outputs[predecessor].clone()),
+            )
+        };
+        for instruction in &mut function.blocks[block_index].instrs {
+            let definition = crate::ir::use_def::def_ref(&instruction.op).cloned();
+            if let Some(definition) = definition.as_ref() {
+                state.remove(definition);
+            }
+            match &mut instruction.op {
+                Op::Assign { dst, src } => {
+                    let value = match src {
+                        Value::Addr(address) => tables_by_va
+                            .contains_key(address)
+                            .then_some(TableValue::Base(*address)),
+                        Value::Const(address) => u64::try_from(*address)
+                            .ok()
+                            .filter(|address| tables_by_va.contains_key(address))
+                            .map(TableValue::Base),
+                        Value::Reg(source) => state.get(source).copied(),
+                    };
+                    if let Some(value) = value {
+                        state.insert(dst.clone(), value);
+                    }
+                }
+                Op::Load { dst, addr } => {
+                    let Some(base) = addr.base.as_ref() else {
+                        continue;
+                    };
+                    let Some(TableValue::Base(table_va)) = state.get(base).copied() else {
+                        continue;
+                    };
+                    let Some(table) = tables_by_va.get(&table_va) else {
+                        continue;
+                    };
+                    let indexed = addr.index.is_some() && addr.scale == table.pointer_size;
+                    let fixed = addr.index.is_none()
+                        && addr.disp >= 0
+                        && (addr.disp as u64) % u64::from(table.pointer_size) == 0
+                        && (addr.disp as u64) / u64::from(table.pointer_size)
+                            < table.targets.len() as u64;
+                    if addr.segment.is_none()
+                        && addr.size == table.pointer_size
+                        && (indexed || fixed)
+                    {
+                        state.insert(dst.clone(), TableValue::Entry(table_va));
+                    }
+                }
+                Op::Call {
+                    target: CallTarget::Indirect(Value::Reg(target)),
+                    effects,
+                } => {
+                    let Some(TableValue::Entry(table_va)) = state.get(target).copied() else {
+                        continue;
+                    };
+                    let Some(table) = tables_by_va.get(&table_va) else {
+                        continue;
+                    };
+                    let targets = table
+                        .targets
+                        .iter()
+                        .map(|target| target.va)
+                        .collect::<Vec<_>>();
+                    let Some(layout) = crate::ir::call_args::table_target_may_use_layout(
+                        &targets,
+                        cc,
+                        &facts.table_entry_layouts,
+                    ) else {
+                        continue;
+                    };
+                    let mut recovered = effects
+                        .clone()
+                        .unwrap_or_else(|| crate::ir::abi::call_effects(cc));
+                    recovered.args = layout.clone();
+                    recovered.proven_args = layout;
+                    recovered.args_are_exact = true;
+                    *effects = Some(recovered);
+                    state.retain(|register, _| !is_caller_saved(register));
+                }
+                Op::Call { .. } => state.retain(|register, _| !is_caller_saved(register)),
+                _ => {}
+            }
+        }
+    }
 }
 
 /// Project recovered callee parameter types back through untouched SSA live-ins.
@@ -1185,6 +1421,180 @@ fn recover_table_entry_layouts(
 #[cfg(test)]
 mod tests {
     use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority};
+
+    fn table(targets: &[u64]) -> crate::ir::function_tables::FunctionPointerTable {
+        crate::ir::function_tables::FunctionPointerTable {
+            va: 0x3e60,
+            name: "OPERATIONS".into(),
+            pointer_size: 8,
+            targets: targets
+                .iter()
+                .enumerate()
+                .map(|(index, va)| crate::ir::ast::FunctionTableTarget {
+                    va: *va,
+                    name: format!("operation_{index}"),
+                })
+                .collect(),
+        }
+    }
+
+    fn flat_loop_table_call() -> crate::ir::types::LlirFunction {
+        use crate::ir::types::{
+            CallTarget, LlirBlock, LlirFunction, LlirInstr, MemOp, Op, VReg, Value,
+        };
+        let instruction = |va, op| LlirInstr { va, op };
+        LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                LlirBlock {
+                    start_va: 0x1000,
+                    end_va: 0x1008,
+                    instrs: vec![instruction(
+                        0x1000,
+                        Op::Assign {
+                            dst: VReg::phys("r13"),
+                            src: Value::Addr(0x3e60),
+                        },
+                    )],
+                    succs: vec![0x1100],
+                },
+                LlirBlock {
+                    start_va: 0x1100,
+                    end_va: 0x1110,
+                    instrs: vec![
+                        instruction(
+                            0x1104,
+                            Op::Load {
+                                dst: VReg::Temp(0),
+                                addr: MemOp::plain(
+                                    Some(VReg::phys("r13")),
+                                    Some(VReg::phys("rcx")),
+                                    8,
+                                    0,
+                                    8,
+                                ),
+                            },
+                        ),
+                        instruction(
+                            0x1108,
+                            Op::Call {
+                                target: CallTarget::Indirect(Value::Reg(VReg::Temp(0))),
+                                effects: None,
+                            },
+                        ),
+                    ],
+                    succs: vec![0x1100, 0x1200],
+                },
+                LlirBlock {
+                    start_va: 0x1200,
+                    end_va: 0x1204,
+                    instrs: vec![instruction(0x1200, Op::Return)],
+                    succs: vec![],
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn flat_loop_table_call_gets_exact_pre_ssa_arguments() {
+        use crate::ir::types::{CallTarget, Op, VReg, Value};
+        let mut function = flat_loop_table_call();
+        let mut facts = super::DirectCalleeFacts::default();
+        for target in [0x2000, 0x2100] {
+            facts
+                .table_entry_layouts
+                .insert(target, vec![VReg::phys("rdi"), VReg::phys("rsi")]);
+        }
+
+        super::apply_recovered_table_call_effects(
+            &mut function,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &facts,
+            &[table(&[0x2000, 0x2100])],
+        );
+
+        let Op::Call {
+            target: CallTarget::Indirect(Value::Reg(target)),
+            effects: Some(effects),
+        } = &function.blocks[1].instrs[1].op
+        else {
+            panic!("expected annotated indirect call")
+        };
+        assert_eq!(target, &VReg::Temp(0));
+        assert_eq!(effects.args, [VReg::phys("rdi"), VReg::phys("rsi")]);
+        assert_eq!(effects.proven_args, effects.args);
+        assert!(effects.args_are_exact);
+    }
+
+    #[test]
+    fn incomplete_table_contract_does_not_narrow_indirect_call() {
+        let mut function = flat_loop_table_call();
+        let mut facts = super::DirectCalleeFacts::default();
+        facts
+            .table_entry_layouts
+            .insert(0x2000, vec![crate::ir::types::VReg::phys("rdi")]);
+
+        super::apply_recovered_table_call_effects(
+            &mut function,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &facts,
+            &[table(&[0x2000, 0x2100])],
+        );
+
+        let crate::ir::types::Op::Call { effects, .. } = &function.blocks[1].instrs[1].op else {
+            panic!("expected indirect call")
+        };
+        assert!(effects.is_none());
+    }
+
+    #[test]
+    fn conflicting_predecessor_table_provenance_is_rejected() {
+        use crate::ir::types::{LlirBlock, LlirInstr, Op, VReg, Value};
+        let mut function = flat_loop_table_call();
+        function.blocks[0].succs = vec![0x1080, 0x1090];
+        function.blocks.insert(
+            1,
+            LlirBlock {
+                start_va: 0x1080,
+                end_va: 0x1084,
+                instrs: vec![],
+                succs: vec![0x1100],
+            },
+        );
+        function.blocks.insert(
+            2,
+            LlirBlock {
+                start_va: 0x1090,
+                end_va: 0x1094,
+                instrs: vec![LlirInstr {
+                    va: 0x1090,
+                    op: Op::Assign {
+                        dst: VReg::phys("r13"),
+                        src: Value::Const(0),
+                    },
+                }],
+                succs: vec![0x1100],
+            },
+        );
+        let mut facts = super::DirectCalleeFacts::default();
+        for target in [0x2000, 0x2100] {
+            facts
+                .table_entry_layouts
+                .insert(target, vec![VReg::phys("rdi")]);
+        }
+
+        super::apply_recovered_table_call_effects(
+            &mut function,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &facts,
+            &[table(&[0x2000, 0x2100])],
+        );
+
+        let Op::Call { effects, .. } = &function.blocks[3].instrs[1].op else {
+            panic!("expected indirect call")
+        };
+        assert!(effects.is_none());
+    }
 
     fn passthrough_caller(
         spill: crate::ir::types::MemOp,
