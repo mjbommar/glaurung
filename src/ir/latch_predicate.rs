@@ -411,7 +411,7 @@ fn coalescible_value_role(
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> bool {
     if let Some(identities) = identities {
-        return identities.exact(register).is_some();
+        return identities.unambiguous_physical_base(register).is_some();
     }
     matches!(register, VReg::Phys(name) if name.strip_prefix("var").is_some_and(|tail| !tail.is_empty() && tail.chars().all(|ch| ch.is_ascii_digit())))
 }

@@ -299,6 +299,46 @@ fn opaque_exact_identities_authorize_loop_entry_coalescing() {
 }
 
 #[test]
+fn coalesced_same_storage_identity_authorizes_loop_entry_coalescing() {
+    let (mut function, seed, carrier) = opaque_carrier_candidate();
+    let mut types = crate::ir::types_recover::TypeMap::default();
+    types.upsert_public(
+        seed.clone(),
+        crate::ir::types_recover::TypeHint::Int {
+            width: 8,
+            signed: true,
+        },
+    );
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
+    identities.record(
+        seed.clone(),
+        crate::ir::ssa::SsaValue {
+            base: reg("rax"),
+            version: 1,
+        },
+    );
+    for version in [2, 3] {
+        identities.record(
+            carrier.clone(),
+            crate::ir::ssa::SsaValue {
+                base: reg("rbx"),
+                version,
+            },
+        );
+    }
+
+    let renames = coalesce_loop_entry_copies_with_identities(
+        &mut function,
+        &std::collections::HashSet::new(),
+        &mut types,
+        Some(&identities),
+    );
+
+    assert_eq!(renames.get(&seed), Some(&carrier));
+    assert_eq!(function.body.len(), 3, "entry copy should be removed");
+}
+
+#[test]
 fn ambiguous_opaque_identity_keeps_loop_entry_copy() {
     let (mut function, seed, carrier) = opaque_carrier_candidate();
     let before = function.clone();
