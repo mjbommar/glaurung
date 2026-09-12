@@ -5247,6 +5247,12 @@ relevant ratchet's accepted-regression record.
    `nested_loop_returning_arm` tree expands by 35 edits. See
    `results/wp4-structure-axis.md`. Reduce that expansion and rerun the focused
    slice before spending time on the clean pinned full comparison.
+   Commit `91d5713f` completes the first shadow-only presentation reduction:
+   terminal then-arms become early returns only after region ownership is
+   fixed. The four-function shadow distance falls from 416 to 394 and output
+   from 34,753 to 26,894 bytes, with all execution verdicts retained. Production
+   remains better at distance 380, so continue reducing the unrolled comparison
+   ladder before the full promotion run.
 5. Extend the landed WP5 shared typed-case transport across the remaining
    fixture/compiler/architecture execution cells and classify every residual
    decline. At `9ad9414d`, `Cfg` is the single producer of immutable ordered

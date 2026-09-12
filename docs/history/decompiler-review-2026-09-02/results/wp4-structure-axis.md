@@ -67,3 +67,44 @@ and this focused slice currently regresses in aggregate. The next quality task
 is to reduce the verified shadow tree expansion in
 `nested_loop_returning_arm`, then rerun this four-function slice before paying
 for the full sample.
+
+## Terminal-branch presentation cleanup
+
+Commit `91d5713f` performs the first targeted reduction. Once structure-v2's
+verified region has fixed block ownership and lowered to the AST, an `else`
+after a branch that returns on every path carries no control information. The
+shadow-only presentation pass rewrites `if (c) return; else body` as
+`if (c) return; body`, including nested all-path returns, while preserving the
+conditional's origin set. Partial-return arms, gotos, breaks, and continues do
+not qualify.
+
+An attempted tree-level implementation was rejected before commit because the
+focused gate showed it could disturb lexical join ownership and duplicate paths
+in `early_return` and `hybrid_switch`. The accepted AST-boundary implementation
+passes all 46 structure-v2 tests, including those two controls, and the
+release-built four-function execution differential remains green.
+
+The same fixed four-function slice moves in the intended direction:
+
+- aggregate shadow structure distance falls from 416 to 394, versus production
+  at 380;
+- shadow output falls from 34,753 to 26,894 bytes;
+- `nested_loop_returning_arm` falls from distance 285 to 273 and from 25,894 to
+  20,330 bytes;
+- `all_arms_break` falls from distance 67 to 63 and from 4,555 to 3,340 bytes,
+  now smaller than production's 3,567 bytes;
+- gotos and all four execution verdicts are unchanged.
+
+The result is substantial cleanup but not structure-axis closure: shadow still
+trails production 394 to 380 on this slice. The post-commit bounded whole-Python
+attempt reached 17% and stopped at the same existing AArch64
+`call_chain_in_loop` mismatch (0 instead of 22176384 for `[0, 0]`), with no new
+earlier failure.
+
+The post-commit JSON names `91d5713f`. Because the shared release build still
+included another lane's uncommitted native changes, it remains scoped
+engineering evidence rather than the clean promotion run. Its CPython 3.12
+extension hash is
+`a98a8f60cd21e0de5308d7475a8b417981cb6af10bff48e49777b66be6ac5253`, and
+the remaining native-source diff hash is
+`8526d3054b53773d2ed4ad3a2272c626d124387867787a11e84f1030897ac396`.
