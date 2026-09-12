@@ -1,11 +1,37 @@
 use super::{
-    identity_value_role, is_source_value_local_with_identities, refine_pointer_high_variables,
+    identity_value_role, is_source_value_local_with_identities,
     refine_pointer_high_variables_with_identities,
 };
 use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority, CallSiteSpec};
 use crate::ir::types::{BinOp, CmpOp, VReg};
 use crate::ir::types_recover::{TypeHint, TypeMap};
+
+fn refine_pointer_high_variables(function: &Function, types: &mut TypeMap) {
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
+    for index in 0..=1000 {
+        identities.record(
+            VReg::phys(format!("var{index}")),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("test_value"),
+                version: index + 1,
+            },
+        );
+    }
+    let parameter_slots = (0..=32)
+        .map(|index| (format!("arg{index}"), index))
+        .collect();
+    identities.attach_promoted_stack_parameter_slots(&parameter_slots);
+    let promoted_objects = [
+        "local_8".to_string(),
+        "local_10".to_string(),
+        "local_20".to_string(),
+        "local_30".to_string(),
+        "local_850".to_string(),
+    ];
+    identities.attach_promoted_stack_objects(&promoted_objects);
+    refine_pointer_high_variables_with_identities(function, types, &identities);
+}
 
 fn pointer_width(types: &TypeMap, name: &str) -> Option<u8> {
     match types.get(&VReg::phys(name)) {
@@ -33,18 +59,19 @@ fn coalesced_same_storage_identities(
 
 #[test]
 fn installed_identity_authority_does_not_trust_var_spelling_for_type_refinement() {
-    let identities = crate::ir::value_number::ValueIdentities::default();
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
 
-    assert!(!identity_value_role("var12", Some(&identities)));
+    assert!(!identity_value_role("var12", &identities));
+    assert!(!is_source_value_local_with_identities("var12", &identities));
     assert!(!is_source_value_local_with_identities(
-        "var12",
-        Some(&identities)
+        "local_8",
+        &identities
     ));
-    assert!(identity_value_role("var12", None));
-    assert!(is_source_value_local_with_identities("var12", None));
+    let local = "local_8".to_string();
+    identities.attach_promoted_stack_objects([&local]);
     assert!(is_source_value_local_with_identities(
         "local_8",
-        Some(&identities)
+        &identities
     ));
 }
 
@@ -71,7 +98,7 @@ fn exact_opaque_identity_is_eligible_for_pointer_refinement() {
     );
     let mut types = TypeMap::default();
 
-    refine_pointer_high_variables_with_identities(&function, &mut types, Some(&identities));
+    refine_pointer_high_variables_with_identities(&function, &mut types, &identities);
 
     assert_eq!(pointer_width(&types, "opaque-value"), Some(1));
 }
@@ -93,7 +120,7 @@ fn coalesced_same_storage_identity_is_eligible_for_pointer_refinement() {
     let mut types = TypeMap::default();
 
     assert!(identities.exact(&value).is_none());
-    refine_pointer_high_variables_with_identities(&function, &mut types, Some(&identities));
+    refine_pointer_high_variables_with_identities(&function, &mut types, &identities);
 
     assert_eq!(pointer_width(&types, "opaque-value"), Some(1));
 }
@@ -123,7 +150,7 @@ fn ambiguous_opaque_identity_is_not_eligible_for_pointer_refinement() {
     }
     let mut types = TypeMap::default();
 
-    refine_pointer_high_variables_with_identities(&function, &mut types, Some(&identities));
+    refine_pointer_high_variables_with_identities(&function, &mut types, &identities);
 
     assert_eq!(pointer_width(&types, "opaque-value"), None);
 }
@@ -252,7 +279,7 @@ fn exact_opaque_high_bit_constant_used_unsigned_is_retyped() {
         },
     );
 
-    refine_pointer_high_variables_with_identities(&function, &mut types, Some(&identities));
+    refine_pointer_high_variables_with_identities(&function, &mut types, &identities);
 
     assert_eq!(
         types.get(&value),
@@ -299,7 +326,7 @@ fn coalesced_same_storage_high_bit_constant_used_unsigned_is_retyped() {
     let identities = coalesced_same_storage_identities(&value, "eax");
 
     assert!(identities.exact(&value).is_none());
-    refine_pointer_high_variables_with_identities(&function, &mut types, Some(&identities));
+    refine_pointer_high_variables_with_identities(&function, &mut types, &identities);
 
     assert_eq!(
         types.get(&value),
@@ -354,7 +381,7 @@ fn ambiguous_opaque_high_bit_constant_stays_signed() {
         );
     }
 
-    refine_pointer_high_variables_with_identities(&function, &mut types, Some(&identities));
+    refine_pointer_high_variables_with_identities(&function, &mut types, &identities);
 
     assert_eq!(
         types.get(&value),
@@ -504,7 +531,7 @@ fn exact_opaque_high_bit_bound_uses_the_rendered_machine_word_domain() {
         );
     }
 
-    refine_pointer_high_variables_with_identities(&function, &mut types, Some(&identities));
+    refine_pointer_high_variables_with_identities(&function, &mut types, &identities);
 
     assert_eq!(
         types.get(&value),
@@ -758,7 +785,7 @@ fn attributed_authoritative_callee_refines_a_forwarded_argument() {
         );
     let mut types = TypeMap::default();
 
-    refine_pointer_high_variables_with_identities(&function, &mut types, Some(&identities));
+    refine_pointer_high_variables_with_identities(&function, &mut types, &identities);
 
     assert_eq!(pointer_width(&types, "arg0"), Some(4));
 }
@@ -794,7 +821,7 @@ fn callee_pointer_contract_does_not_trust_an_unowned_arg_spelling() {
         );
     let mut types = TypeMap::default();
 
-    refine_pointer_high_variables_with_identities(&function, &mut types, Some(&identities));
+    refine_pointer_high_variables_with_identities(&function, &mut types, &identities);
 
     assert_eq!(pointer_width(&types, "arg99"), None);
 }
@@ -836,7 +863,7 @@ fn callee_pointer_contract_does_not_follow_an_unowned_var_copy() {
         );
     let mut types = TypeMap::default();
 
-    refine_pointer_high_variables_with_identities(&function, &mut types, Some(&identities));
+    refine_pointer_high_variables_with_identities(&function, &mut types, &identities);
 
     assert_eq!(pointer_width(&types, "arg0"), None);
 }
@@ -913,11 +940,7 @@ fn recovered_callee_pointer_flows_back_through_a_coalesced_parameter_copy() {
     );
     let mut authoritative_types = TypeMap::default();
 
-    refine_pointer_high_variables_with_identities(
-        &function,
-        &mut authoritative_types,
-        Some(&identities),
-    );
+    refine_pointer_high_variables_with_identities(&function, &mut authoritative_types, &identities);
 
     assert_eq!(pointer_width(&authoritative_types, "arg0"), Some(8));
     assert_eq!(pointer_width(&authoritative_types, "var2"), None);

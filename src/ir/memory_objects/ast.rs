@@ -7,7 +7,7 @@ use crate::ir::memory_objects::{
     AccessRole, AccessSource, LayoutConflict, MemoryObjectBuilder, MemoryObjectModel, ObjectOrigin,
     RawAccess,
 };
-use crate::ir::types::{is_promoted_local_reg, BinOp, VReg};
+use crate::ir::types::{BinOp, VReg};
 
 #[derive(Debug, Default)]
 struct Observations {
@@ -17,15 +17,10 @@ struct Observations {
     next_statement: u32,
 }
 
-/// Infer object/access constraints from the prepared structured AST.
-pub(crate) fn infer_from_ast(function: &Function) -> MemoryObjectModel {
-    infer_from_ast_with_identities(function, None)
-}
-
-/// Infer prepared-AST objects using promoted-stack identity when available.
+/// Infer prepared-AST objects using authoritative promoted-stack identity.
 pub(crate) fn infer_from_ast_with_identities(
     function: &Function,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) -> MemoryObjectModel {
     let mut observations = Observations::default();
     observe_body(&function.body, &mut observations, identities);
@@ -45,7 +40,7 @@ pub(crate) fn infer_from_ast_with_identities(
 fn observe_body(
     body: &[Stmt],
     observations: &mut Observations,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) {
     for statement in body {
         let source = AccessSource::AstStatement(observations.next_statement);
@@ -62,11 +57,7 @@ fn observe_body(
                 // treating them as `*local = value` here creates a fake object
                 // access and loses the cursor's origin/stride definitions.
                 if let Expr::Reg(dst) = addr.semantic() {
-                    let promoted = identities.map_or_else(
-                        || is_promoted_local_reg(dst),
-                        |identities| identities.is_promoted_stack_object(dst),
-                    );
-                    if promoted {
+                    if identities.is_promoted_stack_object(dst) {
                         observe_definition(dst, src, source, observations);
                         observe_expr(src, ExprContext::Value, source, observations);
                         continue;

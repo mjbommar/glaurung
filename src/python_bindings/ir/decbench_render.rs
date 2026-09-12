@@ -298,7 +298,7 @@ fn decbench_text_with_installed_environment(
             crate::ir::high_variables::refine_pointer_high_variables_with_identities(
                 &prepared,
                 tm,
-                Some(&value_identities),
+                &value_identities,
             );
         });
     }

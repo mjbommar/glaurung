@@ -1,9 +1,16 @@
-use super::{infer_from_ast, infer_from_ast_with_identities, AccessRole, LayoutConflict};
+use super::{infer_from_ast_with_identities, AccessRole, LayoutConflict};
 use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 use crate::ir::types::{BinOp, VReg};
 
 fn reg(name: &str) -> VReg {
     VReg::phys(name)
+}
+
+fn infer_from_ast(function: &Function) -> super::MemoryObjectModel {
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
+    let promoted_objects = ["local_4".to_string(), "local_8".to_string()];
+    identities.attach_promoted_stack_objects(&promoted_objects);
+    infer_from_ast_with_identities(function, &identities)
 }
 
 fn x86_image() -> crate::program::image::ProgramImage {
@@ -112,7 +119,7 @@ fn opaque_promoted_cursor_recovers_object_by_identity() {
         }
     }
 
-    let model = infer_from_ast_with_identities(&function(body), Some(&identities));
+    let model = infer_from_ast_with_identities(&function(body), &identities);
     let object = model
         .object_for_base(&reg(&object_name))
         .expect("cursor object");
@@ -133,7 +140,7 @@ fn unowned_local_spelling_is_observed_as_a_pointer_store() {
         size: 8,
     }];
 
-    let model = infer_from_ast_with_identities(&function(body), Some(&identities));
+    let model = infer_from_ast_with_identities(&function(body), &identities);
     let object = model
         .object_for_base(&reg(local))
         .expect("pointer store object");
