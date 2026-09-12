@@ -117,6 +117,15 @@ pub(super) fn fold_one_cdecl32_call(
                 }
             }
             Stmt::Comment(_) | Stmt::Nop => {}
+            statement
+                if pushed_args.is_empty()
+                    && by_offset.is_empty()
+                    && cleanup.is_some()
+                    && skipped_before_setup < 4
+                    && is_exact_call_target_load(statement, &body[call_idx], identities) =>
+            {
+                skipped_before_setup += 1;
+            }
             // 32-bit PIC puts `mov %eax,%ebx` (the materialised
             // `_GLOBAL_OFFSET_TABLE_`) between the last push and the call, which
             // ended the scan before it saw a single argument: `forward_sum6` and
@@ -313,6 +322,57 @@ fn stack_pointer_add_width_cdecl(
     match rhs.semantic() {
         Expr::Const(width) if *width > 0 => Some(*width),
         _ => None,
+    }
+}
+
+/// Whether this statement is the exact reaching load consumed as the call target.
+///
+/// Optimised i386 commonly pushes every cdecl argument and then loads the
+/// function pointer through an entry-frame slot immediately before `call reg`.
+/// That one linked memory read is part of the call target, not an argument-area
+/// barrier. Any different destination or non-load definition still stops the
+/// backward scan.
+fn is_exact_call_target_load(
+    statement: &Stmt,
+    call: &Stmt,
+    identities: Option<&ValueIdentities>,
+) -> bool {
+    let Stmt::Assign { dst, src } = statement.semantic() else {
+        return false;
+    };
+    if !matches!(src.semantic(), Expr::Deref { .. }) {
+        return false;
+    }
+    let Stmt::Call { target, .. } = call.semantic() else {
+        return false;
+    };
+    let mut found = false;
+    visit_expr(target, &mut |node| match node.semantic() {
+        Expr::Reg(register) => {
+            found |= registers_are_same_value(register, dst, identities);
+        }
+        Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => {
+            found |= base
+                .iter()
+                .chain(index.iter())
+                .any(|register| registers_are_same_value(register, dst, identities));
+        }
+        _ => {}
+    });
+    found
+}
+
+fn registers_are_same_value(
+    left: &VReg,
+    right: &VReg,
+    identities: Option<&ValueIdentities>,
+) -> bool {
+    match identities {
+        Some(identities) => identities
+            .value_ids(left)
+            .zip(identities.value_ids(right))
+            .is_some_and(|(left, right)| !left.is_empty() && left == right),
+        None => left == right,
     }
 }
 
@@ -749,6 +809,99 @@ mod tests {
         assert!(matches!(&body[5], Stmt::Call { args, .. } if args.is_empty()));
         assert!(matches!(&body[0], Stmt::Store { .. }));
         assert!(matches!(&body[2], Stmt::Store { .. }));
+    }
+
+    fn pushed_call_with_target_load(target_register: &str) -> Vec<Stmt> {
+        let push = |value| {
+            [
+                Stmt::Assign {
+                    dst: reg("rsp"),
+                    src: Expr::Bin {
+                        op: BinOp::Sub,
+                        lhs: Box::new(Expr::Reg(reg("rsp"))),
+                        rhs: Box::new(Expr::Const(4)),
+                    },
+                },
+                stack_store_at(0, value),
+            ]
+        };
+        let mut body = vec![Stmt::Assign {
+            dst: reg("rsp"),
+            src: Expr::Bin {
+                op: BinOp::Sub,
+                lhs: Box::new(Expr::Reg(reg("rsp"))),
+                rhs: Box::new(Expr::Const(4)),
+            },
+        }];
+        body.extend(push(3));
+        body.extend(push(2));
+        body.extend(push(1));
+        body.push(Stmt::Assign {
+            dst: reg(target_register),
+            src: Expr::Deref {
+                addr: Box::new(Expr::Lea {
+                    base: Some(reg("rsp")),
+                    index: None,
+                    scale: 1,
+                    disp: 28,
+                    segment: None,
+                }),
+                size: 4,
+            },
+        });
+        body.push(Stmt::Call {
+            target: Expr::Deref {
+                addr: Box::new(Expr::Lea {
+                    base: Some(reg("eax")),
+                    index: Some(reg("ecx")),
+                    scale: 4,
+                    disp: 0,
+                    segment: None,
+                }),
+                size: 4,
+            },
+            args: Vec::new(),
+            dst: None,
+            call_spec: None,
+        });
+        body.push(Stmt::Assign {
+            dst: reg("rsp"),
+            src: Expr::Bin {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Reg(reg("rsp"))),
+                rhs: Box::new(Expr::Const(16)),
+            },
+        });
+        body
+    }
+
+    #[test]
+    fn cdecl_call_recovers_pushes_across_its_exact_target_load() {
+        let mut body = pushed_call_with_target_load("eax");
+
+        fold_one_cdecl32_call(&mut body, 8, None);
+
+        let Stmt::Call { args, .. } = body[3].semantic() else {
+            panic!("expected pushes to fold across the target load: {body:#?}")
+        };
+        assert_eq!(args, &vec![Expr::Const(1), Expr::Const(2), Expr::Const(3)]);
+        let Stmt::Assign {
+            src: Expr::Deref { addr, .. },
+            ..
+        } = body[1].semantic()
+        else {
+            panic!("target load disappeared: {body:#?}")
+        };
+        assert!(matches!(addr.semantic(), Expr::Lea { disp: 16, .. }));
+    }
+
+    #[test]
+    fn cdecl_call_rejects_an_unrelated_intervening_load() {
+        let mut body = pushed_call_with_target_load("edx");
+
+        fold_one_cdecl32_call(&mut body, 8, None);
+
+        assert!(matches!(&body[8], Stmt::Call { args, .. } if args.is_empty()));
     }
 
     #[test]
