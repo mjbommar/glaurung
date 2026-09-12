@@ -38,12 +38,20 @@ pub(crate) fn materialize_direct_output_with_identities(
     materialize_direct_output_with_live_in(function, None, &|value| {
         identities.is_result_role(value)
             || identities.candidates(value).is_some_and(|candidates| {
-                !candidates.is_empty()
+                let mut has_preferred_storage = false;
+                let all_result_storage = !candidates.is_empty()
                     && candidates.iter().all(|identity| {
-                        identity
-                            .canonical_physical_base()
-                            .is_some_and(is_projected_result_register)
-                    })
+                        let Some(base) = identity.canonical_physical_base() else {
+                            return false;
+                        };
+                        if is_projected_result_register(base) {
+                            has_preferred_storage = true;
+                            true
+                        } else {
+                            is_fallback_result_register(base)
+                        }
+                    });
+                all_result_storage && has_preferred_storage
             })
     });
 }
@@ -1133,6 +1141,13 @@ mod tests {
             SsaValue {
                 base: VReg::phys("rax"),
                 version: 2,
+            },
+        );
+        identities.record(
+            call_result.clone(),
+            SsaValue {
+                base: VReg::phys("xmm0"),
+                version: 3,
             },
         );
         let mut function = Function {
