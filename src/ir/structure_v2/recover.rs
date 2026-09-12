@@ -479,45 +479,9 @@ impl TreeBuilder<'_> {
                 let mut regions = Vec::with_capacity(exits.len());
                 for target in exits {
                     if Some(target) != join {
-                        // A sibling path outside the loop may already own an
-                        // exit target when the enclosing conditional has no
-                        // common post-dominator.  Reuse only a clone that the
-                        // bounded tail planner proved for this exact loop-exit
-                        // predecessor.  An empty continuation would silently
-                        // turn the typed `Break` into a fall off the function.
-                        let region = if self.owned.get(target).copied().unwrap_or(false) {
-                            let (from, transfer) = loop_info
-                                .exits
-                                .iter()
-                                .filter(|(_, to)| *to == target)
-                                .find_map(|(from, _)| {
-                                    self.candidate_block(*from)?
-                                        .transfers
-                                        .iter()
-                                        .find(|transfer| transfer_target(transfer) == target)
-                                        .map(|transfer| (*from, transfer.clone()))
-                                })?;
-                            if let Some(tail) = self.duplicated_tails.iter().find(|tail| {
-                                tail.source_block == target && tail.cloned_at_predecessor == from
-                            }) {
-                                StructuredRegion::DuplicatedReturn {
-                                    source_block: target,
-                                    blocks: tail.blocks.clone(),
-                                    cloned_at_predecessor: tail.cloned_at_predecessor,
-                                }
-                            } else {
-                                StructuredRegion::SharedGoto {
-                                    from,
-                                    to: target,
-                                    taken: transfer_taken(&transfer),
-                                }
-                            }
-                        } else {
-                            self.build(target, join)?
-                        };
                         regions.push(LoopExitRegion {
                             target,
-                            region: Box::new(region),
+                            region: Box::new(self.build_loop_exit_path(loop_info, target, join)?),
                         });
                     }
                 }
@@ -531,9 +495,54 @@ impl TreeBuilder<'_> {
             exits: exit_regions,
         };
         if let Some(continuation) = continuation {
-            Some(sequence([loop_region, self.build(continuation, stop)?]))
+            Some(sequence([
+                loop_region,
+                self.build_loop_exit_path(loop_info, continuation, stop)?,
+            ]))
         } else {
             Some(loop_region)
+        }
+    }
+
+    /// Build one path beyond a loop without stealing an existing sibling's
+    /// continuation. A proved bounded return clone is preferred; otherwise an
+    /// explicit shared goto keeps the already-owned target single-owned.
+    fn build_loop_exit_path(
+        &mut self,
+        loop_info: &LoopInfo,
+        target: usize,
+        stop: Option<usize>,
+    ) -> Option<StructuredRegion> {
+        if !self.owned.get(target).copied().unwrap_or(false) {
+            return self.build(target, stop);
+        }
+        let (from, transfer) = loop_info
+            .exits
+            .iter()
+            .filter(|(_, to)| *to == target)
+            .find_map(|(from, _)| {
+                self.candidate_block(*from)?
+                    .transfers
+                    .iter()
+                    .find(|transfer| transfer_target(transfer) == target)
+                    .map(|transfer| (*from, transfer.clone()))
+            })?;
+        if let Some(tail) = self
+            .duplicated_tails
+            .iter()
+            .find(|tail| tail.source_block == target && tail.cloned_at_predecessor == from)
+        {
+            Some(StructuredRegion::DuplicatedReturn {
+                source_block: target,
+                blocks: tail.blocks.clone(),
+                cloned_at_predecessor: tail.cloned_at_predecessor,
+            })
+        } else {
+            Some(StructuredRegion::SharedGoto {
+                from,
+                to: target,
+                taken: transfer_taken(&transfer),
+            })
         }
     }
 
@@ -625,7 +634,15 @@ impl TreeBuilder<'_> {
         // Preserve an immediate post-dominator that is also the enclosing
         // stop: both arms must stop before it even though this conditional
         // must not emit the shared continuation a second time.
-        let join = self.cfg.immediate_postdominator(block);
+        let join = self.cfg.immediate_postdominator(block).filter(|join| {
+            self.active_loops.last().is_none_or(|header| {
+                *join != *header
+                    && self
+                        .loops
+                        .by_header(*header)
+                        .is_some_and(|loop_info| loop_info.blocks.contains(join))
+            })
+        });
         let snapshot = self.owned.clone();
         let then_region = self.build_tree_transfer(block, taken, join);
         let else_region = self.build_tree_transfer(block, other, join);

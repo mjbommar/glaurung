@@ -162,7 +162,11 @@ def test_verified_shadow_switch_spells_its_adjacent_join_as_break() -> None:
 def test_shadow_loop_switches_with_shared_exits_round_trip() -> None:
     """Sibling-owned returns must retain their proved loop-exit clones."""
     exports = D.exported_functions(str(RETURNING_ARM_CLANG_O2))
-    functions = {"fsm_returns_from_arm", "two_returning_arms"}
+    functions = {
+        "fsm_returns_from_arm",
+        "nested_loop_returning_arm",
+        "two_returning_arms",
+    }
     rows = g.ir.decompile_many(
         str(RETURNING_ARM_CLANG_O2),
         [exports[name] for name in sorted(functions)],
