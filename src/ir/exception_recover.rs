@@ -1447,11 +1447,14 @@ mod tests {
             matches!(
                 then_body.last(),
                 Some(Stmt::Throw {
-                    value: Expr::Cast { expr, .. }
-                }) if matches!(expr.as_ref(), Expr::Cast { expr, .. }
-                    if expr.as_ref() == &Expr::Reg(VReg::phys("arg0")))
+                    value: Expr::Cast {
+                        signed: true,
+                        width: 4,
+                        expr,
+                    }
+                }) if expr.as_ref() == &Expr::Reg(VReg::phys("arg0"))
             ),
-            "the throw value must survive removal of its SSA chain: {then_body:#?}"
+            "the stored four-byte int must survive removal of its SSA chain: {then_body:#?}"
         );
     }
 
