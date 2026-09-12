@@ -163,14 +163,25 @@ impl EnclosingSlots {
                 let Some(candidates) = identities.candidates(dst) else {
                     return;
                 };
-                let bases = candidates
+                let classified_bases = candidates
                     .iter()
-                    .filter_map(|identity| identity.canonical_physical_base())
+                    .map(|identity| identity.canonical_physical_base())
                     .collect::<Vec<_>>();
-                if bases.len() != candidates.len() {
+                if classified_bases.iter().all(Option::is_none)
+                    && candidates
+                        .iter()
+                        .all(|identity| !matches!(identity.base, VReg::Phys(_)))
+                {
+                    // A compiler temporary has no ABI storage role and cannot
+                    // invalidate a reaching argument merely because it sits
+                    // between that argument's setup and a nested call.
+                    return;
+                }
+                if classified_bases.iter().any(Option::is_none) {
                     reaching.iter_mut().for_each(|slot| *slot = None);
                     return;
                 }
+                let bases = classified_bases.into_iter().flatten().collect::<Vec<_>>();
 
                 let lane_slots = bases
                     .iter()

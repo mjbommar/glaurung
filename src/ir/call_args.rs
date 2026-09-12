@@ -6872,6 +6872,13 @@ mod tests {
                 version: 1,
             },
         );
+        identities.record(
+            reg("compiler_temporary"),
+            crate::ir::ssa::SsaValue {
+                base: VReg::Temp(30),
+                version: 0,
+            },
+        );
         let definition = |dst| Stmt::Assign {
             dst: reg(dst),
             src: Expr::Const(7),
@@ -6904,6 +6911,15 @@ mod tests {
             Some(&identities),
         );
         assert!(malformed.iter().all(Option::is_none));
+
+        let mut unrelated = stale();
+        EnclosingSlots::advance_reaching(
+            &mut unrelated,
+            &definition("compiler_temporary"),
+            CallConv::SysVAmd64,
+            Some(&identities),
+        );
+        assert_eq!(unrelated, stale());
     }
 
     #[test]
