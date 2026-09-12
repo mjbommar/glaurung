@@ -23,21 +23,14 @@ pub(crate) fn fold_latched_predicates(function: &mut Function) {
 }
 
 /// Coalesce a dead source identity with the loop carrier it initializes.
-pub(crate) fn coalesce_loop_entry_copies(
-    function: &mut Function,
-    protected: &std::collections::HashSet<String>,
-    types: &mut crate::ir::types_recover::TypeMap,
-) {
-    let _ = coalesce_loop_entry_copies_with_identities(function, protected, types, None);
-}
-
-/// As [`coalesce_loop_entry_copies`], with opaque SSA identities projected
-/// into the AST's current role-name key space.
+///
+/// Eligibility comes only from the pipeline-owned SSA sidecar. Display
+/// spellings such as `var3` are presentation and never authorize a rewrite.
 pub(crate) fn coalesce_loop_entry_copies_with_identities(
     function: &mut Function,
     protected: &std::collections::HashSet<String>,
     types: &mut crate::ir::types_recover::TypeMap,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) -> std::collections::HashMap<VReg, VReg> {
     // Lexical nesting is not a region boundary when a goto can enter a sibling
     // body or an indirect transfer can target any surviving label. A recursive
@@ -234,7 +227,7 @@ fn coalesce_body(
     body: &mut Vec<Stmt>,
     protected: &std::collections::HashSet<String>,
     types: &mut crate::ir::types_recover::TypeMap,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
     renames: &mut std::collections::HashMap<VReg, VReg>,
 ) {
     for statement in body.iter_mut() {
@@ -408,12 +401,9 @@ fn statement_contains_goto(statement: &Stmt) -> bool {
 
 fn coalescible_value_role(
     register: &VReg,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) -> bool {
-    if let Some(identities) = identities {
-        return identities.unambiguous_physical_base(register).is_some();
-    }
-    matches!(register, VReg::Phys(name) if name.strip_prefix("var").is_some_and(|tail| !tail.is_empty() && tail.chars().all(|ch| ch.is_ascii_digit())))
+    identities.unambiguous_physical_base(register).is_some()
 }
 
 fn protected_register(register: &VReg, protected: &std::collections::HashSet<String>) -> bool {

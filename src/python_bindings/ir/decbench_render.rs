@@ -308,7 +308,7 @@ fn decbench_text_with_installed_environment(
                 &mut prepared,
                 &protected_locals,
                 tm,
-                Some(&value_identities),
+                &value_identities,
             );
             value_identities.apply_renames(&renames);
         });

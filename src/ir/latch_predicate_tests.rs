@@ -10,6 +10,20 @@ fn read(name: &str) -> Expr {
     Expr::Reg(reg(name))
 }
 
+fn exact_identities(names: &[&str]) -> crate::ir::value_number::ValueIdentities {
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
+    for (index, name) in names.iter().enumerate() {
+        identities.record(
+            reg(name),
+            crate::ir::ssa::SsaValue {
+                base: reg("rax"),
+                version: u32::try_from(index + 1).expect("small test identity set"),
+            },
+        );
+    }
+    identities
+}
+
 fn opaque_carrier_candidate() -> (Function, VReg, VReg) {
     let seed = reg("opaque-seed");
     let carrier = reg("opaque-carrier");
@@ -231,7 +245,14 @@ fn coalesces_dead_source_identity_with_immediately_entered_loop_carrier() {
         },
     );
 
-    coalesce_loop_entry_copies(&mut function, &std::collections::HashSet::new(), &mut types);
+    let mut identities = exact_identities(&["var3", "var5"]);
+    let renames = coalesce_loop_entry_copies_with_identities(
+        &mut function,
+        &std::collections::HashSet::new(),
+        &mut types,
+        &identities,
+    );
+    identities.apply_renames(&renames);
 
     assert_eq!(function.body.len(), 3, "entry copy should be removed");
     let text = crate::ir::ast::render(&function);
@@ -277,7 +298,7 @@ fn opaque_exact_identities_authorize_loop_entry_coalescing() {
         &mut function,
         &std::collections::HashSet::new(),
         &mut types,
-        Some(&identities),
+        &identities,
     );
     identities.apply_renames(&renames);
 
@@ -331,7 +352,7 @@ fn coalesced_same_storage_identity_authorizes_loop_entry_coalescing() {
         &mut function,
         &std::collections::HashSet::new(),
         &mut types,
-        Some(&identities),
+        &identities,
     );
 
     assert_eq!(renames.get(&seed), Some(&carrier));
@@ -377,7 +398,7 @@ fn ambiguous_opaque_identity_keeps_loop_entry_copy() {
         &mut function,
         &std::collections::HashSet::new(),
         &mut types,
-        Some(&identities),
+        &identities,
     );
 
     assert_eq!(function, before, "ambiguous values must fail closed");
@@ -388,11 +409,10 @@ fn ambiguous_opaque_identity_keeps_loop_entry_copy() {
 }
 
 #[test]
-fn installed_identity_authority_does_not_fall_back_to_var_spelling() {
+fn display_spelling_without_identity_is_not_coalescible() {
     let identities = crate::ir::value_number::ValueIdentities::default();
 
-    assert!(!coalescible_value_role(&reg("var3"), Some(&identities)));
-    assert!(coalescible_value_role(&reg("var3"), None));
+    assert!(!coalescible_value_role(&reg("var3"), &identities));
 }
 
 #[test]
@@ -420,7 +440,13 @@ fn keeps_loop_entry_copy_when_source_remains_live() {
     let before = function.clone();
 
     let mut types = crate::ir::types_recover::TypeMap::default();
-    coalesce_loop_entry_copies(&mut function, &std::collections::HashSet::new(), &mut types);
+    let identities = exact_identities(&["var3", "var5"]);
+    coalesce_loop_entry_copies_with_identities(
+        &mut function,
+        &std::collections::HashSet::new(),
+        &mut types,
+        &identities,
+    );
 
     assert_eq!(function, before);
 }
@@ -451,7 +477,13 @@ fn keeps_loop_entry_copy_without_positive_type_evidence() {
     let before = function.clone();
 
     let mut types = crate::ir::types_recover::TypeMap::default();
-    coalesce_loop_entry_copies(&mut function, &std::collections::HashSet::new(), &mut types);
+    let identities = exact_identities(&["var3", "var5"]);
+    coalesce_loop_entry_copies_with_identities(
+        &mut function,
+        &std::collections::HashSet::new(),
+        &mut types,
+        &identities,
+    );
 
     assert_eq!(function, before);
 }
@@ -497,7 +529,13 @@ fn keeps_loop_carrier_live_across_a_later_backward_goto() {
         );
     }
 
-    coalesce_loop_entry_copies(&mut function, &std::collections::HashSet::new(), &mut types);
+    let identities = exact_identities(&["var6", "var32"]);
+    coalesce_loop_entry_copies_with_identities(
+        &mut function,
+        &std::collections::HashSet::new(),
+        &mut types,
+        &identities,
+    );
 
     assert_eq!(function, before);
 }
@@ -550,7 +588,13 @@ fn keeps_loop_entry_copy_when_a_sibling_region_jumps_to_its_prefix() {
         },
     );
 
-    coalesce_loop_entry_copies(&mut function, &std::collections::HashSet::new(), &mut types);
+    let identities = exact_identities(&["var3", "var5"]);
+    coalesce_loop_entry_copies_with_identities(
+        &mut function,
+        &std::collections::HashSet::new(),
+        &mut types,
+        &identities,
+    );
 
     assert_eq!(function, before);
 }
@@ -578,7 +622,8 @@ fn keeps_authoritative_source_local_identity_at_loop_entry() {
     let protected = std::collections::HashSet::from(["local_x".to_string()]);
 
     let mut types = crate::ir::types_recover::TypeMap::default();
-    coalesce_loop_entry_copies(&mut function, &protected, &mut types);
+    let identities = exact_identities(&["seed", "local_x"]);
+    coalesce_loop_entry_copies_with_identities(&mut function, &protected, &mut types, &identities);
 
     assert_eq!(function, before);
 }
