@@ -14429,7 +14429,7 @@
     "fold_operations": "pass"
   },
   "95_function_pointer_table:i386:O2": {
-    "dispatch_operation": "fail",
+    "dispatch_operation": "pass",
     "fold_operations": "pass"
   },
   "95_function_pointer_table:x86_64:O0": {

@@ -39,8 +39,18 @@ pub(super) fn fold_one_cdecl32_call(
     // what makes it safe to step over a statement sitting between the last push
     // and the call. See `proven_outgoing_cleanup`.
     let cleanup = proven_outgoing_cleanup(body, call_idx, identities);
+    // A terminal i386 jump does not push a return address. GCC may therefore
+    // write the outgoing arguments above this function's saved-register area,
+    // restore that register and ESP, and only then jump through a proven table
+    // entry. Start the ordinary store scan before that exact epilogue and make
+    // its first argument slot account for both the restored frame bytes and
+    // cdecl's conceptual return-address slot.
+    let tail_epilogue = proven_table_tail_epilogue(body, call_idx, identities);
+    let first_stack_argument = tail_epilogue
+        .map(|(_, restored)| restored.saturating_add(4))
+        .unwrap_or(0);
     let mut skipped_before_setup = 0usize;
-    let mut cursor = call_idx;
+    let mut cursor = tail_epilogue.map(|(start, _)| start).unwrap_or(call_idx);
     while cursor > 0 {
         let i = cursor - 1;
         match body[i].semantic() {
@@ -141,7 +151,7 @@ pub(super) fn fold_one_cdecl32_call(
 
     let args = if pushed_args.is_empty() {
         let mut args = Vec::new();
-        let mut expected_offset = 0i64;
+        let mut expected_offset = first_stack_argument;
         for (offset, (stmt_idx, value, size)) in by_offset {
             if offset != expected_offset {
                 break;
@@ -224,6 +234,85 @@ pub(super) fn fold_one_cdecl32_call(
             None => folded_push_adjustment(folded_bytes),
         };
         body.insert(call_idx - removed_before_call, adjustment);
+    }
+}
+
+/// Prove the lowered epilogue immediately before a terminal function-table jump.
+///
+/// This deliberately accepts one saved-register pop only: `reg = [esp]`,
+/// `esp += 4`, table call, `return eax`. Wider or non-adjacent epilogues remain
+/// explicit until their ownership can be proved independently.
+fn proven_table_tail_epilogue(
+    body: &[Stmt],
+    call_idx: usize,
+    identities: Option<&ValueIdentities>,
+) -> Option<(usize, i64)> {
+    let Stmt::Call { target, .. } = body.get(call_idx)?.semantic() else {
+        return None;
+    };
+    if !matches!(target.semantic(), Expr::FunctionTableEntry { .. })
+        || !matches!(body.get(call_idx + 1)?.semantic(), Stmt::Return {
+            value: Some(value),
+        } if matches!(value.semantic(), Expr::Reg(register)
+            // Tail-call recovery creates this unversioned RAX after the
+            // identity sidecar was built, so it intentionally has no entry in
+            // that sidecar. Accept only that exact pass-owned sentinel; lifted
+            // or versioned operands still require authoritative identity.
+            if register == &VReg::phys("rax")
+                || register_is_storage(register, "rax", identities)))
+    {
+        return None;
+    }
+    let add_index = call_idx.checked_sub(1)?;
+    let restored = stack_pointer_add_width_cdecl(body.get(add_index)?, identities)?;
+    let restore_index = add_index.checked_sub(1)?;
+    let Stmt::Assign { dst, src } = body.get(restore_index)?.semantic() else {
+        return None;
+    };
+    if register_is_storage(dst, "esp", identities) || register_is_storage(dst, "rsp", identities) {
+        return None;
+    }
+    let Expr::Deref { addr, size } = src.semantic() else {
+        return None;
+    };
+    if i64::from(*size) != restored
+        || outgoing_stack_displacement(addr, *size, identities) != Some(0)
+    {
+        return None;
+    }
+    Some((restore_index, restored))
+}
+
+fn stack_pointer_add_width_cdecl(
+    statement: &Stmt,
+    identities: Option<&ValueIdentities>,
+) -> Option<i64> {
+    let Stmt::Assign { dst, src } = statement.semantic() else {
+        return None;
+    };
+    let stack = if register_is_storage(dst, "esp", identities) {
+        "esp"
+    } else if register_is_storage(dst, "rsp", identities) {
+        "rsp"
+    } else {
+        return None;
+    };
+    let Expr::Bin {
+        op: BinOp::Add,
+        lhs,
+        rhs,
+    } = src.semantic()
+    else {
+        return None;
+    };
+    if !matches!(lhs.semantic(), Expr::Reg(base)
+        if register_is_storage(base, stack, identities))
+    {
+        return None;
+    }
+    match rhs.semantic() {
+        Expr::Const(width) if *width > 0 => Some(*width),
+        _ => None,
     }
 }
 
@@ -541,6 +630,125 @@ mod tests {
             src: Expr::Const(7),
             size: 4,
         }
+    }
+
+    fn stack_store_at(disp: i64, value: i64) -> Stmt {
+        Stmt::Store {
+            addr: Expr::Lea {
+                base: Some(reg("esp")),
+                index: None,
+                scale: 1,
+                disp,
+                segment: None,
+            },
+            src: Expr::Const(value),
+            size: 4,
+        }
+    }
+
+    fn table_call() -> Stmt {
+        Stmt::Call {
+            target: Expr::FunctionTableEntry {
+                table_va: 0x4000,
+                table_name: "operations".into(),
+                pointer_size: 4,
+                index: Box::new(Expr::Reg(reg("eax"))),
+                targets: Vec::new(),
+            },
+            args: Vec::new(),
+            dst: None,
+            call_spec: None,
+        }
+    }
+
+    fn table_tail_body() -> Vec<Stmt> {
+        vec![
+            stack_store_at(12, 22),
+            Stmt::Assign {
+                dst: reg("eax"),
+                src: Expr::FunctionTableEntry {
+                    table_va: 0x4000,
+                    table_name: "operations".into(),
+                    pointer_size: 4,
+                    index: Box::new(Expr::Reg(reg("ecx"))),
+                    targets: Vec::new(),
+                },
+            },
+            stack_store_at(8, 11),
+            Stmt::Assign {
+                dst: reg("ebx"),
+                src: Expr::Deref {
+                    addr: Box::new(Expr::Lea {
+                        base: Some(reg("esp")),
+                        index: None,
+                        scale: 1,
+                        disp: 0,
+                        segment: None,
+                    }),
+                    size: 4,
+                },
+            },
+            Stmt::Assign {
+                dst: reg("esp"),
+                src: Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Reg(reg("esp"))),
+                    rhs: Box::new(Expr::Const(4)),
+                },
+            },
+            table_call(),
+            Stmt::Return {
+                value: Some(Expr::Reg(reg("rax"))),
+            },
+        ]
+    }
+
+    #[test]
+    fn cdecl_table_tail_call_recovers_stack_arguments_across_balanced_epilogue() {
+        let mut body = table_tail_body();
+
+        fold_one_cdecl32_call(&mut body, 5, None);
+
+        let Stmt::Call { args, .. } = body[3].semantic() else {
+            panic!("expected stores to fold into the tail call: {body:#?}")
+        };
+        assert_eq!(args, &vec![Expr::Const(11), Expr::Const(22)]);
+    }
+
+    #[test]
+    fn cdecl_table_tail_call_rejects_unbalanced_epilogue() {
+        let mut body = table_tail_body();
+        let Stmt::Assign { src, .. } = body[4].semantic_mut() else {
+            unreachable!("fixture has a stack adjustment")
+        };
+        let Expr::Bin { rhs, .. } = src.semantic_mut() else {
+            unreachable!("fixture has an additive stack adjustment")
+        };
+        **rhs = Expr::Const(8);
+
+        fold_one_cdecl32_call(&mut body, 5, None);
+
+        assert!(matches!(&body[5], Stmt::Call { args, .. } if args.is_empty()));
+        assert!(matches!(&body[0], Stmt::Store { .. }));
+        assert!(matches!(&body[2], Stmt::Store { .. }));
+    }
+
+    #[test]
+    fn cdecl_non_table_tail_call_does_not_cross_the_epilogue() {
+        let mut body = table_tail_body();
+        let Stmt::Call { target, .. } = body[5].semantic_mut() else {
+            unreachable!("fixture has a call")
+        };
+        *target = Expr::Named {
+            va: 0x2000,
+            name: "callee".into(),
+        };
+
+        fold_one_cdecl32_call(&mut body, 5, None);
+
+        assert!(matches!(&body[5], Stmt::Call { args, .. } if args.is_empty()));
+        assert!(matches!(&body[0], Stmt::Store { .. }));
+        assert!(matches!(&body[2], Stmt::Store { .. }));
     }
 
     #[test]
