@@ -54,8 +54,10 @@ pub fn collapse_shared_assignment_guards(function: &mut Function) {
 /// Fuse adjacent `if (condition) { break; }` statements.
 ///
 /// The source-level disjunction preserves the original left-to-right behavior:
-/// the second condition is evaluated exactly when the first is false. Requiring
-/// exact adjacency prevents any intervening effect from being skipped.
+/// the second condition is evaluated exactly when the first is false. An
+/// assignment between the guards may be removed only when the two immediately
+/// reaching definitions prove that it copies a value already held by its
+/// destination. All other intervening statements continue to block fusion.
 pub fn collapse_adjacent_break_guards(function: &mut Function) {
     while collapse_break_one(&mut function.body) {}
 }
@@ -633,6 +635,13 @@ fn collapse_nested_return_one(body: &mut Vec<Stmt>) -> bool {
 
 fn collapse_break_one(body: &mut Vec<Stmt>) -> bool {
     for index in 0..body.len() {
+        if let Some(reaching_dst) = redundant_copy_between_break_guards(body, index) {
+            if let Some(origins) = copy_origins(&body[index + 1]) {
+                body[reaching_dst].merge_origins(&origins);
+            }
+            body.remove(index + 1);
+            return true;
+        }
         if index + 1 < body.len() {
             let left = break_guard_condition(&body[index]);
             let right = break_guard_condition(&body[index + 1]);
@@ -686,6 +695,73 @@ fn collapse_break_one(body: &mut Vec<Stmt>) -> bool {
         }
     }
     false
+}
+
+/// Prove that `guard; dst = carrier; guard` contains a redundant copy.
+///
+/// The two statements immediately before the first guard must define `dst`
+/// and `carrier` from the same stable value. The value may contain only cast
+/// shells around a register or constant and may not read either destination,
+/// so statement order cannot make the definitions disagree. The first guard
+/// must also be side-effect-free. This is an exact local reaching-definition
+/// proof; it does not infer equivalence from rendered variable names.
+fn redundant_copy_between_break_guards(body: &[Stmt], guard_index: usize) -> Option<usize> {
+    if guard_index < 2 || guard_index + 2 >= body.len() {
+        return None;
+    }
+    let first_condition = break_guard_condition(&body[guard_index])?;
+    break_guard_condition(&body[guard_index + 2])?;
+    if !is_short_circuit_safe_boolean(&first_condition) {
+        return None;
+    }
+    let Stmt::Assign {
+        dst: duplicate_dst,
+        src: duplicate_src,
+    } = body[guard_index + 1].semantic()
+    else {
+        return None;
+    };
+    let Expr::Reg(carrier) = duplicate_src.semantic() else {
+        return None;
+    };
+
+    let previous = [&body[guard_index - 2], &body[guard_index - 1]];
+    let mut dst_definition = None;
+    let mut carrier_definition = None;
+    for (offset, statement) in previous.into_iter().enumerate() {
+        let Stmt::Assign { dst, src } = statement.semantic() else {
+            return None;
+        };
+        let absolute_index = guard_index - 2 + offset;
+        if dst == duplicate_dst {
+            dst_definition = Some((absolute_index, src));
+        } else if dst == carrier {
+            carrier_definition = Some(src);
+        } else {
+            return None;
+        }
+    }
+    let (dst_index, dst_value) = dst_definition?;
+    let carrier_value = carrier_definition?;
+    if dst_value.semantic() != carrier_value.semantic()
+        || !stable_independent_copy_value(dst_value, duplicate_dst, carrier)
+    {
+        return None;
+    }
+    Some(dst_index)
+}
+
+fn stable_independent_copy_value(
+    value: &Expr,
+    left: &crate::ir::types::VReg,
+    right: &crate::ir::types::VReg,
+) -> bool {
+    match value.semantic() {
+        Expr::Const(_) => true,
+        Expr::Reg(register) => register != left && register != right,
+        Expr::Cast { expr, .. } => stable_independent_copy_value(expr, left, right),
+        _ => false,
+    }
 }
 
 fn collapse_adjacent_matching_return_one(body: &mut Vec<Stmt>) -> bool {
@@ -1534,6 +1610,127 @@ mod tests {
         assert_eq!(rendered.matches(" || ").count(), 1, "{rendered}");
         assert_eq!(rendered.matches("break;").count(), 1, "{rendered}");
         assert!(rendered.contains("iteration = 1;"), "{rendered}");
+    }
+
+    #[test]
+    fn redundant_equal_value_copy_between_break_guards_is_removed() {
+        let common_value = Expr::Cast {
+            signed: false,
+            width: 4,
+            expr: Box::new(Expr::Reg(reg("next_depth"))),
+        };
+        let mut function = Function {
+            name: "bounded_descent".into(),
+            entry_va: 0x1330,
+            body: vec![Stmt::While {
+                cond: Expr::Const(1),
+                body: vec![
+                    Stmt::Assign {
+                        dst: reg("depth_carrier"),
+                        src: common_value.clone(),
+                    },
+                    Stmt::Assign {
+                        dst: reg("depth"),
+                        src: common_value,
+                    }
+                    .with_origins(OriginSet::one(0x1334)),
+                    Stmt::If {
+                        cond: Expr::Cmp {
+                            op: CmpOp::Slt,
+                            lhs: Box::new(Expr::Reg(reg("node"))),
+                            rhs: Box::new(Expr::Const(0)),
+                        },
+                        then_body: vec![Stmt::Break],
+                        else_body: None,
+                    },
+                    Stmt::Assign {
+                        dst: reg("depth"),
+                        src: Expr::Reg(reg("depth_carrier")).with_origins(OriginSet::one(0x1342)),
+                    }
+                    .with_origins(OriginSet::one(0x1340)),
+                    Stmt::If {
+                        cond: Expr::Cmp {
+                            op: CmpOp::Sle,
+                            lhs: Box::new(Expr::Reg(reg("limit"))),
+                            rhs: Box::new(Expr::Reg(reg("node"))),
+                        },
+                        then_body: vec![Stmt::Break],
+                        else_body: None,
+                    },
+                    Stmt::Assign {
+                        dst: reg("visited"),
+                        src: Expr::Const(1),
+                    },
+                ],
+            }],
+        };
+
+        super::collapse_adjacent_break_guards(&mut function);
+
+        let rendered = render_decbench(&function);
+        assert_eq!(rendered.matches("if (").count(), 1, "{rendered}");
+        assert_eq!(rendered.matches(" || ").count(), 1, "{rendered}");
+        assert_eq!(rendered.matches("break;").count(), 1, "{rendered}");
+        assert_eq!(rendered.matches("depth =").count(), 1, "{rendered}");
+        assert!(rendered.contains("visited = 1;"), "{rendered}");
+        let Stmt::While { body, .. } = function.body[0].semantic() else {
+            panic!("expected loop")
+        };
+        assert_eq!(
+            body[1]
+                .origins()
+                .expect("surviving depth definition origins")
+                .addresses(),
+            &[0x1334, 0x1340, 0x1342]
+        );
+    }
+
+    #[test]
+    fn unequal_reaching_values_keep_copy_between_break_guards() {
+        let mut function = Function {
+            name: "changed_depth".into(),
+            entry_va: 0x1360,
+            body: vec![Stmt::While {
+                cond: Expr::Const(1),
+                body: vec![
+                    Stmt::Assign {
+                        dst: reg("depth_carrier"),
+                        src: Expr::Reg(reg("next_depth")),
+                    },
+                    Stmt::Assign {
+                        dst: reg("depth"),
+                        src: Expr::Reg(reg("old_depth")),
+                    },
+                    Stmt::If {
+                        cond: Expr::Cmp {
+                            op: CmpOp::Slt,
+                            lhs: Box::new(Expr::Reg(reg("node"))),
+                            rhs: Box::new(Expr::Const(0)),
+                        },
+                        then_body: vec![Stmt::Break],
+                        else_body: None,
+                    },
+                    Stmt::Assign {
+                        dst: reg("depth"),
+                        src: Expr::Reg(reg("depth_carrier")),
+                    },
+                    Stmt::If {
+                        cond: Expr::Cmp {
+                            op: CmpOp::Sle,
+                            lhs: Box::new(Expr::Reg(reg("limit"))),
+                            rhs: Box::new(Expr::Reg(reg("node"))),
+                        },
+                        then_body: vec![Stmt::Break],
+                        else_body: None,
+                    },
+                ],
+            }],
+        };
+        let original = function.clone();
+
+        super::collapse_adjacent_break_guards(&mut function);
+
+        assert_eq!(function, original);
     }
 
     #[test]

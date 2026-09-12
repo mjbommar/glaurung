@@ -213,16 +213,6 @@ def test_optimized_bst_search_recovers_latch_and_terminal_returns(
 
 
 @pytest.mark.slow  # ty: ignore[unresolved-attribute]
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "OPEN DEFECT (Clang O2 inorder loop predicate): the inner traversal "
-        "loop retains two `break` guards because a loop-carried stack-depth "
-        "copy separates the `current < 0` and `n <= current` exits. Recover "
-        "their source-level compound predicate without moving the copy across "
-        "a path on which it is required."
-    ),
-)
 def test_optimized_bst_inorder_recovers_one_inner_loop_exit(
     optimized_bst_binary: Path,
 ) -> None:
@@ -233,6 +223,11 @@ def test_optimized_bst_inorder_recovers_one_inner_loop_exit(
     assert inorder is not None
     assert inorder.count("do {") == 2, inorder
     assert inorder.count("break;") == 1, inorder
+    break_guard = re.search(r"if \(([^{}]+)\) \{\s+break;", inorder)
+    assert break_guard is not None, inorder
+    assert "current < 0" in break_guard.group(1), inorder
+    assert "n <= current" in break_guard.group(1), inorder
+    assert " || " in break_guard.group(1), inorder
     assert "goto " not in inorder, inorder
 
 
