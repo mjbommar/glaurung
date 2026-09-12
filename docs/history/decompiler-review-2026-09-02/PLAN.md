@@ -2530,6 +2530,16 @@ provenance through lowering.
   `test_real_arm_hard_float_call_round_trip` green, removing the redundant
   `local_c`/integer-float union path and recovering the source parameter at the
   call boundary. See `results/wp3-parameter-alias-restores.md`.
+  Commit `221bfeea` closes the frame-array parameter-home expression sibling.
+  Differently attributed but semantically identical frame addresses now retain
+  the same exact storage proof, and reload discovery/rewriting traverses
+  numeric conversions and value-producing calls. The observed-red contract
+  and all eight parameter-spill tests pass. An exact clean release build
+  retains the ARM hard-float execution round trip and all 16 selected O0/O2
+  dynamic symbols/PIE Hello nodes across x86-64, AArch64, and ARMv7. The parent
+  passes the ARM control too, so this is a latent correctness repair rather
+  than an attributed fixture-output change. See
+  `results/wp3-frame-parameter-home-expression-carriers.md`.
   Commit `78b31b39` closes the next ARM32 frame-storage identity defect and
   supersedes the ineffective presentation-prefix attempt in `47c5eb0b`.
   Structural `sp` deliberately carries several SSA versions under one spelling;

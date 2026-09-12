@@ -1,7 +1,7 @@
 {
  "note": "Test files classified by what they NEED. Applied as pytest markers by python/tests/conftest.py. Regenerate with tools/gen_test_facets.py; do not hand-edit.",
  "counts": {
-  "core": 326,
+  "core": 329,
   "lfs": 114,
   "fixtures": 38,
   "toolchain": 37,
@@ -334,6 +334,9 @@
   ],
   "test_decompiler_lazy_call_select.py": [
    "toolchain"
+  ],
+  "test_decompiler_line_mappings.py": [
+   "core"
   ],
   "test_decompiler_memory_objects.py": [
    "toolchain"
@@ -1011,6 +1014,9 @@
   ],
   "test_source_dependence_joern.py": [
    "decbench"
+  ],
+  "test_source_feasibility.py": [
+   "core"
   ],
   "test_source_files.py": [
    "core"
