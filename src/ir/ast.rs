@@ -108,6 +108,7 @@ pub(crate) use return_folds::{
 #[cfg(test)]
 pub(crate) use abi_widths::refine_decbench_abi_widths;
 pub(crate) use abi_widths::refine_decbench_abi_widths_with_identities;
+#[cfg(test)]
 pub(crate) use abi_widths::refine_decbench_abi_widths_with_value_widths;
 pub(crate) use return_ctype::{
     declared_int_type, declared_int_type_with_identities, fold_typed_return_abi_extensions,

@@ -293,7 +293,7 @@ fn decbench_text_with_installed_environment(
                 &prepared,
                 tm,
                 exact_value_widths,
-                Some(&value_identities),
+                &value_identities,
             );
             crate::ir::high_variables::refine_pointer_high_variables_with_identities(
                 &prepared,
@@ -330,7 +330,7 @@ fn decbench_text_with_installed_environment(
                 &prepared,
                 tm,
                 exact_value_widths,
-                Some(&value_identities),
+                &value_identities,
             )
         );
     }

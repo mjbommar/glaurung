@@ -17,10 +17,7 @@
 //! self-contained width question over an already-built AST, and `ast.rs` is the
 //! crate's largest file.
 
-use super::{
-    is_high_variable, is_promoted_local, parse_arg_index, BinOp, CmpOp, Expr, Function, Stmt,
-    TypeHint, TypeMap, VReg,
-};
+use super::{BinOp, CmpOp, Expr, Function, Stmt, TypeHint, TypeMap, VReg};
 
 /// Correct declaration widths when the AST proves that the high half of an ABI
 /// value is semantically live. Raw-register type recovery deliberately prefers a
@@ -40,17 +37,46 @@ use super::{
 /// that a reader grepping for the live width pass cannot land on the wrong one.
 #[cfg(test)]
 pub(crate) fn refine_decbench_abi_widths(f: &Function, tm: &mut TypeMap) {
-    refine_decbench_abi_widths_with_value_widths(f, tm, None);
+    let identities = test_identities(tm);
+    refine_decbench_abi_widths_with_identities(f, tm, None, &identities);
 }
 
 /// Refine declarations after source-level preparation while retaining exact
 /// per-SSA-value width evidence from value numbering.
+#[cfg(test)]
 pub(crate) fn refine_decbench_abi_widths_with_value_widths(
     f: &Function,
     tm: &mut TypeMap,
     value_widths: Option<&std::collections::HashMap<String, u8>>,
 ) {
-    refine_decbench_abi_widths_with_identities(f, tm, value_widths, None);
+    let identities = test_identities(tm);
+    refine_decbench_abi_widths_with_identities(f, tm, value_widths, &identities);
+}
+
+#[cfg(test)]
+fn test_identities(tm: &TypeMap) -> crate::ir::value_number::ValueIdentities {
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
+    let mut promoted = Vec::new();
+    let mut parameter_slots = std::collections::HashMap::new();
+    for (index, (value, _)) in tm.iter().enumerate() {
+        let VReg::Phys(name) = value else { continue };
+        identities.record(
+            value.clone(),
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("test_value"),
+                version: index as u32 + 1,
+            },
+        );
+        if super::is_promoted_local(name) {
+            promoted.push(name.clone());
+        }
+        if let Some(slot) = super::parse_arg_index(name) {
+            parameter_slots.insert(name.clone(), slot);
+        }
+    }
+    identities.attach_promoted_stack_objects(&promoted);
+    identities.attach_promoted_stack_parameter_slots(&parameter_slots);
+    identities
 }
 
 /// Refine declarations with width and opaque SSA storage evidence.
@@ -58,7 +84,7 @@ pub(crate) fn refine_decbench_abi_widths_with_identities(
     f: &Function,
     tm: &mut TypeMap,
     value_widths: Option<&std::collections::HashMap<String, u8>>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) {
     refine_signed_comparison_operands(&f.body, tm);
 
@@ -74,10 +100,10 @@ pub(crate) fn refine_decbench_abi_widths_with_identities(
             break;
         }
     }
-    for name in required_wide.iter().filter(|name| match identities {
-        Some(identities) => identities.parameter_slot(&VReg::phys(*name)).is_some(),
-        None => parse_arg_index(name).is_some(),
-    }) {
+    for name in required_wide
+        .iter()
+        .filter(|name| identities.parameter_slot(&VReg::phys(*name)).is_some())
+    {
         tm.force_int_width(VReg::phys(name), 8);
     }
 
@@ -146,21 +172,16 @@ pub(crate) fn refine_decbench_abi_widths_with_identities(
             tm.force_int_width(VReg::phys("ret"), 8);
         }
     }
-    refine_pointer_access_widths(&f.body, tm);
+    refine_pointer_access_widths(&f.body, tm, identities);
 }
 
 fn is_width_refinement_value(
     name: &str,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) -> bool {
-    if is_high_variable(name) {
-        return true;
-    }
-    identities.is_some_and(|identities| {
-        identities
-            .unambiguous_physical_base(&VReg::phys(name))
-            .is_some()
-    })
+    identities
+        .unambiguous_physical_base(&VReg::phys(name))
+        .is_some()
 }
 
 /// Signed comparison operators carry source-level signedness evidence that is
@@ -426,10 +447,14 @@ fn expression_proven_scalar(expr: &Expr, tm: &TypeMap) -> bool {
     }
 }
 
-fn refine_pointer_access_widths(body: &[Stmt], tm: &mut TypeMap) {
+fn refine_pointer_access_widths(
+    body: &[Stmt],
+    tm: &mut TypeMap,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
     let mut observed: std::collections::HashMap<String, std::collections::BTreeSet<u8>> =
         std::collections::HashMap::new();
-    collect_pointer_accesses_body(body, tm, &mut observed);
+    collect_pointer_accesses_body(body, tm, identities, &mut observed);
     for (name, widths) in observed {
         if widths.len() == 1 {
             tm.force_pointer_width(
@@ -490,7 +515,7 @@ mod identity_tests {
             &function,
             &mut types,
             Some(&widths),
-            Some(&identities),
+            &identities,
         );
 
         assert_eq!(
@@ -523,7 +548,7 @@ mod identity_tests {
             &function,
             &mut types,
             Some(&widths),
-            Some(&identities),
+            &identities,
         );
 
         assert_eq!(
@@ -556,7 +581,7 @@ mod identity_tests {
             &function,
             &mut types,
             Some(&widths),
-            Some(&identities),
+            &identities,
         );
 
         assert!(identities.exact(&value).is_none());
@@ -606,7 +631,7 @@ mod identity_tests {
                 &std::collections::HashSet::from([0]),
             );
 
-        refine_decbench_abi_widths_with_identities(&function, &mut types, None, Some(&identities));
+        refine_decbench_abi_widths_with_identities(&function, &mut types, None, &identities);
 
         assert_eq!(
             types.get(&VReg::phys("arg0")),
@@ -623,11 +648,53 @@ mod identity_tests {
             })
         );
     }
+
+    #[test]
+    fn promoted_store_exclusion_uses_identity_not_local_spelling() {
+        let local = VReg::phys("local_looks_promoted");
+        let function = Function {
+            name: "pointer_store".into(),
+            entry_va: 0,
+            body: vec![Stmt::Store {
+                addr: Expr::Reg(local.clone()),
+                src: Expr::Const(1),
+                size: 4,
+            }],
+        };
+        let initial_types = || {
+            let mut types = TypeMap::default();
+            types.upsert_public(local.clone(), TypeHint::Pointer { pointee_width: 8 });
+            types
+        };
+
+        let mut unowned_types = initial_types();
+        refine_decbench_abi_widths_with_identities(
+            &function,
+            &mut unowned_types,
+            None,
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
+        assert_eq!(
+            unowned_types.get(&local),
+            Some(TypeHint::Pointer { pointee_width: 4 })
+        );
+
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        let local_name = "local_looks_promoted".to_string();
+        identities.attach_promoted_stack_objects([&local_name]);
+        let mut owned_types = initial_types();
+        refine_decbench_abi_widths_with_identities(&function, &mut owned_types, None, &identities);
+        assert_eq!(
+            owned_types.get(&local),
+            Some(TypeHint::Pointer { pointee_width: 8 })
+        );
+    }
 }
 
 fn collect_pointer_accesses_body(
     body: &[Stmt],
     tm: &TypeMap,
+    identities: &crate::ir::value_number::ValueIdentities,
     observed: &mut std::collections::HashMap<String, std::collections::BTreeSet<u8>>,
 ) {
     for statement in body {
@@ -636,7 +703,7 @@ fn collect_pointer_accesses_body(
                 collect_pointer_accesses_expr(src, tm, observed)
             }
             Stmt::Store { addr, src, size } => {
-                if !matches!(addr.semantic(), Expr::Reg(VReg::Phys(name)) if is_promoted_local(name))
+                if !matches!(addr.semantic(), Expr::Reg(value) if identities.is_promoted_stack_object(value))
                 {
                     record_pointer_access(addr, *size, tm, observed);
                 }
@@ -658,14 +725,14 @@ fn collect_pointer_accesses_body(
                 else_body,
             } => {
                 collect_pointer_accesses_expr(cond, tm, observed);
-                collect_pointer_accesses_body(then_body, tm, observed);
+                collect_pointer_accesses_body(then_body, tm, identities, observed);
                 if let Some(else_body) = else_body {
-                    collect_pointer_accesses_body(else_body, tm, observed);
+                    collect_pointer_accesses_body(else_body, tm, identities, observed);
                 }
             }
             Stmt::While { cond, body } | Stmt::DoWhile { cond, body } => {
                 collect_pointer_accesses_expr(cond, tm, observed);
-                collect_pointer_accesses_body(body, tm, observed);
+                collect_pointer_accesses_body(body, tm, identities, observed);
             }
             Stmt::For {
                 init,
@@ -673,10 +740,20 @@ fn collect_pointer_accesses_body(
                 step,
                 body,
             } => {
-                collect_pointer_accesses_body(std::slice::from_ref(init.as_ref()), tm, observed);
+                collect_pointer_accesses_body(
+                    std::slice::from_ref(init.as_ref()),
+                    tm,
+                    identities,
+                    observed,
+                );
                 collect_pointer_accesses_expr(cond, tm, observed);
-                collect_pointer_accesses_body(std::slice::from_ref(step.as_ref()), tm, observed);
-                collect_pointer_accesses_body(body, tm, observed);
+                collect_pointer_accesses_body(
+                    std::slice::from_ref(step.as_ref()),
+                    tm,
+                    identities,
+                    observed,
+                );
+                collect_pointer_accesses_body(body, tm, identities, observed);
             }
             Stmt::Switch {
                 discriminant,
@@ -685,10 +762,10 @@ fn collect_pointer_accesses_body(
             } => {
                 collect_pointer_accesses_expr(discriminant, tm, observed);
                 for (_, case) in cases {
-                    collect_pointer_accesses_body(case, tm, observed);
+                    collect_pointer_accesses_body(case, tm, identities, observed);
                 }
                 if let Some(default) = default {
-                    collect_pointer_accesses_body(default, tm, observed);
+                    collect_pointer_accesses_body(default, tm, identities, observed);
                 }
             }
             _ => {}
