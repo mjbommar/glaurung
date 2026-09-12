@@ -80,3 +80,23 @@ remains open. The recorded value is still point-specific and must be cleared at
 calls, transfers, joins, entry candidates, incomplete lane writes, and
 ambiguous storage. Other exact-identity consumers require their own semantic
 classification and bounded proof.
+
+## Fixture ratchet
+
+The deferred behavioral check is now closed. At exact detached source commit
+`d2ece996`, the release extension with SHA-256
+`c7b25fbedf70d1f84abec57b855fa585fa8c91d4c64ec99c6d96920ede19d37b`
+passes both previously failing `two_decrements_one_scratch` cells:
+
+```text
+81_call_argument_identity:clang:O2:two_decrements_one_scratch  pass
+81_call_argument_identity:gcc:O2:two_decrements_one_scratch    pass
+```
+
+The scoped differential reported two improvements and no regressions. The two
+corresponding entries in `baseline.json` are therefore ratcheted from `fail`
+to `pass`. Re-running the same two-cell selection against the ratchet reports
+no regressions and no pending improvements. The owning
+`enclosing_reaching_state_uses_one_authoritative_storage_slot` Rust contract
+also passes at the same source revision. No broad suite was used for this
+baseline-only closure.

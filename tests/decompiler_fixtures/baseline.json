@@ -4746,7 +4746,7 @@
   },
   "81_call_argument_identity:clang:O2": {
     "argument_sink": "pass",
-    "two_decrements_one_scratch": "fail"
+    "two_decrements_one_scratch": "pass"
   },
   "81_call_argument_identity:gcc:O0": {
     "argument_sink": "pass",
@@ -4754,7 +4754,7 @@
   },
   "81_call_argument_identity:gcc:O2": {
     "argument_sink": "pass",
-    "two_decrements_one_scratch": "fail"
+    "two_decrements_one_scratch": "pass"
   },
   "82_comma_operator:clang:O0": {
     "comma_chain": "pass",

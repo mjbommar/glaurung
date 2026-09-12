@@ -5861,6 +5861,12 @@ relevant ratchet's accepted-regression record.
    contract, three focused controls, all 130 `call_args` tests, and the exact-
    release GCC O2 effectful-select nested-call canary pass. See
    `results/wp3-coalesced-enclosing-reaching-values.md`.
+   Exact-release follow-up at `d2ece996` closes the deferred behavioral
+   evidence: both Clang and GCC O2
+   `81_call_argument_identity::two_decrements_one_scratch` cells improve from
+   fail to pass, so their two host-baseline entries are ratcheted. The scoped
+   rerun has no regressions or pending improvements; this closes that measured
+   fixture gap but not the remaining WP3 identity/parser audit.
    Commit `20364f46` then migrates shared integer declaration typing from one
    exact SSA identity to one unambiguous physical storage base. Same-carrier
    coalesced versions retain recovered narrow signedness and width, while mixed
