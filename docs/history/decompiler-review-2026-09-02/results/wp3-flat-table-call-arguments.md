@@ -247,3 +247,12 @@ selection pass without regression. Fixture 191 i386 O2 remains an execution
 failure because its indirect target and return type are still unrecovered; it
 is an output-quality improvement, not a baseline movement. No DecBench or
 Joern run was made.
+
+The required post-source-commit Python gate was started from exact source
+commit `3e4c5242` with a fresh release extension (SHA-256
+`bb76986756adf5432ddaa1d20dd2f873b8860f8316100ab0601186ad39c4495e`).
+It reached 11% and reproduced five existing failures: three static/frame stack
+definedness failures and two CLI decompile-output failures. None exercises the
+i386 fixture or cdecl call-argument path. The run was stopped once broadly red
+instead of spending the remaining gate time on an unchanged decision; it is a
+partial broad-gate attempt, not a full-green claim.
