@@ -2758,7 +2758,16 @@ provenance through lowering.
   closed regardless of spelling. The 12-lane loop slice and six
   cross-architecture O0/O2 Hello cells remain green after a fresh release
   build. See `results/wp3-loop-entry-required-identities.md`. Other product
-  consumers remain. Commit `3e302824` removes an `argN` spelling decision from
+  consumers remain. Commit `1e247c46` removes the corresponding no-sidecar
+  compatibility path and all display-name authority from prepared-AST pointer
+  refinement and its memory-object input. The production renderer must provide
+  `ValueIdentities`; ordinary values, parameters, promoted objects, trusted
+  copies, and character-pointer cursors now require explicit sidecar facts.
+  All 37 owning high-variable tests, all 11 prepared-AST memory-object tests,
+  and both directly owning release-built binary checks pass. See
+  `results/wp3-pointer-refinement-required-identities.md`. Other semantic
+  consumers and universal origin attribution remain open. Commit `3e302824`
+  removes an `argN` spelling decision from
   DWARF aggregate-field recovery: only roles seeded from the authoritative
   prototype are exempt from definition validation, so stale or fabricated
   argument spellings cannot impersonate parameters. Commit `7eeb84ca` then
