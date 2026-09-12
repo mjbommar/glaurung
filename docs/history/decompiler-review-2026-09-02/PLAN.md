@@ -411,6 +411,14 @@ failing node IDs relative to the AArch64 parent; the sole removed failure is
 the census check updated by `86d224f5`. This is triaged broadly-red evidence,
 not a release-green claim. See
 `results/wp5-i386-got-relative-switch.md`.
+Commit `144211a0` subsequently closes a WP3-origin regression in this route:
+AST switch-index fallback now reads attributed prefix assignments through
+their semantic carrier instead of emitting an undeclared synthetic
+discriminant. The exact two fixture functions and their owning i386 O2 pytest
+pass after a release rebuild. See
+`results/wp3-wp5-attributed-switch-index.md`. This is one bounded WP3 consumer
+migration and restores the proved WP5 behavior; it is not completion of either
+work package.
 The following ARMv7 A32 slice is landed at `76cce5d1` and hardened at
 `5ef0bcb9`. Exact PC-relative literal materialisation, unsigned byte-table
 decode, and `add pc, pc, rOffset, lsl #2` semantics recover nine O2 switch
