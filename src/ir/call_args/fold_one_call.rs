@@ -50,6 +50,16 @@ pub(super) fn fold_one_call(
     string_pool: &std::collections::HashMap<u64, String>,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
+    // A previous semantic stage may already have materialised exact call
+    // operands (currently the pre-SSA relocation-proven table analysis). The
+    // local backward scanner has less information and must never replace that
+    // complete list with whichever adjacent prefix happens to remain.
+    if matches!(
+        body[call_idx].semantic(),
+        Stmt::Call { args, .. } if !args.is_empty()
+    ) {
+        return;
+    }
     let incoming_overrides = enclosing.overrides.as_slice();
     let format_proven_arity = format_proven_arity(body, call_idx, arch, string_pool);
     if arch == CallConv::Cdecl32 {

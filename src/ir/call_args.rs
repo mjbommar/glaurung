@@ -6946,6 +6946,33 @@ mod tests {
     }
 
     #[test]
+    fn materialized_call_arguments_outrank_the_local_backward_scan() {
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("rdi"),
+                    src: Expr::Const(9),
+                },
+                Stmt::Call {
+                    target: Expr::Reg(VReg::Temp(0)),
+                    args: vec![Expr::Const(7), Expr::Const(8)],
+                    dst: None,
+                    call_spec: None,
+                },
+            ],
+        };
+
+        reconstruct_args(&mut f, CallConv::SysVAmd64);
+
+        assert!(matches!(
+            f.body[1].semantic(),
+            Stmt::Call { args, .. } if args == &[Expr::Const(7), Expr::Const(8)]
+        ));
+    }
+
+    #[test]
     fn a_later_call_clobbers_the_register_so_the_earlier_result_is_unread() {
         let mut f = Function {
             name: "f".into(),
