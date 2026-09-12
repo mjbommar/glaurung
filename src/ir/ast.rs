@@ -7457,6 +7457,79 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn authoritative_integer_local_keeps_attributed_compound_assignment() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let sum = VReg::phys("var0");
+        let f = Function {
+            name: "accumulate".to_string(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: sum.clone(),
+                    src: Expr::Const(0),
+                },
+                Stmt::Assign {
+                    dst: sum.clone(),
+                    src: Expr::Bin {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Reg(sum).with_origins(OriginSet::one(0x1010))),
+                        rhs: Box::new(Expr::Const(2).with_origins(OriginSet::one(0x1014))),
+                    }
+                    .with_origins(OriginSet::one(0x1018)),
+                },
+            ],
+        };
+
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            VReg::phys("var0"),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+        let text = render_decbench_typed(&f, Some(&types), None);
+
+        assert!(text.contains("var0 += 2;"), "{text}");
+    }
+
+    #[test]
+    fn attributed_global_unit_update_keeps_increment_syntax() {
+        let address = 0x2000;
+        let f = Function {
+            name: "increment_global".to_string(),
+            entry_va: 0x1000,
+            body: vec![Stmt::Store {
+                addr: Expr::Addr(address),
+                src: Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(
+                        Expr::Deref {
+                            addr: Box::new(
+                                Expr::Addr(address).with_origins(OriginSet::one(0x1010)),
+                            ),
+                            size: 4,
+                        }
+                        .with_origins(OriginSet::one(0x1014)),
+                    ),
+                    rhs: Box::new(Expr::Const(1).with_origins(OriginSet::one(0x1018))),
+                }
+                .with_origins(OriginSet::one(0x101c)),
+                size: 4,
+            }],
+        };
+        install_dec_global_names(crate::ir::data_symbols::DataSymbols::from_entries([(
+            address, 4, "counter",
+        )]));
+
+        let text = render_decbench(&f);
+        clear_dec_global_names();
+
+        assert!(text.contains("counter++;"), "{text}");
+    }
+
+    #[test]
     fn opaque_aggregate_pointer_does_not_guess_c_pointee_scaling() {
         use crate::debug::dwarf::{DwarfType, DwarfTypeKind};
         use crate::ir::types_recover::{RecoveredOutputKind, TypeHint, TypeMap};

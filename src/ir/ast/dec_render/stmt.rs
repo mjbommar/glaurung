@@ -117,18 +117,25 @@ fn write_control_condition_dec(condition: &Expr, out: &mut String) {
 fn write_int_compound_assignment_dec(dst: &VReg, src: &Expr, out: &mut String) -> bool {
     fn strip_casts(mut value: &Expr) -> (&Expr, u8) {
         let mut widest_cast = 0;
-        while let Expr::Cast { width, expr, .. } = value {
+        loop {
+            value = value.semantic();
+            let Expr::Cast { width, expr, .. } = value else {
+                return (value, widest_cast);
+            };
             widest_cast = widest_cast.max(*width);
             value = expr;
         }
-        (value, widest_cast)
     }
 
     let mut src = src;
-    while let Expr::Cast {
-        width: 4 | 8, expr, ..
-    } = src
-    {
+    loop {
+        src = src.semantic();
+        let Expr::Cast {
+            width: 4 | 8, expr, ..
+        } = src
+        else {
+            break;
+        };
         src = expr;
     }
     let Expr::Bin { op, lhs, rhs } = src else {
@@ -164,7 +171,7 @@ fn write_int_compound_assignment_dec(dst: &VReg, src: &Expr, out: &mut String) -
     // converts the result back to the lvalue type. A widening cast on only the
     // left operand is removable only when the right operand proves arithmetic
     // at that same width. Retain the established GCC narrow-view shape too.
-    let other = match other {
+    let other = match other.semantic() {
         Expr::Cast {
             signed: false,
             width: 4,
@@ -186,10 +193,13 @@ fn write_int_compound_assignment_dec(dst: &VReg, src: &Expr, out: &mut String) -
 /// operation's storage width.
 fn write_global_unit_step_dec(address: u64, src: &Expr, out: &mut String) -> bool {
     fn without_casts(mut expression: &Expr) -> &Expr {
-        while let Expr::Cast { expr, .. } = expression {
+        loop {
+            expression = expression.semantic();
+            let Expr::Cast { expr, .. } = expression else {
+                return expression;
+            };
             expression = expr;
         }
-        expression
     }
 
     let Expr::Bin { op, lhs, rhs } = without_casts(src) else {
