@@ -37,9 +37,14 @@ pub(crate) fn materialize_direct_output_with_identities(
 ) {
     materialize_direct_output_with_live_in(function, None, &|value| {
         identities.is_result_role(value)
-            || identities
-                .unambiguous_physical_base(value)
-                .is_some_and(is_projected_result_register)
+            || identities.candidates(value).is_some_and(|candidates| {
+                !candidates.is_empty()
+                    && candidates.iter().all(|identity| {
+                        identity
+                            .canonical_physical_base()
+                            .is_some_and(is_projected_result_register)
+                    })
+            })
     });
 }
 
