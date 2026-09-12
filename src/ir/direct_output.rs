@@ -36,24 +36,31 @@ pub(crate) fn materialize_direct_output_with_identities(
     identities: &crate::ir::value_number::ValueIdentities,
 ) {
     materialize_direct_output_with_live_in(function, None, &|value| {
-        identities.is_result_role(value)
-            || identities.candidates(value).is_some_and(|candidates| {
-                let mut has_preferred_storage = false;
-                let all_result_storage = !candidates.is_empty()
-                    && candidates.iter().all(|identity| {
-                        let Some(base) = identity.canonical_physical_base() else {
-                            return false;
-                        };
-                        if is_projected_result_register(base) {
-                            has_preferred_storage = true;
-                            true
-                        } else {
-                            is_fallback_result_register(base)
-                        }
-                    });
-                all_result_storage && has_preferred_storage
-            })
+        identity_is_result_storage(identities, value)
     });
+}
+
+fn identity_is_result_storage(
+    identities: &crate::ir::value_number::ValueIdentities,
+    value: &VReg,
+) -> bool {
+    identities.is_result_role(value)
+        || identities.candidates(value).is_some_and(|candidates| {
+            let mut has_preferred_storage = false;
+            let all_result_storage = !candidates.is_empty()
+                && candidates.iter().all(|identity| {
+                    let Some(base) = identity.canonical_physical_base() else {
+                        return false;
+                    };
+                    if is_projected_result_register(base) {
+                        has_preferred_storage = true;
+                        true
+                    } else {
+                        is_fallback_result_register(base)
+                    }
+                });
+            all_result_storage && has_preferred_storage
+        })
 }
 
 /// Project a prototype-proven direct output, including identity functions whose
@@ -62,6 +69,7 @@ pub(crate) fn materialize_prototype_output(
     function: &mut Function,
     cc: CallConv,
     prototype: Option<&RecoveredPrototype>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
     let live_in_result = prototype.and_then(|prototype| {
         if prototype.output_kind() != RecoveredOutputKind::Direct
@@ -86,7 +94,9 @@ pub(crate) fn materialize_prototype_output(
         live_in_result.filter(|_| !body_writes_abi_return_storage(&function.body, cc));
     // This pass runs before role naming. A literal `ret` here may be a source
     // or debug spelling and is not evidence of machine result storage.
-    materialize_direct_output_with_live_in(function, live_in_result, &|_| false);
+    materialize_direct_output_with_live_in(function, live_in_result, &|value| {
+        identities.is_some_and(|identities| identity_is_result_storage(identities, value))
+    });
 }
 
 fn body_writes_abi_return_storage(body: &[Stmt], cc: CallConv) -> bool {
@@ -911,7 +921,7 @@ mod tests {
         prototype.apply_locked_output(RecoveredOutputKind::Direct, Some(int32()));
         let mut function = bare_return_function();
 
-        materialize_prototype_output(&mut function, CallConv::Aarch64, Some(&prototype));
+        materialize_prototype_output(&mut function, CallConv::Aarch64, Some(&prototype), None);
 
         assert_eq!(
             function.body,
@@ -1011,7 +1021,7 @@ mod tests {
         let mut prototype = RecoveredPrototype::default();
         prototype.apply_locked_parameters(CallConv::SysVAmd64, &[Some(int32())]);
         prototype.apply_locked_output(RecoveredOutputKind::Direct, Some(int32()));
-        materialize_prototype_output(&mut function, CallConv::SysVAmd64, Some(&prototype));
+        materialize_prototype_output(&mut function, CallConv::SysVAmd64, Some(&prototype), None);
         assert_eq!(
             function,
             bare_return_function(),
@@ -1032,7 +1042,12 @@ mod tests {
                 Stmt::Return { value: None },
             ],
         };
-        materialize_prototype_output(&mut written_version, CallConv::Aarch64, Some(&aarch64));
+        materialize_prototype_output(
+            &mut written_version,
+            CallConv::Aarch64,
+            Some(&aarch64),
+            None,
+        );
         assert_eq!(
             written_version.body.last(),
             Some(&Stmt::Return { value: None }),
@@ -1057,7 +1072,7 @@ mod tests {
             ],
         };
 
-        materialize_prototype_output(&mut function, CallConv::Aarch64, Some(&prototype));
+        materialize_prototype_output(&mut function, CallConv::Aarch64, Some(&prototype), None);
 
         assert_eq!(
             function.body.last(),
@@ -1175,6 +1190,72 @@ mod tests {
         };
 
         materialize_direct_output_with_identities(&mut function, &identities);
+
+        assert_eq!(
+            function.body.last(),
+            Some(&Stmt::Return {
+                value: Some(Expr::Reg(call_result)),
+            })
+        );
+    }
+
+    #[test]
+    fn prototype_output_uses_cross_bank_call_result_identity() {
+        let incoming = VReg::phys("rax");
+        let call_result = VReg::phys("rax#2");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            incoming.clone(),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 0,
+            },
+        );
+        identities.record(
+            call_result.clone(),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 2,
+            },
+        );
+        identities.record(
+            call_result.clone(),
+            SsaValue {
+                base: VReg::phys("xmm0"),
+                version: 3,
+            },
+        );
+        let mut prototype = RecoveredPrototype::default();
+        prototype.apply_locked_output(
+            RecoveredOutputKind::Direct,
+            Some(TypeHint::Float { width: 8 }),
+        );
+        let mut function = Function {
+            name: "forward_double_call".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: incoming,
+                    src: Expr::Reg(VReg::phys("arg0")),
+                },
+                Stmt::Assign {
+                    dst: call_result.clone(),
+                    src: Expr::Reg(VReg::phys("xmm0#call_lifetime_0")),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("xmm0"),
+                    src: Expr::Reg(call_result.clone()),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        materialize_prototype_output(
+            &mut function,
+            CallConv::SysVAmd64,
+            Some(&prototype),
+            Some(&identities),
+        );
 
         assert_eq!(
             function.body.last(),

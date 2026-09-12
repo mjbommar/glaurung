@@ -743,7 +743,12 @@ pub(super) fn run_ast_passes(
                 prototype,
                 Some(value_identities),
             );
-            crate::ir::direct_output::materialize_prototype_output(f, cc, prototype);
+            crate::ir::direct_output::materialize_prototype_output(
+                f,
+                cc,
+                prototype,
+                Some(value_identities),
+            );
             // The result register now carries the LOW eightbyte of a proven
             // two-register aggregate result. State the whole contract here,
             // while the high half's definition is still present: dead-store
