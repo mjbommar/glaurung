@@ -235,6 +235,17 @@ fn region_goto_targets(region: &Region) -> Vec<usize> {
 }
 
 fn adapt_region(region: &StructuredRegion) -> Option<Region> {
+    adapt_region_with_continuation(region, None)
+}
+
+/// Adapt a region while carrying the lexically owned continuation into its
+/// terminal control node. This matters when a branch ends in a post-tested
+/// loop whose exit is the enclosing `if` join: the join is owned outside the
+/// branch and must not be synthesized as a terminal loop tail.
+fn adapt_region_with_continuation(
+    region: &StructuredRegion,
+    continuation: Option<usize>,
+) -> Option<Region> {
     match region {
         StructuredRegion::Empty => Some(Region::Seq(Vec::new())),
         StructuredRegion::Block(block) => Some(Region::Block(block.block)),
@@ -242,7 +253,9 @@ fn adapt_region(region: &StructuredRegion) -> Option<Region> {
         StructuredRegion::DuplicatedReturn { blocks, .. } => Some(Region::Seq(
             blocks.iter().copied().map(Region::Block).collect(),
         )),
-        StructuredRegion::Sequence(regions) => adapt_sequence(regions),
+        StructuredRegion::Sequence(regions) => {
+            adapt_sequence_with_continuation(regions, continuation)
+        }
         StructuredRegion::If {
             source_block,
             then_region,
@@ -255,7 +268,7 @@ fn adapt_region(region: &StructuredRegion) -> Option<Region> {
             kind,
             body,
             exits,
-        } => adapt_loop(*header, *kind, body, exits, None),
+        } => adapt_loop(*header, *kind, body, exits, continuation),
         StructuredRegion::LocalGoto { to, .. } | StructuredRegion::SharedGoto { to, .. } => {
             Some(Region::Goto(*to))
         }
@@ -678,7 +691,10 @@ fn latch_exit(
     }
 }
 
-fn adapt_sequence(regions: &[StructuredRegion]) -> Option<Region> {
+fn adapt_sequence_with_continuation(
+    regions: &[StructuredRegion],
+    continuation: Option<usize>,
+) -> Option<Region> {
     let mut adapted = Vec::new();
     let mut index = 0usize;
     while index < regions.len() {
@@ -688,30 +704,20 @@ fn adapt_sequence(regions: &[StructuredRegion]) -> Option<Region> {
             // lower that same block, so adapting both would execute it twice.
             index += 1;
         }
+        let next = regions.get(index + 1).and_then(entry_block);
         let adapted_region = match &regions[index] {
             StructuredRegion::If {
                 source_block,
                 then_region,
                 else_region,
                 ..
-            } => adapt_if(
-                *source_block,
-                then_region,
-                else_region.as_deref(),
-                regions.get(index + 1).and_then(entry_block),
-            )?,
+            } => adapt_if(*source_block, then_region, else_region.as_deref(), next)?,
             StructuredRegion::Loop {
                 header,
                 kind,
                 body,
                 exits,
-            } => adapt_loop(
-                *header,
-                *kind,
-                body,
-                exits,
-                regions.get(index + 1).and_then(entry_block),
-            )?,
+            } => adapt_loop(*header, *kind, body, exits, next.or(continuation))?,
             StructuredRegion::Switch { .. } => adapt_switch(
                 &regions[index],
                 regions.get(index + 1).and_then(entry_block),
@@ -788,7 +794,7 @@ fn adapt_if(
     else_region: Option<&StructuredRegion>,
     join: Option<usize>,
 ) -> Option<Region> {
-    let then_r = Box::new(adapt_region(then_region)?);
+    let then_r = Box::new(adapt_region_with_continuation(then_region, join)?);
     match else_region {
         None | Some(StructuredRegion::Empty) => Some(Region::IfThen {
             cond: source_block,
@@ -799,7 +805,7 @@ fn adapt_if(
         Some(else_region) => Some(Region::IfThenElse {
             cond: source_block,
             then_r,
-            else_r: Box::new(adapt_region(else_region)?),
+            else_r: Box::new(adapt_region_with_continuation(else_region, join)?),
             join,
             invert: false,
         }),
@@ -887,6 +893,60 @@ mod tests {
         let adapted = adapt_post_tested_body(&branch, 0, &mut PostTestedFacts::default())
             .expect("an ordinary internal branch is representable");
         assert!(matches!(adapted, Region::IfThenElse { .. }));
+    }
+
+    #[test]
+    fn branch_owned_post_tested_loop_reuses_the_enclosing_join() {
+        let latch = StructuredRegion::If {
+            source_block: 2,
+            condition: crate::ir::structure_v2::ConditionId(2),
+            then_region: Box::new(StructuredRegion::Break {
+                from: 2,
+                header: 1,
+                to: 3,
+                taken: Some(true),
+            }),
+            else_region: Some(Box::new(StructuredRegion::Continue {
+                from: 2,
+                header: 1,
+                taken: Some(false),
+            })),
+        };
+        let branch = StructuredRegion::Sequence(vec![
+            StructuredRegion::If {
+                source_block: 0,
+                condition: crate::ir::structure_v2::ConditionId(0),
+                then_region: Box::new(StructuredRegion::Loop {
+                    header: 1,
+                    kind: LoopKind::PostTested,
+                    body: Box::new(latch),
+                    exits: Vec::new(),
+                }),
+                else_region: Some(Box::new(StructuredRegion::Block(BlockRegion {
+                    block: 4,
+                    transfers: Vec::new(),
+                    terminal: None,
+                }))),
+            },
+            StructuredRegion::Block(BlockRegion {
+                block: 3,
+                transfers: Vec::new(),
+                terminal: None,
+            }),
+        ]);
+
+        let Some(Region::Seq(parts)) = adapt_region(&branch) else {
+            panic!("branch and its post-tested loop should adapt");
+        };
+        let Region::IfThenElse { then_r, join, .. } = &parts[0] else {
+            panic!("expected the enclosing conditional");
+        };
+        assert_eq!(*join, Some(3));
+        assert!(matches!(
+            then_r.as_ref(),
+            Region::DoWhile { exit: Some(3), .. }
+        ));
+        assert_eq!(parts[1], Region::Block(3));
     }
 
     #[test]

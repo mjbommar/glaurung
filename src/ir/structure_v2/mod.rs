@@ -1485,6 +1485,25 @@ mod tests {
     }
 
     #[test]
+    fn real_all_breaking_arms_keep_their_loop_join_local() {
+        let Some(lifted) =
+            lift_real_fixture("212_loop_with_returning_arm-clang-O2.so", "all_arms_break")
+        else {
+            return;
+        };
+        let report = observe(&lifted, &compute_ssa(&lifted));
+
+        let prepared = report
+            .prepared_pseudocode
+            .as_deref()
+            .unwrap_or_else(|| panic!("all-breaking control should render: {report:#?}"));
+        assert!(prepared.contains("while ("), "{prepared}");
+        assert!(report.verification_errors.is_empty(), "{report:#?}");
+        assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
+        assert_prepared_c(&report);
+    }
+
+    #[test]
     fn real_dispatch_in_loop_o0_materializes_switch_exit_paths() {
         for binary in [
             "206_aarch64_wide_dispatch-clang-O0.so",
