@@ -322,7 +322,9 @@ fn expr_mentions_slot(e: &Expr, slot: &str) -> bool {
                 || expr_mentions_slot(if_false, slot)
         }
         Expr::Un { src, .. } => expr_mentions_slot(src, slot),
-        Expr::Cast { expr, .. } => expr_mentions_slot(expr, slot),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+            expr_mentions_slot(expr, slot)
+        }
         Expr::Deref { addr, .. } => expr_mentions_slot(addr, slot),
         Expr::FunctionTableEntry { index, .. } => expr_mentions_slot(index, slot),
         Expr::WideArithmetic { args, .. } => args.iter().any(|arg| expr_mentions_slot(arg, slot)),
@@ -354,7 +356,9 @@ fn expr_mentions_canary_marker(e: &Expr) -> bool {
                 || expr_mentions_canary_marker(if_false)
         }
         Expr::Un { src, .. } => expr_mentions_canary_marker(src),
-        Expr::Cast { expr, .. } => expr_mentions_canary_marker(expr),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => {
+            expr_mentions_canary_marker(expr)
+        }
         Expr::Deref { addr, .. } => expr_mentions_canary_marker(addr),
         Expr::FunctionTableEntry { index, .. } => expr_mentions_canary_marker(index),
         Expr::WideArithmetic { args, .. } => args.iter().any(expr_mentions_canary_marker),
@@ -379,7 +383,7 @@ fn expr_mentions_guard(e: &Expr) -> bool {
                 || expr_mentions_guard(if_false)
         }
         Expr::Un { src, .. } => expr_mentions_guard(src),
-        Expr::Cast { expr, .. } => expr_mentions_guard(expr),
+        Expr::Cast { expr, .. } | Expr::NumericConvert { expr, .. } => expr_mentions_guard(expr),
         Expr::Deref { addr, .. } => expr_mentions_guard(addr),
         _ => false,
     }
@@ -906,7 +910,7 @@ fn known_tls_load(addr: &Expr) -> Option<(i64, &'static str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::ast::{Expr, Function, Stmt};
+    use crate::ir::ast::{Expr, Function, ScalarType, Stmt};
     use crate::ir::types::VReg;
 
     fn lea_abs(disp: i64) -> Expr {
@@ -921,6 +925,25 @@ mod tests {
             disp,
             segment,
         }
+    }
+
+    #[test]
+    fn numeric_conversions_are_transparent_to_canary_semantic_walkers() {
+        let converted = |expr| Expr::NumericConvert {
+            from: ScalarType::SignedInt(8),
+            to: ScalarType::Float(8),
+            expr: Box::new(expr),
+        };
+
+        assert!(expr_mentions_slot(
+            &converted(Expr::Reg(VReg::phys("stack_0"))),
+            "stack_0"
+        ));
+        assert!(expr_mentions_canary_marker(&converted(Expr::Const(0x28))));
+        assert!(expr_mentions_guard(&converted(Expr::Named {
+            va: 0,
+            name: CANARY_NAME.into(),
+        })));
     }
 
     /// AArch64 reaches the guard through its GOT entry rather than through a
