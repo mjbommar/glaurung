@@ -2248,6 +2248,53 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn spill_pointer_crosses_equal_coalesced_frame_identities() {
+        let lf = mk_block(vec![
+            Op::Store {
+                addr: MemOp {
+                    base: Some(VReg::phys("store_frame")),
+                    disp: -8,
+                    size: 8,
+                    ..Default::default()
+                },
+                src: Value::Reg(VReg::phys("rdi")),
+            },
+            Op::Load {
+                dst: VReg::phys("rax"),
+                addr: MemOp {
+                    base: Some(VReg::phys("load_frame")),
+                    disp: -8,
+                    size: 8,
+                    ..Default::default()
+                },
+            },
+            Op::Load {
+                dst: VReg::phys("rcx"),
+                addr: MemOp {
+                    base: Some(VReg::phys("rax")),
+                    size: 1,
+                    ..Default::default()
+                },
+            },
+        ]);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for version in [1, 2] {
+            let identity = SsaValue {
+                base: VReg::phys("rbp"),
+                version,
+            };
+            identities.record(VReg::phys("store_frame"), identity.clone());
+            identities.record(VReg::phys("load_frame"), identity);
+        }
+
+        let types = recover_types_with_identities(&lf, &identities);
+        assert!(matches!(
+            types.get(&VReg::phys("rdi")),
+            Some(TypeHint::Pointer { .. })
+        ));
+    }
+
     fn mk_block(ops: Vec<Op>) -> LlirFunction {
         LlirFunction {
             entry_va: 0x1000,

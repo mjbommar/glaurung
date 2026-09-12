@@ -16,7 +16,7 @@
 //! `reg_width_bytes` and `int_for_reg` — stays in the parent module, as
 //! [`valued`](super::valued) documents.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use crate::ir::types::{BinOp, LlirFunction, Op, VReg, Value};
 
@@ -27,7 +27,7 @@ use super::{
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum FrameBaseIdentity {
-    Exact(crate::ir::ssa::SsaValue),
+    Attributed(BTreeSet<crate::ir::ssa::SsaValue>),
     CompatibilitySpelling(String),
 }
 
@@ -263,11 +263,10 @@ fn frame_base_identity(
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Option<FrameBaseIdentity> {
     if let Some(identities) = identities {
-        let identity = identities.exact(v)?;
-        let VReg::Phys(base) = &identity.base else {
-            return None;
-        };
-        return is_frame_base_name(base).then(|| FrameBaseIdentity::Exact(identity.clone()));
+        let base = identities.unambiguous_physical_base(v)?;
+        let candidates = identities.candidates(v)?;
+        return (is_frame_base_name(base) && !candidates.is_empty())
+            .then(|| FrameBaseIdentity::Attributed(candidates.clone()));
     }
     let VReg::Phys(name) = v else {
         return None;
