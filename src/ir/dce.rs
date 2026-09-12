@@ -15,41 +15,6 @@
 use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::types::VReg;
 
-/// Every flag [`VReg`] the `reads_flag` reference walker would report for
-/// this expression.
-///
-/// It must mirror that walker EXACTLY, including which nodes it declines
-/// to descend into: this pass's decisions are not conservative in either
-/// direction, so a broader walk would keep definitions the narrow one drops
-/// and a narrower walk would drop definitions it keeps.
-fn collect_flags_read(e: &Expr, out: &mut Vec<VReg>) {
-    match e {
-        Expr::Reg(v) => {
-            if matches!(v, VReg::Flag(_) | VReg::FlagValue { .. }) {
-                out.push(v.clone());
-            }
-        }
-        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-            collect_flags_read(lhs, out);
-            collect_flags_read(rhs, out);
-        }
-        Expr::Select {
-            cond,
-            if_true,
-            if_false,
-            ..
-        } => {
-            collect_flags_read(cond, out);
-            collect_flags_read(if_true, out);
-            collect_flags_read(if_false, out);
-        }
-        Expr::Un { src, .. } => collect_flags_read(src, out),
-        Expr::Cast { expr, .. } => collect_flags_read(expr, out),
-        Expr::Deref { addr, .. } => collect_flags_read(addr, out),
-        _ => {}
-    }
-}
-
 /// Remove flag assignments that a LATER write to the same flag overwrites unread.
 ///
 /// [`prune_dead_flags`] counts reads of the exact [`VReg`].  After value numbering,
@@ -75,25 +40,6 @@ fn collect_flags_read(e: &Expr, out: &mut Vec<VReg>) {
 /// numbering, where the lifter still names architectural [`VReg::Flag`] values, and is
 /// exact per definition after value numbering.
 pub fn prune_overwritten_flags(f: &mut Function) {
-    fn reads_flag(e: &Expr, flag: &VReg) -> bool {
-        match e {
-            Expr::Reg(v) => v == flag,
-            Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
-                reads_flag(lhs, flag) || reads_flag(rhs, flag)
-            }
-            Expr::Select {
-                cond,
-                if_true,
-                if_false,
-                ..
-            } => reads_flag(cond, flag) || reads_flag(if_true, flag) || reads_flag(if_false, flag),
-            Expr::Un { src, .. } => reads_flag(src, flag),
-            Expr::Cast { expr, .. } => reads_flag(expr, flag),
-            Expr::Deref { addr, .. } => reads_flag(addr, flag),
-            _ => false,
-        }
-    }
-
     fn prune(body: &mut Vec<Stmt>) {
         // Recurse first so nested lists are handled independently.
         for st in body.iter_mut() {
@@ -146,7 +92,7 @@ pub fn prune_overwritten_flags(f: &mut Function) {
         // every flag write in it.
         let mut drop_at = vec![false; body.len()];
         let mut pending: std::collections::HashMap<VReg, usize> = std::collections::HashMap::new();
-        let mut reads: Vec<VReg> = Vec::new();
+        let mut reads = std::collections::BTreeSet::new();
         for j in 0..body.len() {
             match body[j].semantic() {
                 Stmt::Origin { .. } => {
@@ -164,7 +110,7 @@ pub fn prune_overwritten_flags(f: &mut Function) {
                 | Stmt::Return { .. } => pending.clear(),
                 Stmt::Assign { dst, src } => {
                     reads.clear();
-                    collect_flags_read(src, &mut reads);
+                    collect_flag_reads_in_expr(src, &mut reads, true);
                     for read in &reads {
                         pending.remove(read); // read before overwrite: live
                     }
@@ -176,8 +122,8 @@ pub fn prune_overwritten_flags(f: &mut Function) {
                 }
                 Stmt::Store { addr, src, .. } => {
                     reads.clear();
-                    collect_flags_read(addr, &mut reads);
-                    collect_flags_read(src, &mut reads);
+                    collect_flag_reads_in_expr(addr, &mut reads, true);
+                    collect_flag_reads_in_expr(src, &mut reads, true);
                     for read in &reads {
                         pending.remove(read);
                     }
@@ -644,6 +590,37 @@ mod tests {
     use crate::ir::structure::recover;
     use crate::ir::types::{CmpOp, Flag, LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
 
+    #[test]
+    fn overwritten_flag_pruning_sees_reads_through_expression_origins() {
+        let zf = VReg::Flag(Flag::Z);
+        let mut function = Function {
+            name: "attributed_flag_read".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: zf.clone(),
+                    src: Expr::Const(1),
+                },
+                Stmt::Assign {
+                    dst: VReg::phys("observed"),
+                    src: Expr::Reg(zf.clone()).with_origins(crate::ir::ast::OriginSet::one(0x1004)),
+                },
+                Stmt::Assign {
+                    dst: zf.clone(),
+                    src: Expr::Const(0),
+                },
+            ],
+        };
+
+        prune_overwritten_flags(&mut function);
+
+        assert_eq!(
+            function.body.len(),
+            3,
+            "the attributed read observes the first definition: {function:#?}"
+        );
+    }
+
     // ---------------------------------------------------------------
     // Reference walkers.
     //
@@ -1061,8 +1038,8 @@ mod tests {
         assert!(exprs.len() > 20, "zoo should reach many expressions");
 
         for expr in &exprs {
-            let mut collected = Vec::new();
-            collect_flags_read(expr, &mut collected);
+            let mut collected = std::collections::BTreeSet::new();
+            collect_flag_reads_in_expr(expr, &mut collected, true);
             assert!(
                 collected
                     .iter()
