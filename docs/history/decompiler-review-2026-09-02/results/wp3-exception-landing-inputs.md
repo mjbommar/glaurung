@@ -57,13 +57,16 @@ The four directly owning executable exception cells remain green:
 The twelve functions in fixture `136_cpp_exception_unwinding` remain at their
 existing failed baseline across GCC/Clang O0/O2; this increment introduces no
 change in that slice and does not claim broader exception recovery complete.
-The module-wide Rust selection is 12/13 because the pre-existing AArch64 GOT
-throw assertion expects a nested cast while current preparation emits the
-same recovered `throw` with one cast. The new contracts and directly owning
-execution evidence are green; that unrelated assertion remains separate debt.
+Follow-on test-only commit `3bc525f5` resolves the module's stale AArch64 GOT
+throw assertion. The machine sequence zero-extends a 32-bit reload to 64 bits
+but stores only four bytes into an `int` exception object; preparation
+correctly reduces this to one signed 32-bit cast. The assertion now checks that
+semantic contract instead of requiring obsolete nested-cast scaffolding, and
+all 13 exception-recovery tests pass.
 
 The required post-source-commit `pytest python/tests/ -x` gate stopped at the
 unrelated CFR retrieval corpus-size invariant after 569 passes, 15 skips,
-three xfails, and two subtests in 110.58 seconds: only eight eligible queries
+three xfails, and two subtests in 131.34 seconds on the confirming run: only
+eight eligible queries
 were present where the test requires twenty. This is a partial gate, not a
 whole-suite-green claim. No DecBench or Joern run was performed.

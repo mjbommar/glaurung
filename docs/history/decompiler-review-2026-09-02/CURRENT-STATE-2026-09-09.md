@@ -2,7 +2,7 @@
 
 **Branch:** `master`
 
-**Implementation revision summarized:** `b0319768`
+**Implementation revision summarized:** `3bc525f5`
 
 **Operational authority:** [`PLAN.md`](PLAN.md)
 
@@ -94,6 +94,7 @@ de6e45554988f2cc8497f6db9ea285d0bd85357aeff520be4f29615463436a20
 Latest focused evidence:
 
 - identity-proven and ambiguous landing-input contracts: 2/2 passed;
+- exception-recovery module: 13/13 passed;
 - label-pruning module: 22/22 passed;
 - real GCC O0 Hello C++ definedness regression: passed with zero verifier
   findings;
@@ -103,11 +104,11 @@ Latest focused evidence:
 The required post-source-commit Python suite reached an unrelated CFR corpus-
 size assertion after 569 passes, 15 skips, three xfails, and two subtests. Only
 eight eligible retrieval queries were available where that test requires 20.
-The exception module's current 12/13 result also retains one older AArch64 GOT
-throw assertion whose expected nested-cast shape differs from the recovered
-single-cast throw. These results support the bounded change only and are not a
-release-green claim. No complete fixture matrix, 419-pair identity sweep,
-DecBench, Joern, GED, performance, or corpus-wide measurement was run.
+The exception-recovery module is 13/13 green after replacing one stale nested-
+cast assertion with the semantic four-byte `int` throw contract. These results
+support the bounded change only and are not a release-green claim. No complete
+fixture matrix, 419-pair identity sweep, DecBench, Joern, GED, performance, or
+corpus-wide measurement was run.
 
 The release measurement used the isolated verifier rather than the stale main-
 checkout extension. The result record names the exact overlays, native hash,
@@ -116,9 +117,6 @@ commands, and limitations; it is the authority for this increment.
 ## Ordered resume point
 
 1. Continue WP3 before starting a new dependent WP6/WP7B architecture layer.
-   Triage the older AArch64 throw assertion first because it is now the nearest
-   owning-module red boundary; fix the implementation only if semantic evidence
-   shows the emitted single cast is wrong.
 2. Audit remaining production `ssa_base`, `split_once('#')`, `argN`,
    `local_`, and `stack_` readers. Classify each as:
    - semantic identity requiring `ValueIdentities`/`ValueId` migration;
@@ -145,7 +143,7 @@ identity evidence.
 
 ## Workspace handoff
 
-At this handoff, `master` and `origin/master` both point to `b0319768`. The main
+At this handoff, `master` and `origin/master` both point to `3bc525f5`. The main
 checkout contains concurrent uncommitted work under `src/csource/`,
 `src/syntax/`, `src/python_bindings/source_metrics.rs`, `src/lib.rs`, and
 `src/ir/stack_locals/indexed_objects.rs`. Those paths were neither staged nor

@@ -2612,6 +2612,9 @@ provenance through lowering.
   execution cells pass on an exact release overlay. Fixture 136's twelve
   broader exception functions remain failed baseline debt. The post-commit
   Python gate reaches an unrelated CFR corpus-size assertion after 569 passes.
+  Test-only follow-on `3bc525f5` replaces the stale nested-cast expectation for
+  an AArch64 four-byte `int` exception store with its actual semantic contract;
+  the complete exception-recovery module is now 13/13 green.
   See `results/wp3-exception-landing-inputs.md`.
   Commit `327b6734` closes the adjacent lazy-call saturation consumer. Constant
   arms, signed range predicates, doubled call results, promoted destinations,
