@@ -15,27 +15,58 @@ import diff_decompile as D  # ty: ignore[unresolved-import]  # added above
 import structure_v2_compare as S  # ty: ignore[unresolved-import]  # added above
 
 
+def test_structure_axis_compares_both_outputs_on_one_source_denominator() -> None:
+    source = S.metrics.skeletons("int f(int x) { if (x) return 1; return 0; }")["f"]
+
+    cell = S._structure_cell(
+        source,
+        "int f(int x) { goto out; out: return 0; }",
+        "int f(int x) { if (x) return 1; return 0; }",
+        "f",
+    )
+
+    assert cell["status"] == "scored"
+    assert cell["shadow_distance"] == 0
+    assert cell["production_distance"] > cell["shadow_distance"]
+    assert cell["movement"] == "improved"
+
+
+def test_structure_axis_keeps_a_shadow_decline_out_of_the_distance_denominator() -> (
+    None
+):
+    source = S.metrics.skeletons("int f(void) { return 0; }")["f"]
+
+    assert S._structure_cell(source, "int f(void) { return 0; }", None, "f") == {
+        "status": "shadow_declined",
+        "source_nodes": len(source),
+    }
+
+
 def test_mixed_real_batch_counts_verified_output_and_local_decline() -> None:
     """A refused loop must not erase a verified sibling from measurement."""
-    binary = BUILD / "03_loop_shapes-gcc-O0.so"
+    binary = BUILD / "03_loop_shapes-clang-O0.so"
     if not binary.is_file():
         pytest.skip("real decompiler fixture matrix is absent")
     exports = D.exported_functions(str(binary))
     rows = [
-        {"obj": binary.name, "fn": "for_sum", "va": exports["for_sum"]},
         {
             "obj": binary.name,
-            "fn": "dowhile_recompute",
-            "va": exports["dowhile_recompute"],
+            "fn": "loop_early_return",
+            "va": exports["loop_early_return"],
+        },
+        {
+            "obj": binary.name,
+            "fn": "while_prefix",
+            "va": exports["while_prefix"],
         },
     ]
 
     result = S.compare_object(binary.name, rows)
 
     by_name = {function["fn"]: function for function in result["functions"]}
-    assert by_name["for_sum"]["shadow_gotos"] is not None
-    assert by_name["dowhile_recompute"]["status"] == "shadow_declined"
-    assert by_name["dowhile_recompute"]["shadow_gotos"] is None
+    assert by_name["loop_early_return"]["shadow_gotos"] is not None
+    assert by_name["while_prefix"]["status"] == "shadow_declined"
+    assert by_name["while_prefix"]["shadow_gotos"] is None
 
 
 def test_reviewed_shadow_regression_keeps_raw_status_and_adds_evidence(
@@ -134,3 +165,54 @@ def test_report_separates_raw_and_classified_regressions(
         "accepted_honest_goto": 1,
         "unexplained_regression": 0,
     }
+
+
+def test_report_aggregates_only_jointly_scored_structure_cells(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = {
+        "object": "fixture.so",
+        "requested": 2,
+        "production_seconds": 0.1,
+        "shadow_seconds": 0.2,
+        "functions": [
+            {
+                "fn": "scored",
+                "status": "improved",
+                "classification": None,
+                "production_gotos": 2,
+                "shadow_gotos": 1,
+                "production_bytes": 20,
+                "shadow_bytes": 15,
+                "structure": {
+                    "status": "scored",
+                    "production_distance": 7,
+                    "shadow_distance": 3,
+                    "movement": "improved",
+                },
+            },
+            {
+                "fn": "declined",
+                "status": "shadow_declined",
+                "classification": None,
+                "production_gotos": 1,
+                "shadow_gotos": None,
+                "production_bytes": 10,
+                "shadow_bytes": None,
+                "structure": {"status": "shadow_declined"},
+            },
+        ],
+    }
+    monkeypatch.setattr(S, "compare_object", lambda *_args: result)
+
+    report = S.build_report({"fixture.so": [{}, {}]}, jobs=1)
+
+    assert report["structure_axis"]["status_counts"]["scored"] == 1
+    assert report["structure_axis"]["status_counts"]["shadow_declined"] == 1
+    assert report["structure_axis"]["movement_counts"] == {
+        "improved": 1,
+        "unchanged": 0,
+        "regressed": 0,
+    }
+    assert report["structure_axis"]["production_distance_total"] == 7
+    assert report["structure_axis"]["shadow_distance_total"] == 3

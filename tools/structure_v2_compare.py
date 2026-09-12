@@ -21,10 +21,12 @@ import time
 from pathlib import Path
 
 import glaurung as g
+from glaurung._native import metrics
 
 ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / "tests" / "decompiler_fixtures" / "build"
 INVENTORY = ROOT / "tests" / "open_defects" / "known_failures.json"
+SOURCE = ROOT / "tests" / "decompiler_fixtures" / "src"
 GOTO_RE = re.compile(r"\bgoto\s+\w+\s*;")
 GOTO_TARGET_RE = re.compile(r"\bgoto\s+(\w+)\s*;")
 LABEL_RE = re.compile(r"(?m)^\s*(\w+)\s*:(?!:)")
@@ -114,6 +116,60 @@ def _decompile(path: Path, vas: list[int], shadow_v2: bool) -> dict[int, str]:
     return {int(va): text for _name, va, text, *_extra in rows}
 
 
+def _source_skeletons(object_name: str) -> dict:
+    """Return C source skeletons for one fixture object, or an empty map."""
+    fixture = object_name.split("-", 1)[0]
+    source = SOURCE / f"{fixture}.c"
+    return (
+        metrics.skeletons(source.read_text(encoding="utf-8"))
+        if source.is_file()
+        else {}
+    )
+
+
+def _structure_cell(
+    source, production: str | None, shadow: str | None, function: str
+) -> dict:
+    """Compare production and shadow on one explicit source-relative denominator."""
+    if source is None:
+        return {"status": "no_c_source"}
+    base = {"source_nodes": len(source)}
+    if production is None:
+        return {**base, "status": "production_missing"}
+    if shadow is None:
+        return {**base, "status": "shadow_declined"}
+    production_tree = metrics.skeletons(production).get(function)
+    if production_tree is None:
+        return {**base, "status": "production_unparsed"}
+    shadow_tree = metrics.skeletons(shadow).get(function)
+    if shadow_tree is None:
+        return {**base, "status": "shadow_unparsed"}
+    production_distance = metrics.tree_edit_distance(source, production_tree)
+    shadow_distance = metrics.tree_edit_distance(source, shadow_tree)
+    if production_distance is None or shadow_distance is None:
+        return {
+            **base,
+            "status": "abstained",
+            "production_nodes": len(production_tree),
+            "shadow_nodes": len(shadow_tree),
+        }
+    delta = shadow_distance - production_distance
+    return {
+        **base,
+        "status": "scored",
+        "production_nodes": len(production_tree),
+        "shadow_nodes": len(shadow_tree),
+        "production_distance": production_distance,
+        "shadow_distance": shadow_distance,
+        "delta": delta,
+        "movement": "improved"
+        if delta < 0
+        else "regressed"
+        if delta > 0
+        else "unchanged",
+    }
+
+
 def compare_object(name: str, rows: list[dict]) -> dict:
     """Compare all requested ground-truth rows for one real fixture binary."""
     path = BUILD / name
@@ -125,6 +181,7 @@ def compare_object(name: str, rows: list[dict]) -> dict:
     started = time.perf_counter()
     shadow = _decompile(path, vas, True)
     shadow_seconds = time.perf_counter() - started
+    source_skeletons = _source_skeletons(name)
 
     comparisons = []
     row_by_va = {int(row["va"]): row for row in rows}
@@ -163,6 +220,12 @@ def compare_object(name: str, rows: list[dict]) -> dict:
                 "shadow_bytes": len(candidate.encode())
                 if candidate is not None
                 else None,
+                "structure": _structure_cell(
+                    source_skeletons.get(row_by_va[va]["fn"]),
+                    baseline,
+                    candidate,
+                    row_by_va[va]["fn"],
+                ),
             }
         )
     return {
@@ -215,6 +278,26 @@ def build_report(targets: dict[str, list[dict]], jobs: int) -> dict:
         if function["shadow_gotos"] is not None
         and function["status"] != "production_missing"
     ]
+    structure_cells = [function.get("structure", {}) for function in functions]
+    scored_structure = [
+        cell for cell in structure_cells if cell.get("status") == "scored"
+    ]
+    structure_status_counts = {
+        status: sum(cell.get("status") == status for cell in structure_cells)
+        for status in (
+            "scored",
+            "no_c_source",
+            "production_missing",
+            "shadow_declined",
+            "production_unparsed",
+            "shadow_unparsed",
+            "abstained",
+        )
+    }
+    structure_movement_counts = {
+        movement: sum(cell.get("movement") == movement for cell in scored_structure)
+        for movement in ("improved", "unchanged", "regressed")
+    }
     return {
         "revision": subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -239,6 +322,16 @@ def build_report(targets: dict[str, list[dict]], jobs: int) -> dict:
         "shadow_bytes_comparable": sum(
             function["shadow_bytes"] for function in comparable
         ),
+        "structure_axis": {
+            "status_counts": structure_status_counts,
+            "movement_counts": structure_movement_counts,
+            "production_distance_total": sum(
+                cell["production_distance"] for cell in scored_structure
+            ),
+            "shadow_distance_total": sum(
+                cell["shadow_distance"] for cell in scored_structure
+            ),
+        },
         "production_seconds_sum": round(
             sum(obj["production_seconds"] for obj in objects), 6
         ),
