@@ -574,6 +574,13 @@ fn reconstruct_args_with_layouts_prototypes_strings_and_optional_identities(
     string_pool: &std::collections::HashMap<u64, String>,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) {
+    // Plain/register rendering deliberately does not value-number its LLIR.
+    // Its pipeline-owned sidecar is therefore globally empty, which means
+    // identity mode is unavailable rather than that every architectural
+    // spelling has been disproved. Preserve the established unnumbered path in
+    // that case. A non-empty sidecar remains authoritative per value: a missing
+    // or conflicting candidate still fails closed.
+    let identities = identities.filter(|identities| !identities.is_empty());
     // The spelling this function uses for each live-in argument register is a
     // WHOLE-FUNCTION fact. Answering it from the statement list that happens to
     // contain the call makes an untouched incoming parameter invisible to every
@@ -7247,6 +7254,31 @@ mod tests {
         assert!(matches!(
             misleading.body.as_slice(),
             [Stmt::Assign { .. }, Stmt::Call { args, .. }] if args.is_empty()
+        ));
+    }
+
+    #[test]
+    fn globally_empty_identity_mode_preserves_unnumbered_call_arguments() {
+        let mut function = Function {
+            name: "plain_start".into(),
+            entry_va: 0x1000,
+            body: vec![assign("rdi", 0x13d0), call_to("__libc_start_main")],
+        };
+
+        reconstruct_args_with_layouts_prototypes_strings_and_identities(
+            &mut function,
+            CallConv::SysVAmd64,
+            &mut Default::default(),
+            &Default::default(),
+            &Default::default(),
+            None,
+            &Default::default(),
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
+
+        assert!(matches!(
+            function.body.as_slice(),
+            [Stmt::Call { args, .. }] if args == &[Expr::Const(0x13d0)]
         ));
     }
 

@@ -81,6 +81,16 @@ pub struct ValueIdentities {
 }
 
 impl ValueIdentities {
+    /// Whether this sidecar carries no authoritative value facts at all.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.by_numbered_value.is_empty()
+            && self.physical_bases_by_value.is_empty()
+            && self.parameter_slots_by_value.is_empty()
+            && self.result_roles.is_empty()
+            && self.machine_saved_slots.is_empty()
+            && self.promoted_stack_objects.is_empty()
+    }
+
     /// Return the sole SSA identity represented by `value`, if unambiguous.
     pub fn exact(&self, value: &VReg) -> Option<&SsaValue> {
         let candidates = self.by_numbered_value.get(value)?;
