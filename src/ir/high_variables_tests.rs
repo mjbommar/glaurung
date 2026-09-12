@@ -842,7 +842,7 @@ fn callee_pointer_contract_does_not_follow_an_unowned_var_copy() {
 }
 
 #[test]
-fn recovered_callee_pointer_flows_back_through_one_exact_parameter_copy() {
+fn recovered_callee_pointer_flows_back_through_a_coalesced_parameter_copy() {
     // Real shape: diffutils `lf_skip(struct line_filter *lf, lin lines)`.
     // The incoming pointer is copied to a numbered value, used in raw byte
     // address arithmetic, and passed to a helper whose recovered contract
@@ -898,6 +898,13 @@ fn recovered_callee_pointer_flows_back_through_one_exact_parameter_copy() {
         crate::ir::ssa::SsaValue {
             base: VReg::phys("rax"),
             version: 1,
+        },
+    );
+    identities.record(
+        VReg::phys("var2"),
+        crate::ir::ssa::SsaValue {
+            base: VReg::phys("rax"),
+            version: 2,
         },
     );
     let identities = identities.with_role_aliases_and_parameter_slots(

@@ -1162,7 +1162,10 @@ fn is_trusted_copy_source_with_identities(
     match identities {
         Some(identities) => {
             let value = VReg::phys(name);
-            identities.exact(&value).is_some() || identities.parameter_slot(&value).is_some()
+            identities
+                .candidates(&value)
+                .is_some_and(|candidates| !candidates.is_empty())
+                || identities.parameter_slot(&value).is_some()
         }
         None => is_trusted_copy_source(name),
     }
