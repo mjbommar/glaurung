@@ -1027,7 +1027,12 @@ provenance through lowering.
 - [~] Add a pipeline-owned, versioned `SsaInfo` near the existing SSA
   implementation under `src/ir/`. `925dc002` lands the owner and `09522773`
   retains it across definedness normalization, prototype recovery, and return
-  materialization; ownership does not yet persist through AST lowering.
+  materialization. Commit `85afee69` additionally carries the final
+  owner-produced snapshot out of LLIR preparation and reuses it for
+  passthrough-parameter refinement; a source ratchet permits no independent
+  `compute_ssa` call in the production pipeline. Ownership does not yet persist
+  through every AST mutation. See
+  `results/wp3-pipeline-owned-ssa-snapshot.md`.
 - [x] Define explicit invalidation classes: CFG changed, definitions changed,
   uses changed, types changed, and presentation-only change.
 - [x] Make an unclassified mutating pass conservatively return
@@ -3318,7 +3323,13 @@ spelling, but does not complete WP3 or permit compatibility-tag deletion. See
 ### Exit criteria
 
 - [ ] No product consumer parses display names to identify semantic values.
-- [ ] SSA construction occurs only on initial demand or declared invalidation.
+- [x] SSA construction occurs only on initial demand or declared invalidation.
+  Commit `85afee69` removes the final direct reconstruction from production
+  pipeline orchestration and ratchets that count to zero. The remaining
+  production binding call constructs the first snapshot for each independently
+  lifted recursive callee; other repository search hits are implementation or
+  test-local fixture construction. See
+  `results/wp3-pipeline-owned-ssa-snapshot.md`.
 - [ ] Origins survive every enabled pass and produce deterministic mappings.
 - [ ] The fixture matrix is byte-identical until an intentionally output-
   changing work package begins.
