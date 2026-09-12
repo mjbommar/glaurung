@@ -106,7 +106,7 @@ By compiler: clang 29, gcc 13, rustc 6. Fixtures: `102_duffs_device` 6,
 
 | file | cells | defect |
 |---|---:|---|
-| `test_open_decompiler_defects.py:104` | 2 | `call_args` intervening read: an inlined `printf("... %d", static_var)` loses its argument at -O2; repro `tests/open_defects/inlined_printf_arg.c` |
+| `test_open_decompiler_defects.py:104` | 0 | Resolved at `d44a11d2`: both GCC and Clang retain the inlined `printf("... %d", static_var)` argument; the former strict xfail is now an ordinary passing regression test |
 | `test_pdb_type_recovery.py:67-118` | 4 of 5 | PDB prototypes: struct-by-value flattened to `long`; pointee guessed from first access; `double` parameter recovered as `float`; `unsigned long long widen(unsigned int)` recovered as `widen(int)` returning `unsigned long` |
 | `test_macho_lane.py:145` | 1 | AArch64 `fmadd` unlifted, so `double mix_float(double, float)` collapses to `void(void)`; the reason records an intrinsic fix that was tried and rejected because it broke `217_complex_arithmetic:aarch64:O2` |
 | `test_decompiler_curriculum_corpus.py:170` | 1 (slow) | gcc 11 -O2 `bst_search`: peeled and rotated loop structured as two `do {}` loops |
