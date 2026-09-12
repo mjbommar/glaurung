@@ -2627,6 +2627,15 @@ provenance through lowering.
   the full-region `memset` spelling. Its observed-red and plain controls pass;
   an exact release build retains all 20 fixture-184 function cells across
   GCC/Clang O0/O2. The same result record carries this sibling.
+  Commit `32186aca` closes the remaining confirmed direct render matches in
+  this cluster. Attributed pointer register stores no longer gain a redundant
+  representation cast; attributed promoted-local destinations remain local
+  assignments and first-definition initializers; attributed synthesized
+  aggregate returns retain the complete object type instead of narrowing to
+  `long`. All three contracts were observed red. Focused controls pass, and an
+  exact release build retains all 100 function cells across fixture families
+  195 and 198 with no regression. See
+  `results/wp3-store-return-expression-carriers.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
