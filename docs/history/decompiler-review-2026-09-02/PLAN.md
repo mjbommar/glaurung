@@ -5875,10 +5875,13 @@ relevant ratchet's accepted-regression record.
    over-invalidation: identities belonging wholly to compiler temporaries no
    longer clear unrelated enclosing ABI-slot facts, while mixed and malformed
    physical identities still fail closed. Five focused producer/lowering
-   contracts and all 130 `call_args` tests pass. In an exact release verifier,
+   contracts and all 131 `call_args` tests pass. In an exact release verifier,
    GCC O2 `95_function_pointer_table::fold_operations` improves from fail to
-   pass and both GCC dispatch controls remain green. Fixture 191's three-
-   argument loop remains red and is the next table-call identity boundary. See
+   pass and both GCC dispatch controls remain green. Commit `87dc4167` makes
+   those pre-materialised semantic arguments authoritative over the later local
+   backward scan; GCC O2 fixture 191's three-argument table call then also
+   improves from fail to pass with no scoped regression. Cross-architecture
+   coverage and the remaining corpus zero/partial-argument query stay open. See
    `results/wp3-flat-table-call-arguments.md`.
    Commit `20364f46` then migrates shared integer declaration typing from one
    exact SSA identity to one unambiguous physical storage base. Same-carrier

@@ -2860,7 +2860,7 @@
     "t191_computed_args": "pass",
     "t191_direct_control": "pass",
     "t191_dispatch": "pass",
-    "t191_fold": "fail"
+    "t191_fold": "pass"
   },
   "192_pointer_chased_list:clang:O0": {
     "l192_chase_keys": "pass",

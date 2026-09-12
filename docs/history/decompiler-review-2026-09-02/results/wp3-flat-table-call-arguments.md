@@ -1,7 +1,7 @@
 # WP3 flat-CFG function-table call arguments
 
-Status: bounded production migration landed in `a9001bd1` and `af320048` on
-`master`.
+Status: bounded production migration landed in `a9001bd1`, `af320048`, and
+`87dc4167` on `master`.
 
 ## Result
 
@@ -26,6 +26,12 @@ an all-nonphysical temporary alone while retaining the existing fail-closed
 behavior for mixed or malformed physical-storage identities. This restores
 the two-argument `dispatch_operation` tail call.
 
+Finally, AST argument reconstruction now treats a nonempty argument list from
+an earlier semantic stage as authoritative. Its local backward scan cannot
+replace the exact three-argument LLIR contract with the one adjacent register
+assignment it happens to see after structuring. This closes the larger fixture
+191 loop without special-casing that fixture or its function names.
+
 ## Focused evidence
 
 ```text
@@ -46,12 +52,12 @@ TMPDIR=/home/mjbommar/.cache/glaurung/tmp \
 
 TMPDIR=/home/mjbommar/.cache/glaurung/tmp \
   cargo test --features python-ext --lib ir::call_args::tests
-130 passed; 0 failed; 4,662 filtered out; 0.20 s
+131 passed; 0 failed; 4,662 filtered out; 0.19 s
 ```
 
-The exact detached verifier at `af320048` used a release extension with
+The final exact detached verifier at `87dc4167` used a release extension with
 SHA-256
-`44f3cd6c90ad7ee5702c166bb3324c8e840c4d37ebcf0abb6b97be1f315b311e`.
+`0f00942078adaf229352e8e04542e0c32106bec75595d0c2d2e41675dbcc5b73`.
 Its scoped command was:
 
 ```text
@@ -64,20 +70,27 @@ TMPDIR=/home/mjbommar/.cache/glaurung/tmp \
   191_indirect_table_args:gcc:O2:t191_fold --show
 ```
 
-The selected host lanes report no regressions and one improvement:
-`95_function_pointer_table:gcc:O2:fold_operations` moves from fail to pass.
-Its recovered call is now
+The first exact source revision reports no regressions and one improvement:
+`95_function_pointer_table:gcc:O2:fold_operations` moves from fail to pass. Its
+recovered call is now
 `OPERATIONS[which](accumulator, index + 1)` in semantic terms and executes
 equivalently under the round-trip harness. Both GCC dispatch controls remain
-green.
+green. The final exact revision then reports the independent
+`191_indirect_table_args:gcc:O2:t191_fold` cell improving from fail to pass,
+with all three arguments `(scratch, accumulator, index + 1)` retained and no
+regression in the same scoped controls.
 
 ## Remaining boundary
 
-This is not universal indirect-call recovery. The larger
-`191_indirect_table_args:gcc:O2:t191_fold` control remains red: it currently
-recovers only the first of three table-call arguments. That fixture is the
-next measured extension for compound table-base/value transport and
-loop-carried multi-slot argument identity. No DecBench or Joern run was made.
+This is not universal indirect-call recovery. It covers relocation-proven local
+tables whose complete entry layouts form a valid ABI prefix; writable,
+incomplete, disagreeing, non-relocated, and unassociated indirect targets still
+decline. The next table-call work is cross-architecture fixture coverage and a
+corpus query for remaining zero/partial-argument table calls. No DecBench or
+Joern run was made.
 
-The complete Python post-source-commit gate is recorded separately when it
-terminates; it is not implied by the focused evidence above.
+The complete Python post-source-commit gate was attempted at the preceding
+`af320048` source revision. By 9% it had reproduced three unrelated existing
+build-configuration failures: the static-executable stack-canary `local_10`
+defect and the static/frame-pointer undefined-`rbp` defects. It was interrupted
+after `87dc4167` made that run obsolete. No broad-green claim is made.
