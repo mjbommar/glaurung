@@ -577,14 +577,26 @@ def test_every_local_used_is_also_declared(built, arch, opt, request) -> None:
     text = _decompile(built[(arch, opt)])
     problems: list[str] = []
     for name, body in _fixture_units(text).items():
+        # A diagnostic comment may name the machine slot that a semantic pass
+        # deliberately removed, for example
+        # `// stack canary: save guard to %local_8`.  That is provenance for an
+        # analyst, not a C expression that requires a declaration.  Scan the
+        # translation unit after removing line comments so this invariant keeps
+        # measuring identifiers the compiler would actually resolve.
+        semantic_body = re.sub(r"//[^\n]*", "", body)
         declared = set(
             re.findall(
                 r"^[ \t]+[\w \*]+?\b((?:var|local_|stack_)\w+)\s*(?:[;\[]|=)",
-                body,
+                semantic_body,
                 re.MULTILINE,
             )
         )
-        used = set(re.findall(r"\b((?:var\d+|local_[0-9a-fA-F]+|stack_\d+))\b", body))
+        used = set(
+            re.findall(
+                r"\b((?:var\d+|local_[0-9a-fA-F]+|stack_\d+))\b",
+                semantic_body,
+            )
+        )
         missing = sorted(used - declared)
         if missing:
             problems.append(f"{name}: uses undeclared {', '.join(missing[:4])}")
