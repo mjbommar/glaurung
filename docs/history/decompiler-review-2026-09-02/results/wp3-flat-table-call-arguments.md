@@ -197,3 +197,53 @@ curriculum failures. The separately rerun baseline-integrity test fails only on
 pre-existing control mismatches in fixtures 157, 172, and 81; none is one of
 the seven entries ratcheted here. This run is partial evidence, not a complete
 gate and not a broad-green claim.
+
+## i386 cdecl closure
+
+Commit `d06d2d59` closes the terminal i386 table-dispatch case. GCC O2 writes
+its two outgoing cdecl arguments above one saved-register slot, restores that
+slot and `esp`, and then jumps through `OPERATIONS[which]`. The cdecl scanner
+now crosses only that exact balanced epilogue: one pointer-width restore,
+`esp += 4`, a relocation-proven terminal table call, and the pass-owned
+`return rax` sentinel. Unknown widths, non-table calls, and non-adjacent shapes
+still decline. The release output changes from a zero-argument call to:
+
+```c
+return ((long (*)(long, long))(OPERATIONS[var3]))(var4, var5);
+```
+
+The observed-red positive test, two refusal tests, all 161 `call_args` tests,
+and this exact i386 O0/O2 selection pass:
+
+```text
+TMPDIR=/home/mjbommar/.cache/glaurung/tmp \
+  UV_PROJECT_ENVIRONMENT=/home/mjbommar/.cache/glaurung/verify-85afee69/.venv \
+  uv run --no-sync python tools/dectest.py \
+  95_function_pointer_table:gcc:O0:dispatch_operation \
+  95_function_pointer_table:gcc:O2:dispatch_operation \
+  191_indirect_table_args:gcc:O0:t191_fold \
+  191_indirect_table_args:gcc:O2:t191_fold --arch i386
+```
+
+The selection has no regression and moves only fixture 95 i386 O2 from fail
+to pass; that one `arch_baseline.json` entry is ratcheted.
+
+Commit `3e4c5242` closes the adjacent ordinary-call presentation defect. GCC
+O2 fixture 191 pushes three arguments and then loads the indirect target from
+an entry-frame slot. The backward scanner may now cross one memory load only
+when its destination is the exact stable value consumed by the call target and
+post-call cleanup independently proves the outgoing area. An unrelated load
+still stops the scan. Removed pushes rebase the target load, so its frame slot
+continues to name the same address. The release output removes the false
+`local_3c[12]` object and renders the complete semantic call:
+
+```c
+var8 = ((long (*)(long, long, long))target)(var7, var8, var18);
+```
+
+Its positive and mismatched-target refusal tests, all seven owning cdecl tests,
+all nine pre-existing cdecl integration tests, and the same four-cell i386
+selection pass without regression. Fixture 191 i386 O2 remains an execution
+failure because its indirect target and return type are still unrecovered; it
+is an output-quality improvement, not a baseline movement. No DecBench or
+Joern run was made.

@@ -5894,7 +5894,16 @@ relevant ratchet's accepted-regression record.
    fixture 150 Clang O0 reaches no call because its surrounding state-machine
    switch remains an unrecovered WP5 indirect jump. The one reported
    fixture-131 regression reproduces identically at parent `0c36651c`, so it is
-   not attributable. The distinct ARMv7/i386 O2 failures stay open. See
+   not attributable. Commits `d06d2d59` and `3e4c5242` then close both i386
+   cdecl argument-presentation boundaries found by that sweep. An exact
+   balanced saved-register epilogue can feed a terminal table call, moving
+   fixture-95 i386 O2 from fail to pass. An ordinary call may cross one target
+   load only when its destination is the exact stable value consumed by that
+   call and post-call cleanup independently proves the outgoing area; fixture
+   191 consequently loses its false argument-buffer local and renders all
+   three operands. The latter execution cell remains red because target and
+   return typing are still unresolved, so it is not ratcheted. ARMv7 O2
+   failures and that separate i386 target/type defect stay open. See
    `results/wp3-flat-table-call-arguments.md`.
    Commit `20364f46` then migrates shared integer declaration typing from one
    exact SSA identity to one unambiguous physical storage base. Same-carrier
