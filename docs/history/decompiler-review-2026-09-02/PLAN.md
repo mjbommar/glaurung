@@ -5803,6 +5803,15 @@ relevant ratchet's accepted-regression record.
    Same-carrier coalesced values retain recovered pointer/integer declarations;
    mixed carriers remain `long`. Its observed-red contract and nine focused
    declaration/cast checks pass. See `results/wp3-declaration-identities.md`.
+   Commit `1f48af39` migrates value-keyed type projection from one exact
+   `ValueId` to unanimous facts across a complete stable identity set. Legal
+   phi/copy coalescing can now retain pointer/scalar class and narrow width;
+   missing or conflicting facts still decline, and locked declarations remain
+   authoritative. Its observed-red unanimous-width contract, the existing
+   partial-fact refusal, all 92 type-recovery tests, all four integer-width
+   fixture lanes, and the six-cell cross-architecture Hello checkpoint pass
+   against an exact release build. See
+   `results/wp3-unanimous-value-type-projection.md`.
    Commit `11afa94a` applies it to whole-value pointer and unsigned-literal
    refinement. Same-carrier coalesced values gain proved pointer/signedness
    facts; mixed carriers still decline. Its two observed-red contracts and all
