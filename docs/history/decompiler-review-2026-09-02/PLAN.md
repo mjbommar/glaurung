@@ -5815,6 +5815,15 @@ relevant ratchet's accepted-regression record.
    tests pass, and an exact release build retains one AArch64 O2 call-shape
    lane plus the six-cell cross-architecture Hello sample. See
    `results/wp3-phi-plumbing-identities.md`.
+   Commit `de12aebe` removes another CFG-order-dependent name/storage heuristic
+   from float-argument recovery. Float-bank membership and x86 binary64 width
+   evidence now accept only exact version-zero SSA uses, so a write on one
+   branch cannot suppress an incoming float parameter read on a sibling. The
+   observed-red branch contract, all 90 focused type-recovery tests, one exact-
+   release GCC O0 three-double fixture lane, and the six-cell cross-architecture
+   Hello checkpoint pass without an attributable regression. The fixture lane
+   retains its pre-existing wrong returned-value body and therefore remains a
+   known failure. See `results/wp3-float-live-in-ssa-paths.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
