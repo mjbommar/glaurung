@@ -2592,6 +2592,16 @@ provenance through lowering.
   advances from the old 8 percent stop to a pre-existing `_start` call-argument
   failure at 11 percent after 632 passes; parent A/B reproduces it. See
   `results/wp3-coalesced-frame-save-identities.md`.
+  Commit `22b3eb99` closes the next unified-pipeline identity boundary. Plain
+  rendering deliberately has no value-numbered sidecar; argument recovery now
+  treats a globally empty sidecar as unavailable and preserves its unnumbered
+  path, while any non-empty sidecar remains authoritative and fail-closed per
+  value. All 132 call-recovery tests pass, and the exact release `_start`
+  regression again renders `__libc_start_main(main, ...)` with six arguments.
+  The post-commit gate advances to a stale explicit-range naming assertion
+  after 634 passes; `_start` is the valid image symbol and the assertion is
+  corrected alongside the generated 5,349-test census. See
+  `results/wp3-empty-identity-call-arguments.md`.
   Commit `327b6734` closes the adjacent lazy-call saturation consumer. Constant
   arms, signed range predicates, doubled call results, promoted destinations,
   and saturation recognition now see through expression owners, while the

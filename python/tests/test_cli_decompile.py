@@ -81,7 +81,10 @@ def test_decompile_accepts_explicit_function_range():
         ]
     )
     assert result.returncode == 0, result.stderr
-    assert "function sub_1840 @ 0x1840 {" in result.stdout
+    # An explicit byte range constrains lifting; it does not discard a valid
+    # image symbol for the selected entry. Range and ordinary address requests
+    # share the same function pipeline, so both should preserve `_start`.
+    assert "function _start @ 0x1840 {" in result.stdout
     assert "__libc_start_main" in result.stdout
 
 

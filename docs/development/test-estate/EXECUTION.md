@@ -773,6 +773,25 @@ failed. A release parent A/B reproduces that exact failure. See
 `docs/history/decompiler-review-2026-09-02/results/wp3-coalesced-frame-save-identities.md`
 for commands, rendered-output conclusions, and scope limits.
 
+## Empty identity mode and plain call arguments
+
+Commit `22b3eb99` distinguishes a globally empty identity sidecar from missing
+evidence inside an active identity mode. Plain/register rendering deliberately
+does not number LLIR; its empty sidecar now selects the established unnumbered
+call-argument path. Non-empty sidecars remain strict per value.
+
+All 132 owning Rust tests pass, and the release `_start` integration case again
+renders six `__libc_start_main` arguments beginning with `main`. The 37-test CLI
+module exposed only a stale range-name assertion: the WP2-unified range pipeline
+preserves the real `_start` symbol instead of synthesizing `sub_1840`. The test
+now pins that better contract and the whole module passes.
+
+The post-source `pytest python/tests/ -x` gate reached that assertion after 634
+passes. This remains partial broad-gate evidence. The generated committed-source
+census is refreshed from 5,324 to 5,349 declared tests, with zero outside every
+gate. See
+`docs/history/decompiler-review-2026-09-02/results/wp3-empty-identity-call-arguments.md`.
+
 ## Ground rules
 
 Verified before any claim of done: `cargo test --features python-ext`,
