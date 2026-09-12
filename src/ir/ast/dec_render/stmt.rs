@@ -369,7 +369,7 @@ pub(in crate::ir::ast) fn write_stmt_dec(s: &Stmt, out: &mut String, level: usiz
             // The integer C backend has no scalar 128-bit lvalue. A proven
             // zero vector still has exact byte semantics, so preserve the full
             // machine write instead of silently narrowing it to one `long`.
-            if *size == 16 && matches!(src, Expr::Const(0)) {
+            if *size == 16 && matches!(src.semantic(), Expr::Const(0)) {
                 out.push_str("__builtin_memset(");
                 write_representation_value_dec("void *", addr, out);
                 out.push_str(", 0, 16);\n");

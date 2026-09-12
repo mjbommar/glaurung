@@ -9252,6 +9252,30 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn attributed_sixteen_byte_zero_store_initializes_the_full_region() {
+        let f = Function {
+            name: "zero_attributed_vector".to_string(),
+            entry_va: 0x20,
+            body: vec![Stmt::Store {
+                addr: Expr::StackAddr {
+                    object: VReg::phys("local_10"),
+                    size: 16,
+                },
+                src: Expr::Const(0).with_origins(OriginSet::one(0x20)),
+                size: 16,
+            }],
+        };
+
+        let text = render_decbench(&f);
+        assert!(text.contains("unsigned char local_10[16];"), "{text}");
+        assert!(
+            text.contains("__builtin_memset(&local_10[0], 0, 16);"),
+            "an owner must not narrow a complete zero store: {text}"
+        );
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
     fn decbench_adjacent_sixteen_byte_load_store_keeps_every_byte() {
         let loaded = VReg::phys("var0");
         let f = Function {
