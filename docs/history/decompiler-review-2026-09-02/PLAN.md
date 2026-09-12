@@ -2578,6 +2578,15 @@ provenance through lowering.
   three `thumb_frame` tests pass; an exact clean release build retains both the
   real ARM frame-spill and Cortex-M leaf-frame controls. See
   `results/wp3-arm-frame-anchor-expression-origins.md`.
+  Commit `05798ef3` closes an adjacent expression-reconstruction safety gap:
+  register-only address slots inside `for` initializers/steps and `throw`
+  values now prevent deletion of a definition that substitution cannot move.
+  Its observed-red regression and all 15 owning tests pass. Final exact-release
+  validation at `1283716a` retains the GCC O0 `for_sum` lane and passes the
+  corrected eight-cell executable undeclared-local invariant; three apparent
+  failures were proven to be identifiers appearing only in analyst comments,
+  which the invariant now excludes. See
+  `results/wp3-loop-clause-address-temporaries.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
