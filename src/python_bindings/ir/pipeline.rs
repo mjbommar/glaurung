@@ -1550,6 +1550,9 @@ fn normalize_definedness_with_ssa(
 /// structuring. Keeping that feedback edge here prevents `--all`, `--vas`, and
 /// address/range decompilation from observing different return identities.
 pub(super) struct PreparedLlir {
+    /// The versioned owner's final snapshot for the exact LLIR stored beside it.
+    /// Downstream consumers must not reconstruct an untracked parallel SSA view.
+    pub(super) ssa: crate::ir::ssa::SsaInfo,
     pub(super) region: crate::ir::structure::Region,
     pub(super) shadow_v2_region: Option<crate::ir::structure::Region>,
     pub(super) cfg_health: crate::ir::health::CfgHealth,
@@ -1608,6 +1611,7 @@ pub(super) fn lower_and_run_ast_passes(
     got_targets: &std::collections::HashMap<u64, u64>,
 ) -> Result<PreparedAst, AstPassOrderError> {
     let PreparedLlir {
+        ssa,
         region,
         cfg_health,
         numbered,
@@ -1619,8 +1623,7 @@ pub(super) fn lower_and_run_ast_passes(
         ..
     } = prepared;
     if let Some(prototype) = prototype.as_mut() {
-        let exact_ssa = crate::ir::ssa::compute_ssa(raw);
-        refine_passthrough_parameter_hints(prototype, raw, &exact_ssa, callee_facts);
+        refine_passthrough_parameter_hints(prototype, raw, &ssa, callee_facts);
     }
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
         eprintln!("\n===== recovered prototype =====\n{prototype:#?}");
@@ -1896,6 +1899,7 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
     }
     lock_parameter_slots_from_prototype(prototype.as_ref(), &mut parameter_slots);
     PreparedLlir {
+        ssa,
         region,
         shadow_v2_region,
         cfg_health,

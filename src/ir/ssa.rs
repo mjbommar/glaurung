@@ -1220,6 +1220,11 @@ mod tests {
             0,
             "production callers must use apply_mutation so no-op changes stay valid"
         );
+        assert_eq!(
+            pipeline.matches("compute_ssa(").count(),
+            0,
+            "production SSA consumers must use the versioned pipeline-owned snapshot"
+        );
     }
 
     #[test]
