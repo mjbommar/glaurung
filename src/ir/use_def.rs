@@ -32,6 +32,24 @@ fn same_machine_register(left: &VReg, right: &VReg) -> bool {
     }
 }
 
+fn same_machine_register_with_identities(
+    left: &VReg,
+    right: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    let Some(identities) = identities else {
+        return same_machine_register(left, right);
+    };
+    let Some(left) = identities.unambiguous_physical_base(left) else {
+        return false;
+    };
+    let Some(right) = identities.unambiguous_physical_base(right) else {
+        return false;
+    };
+    crate::ir::ssa::parent64(left).unwrap_or(left)
+        == crate::ir::ssa::parent64(right).unwrap_or(right)
+}
+
 /// Whether a use reported by [`def_uses`] is positive source-level evidence.
 ///
 /// Calls conservatively report every ABI argument register as a may-use so
@@ -41,6 +59,15 @@ fn same_machine_register(left: &VReg, right: &VReg) -> bool {
 /// every listed argument.  Indirect call targets and all non-call operands are
 /// genuine reads.
 pub fn use_is_proven_input(op: &Op, use_index: usize) -> bool {
+    use_is_proven_input_with_identities(op, use_index, None)
+}
+
+/// Identity-aware form of [`use_is_proven_input`].
+pub fn use_is_proven_input_with_identities(
+    op: &Op,
+    use_index: usize,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
     let Op::Call { target, effects } = op else {
         return true;
     };
@@ -58,7 +85,7 @@ pub fn use_is_proven_input(op: &Op, use_index: usize) -> bool {
         || effects
             .proven_args
             .iter()
-            .any(|proven| same_machine_register(proven, argument))
+            .any(|proven| same_machine_register_with_identities(proven, argument, identities))
 }
 
 /// Address of an op within a function.
@@ -794,6 +821,41 @@ mod tests {
         assert_eq!(def, Some(VReg::phys("x0")));
         assert!(uses.contains(&VReg::phys("r11")), "target: {uses:?}");
         assert!(uses.contains(&VReg::phys("x7")), "args: {uses:?}");
+    }
+
+    #[test]
+    fn proven_call_input_rejects_matching_display_names_with_different_identities() {
+        let proven = VReg::phys("rdi#looks_proven");
+        let argument = VReg::phys("edi#also_looks_proven");
+        let op = Op::Call {
+            target: CallTarget::Direct(0x2000),
+            effects: Some(crate::ir::types::CallEffects {
+                args: vec![argument.clone()],
+                proven_args: vec![proven.clone()],
+                ..Default::default()
+            }),
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            proven,
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rax"),
+                version: 1,
+            },
+        );
+        identities.record(
+            argument,
+            crate::ir::ssa::SsaValue {
+                base: VReg::phys("rsi"),
+                version: 2,
+            },
+        );
+
+        assert!(!use_is_proven_input_with_identities(
+            &op,
+            0,
+            Some(&identities),
+        ));
     }
 
     #[test]

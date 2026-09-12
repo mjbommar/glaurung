@@ -10,7 +10,7 @@
 use std::collections::HashSet;
 
 use crate::ir::types::{LlirFunction, Op, VReg, Value};
-use crate::ir::use_def::{for_each_use, use_is_proven_input};
+use crate::ir::use_def::{for_each_use, use_is_proven_input_with_identities};
 
 /// The `(destination, source)` register names of a phi copy: an `Assign` between
 /// two SSA versions of the *same* physical register.
@@ -86,7 +86,7 @@ pub(crate) fn architecturally_read_names(
             for_each_use(&ins.op, |used| {
                 let index = use_index;
                 use_index += 1;
-                if !use_is_proven_input(&ins.op, index) {
+                if !use_is_proven_input_with_identities(&ins.op, index, identities) {
                     return;
                 }
                 if let VReg::Phys(name) = used {

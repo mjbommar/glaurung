@@ -7,7 +7,7 @@
 
 use crate::ir::call_args::CallConv;
 use crate::ir::types::{LlirFunction, Op, VReg, Value};
-use crate::ir::use_def::{def_ref, for_each_use, use_is_proven_input, InstrAddr};
+use crate::ir::use_def::{def_ref, for_each_use, use_is_proven_input_with_identities, InstrAddr};
 
 use super::architectural_reads::{architecturally_read_names, phi_copy_operands};
 
@@ -180,7 +180,7 @@ pub fn live_in_arg_slots_llir_with_identities(
                     }
                     let index = use_index;
                     use_index += 1;
-                    if !use_is_proven_input(&ins.op, index) {
+                    if !use_is_proven_input_with_identities(&ins.op, index, identities) {
                         return;
                     }
                     if alignment_padding.excludes_use(
