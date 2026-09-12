@@ -25,7 +25,12 @@ route now emits the recovered four-case switch and passes all 27 deterministic
 execution cases where production v1 fails. See
 `results/wp4-sibling-owned-loop-exits.md`. The adjacent
 `two_returning_arms` cell remains execution-correct through an exactly planned
-return-tail clone rather than an empty loop exit. WP5, WP8, WP9, and WP10 have
+return-tail clone rather than an empty loop exit. Commit `b214a053` applies the
+same ownership boundary to loop-local conditional joins and recovers the
+70-block Clang O2 `nested_loop_returning_arm` comparison ladder with all 116
+edges represented. Its 22 execution cases remain green and gotos fall from 42
+to 35, while the 25,894-byte output remains a recorded cleanup debt. WP5, WP8,
+WP9, and WP10 have
 production or shadow vertical slices
 but have not met their full exit criteria. WP6 has its first per-use signedness
 slice and the O0 `classify` signed-result vertical slice, but not the general
@@ -3841,6 +3846,13 @@ that preserves honest local gotos when required.
   The sibling `two_returning_arms` cell stays green over 22 cases, yielding one
   improvement, one stable pass, zero regressions, and zero infrastructure
   findings in the pinned two-candidate execution slice.
+  Commit `b214a053` extends this rule to joins inside an active natural loop:
+  a function epilogue cannot be claimed as an inner conditional join. The
+  pinned fixture-212 slice now renders three candidates and reports one
+  execution improvement, two stable passes, zero regressions, and zero
+  infrastructure findings. `nested_loop_returning_arm` drops from 42 to 35
+  gotos but grows from 9,319 to 25,894 bytes, so cleanup and output-size budget
+  work remain explicit rather than being hidden by the coverage gain.
   Residual case-suffix gotos and the corpus-wide promotion measurements remain
   open. See `results/wp4-sibling-owned-loop-exits.md`.
 - [ ] No unexplained block/edge accounting findings.

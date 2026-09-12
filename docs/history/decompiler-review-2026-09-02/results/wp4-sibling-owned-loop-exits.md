@@ -61,6 +61,35 @@ zero regressions, and zero infrastructure findings. Structurally,
 gotos versus production's two, so its correctness improvement is not presented
 as a readability win.
 
+Commit `b214a053` extends the same ownership rule to joins selected while a
+natural loop is active. An inner conditional may use an immediate
+post-dominator only when that join remains inside the active loop; a
+function-level epilogue beyond the loop stays owned by the loop or its sibling
+path. The loop's own continuation now uses the same exact planned-clone or
+verified-shared-goto rule as its explicit exit regions.
+
+The pinned follow-up again requested all four Clang O2 fixture functions. Three
+now render through shadow v2 and `all_arms_break` still declines locally:
+
+- `fsm_returns_from_arm`: production fails and shadow passes 27 cases;
+- `two_returning_arms`: production and shadow both pass 22 cases, while gotos
+  fall from 8 to 1;
+- `nested_loop_returning_arm`: production and shadow both pass 22 cases, while
+  gotos fall from 42 to 35;
+- execution summary: 1 improved, 2 stable passes, 0 regressions, and 0
+  infrastructure findings.
+
+Clang fully unrolls the source inner loop in this O2 object, yielding one
+natural outer loop around a 70-block returning comparison ladder. The new real
+fixture test covers all 70 blocks and 116 edges and requires deterministic,
+parseable structured output. Its shadow text grows from production's 9,319
+bytes to 25,894 bytes, so this remains an explicit output-size and cleanup
+debt despite the seven-goto reduction.
+
+The focused Rust module after this increment reports 42 passed and 0 failed in
+0.93 seconds. The expanded Python execution regression passes as one test over
+the three rendered fixture functions.
+
 ## Broad-gate boundary
 
 Repository policy requires a whole-Python attempt after a source commit:
@@ -81,7 +110,9 @@ After the semantic follow-up commit, the required bounded rerun used the same
 suite with `-x`. It reached 17% and stopped at the first same broad failure,
 `test_aarch64_optimized_call_flow_round_trips`: `call_chain_in_loop` returned 0
 instead of 22176384 for `[0, 0]`. This is outside the structure-v2 fixture-212
-slice, but the global gate remains honestly red.
+slice, but the global gate remains honestly red. The required post-`b214a053`
+attempt reproduced that same first failure at 17%; no new earlier failure was
+observed.
 
 ## Roadmap effect
 
