@@ -127,17 +127,26 @@ fn coalesce_frame_object_param_spills(
 }
 
 fn expr_reads_exact_frame_home(expr: &Expr, home: &FrameParamHome) -> bool {
-    if matches!(expr, Expr::Deref { addr, size } if *size == home.size && **addr == home.addr) {
+    let expr = expr.semantic();
+    if matches!(expr, Expr::Deref { addr, size } if *size == home.size && addr.semantic() == home.addr.semantic())
+    {
         return true;
     }
     match expr {
+        Expr::Origin { .. } => unreachable!("semantic expression cannot be an origin wrapper"),
         Expr::Deref { addr, .. } => expr_reads_exact_frame_home(addr, home),
+        Expr::Call { target, args, .. } => {
+            expr_reads_exact_frame_home(target, home)
+                || args
+                    .iter()
+                    .any(|arg| expr_reads_exact_frame_home(arg, home))
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             expr_reads_exact_frame_home(lhs, home) || expr_reads_exact_frame_home(rhs, home)
         }
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => {
-            expr_reads_exact_frame_home(src, home)
-        }
+        Expr::Un { src, .. }
+        | Expr::Cast { expr: src, .. }
+        | Expr::NumericConvert { expr: src, .. } => expr_reads_exact_frame_home(src, home),
         Expr::Select {
             cond,
             if_true,
@@ -221,15 +230,20 @@ fn body_reads_exact_frame_home(body: &[Stmt], home: &FrameParamHome) -> bool {
 }
 
 fn expression_contains_stack_object(expr: &Expr) -> bool {
-    match expr {
+    match expr.semantic() {
+        Expr::Origin { .. } => unreachable!("semantic expression cannot be an origin wrapper"),
         Expr::StackAddr { .. } => true,
         Expr::Deref { addr, .. } => expression_contains_stack_object(addr),
+        Expr::Call { target, args, .. } => {
+            expression_contains_stack_object(target)
+                || args.iter().any(expression_contains_stack_object)
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             expression_contains_stack_object(lhs) || expression_contains_stack_object(rhs)
         }
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => {
-            expression_contains_stack_object(src)
-        }
+        Expr::Un { src, .. }
+        | Expr::Cast { expr: src, .. }
+        | Expr::NumericConvert { expr: src, .. } => expression_contains_stack_object(src),
         Expr::Select {
             cond,
             if_true,
@@ -274,7 +288,10 @@ fn record_frame_store(
     if !expression_contains_stack_object(addr) {
         return;
     }
-    if let Some(home) = homes.iter_mut().find(|home| home.addr == *addr) {
+    if let Some(home) = homes
+        .iter_mut()
+        .find(|home| home.addr.semantic() == addr.semantic())
+    {
         home.stores += 1;
         if home.size != size || home.arg.as_deref() != parameter_source(src, identities).as_deref()
         {
@@ -341,23 +358,39 @@ fn collect_frame_param_homes(
 }
 
 fn rewrite_frame_home_expr(expr: &mut Expr, homes: &[FrameParamHome]) {
-    if let Expr::Deref { addr, size } = expr {
+    let replacement = if let Expr::Deref { addr, size } = expr.semantic() {
         if let Some(arg) = homes.iter().find_map(|home| {
-            (home.size == *size && home.addr == **addr)
+            (home.size == *size && home.addr.semantic() == addr.semantic())
                 .then(|| home.arg.clone())
                 .flatten()
         }) {
-            *expr = Expr::Reg(VReg::phys(arg));
-            return;
+            Some(Expr::Reg(VReg::phys(arg)))
+        } else {
+            None
         }
+    } else {
+        None
+    };
+    if let Some(replacement) = replacement {
+        *expr.semantic_mut() = replacement;
+        return;
     }
-    match expr {
+    match expr.semantic_mut() {
+        Expr::Origin { .. } => unreachable!("semantic expression cannot be an origin wrapper"),
         Expr::Deref { addr, .. } => rewrite_frame_home_expr(addr, homes),
+        Expr::Call { target, args, .. } => {
+            rewrite_frame_home_expr(target, homes);
+            for arg in args {
+                rewrite_frame_home_expr(arg, homes);
+            }
+        }
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
             rewrite_frame_home_expr(lhs, homes);
             rewrite_frame_home_expr(rhs, homes);
         }
-        Expr::Un { src, .. } | Expr::Cast { expr: src, .. } => rewrite_frame_home_expr(src, homes),
+        Expr::Un { src, .. }
+        | Expr::Cast { expr: src, .. }
+        | Expr::NumericConvert { expr: src, .. } => rewrite_frame_home_expr(src, homes),
         Expr::Select {
             cond,
             if_true,
@@ -381,8 +414,10 @@ fn rewrite_frame_home_expr(expr: &mut Expr, homes: &[FrameParamHome]) {
 fn rewrite_frame_param_homes(body: &mut Vec<Stmt>, homes: &[FrameParamHome]) {
     body.retain(|statement| {
         !matches!(statement.semantic(),
-            Stmt::Store { addr, size, .. }
-                if homes.iter().any(|home| home.size == *size && home.addr == *addr))
+        Stmt::Store { addr, size, .. }
+            if homes.iter().any(|home| {
+                home.size == *size && home.addr.semantic() == addr.semantic()
+            }))
     });
     for statement in body {
         match statement.semantic_mut() {
@@ -867,7 +902,7 @@ pub(super) fn drop_self_stores(body: &mut Vec<Stmt>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::ast::OriginSet;
+    use crate::ir::ast::{OriginSet, ScalarType};
 
     fn simple_named_home() -> Vec<Stmt> {
         vec![
@@ -1078,6 +1113,93 @@ mod tests {
             Stmt::Return {
                 value: Some(Expr::Reg(register))
             } if register == &VReg::phys("arg0")
+        ));
+    }
+
+    #[test]
+    fn differently_attributed_frame_addresses_are_coalesced() {
+        let address = Expr::StackAddr {
+            object: VReg::phys("frame_10"),
+            size: 16,
+        };
+        let store_address_owner = OriginSet::one(0x2100);
+        let reload_address_owner = OriginSet::one(0x2104);
+        let reload_owner = OriginSet::one(0x2108);
+        let mut body = vec![
+            Stmt::Store {
+                addr: address.clone().with_origins(store_address_owner),
+                src: Expr::Reg(VReg::phys("arg0")),
+                size: 8,
+            },
+            Stmt::Return {
+                value: Some(
+                    Expr::Deref {
+                        addr: Box::new(address.with_origins(reload_address_owner)),
+                        size: 8,
+                    }
+                    .with_origins(reload_owner.clone()),
+                ),
+            },
+        ];
+
+        coalesce_frame_object_param_spills(&mut body, None);
+
+        assert_eq!(body.len(), 1);
+        let Stmt::Return { value: Some(value) } = body[0].semantic() else {
+            unreachable!()
+        };
+        assert_eq!(value.origins(), Some(&reload_owner));
+        assert!(matches!(
+            value.semantic(),
+            Expr::Reg(register) if register == &VReg::phys("arg0")
+        ));
+    }
+
+    #[test]
+    fn converted_frame_reload_inside_call_is_coalesced() {
+        let address = Expr::StackAddr {
+            object: VReg::phys("frame_10"),
+            size: 16,
+        };
+        let mut body = vec![
+            Stmt::Store {
+                addr: address.clone(),
+                src: Expr::Reg(VReg::phys("arg0")),
+                size: 4,
+            },
+            Stmt::Return {
+                value: Some(Expr::Call {
+                    target: Box::new(Expr::Named {
+                        va: 0x4000,
+                        name: "consume".into(),
+                    }),
+                    args: vec![Expr::NumericConvert {
+                        from: ScalarType::SignedInt(4),
+                        to: ScalarType::Float(4),
+                        expr: Box::new(Expr::Deref {
+                            addr: Box::new(address),
+                            size: 4,
+                        }),
+                    }],
+                    call_spec: None,
+                    result_width: Some(4),
+                }),
+            },
+        ];
+
+        coalesce_frame_object_param_spills(&mut body, None);
+
+        assert_eq!(body.len(), 1);
+        let Stmt::Return {
+            value: Some(Expr::Call { args, .. }),
+        } = body[0].semantic()
+        else {
+            unreachable!()
+        };
+        assert!(matches!(
+            args[0].semantic(),
+            Expr::NumericConvert { expr, .. }
+                if matches!(expr.semantic(), Expr::Reg(register) if register == &VReg::phys("arg0"))
         ));
     }
 }
