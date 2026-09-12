@@ -1420,6 +1420,10 @@ mod tests {
         });
         assert!(prepared.contains("switch ("), "{prepared}");
         assert!(
+            !prepared.contains("goto L_113c;"),
+            "the loop-local switch continuation must not be owned by one arm:\n{prepared}"
+        );
+        assert!(
             !prepared.contains("unrecovered indirect jump"),
             "{prepared}"
         );

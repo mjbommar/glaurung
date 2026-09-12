@@ -5,6 +5,7 @@ use super::{
     LoopKind, RegionCandidate, Terminal, Transfer,
 };
 use crate::ir::structure::Cfg;
+use std::collections::BTreeSet;
 
 /// A structured, non-rendering view of one verified CFG region.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -264,15 +265,19 @@ impl TreeBuilder<'_> {
         // A switch may own a local continuation, but it must not reach across
         // the natural-loop boundary that is currently structuring it. Loop
         // exits belong to `build_loop`, and the header is a typed `Continue`.
-        let join = self.cfg.immediate_postdominator(block).filter(|join| {
-            self.active_loops.last().is_none_or(|header| {
-                *join != *header
-                    && self
-                        .loops
-                        .by_header(*header)
-                        .is_some_and(|loop_info| loop_info.blocks.contains(join))
+        let join = self
+            .cfg
+            .immediate_postdominator(block)
+            .filter(|join| {
+                self.active_loops.last().is_none_or(|header| {
+                    *join != *header
+                        && self
+                            .loops
+                            .by_header(*header)
+                            .is_some_and(|loop_info| loop_info.blocks.contains(join))
+                })
             })
-        });
+            .or_else(|| self.direct_loop_local_switch_join(block, &evidence));
         let arm_stop = join.or(stop);
         let mut cases = Vec::with_capacity(evidence.cases.len());
         for case in evidence.cases {
@@ -319,6 +324,55 @@ impl TreeBuilder<'_> {
             regions.push(self.build(join, stop)?);
         }
         Some(sequence(regions))
+    }
+
+    /// Find a shared in-loop continuation even when a returning case prevents
+    /// it from post-dominating the whole switch.
+    ///
+    /// This deliberately recognises only the exact local shape: at least two
+    /// in-loop arm entries must either be the continuation or have it as their
+    /// sole successor. Arms whose entry is outside the loop are exits and do
+    /// not vote. The intersection makes one CFG block the sole authority; no
+    /// reachability guess or rendered-label matching is involved.
+    fn direct_loop_local_switch_join(
+        &self,
+        guard: usize,
+        evidence: &crate::ir::structure::SwitchEvidence,
+    ) -> Option<usize> {
+        let header = *self.active_loops.last()?;
+        let loop_info = self.loops.by_header(header)?;
+        let targets = evidence
+            .cases
+            .iter()
+            .map(|case| case.target)
+            .chain(evidence.default.iter().map(|default| default.target))
+            .filter(|target| loop_info.blocks.binary_search(target).is_ok())
+            .collect::<Vec<_>>();
+        if targets.len() < 2 {
+            return None;
+        }
+
+        let mut common: Option<BTreeSet<usize>> = None;
+        for target in targets {
+            let mut candidates = BTreeSet::from([target]);
+            if let [successor] = self.cfg.succs.get(target)?.as_slice() {
+                if loop_info.blocks.binary_search(successor).is_ok() {
+                    candidates.insert(*successor);
+                }
+            }
+            common = Some(match common {
+                Some(existing) => existing.intersection(&candidates).copied().collect(),
+                None => candidates,
+            });
+        }
+
+        common?.into_iter().find(|candidate| {
+            *candidate != header
+                && *candidate != guard
+                && *candidate != evidence.dispatch
+                && !self.owned[*candidate]
+                && !self.active[*candidate]
+        })
     }
 
     fn build_local_entry_block(
