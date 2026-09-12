@@ -5888,9 +5888,13 @@ relevant ratchet's accepted-regression record.
    call-argument tests pass. An exact-release 24-lane sweep of fixtures 95 and
    191 across six architectures and O0/O2 has zero attributable regressions and
    seven fail-to-pass movements: all three previously red AArch64 O2 table-call
-   functions plus the four x86-64/x86-64-GCC15 O2 loop cells. The remaining
-   corpus zero/partial-argument query and the distinct ARMv7/i386 O2 failures
-   stay open. See
+   functions plus the four x86-64/x86-64-GCC15 O2 loop cells. A host
+   fixture-corpus query then enumerates all six static function-table families
+   over GCC/Clang O0/O2. Every emitted call has its complete source arity;
+   fixture 150 Clang O0 reaches no call because its surrounding state-machine
+   switch remains an unrecovered WP5 indirect jump. The one reported
+   fixture-131 regression reproduces identically at parent `0c36651c`, so it is
+   not attributable. The distinct ARMv7/i386 O2 failures stay open. See
    `results/wp3-flat-table-call-arguments.md`.
    Commit `20364f46` then migrates shared integer declaration typing from one
    exact SSA identity to one unambiguous physical storage base. Same-carrier

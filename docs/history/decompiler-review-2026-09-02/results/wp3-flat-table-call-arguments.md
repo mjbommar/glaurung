@@ -149,9 +149,39 @@ fixture family are ARMv7/ARMv7-A32 O2 call/structure cells and i386 O2
 This is not universal indirect-call recovery. It covers relocation-proven local
 tables whose complete entry layouts form a valid ABI prefix; writable,
 incomplete, disagreeing, non-relocated, and unassociated indirect targets still
-decline. The next table-call work is the corpus query for remaining
-zero/partial-argument table calls, followed by the distinct ARMv7 and i386 O2
-encodings found by the bounded matrix. No DecBench or Joern run was made.
+decline. The fixture-corpus zero/partial-argument query is complete for the host
+GCC/Clang O0/O2 population. A source census found six static function-table
+families: fixtures 08, 95, 131, 148, 150, and 191. The bounded command was:
+
+```text
+TMPDIR=/home/mjbommar/.cache/glaurung/tmp \
+  UV_PROJECT_ENVIRONMENT=/home/mjbommar/.cache/glaurung/verify-85afee69/.venv \
+  uv run --no-sync python tools/dectest.py \
+  08_indirect_dispatch 95_function_pointer_table \
+  131_obfuscated_composite 148_dispatch_obfuscation \
+  150_obfuscation_composite 191_indirect_table_args \
+  --full --show --jobs 8
+```
+
+All 24 selected compiler/optimisation lanes completed. Every table-call
+function that passes execution necessarily consumes its behaviorally checked
+inputs, including fixture 191's explicit argument-witness slots. Manual review
+of every failing function that still emits a table call found the complete
+source arity: one argument for fixture 131, two for fixtures 148 and 150, and
+no zero/partial call. Fixture 150 Clang O0 emits no table call because its
+surrounding state-machine switch remains an unrecovered indirect jump; that is
+a WP5 control-recovery gap, not a partial-argument call.
+
+The sweep reports one apparent regression,
+`131_obfuscated_composite:clang:O0:obfuscated_pipeline`, and three apparent
+improvements. An exact release A/B at parent `0c36651c` reproduces the same
+fixture-131 failure and identical one-argument call, proving it is not
+attributable to the affine-address increment. The other baseline movements are
+likewise already present at the parent and are not ratcheted as evidence for
+this work.
+
+The next table-call work is therefore the distinct ARMv7 and i386 O2 encodings
+found by the architecture matrix. No DecBench or Joern run was made.
 
 The complete Python post-source-commit gate was attempted at the preceding
 `af320048` source revision. By 9% it had reproduced three unrelated existing
