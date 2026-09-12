@@ -7960,13 +7960,13 @@
     "t191_computed_args": "pass",
     "t191_direct_control": "pass",
     "t191_dispatch": "pass",
-    "t191_fold": "fail"
+    "t191_fold": "pass"
   },
   "191_indirect_table_args:armv7:O2": {
-    "t191_computed_args": "fail",
+    "t191_computed_args": "pass",
     "t191_direct_control": "pass",
-    "t191_dispatch": "fail",
-    "t191_fold": "fail"
+    "t191_dispatch": "pass",
+    "t191_fold": "pass"
   },
   "191_indirect_table_args:armv7_a32:O0": {
     "t191_computed_args": "pass",
@@ -7977,8 +7977,8 @@
   "191_indirect_table_args:armv7_a32:O2": {
     "t191_computed_args": "pass",
     "t191_direct_control": "pass",
-    "t191_dispatch": "fail",
-    "t191_fold": "fail"
+    "t191_dispatch": "pass",
+    "t191_fold": "pass"
   },
   "191_indirect_table_args:i386:O0": {
     "t191_computed_args": "pass",

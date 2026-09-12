@@ -588,6 +588,10 @@ fn apply_recovered_table_call_effects(
     ) -> Option<u64> {
         use crate::ir::types::BinOp;
         match (op, lhs, rhs) {
+            (BinOp::Add, Value::Reg(base), Value::Addr(addend))
+            | (BinOp::Add, Value::Addr(addend), Value::Reg(base)) => {
+                register_address(base, state).and_then(|address| address.checked_add(*addend))
+            }
             (BinOp::Add, Value::Reg(base), Value::Const(displacement))
             | (BinOp::Add, Value::Const(displacement), Value::Reg(base)) => {
                 register_address(base, state).and_then(|address| offset(address, *displacement))
@@ -1629,6 +1633,70 @@ mod tests {
         };
         assert_eq!(target, &VReg::phys("r13"));
         assert_eq!(effects.args, [VReg::phys("x0"), VReg::phys("x1")]);
+        assert_eq!(effects.proven_args, effects.args);
+        assert!(effects.args_are_exact);
+    }
+
+    #[test]
+    fn arm_pc_relative_table_call_gets_exact_pre_ssa_arguments() {
+        use crate::ir::types::{CallTarget, LlirInstr, Op, VReg, Value};
+
+        let mut function = flat_loop_table_call();
+        function.blocks[0].end_va = 0x100c;
+        function.blocks[0].instrs = vec![
+            LlirInstr {
+                va: 0x1000,
+                op: Op::Assign {
+                    dst: VReg::phys("r3"),
+                    src: Value::Const(0x2a58),
+                },
+            },
+            LlirInstr {
+                va: 0x1004,
+                op: Op::Bin {
+                    dst: VReg::phys("r3"),
+                    op: crate::ir::types::BinOp::Add,
+                    lhs: Value::Reg(VReg::phys("r3")),
+                    rhs: Value::Addr(0x1408),
+                },
+            },
+        ];
+        let Op::Load { dst, addr } = &mut function.blocks[1].instrs[0].op else {
+            panic!("expected indexed table load")
+        };
+        *dst = VReg::phys("r3");
+        addr.base = Some(VReg::phys("r3"));
+        function.blocks[1].succs = vec![0x1200];
+        let Op::Call { target, .. } = &mut function.blocks[1].instrs[1].op else {
+            panic!("expected indirect call")
+        };
+        *target = CallTarget::Indirect(Value::Reg(VReg::phys("r3")));
+        let mut facts = super::DirectCalleeFacts::default();
+        for target in [0x2000, 0x2100] {
+            facts.table_entry_layouts.insert(
+                target,
+                vec![VReg::phys("r0"), VReg::phys("r1"), VReg::phys("r2")],
+            );
+        }
+
+        super::apply_recovered_table_call_effects(
+            &mut function,
+            crate::ir::call_args::CallConv::Arm,
+            &facts,
+            &[table(&[0x2000, 0x2100])],
+        );
+
+        let Op::Call {
+            effects: Some(effects),
+            ..
+        } = &function.blocks[1].instrs[1].op
+        else {
+            panic!("expected annotated indirect call")
+        };
+        assert_eq!(
+            effects.args,
+            [VReg::phys("r0"), VReg::phys("r1"), VReg::phys("r2")]
+        );
         assert_eq!(effects.proven_args, effects.args);
         assert!(effects.args_are_exact);
     }

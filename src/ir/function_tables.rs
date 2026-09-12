@@ -241,6 +241,11 @@ pub fn tables_referenced_by<'tables>(
                     rhs,
                     ..
                 } => match (lhs, rhs) {
+                    (Value::Reg(base), Value::Addr(addend))
+                    | (Value::Addr(addend), Value::Reg(base)) => addresses
+                        .get(base)
+                        .copied()
+                        .and_then(|address| address.checked_add(*addend)),
                     (Value::Reg(base), Value::Const(displacement))
                     | (Value::Const(displacement), Value::Reg(base)) => addresses
                         .get(base)
@@ -1428,6 +1433,43 @@ mod tests {
                             op: BinOp::Add,
                             lhs: Value::Reg(VReg::phys("x22")),
                             rhs: Value::Const(0x1004),
+                        },
+                    },
+                ],
+                succs: vec![],
+            }],
+        };
+        let table = ops_table();
+
+        let referenced = tables_referenced_by(&caller, std::slice::from_ref(&table));
+
+        assert_eq!(referenced, [&table]);
+    }
+
+    #[test]
+    fn arm32_literal_displacement_plus_pc_marks_referenced_table() {
+        use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, Value};
+
+        let caller = LlirFunction {
+            entry_va: 0x1400,
+            blocks: vec![LlirBlock {
+                start_va: 0x1400,
+                end_va: 0x1408,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x1400,
+                        op: Op::Assign {
+                            dst: VReg::phys("r3"),
+                            src: Value::Const(0x2bfc),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1404,
+                        op: Op::Bin {
+                            dst: VReg::phys("r3"),
+                            op: BinOp::Add,
+                            lhs: Value::Reg(VReg::phys("r3")),
+                            rhs: Value::Addr(0x1408),
                         },
                     },
                 ],
