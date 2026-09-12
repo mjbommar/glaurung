@@ -10,6 +10,12 @@ use crate::analysis::exception::{CatchType, ExceptionAction, ExceptionCallSite};
 use crate::ir::ast::{CatchClause, Expr, Function, OriginSet, Stmt};
 use crate::ir::types::VReg;
 
+/// Whether an AST comment is the producer-owned marker for an LSDA landing pad.
+pub(crate) fn is_landing_pad_marker(text: &str) -> bool {
+    text.strip_prefix("__glaurung_eh_landing_")
+        .is_some_and(|va| !va.is_empty() && va.bytes().all(|byte| byte.is_ascii_hexdigit()))
+}
+
 /// Preserve landing-pad identity through generic label cleanup without making
 /// exception constructs visible to passes that run before final preparation.
 pub fn mark_landing_pads(function: &mut Function, sites: &[ExceptionCallSite]) {
@@ -25,6 +31,50 @@ pub fn mark_landing_pads(function: &mut Function, sites: &[ExceptionCallSite]) {
             index,
             Stmt::Comment(format!("__glaurung_eh_landing_{:x}", site.landing_pad)),
         );
+    }
+}
+
+/// Materialise the exception object supplied by the unwinder at an LSDA entry.
+///
+/// Itanium landing pads receive state from the unwinder rather than from an
+/// ordinary predecessor in the machine CFG. SSA therefore has no local
+/// definition for that live-in. Replace only the canonical entry copy from
+/// the ABI integer-result register, and only when the value-identity sidecar
+/// proves that storage. Rendered register names are never evidence.
+pub fn materialize_landing_pad_inputs(
+    function: &mut Function,
+    sites: &[ExceptionCallSite],
+    cc: crate::ir::call_args::CallConv,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    for site in sites {
+        let marker = format!("__glaurung_eh_landing_{:x}", site.landing_pad);
+        let Some(marker_index) = function.body.iter().position(
+            |statement| matches!(statement.semantic(), Stmt::Comment(text) if text == &marker),
+        ) else {
+            continue;
+        };
+
+        let candidate = function.body[marker_index + 1..]
+            .iter_mut()
+            .find(|statement| !matches!(statement.semantic(), Stmt::Label(_) | Stmt::Nop));
+        let Some(Stmt::Assign { src, .. }) = candidate.map(Stmt::semantic_mut) else {
+            continue;
+        };
+        let Expr::Reg(source) = src.semantic() else {
+            continue;
+        };
+        let Some(base) = identities.unambiguous_physical_base(source) else {
+            continue;
+        };
+        if !crate::ir::abi::integer_return_registers(cc).contains(&base) {
+            continue;
+        }
+
+        let (_, origins) =
+            std::mem::replace(src, Expr::Unknown(String::new())).into_semantic_with_origins();
+        *src = Expr::Unknown("exception object supplied by unwinder".into())
+            .with_optional_origins(origins);
     }
 }
 
@@ -797,7 +847,8 @@ fn origins_of(statements: &[Stmt]) -> OriginSet {
 mod tests {
     use super::{
         mark_int_throws_with_address_map, mark_int_throws_with_address_map_and_identities,
-        recover_throws, recover_throws_with_identities, recover_typed_handlers,
+        materialize_landing_pad_inputs, recover_throws, recover_throws_with_identities,
+        recover_typed_handlers,
     };
     use crate::analysis::exception::{CatchType, ExceptionAction, ExceptionCallSite};
     use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
@@ -813,6 +864,79 @@ mod tests {
             dst,
             call_spec: None,
         }
+    }
+
+    fn cleanup_site() -> ExceptionCallSite {
+        ExceptionCallSite {
+            function_start: 0x1000,
+            protected_start: 0x1004,
+            protected_end: 0x1010,
+            landing_pad: 0x1030,
+            action: ExceptionAction::Cleanup,
+            catch_type: None,
+            type_info_location: None,
+        }
+    }
+
+    fn marked_landing_copy(source: VReg) -> Function {
+        Function {
+            name: "cleanup".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Comment("__glaurung_eh_landing_1030".into()),
+                Stmt::Label(0x1030),
+                Stmt::Nop,
+                Stmt::Assign {
+                    dst: VReg::phys("saved_exception"),
+                    src: Expr::Reg(source),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn identity_proven_landing_object_becomes_external_input() {
+        let source = VReg::phys("opaque_input");
+        let mut function = marked_landing_copy(source.clone());
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_physical_base(source, "rax");
+
+        materialize_landing_pad_inputs(
+            &mut function,
+            &[cleanup_site()],
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &identities,
+        );
+
+        assert!(matches!(
+            function.body[3].semantic(),
+            Stmt::Assign {
+                src: Expr::Unknown(reason),
+                ..
+            } if reason == "exception object supplied by unwinder"
+        ));
+    }
+
+    #[test]
+    fn landing_object_requires_unambiguous_abi_identity() {
+        let source = VReg::phys("rax#9");
+        let mut function = marked_landing_copy(source.clone());
+        let expected = function.clone();
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_physical_base(source.clone(), "rax");
+        identities.attach_physical_base(source, "rbx");
+
+        materialize_landing_pad_inputs(
+            &mut function,
+            &[cleanup_site()],
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &identities,
+        );
+
+        assert_eq!(
+            function, expected,
+            "a suggestive spelling or mixed storage candidates cannot mint an exception input"
+        );
     }
 
     #[test]

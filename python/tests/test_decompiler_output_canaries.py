@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+import glaurung as g
+
 ROOT = Path(__file__).resolve().parent.parent.parent
 TOOL = ROOT / "tools/decompiler_output_canaries.py"
 BASELINE = ROOT / "tests/decompiler_output_canaries/baseline.json"
@@ -44,6 +46,18 @@ def test_real_function_capture_is_deterministic_and_health_attributed(canary_mod
     assert first["health"]["uncovered_cfg_edges"] == 0
     assert first["health"]["invented_cfg_edges"] == 0
     assert first["health_event_count"] >= 20
+
+
+def test_real_cpp_cleanup_landing_inputs_are_defined(monkeypatch):
+    """LSDA cleanup entries receive their exception object from the unwinder."""
+    binary = ROOT / "samples/binaries/platforms/linux/amd64/native/gcc/O0/hello-gcc-O0"
+    monkeypatch.setenv("GLAURUNG_VERIFY_DEFS", "1")
+
+    output = g.ir.decompile_at(str(binary), 0x2549, style="decbench")
+
+    assert "// glaurung-verify:" not in output
+    assert output.count("__glaurung_eh_landing_") >= 2
+    assert "_Unwind_Resume" in output
 
 
 def test_manifest_parser_rejects_unknown_fields_and_unpinned_inputs(

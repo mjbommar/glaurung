@@ -639,10 +639,14 @@ fn prune_unreachable_body(body: &mut Vec<Stmt>) {
         // Origin-wrapped transfers are machine edges already represented by
         // the enclosing recovered region. Only residual lexical labels and
         // terminators delimit this list for the early reachability cleanup.
-        if matches!(statement.semantic(), Stmt::Label(_)) {
+        if matches!(statement.semantic(), Stmt::Label(_))
+            || matches!(statement.semantic(), Stmt::Comment(text) if crate::ir::exception_recover::is_landing_pad_marker(text))
+        {
             // A label may be entered by a goto from any nested region. Target
             // pruning below will remove it on the next iteration if no such
-            // edge survives.
+            // edge survives. An LSDA landing marker is independently an
+            // external exceptional entry and deliberately survives label
+            // pruning.
             reachable = true;
         }
         if !reachable {
@@ -1455,6 +1459,39 @@ mod tests {
         prune_unreachable_tails(&mut f);
 
         assert_eq!(f, expected, "a live goto keeps its target entry reachable");
+    }
+
+    #[test]
+    fn exception_landing_marker_after_return_reopens_reachability() {
+        let mut function = Function {
+            name: "cleanup_path".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Return { value: None },
+                Stmt::Comment("__glaurung_eh_landing_1100".into()),
+                Stmt::Assign {
+                    dst: VReg::phys("saved_exception"),
+                    src: Expr::Reg(VReg::phys("exception_input")),
+                },
+                Stmt::Call {
+                    target: Expr::Named {
+                        va: 0x2000,
+                        name: "_Unwind_Resume".into(),
+                    },
+                    args: vec![Expr::Reg(VReg::phys("saved_exception"))],
+                    dst: None,
+                    call_spec: None,
+                },
+            ],
+        };
+        let expected = function.clone();
+
+        prune_unreachable_tails(&mut function);
+
+        assert_eq!(
+            function, expected,
+            "an LSDA-proven landing pad is an external control-flow entry"
+        );
     }
 
     #[test]

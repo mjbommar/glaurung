@@ -1648,6 +1648,12 @@ pub(super) fn lower_and_run_ast_passes(
         )
     });
     crate::ir::exception_recover::mark_landing_pads(&mut function, exception_sites);
+    crate::ir::exception_recover::materialize_landing_pad_inputs(
+        &mut function,
+        exception_sites,
+        cc,
+        &value_identities,
+    );
     crate::ir::health::trace_pass("lower", &function, cfg_health);
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
         eprintln!(
