@@ -11,6 +11,10 @@ spelling as identical plain expressions. Only the provenance carrier is
 transparent; the underlying dereference width, wide-local classification, and
 load-before-store ordering proofs are unchanged.
 
+Commit `e712392c` closes the adjacent zero-fill sibling. An attributed
+16-byte zero value now retains the same full-region `__builtin_memset` as the
+plain constant instead of degrading to a single machine-word store.
+
 ## Observed-red and focused verification
 
 `attributed_sixteen_byte_load_store_keeps_every_byte` was observed red before
@@ -48,6 +52,11 @@ all commands passed
 
 Filtered tests were not executed.
 
+The zero-fill sibling was separately observed red as
+`*(long *)(&local_10[0]) = 0;`, which initialized only half of the proven
+16-byte object. After `e712392c`, its attributed and plain-expression contracts
+both pass and render `__builtin_memset(&local_10[0], 0, 16);`.
+
 ## Exact release checkpoint
 
 A clean detached worktree at exact commit `c08b6dd9` was release-built. The
@@ -67,9 +76,14 @@ This retained fixture result is not claimed as an attributable corpus-output
 improvement. No whole-Python, DecBench, or Joern gate was run for this bounded
 increment.
 
+An exact release build of `e712392c` has extension SHA-256
+`b10ffb62c53d699345e138eb5cf282fd9a61b2e6113a644c667f5f1f4ac6da9b`.
+All 20 fixture-184 function cells across GCC/Clang O0/O2 pass, including the
+fixed zero-block case and the non-zero width controls.
+
 ## Next boundary
 
 Continue the render-consumer audit with one raw-expression match at a time.
-Wide zero stores, pointer-valued stores, promoted-local destinations, and
-aggregate returns still have direct pattern matches; each needs its own
-observed-red contract before becoming origin-transparent.
+Pointer-valued stores, promoted-local destinations, and aggregate returns
+still have direct pattern matches; each needs its own observed-red contract
+before becoming origin-transparent.

@@ -2622,6 +2622,11 @@ provenance through lowering.
   exact release build retains all 16 fixture-188 function cells across
   GCC/Clang O0/O2, including the transformed-lane negative control. See
   `results/wp3-wide-copy-expression-carriers.md`.
+  Commit `e712392c` closes the adjacent wide-zero sibling. An attributed
+  16-byte zero store no longer narrows to one machine word and instead retains
+  the full-region `memset` spelling. Its observed-red and plain controls pass;
+  an exact release build retains all 20 fixture-184 function cells across
+  GCC/Clang O0/O2. The same result record carries this sibling.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
