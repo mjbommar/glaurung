@@ -9287,6 +9287,43 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn attributed_sixteen_byte_load_store_keeps_every_byte() {
+        let loaded = VReg::phys("var0");
+        let f = Function {
+            name: "copy_attributed_vector".to_string(),
+            entry_va: 0x20,
+            body: vec![
+                Stmt::Assign {
+                    dst: loaded.clone(),
+                    src: Expr::Deref {
+                        addr: Box::new(
+                            Expr::Reg(VReg::phys("arg1")).with_origins(OriginSet::one(0x20)),
+                        ),
+                        size: 16,
+                    }
+                    .with_origins(OriginSet::one(0x24)),
+                },
+                Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("arg0")).with_origins(OriginSet::one(0x28)),
+                    src: Expr::Reg(loaded).with_origins(OriginSet::one(0x2c)),
+                    size: 16,
+                },
+            ],
+        };
+
+        let prepared = prepare_for_decbench(&f);
+        assert_eq!(prepared.body.len(), 2, "{prepared:#?}");
+        let text = render_decbench(&prepared);
+        assert!(
+            text.contains("__builtin_memcpy(var0, (void *)(arg1), 16);")
+                && text.contains("__builtin_memmove((void *)(arg0), var0, 16);"),
+            "an owner must not narrow a complete vector copy: {text}"
+        );
+        assert!(!text.contains("long var0;"), "{text}");
+        assert_looks_like_c(&text);
+    }
+
+    #[test]
     fn decbench_vector_load_batch_preserves_load_before_store_order() {
         let first = VReg::phys("var0");
         let second = VReg::phys("var1");

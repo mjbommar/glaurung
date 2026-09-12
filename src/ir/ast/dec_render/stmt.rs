@@ -297,7 +297,7 @@ pub(in crate::ir::ast) fn write_stmt_dec(s: &Stmt, out: &mut String, level: usiz
                 if let Expr::Deref {
                     addr: source,
                     size: 16,
-                } = src
+                } = src.semantic()
                 {
                     indent(out, level);
                     out.push_str("__builtin_memcpy(");
@@ -341,7 +341,7 @@ pub(in crate::ir::ast) fn write_stmt_dec(s: &Stmt, out: &mut String, level: usiz
             // overlap-safe builtin. Unlike `memcpy`, `memmove` also matches a
             // load-before-store instruction pair when the ranges overlap.
             if *size == 16 {
-                let source = match src {
+                let source = match src.semantic() {
                     Expr::Deref {
                         addr: source,
                         size: 16,
@@ -356,7 +356,7 @@ pub(in crate::ir::ast) fn write_stmt_dec(s: &Stmt, out: &mut String, level: usiz
                     // A wide local is declared as a byte array and already
                     // decays to `void *`; only machine-word addresses need the
                     // representation conversion.
-                    match source {
+                    match source.semantic() {
                         Expr::Reg(register) if dec_is_wide_local(register) => {
                             write_reg_lvalue_dec(register, out)
                         }
