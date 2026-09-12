@@ -2766,7 +2766,14 @@ provenance through lowering.
   All 37 owning high-variable tests, all 11 prepared-AST memory-object tests,
   and both directly owning release-built binary checks pass. See
   `results/wp3-pointer-refinement-required-identities.md`. Other semantic
-  consumers and universal origin attribution remain open. Commit `3e302824`
+  consumers and universal origin attribution remain open. Commit `6ef3ba30`
+  removes the adjacent production no-sidecar entry point from prepared-AST
+  ABI-width refinement. High-half parameters, ordinary width-refinement
+  values, and promoted-store exclusions now require typed sidecar facts rather
+  than `argN`, `varN`, or `local_N` spelling. Five identity contracts, the fast
+  66-test `decbench_` AST-render group, four exact adjacent controls, a library
+  check, and four directly relevant release-built Python round trips pass. See
+  `results/wp3-abi-refinement-required-identities.md`. Commit `3e302824`
   removes an `argN` spelling decision from
   DWARF aggregate-field recovery: only roles seeded from the authoritative
   prototype are exempt from definition validation, so stale or fabricated
