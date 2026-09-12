@@ -2549,6 +2549,12 @@ provenance through lowering.
   24 canary tests pass; an exact clean release build retains the AArch64 O2
   `graph_bfs` lane and both stack-protected return cases. See
   `results/wp3-canary-expression-origins.md`.
+  Commit `aeb0c581` closes the scalar numeric-conversion sibling in the same
+  consumer: slot, TLS-marker, and named-guard walkers now traverse
+  `NumericConvert` exactly as they traverse integer `Cast`. The observed-red
+  contract and all 25 canary tests pass; an exact release build retains the
+  AArch64 O2 `graph_bfs` lane and both stack-protected return cases. See
+  `results/wp3-canary-numeric-conversion-origins.md`.
   Commit `327b6734` closes the adjacent lazy-call saturation consumer. Constant
   arms, signed range predicates, doubled call results, promoted destinations,
   and saturation recognition now see through expression owners, while the
