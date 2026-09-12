@@ -536,7 +536,7 @@ fn apply_recovered_table_call_effects(
     facts: &DirectCalleeFacts,
     tables: &[crate::ir::function_tables::FunctionPointerTable],
 ) {
-    use crate::ir::types::{CallTarget, Op, VReg, Value};
+    use crate::ir::types::{CallTarget, MemOp, Op, VReg, Value};
     use std::collections::HashMap;
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -621,6 +621,27 @@ fn apply_recovered_table_call_effects(
         })
     }
 
+    fn loaded_value(
+        address: &MemOp,
+        state: &HashMap<VReg, TableValue>,
+        tables: &[crate::ir::function_tables::FunctionPointerTable],
+    ) -> Option<TableValue> {
+        if address.segment.is_some() {
+            return None;
+        }
+        let base = address.base.as_ref()?;
+        let base_address = register_address(base, state)?;
+        let effective_address = offset(base_address, address.disp)?;
+        loaded_table(
+            effective_address,
+            address.index.is_some(),
+            address.scale,
+            address.size,
+            tables,
+        )
+        .map(TableValue::Entry)
+    }
+
     fn merge(states: impl Iterator<Item = HashMap<VReg, TableValue>>) -> HashMap<VReg, TableValue> {
         let mut states = states.peekable();
         let Some(mut joined) = states.next() else {
@@ -694,41 +715,17 @@ fn apply_recovered_table_call_effects(
                     Op::Bin { op, lhs, rhs, .. } => {
                         derived_address(*op, lhs, rhs, &state).map(TableValue::Address)
                     }
+                    Op::Load { addr, .. } => loaded_value(addr, &state, tables),
                     _ => None,
                 };
                 if let Some(definition) = definition.as_ref() {
                     state.remove(definition);
                 }
                 match &instruction.op {
-                    Op::Assign { dst, .. } | Op::Bin { dst, .. } => {
+                    Op::Assign { dst, .. } | Op::Bin { dst, .. } | Op::Load { dst, .. } => {
                         if let Some(value) = derived {
                             state.insert(dst.clone(), value);
                         }
-                    }
-                    Op::Load { dst, addr } => {
-                        let Some(base) = addr.base.as_ref() else {
-                            continue;
-                        };
-                        let Some(TableValue::Address(base_address)) = state.get(base).copied()
-                        else {
-                            continue;
-                        };
-                        if addr.segment.is_some() {
-                            continue;
-                        }
-                        let Some(address) = offset(base_address, addr.disp) else {
-                            continue;
-                        };
-                        let Some(table_va) = loaded_table(
-                            address,
-                            addr.index.is_some(),
-                            addr.scale,
-                            addr.size,
-                            tables,
-                        ) else {
-                            continue;
-                        };
-                        state.insert(dst.clone(), TableValue::Entry(table_va));
                     }
                     Op::Call { .. } => state.retain(|register, _| !is_caller_saved(register)),
                     _ => {}
@@ -758,36 +755,17 @@ fn apply_recovered_table_call_effects(
                 Op::Bin { op, lhs, rhs, .. } => {
                     derived_address(*op, lhs, rhs, &state).map(TableValue::Address)
                 }
+                Op::Load { addr, .. } => loaded_value(addr, &state, tables),
                 _ => None,
             };
             if let Some(definition) = definition.as_ref() {
                 state.remove(definition);
             }
             match &mut instruction.op {
-                Op::Assign { dst, .. } | Op::Bin { dst, .. } => {
+                Op::Assign { dst, .. } | Op::Bin { dst, .. } | Op::Load { dst, .. } => {
                     if let Some(value) = derived {
                         state.insert(dst.clone(), value);
                     }
-                }
-                Op::Load { dst, addr } => {
-                    let Some(base) = addr.base.as_ref() else {
-                        continue;
-                    };
-                    let Some(TableValue::Address(base_address)) = state.get(base).copied() else {
-                        continue;
-                    };
-                    if addr.segment.is_some() {
-                        continue;
-                    }
-                    let Some(address) = offset(base_address, addr.disp) else {
-                        continue;
-                    };
-                    let Some(table_va) =
-                        loaded_table(address, addr.index.is_some(), addr.scale, addr.size, tables)
-                    else {
-                        continue;
-                    };
-                    state.insert(dst.clone(), TableValue::Entry(table_va));
                 }
                 Op::Call {
                     target: CallTarget::Indirect(Value::Reg(target)),
@@ -1619,6 +1597,15 @@ mod tests {
                 },
             },
         ];
+        let Op::Load { dst, .. } = &mut function.blocks[1].instrs[0].op else {
+            panic!("expected indexed table load")
+        };
+        *dst = VReg::phys("r13");
+        function.blocks[1].succs = vec![0x1200];
+        let Op::Call { target, .. } = &mut function.blocks[1].instrs[1].op else {
+            panic!("expected indirect call")
+        };
+        *target = CallTarget::Indirect(Value::Reg(VReg::phys("r13")));
         let mut facts = super::DirectCalleeFacts::default();
         for target in [0x2000, 0x2100] {
             facts
@@ -1640,7 +1627,7 @@ mod tests {
         else {
             panic!("expected annotated indirect call")
         };
-        assert_eq!(target, &VReg::Temp(0));
+        assert_eq!(target, &VReg::phys("r13"));
         assert_eq!(effects.args, [VReg::phys("x0"), VReg::phys("x1")]);
         assert_eq!(effects.proven_args, effects.args);
         assert!(effects.args_are_exact);
