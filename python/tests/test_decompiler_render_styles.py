@@ -62,6 +62,9 @@ RENDER_CASES = [
 WIDE_CLANG_O2 = FIXTURES / "build" / "154_wide_switch-clang-O2.so"
 LOOPS_GCC_O0 = FIXTURES / "build" / "03_loop_shapes-gcc-O0.so"
 PACKET_GCC_O0 = FIXTURES / "build" / "07_packet_parser-gcc-O0.so"
+RETURNING_ARM_CLANG_O2 = (
+    FIXTURES / "build" / "212_loop_with_returning_arm-clang-O2.so"
+)
 
 
 def test_shadow_batch_returns_each_verified_function() -> None:
@@ -154,6 +157,34 @@ def test_verified_shadow_switch_spells_its_adjacent_join_as_break() -> None:
 
     assert "goto L_26fe;" not in body, body
     assert body.count("goto ") <= 32, body
+
+
+def test_shadow_loop_switch_with_a_shared_exit_round_trips() -> None:
+    """A sibling-owned return must not make a typed in-loop switch decline."""
+    exports = D.exported_functions(str(RETURNING_ARM_CLANG_O2))
+    [(_name, _va, body, *_extra)] = g.ir.decompile_many(
+        str(RETURNING_ARM_CLANG_O2),
+        [exports["fsm_returns_from_arm"]],
+        style="decbench",
+        shadow_v2=True,
+        max_functions=1,
+    )
+
+    assert "switch (" in body, body
+    assert "case 3:" in body, body
+    assert "unrecovered indirect jump" not in body, body
+
+    results = D.run(
+        str(RETURNING_ARM_CLANG_O2),
+        str(FIXTURES / "src" / "212_loop_with_returning_arm.c"),
+        "212_loop_with_returning_arm",
+        seed=1234,
+        fuzz=M.FIXTURE_FUZZ,
+        lane="clang:O2:shadow-v2",
+        only={"fsm_returns_from_arm"},
+        shadow_v2=True,
+    )
+    assert results["fsm_returns_from_arm"]["status"] == "pass", results
 
 
 def _source_for(fixture: str) -> Path:

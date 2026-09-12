@@ -479,9 +479,19 @@ impl TreeBuilder<'_> {
                 let mut regions = Vec::with_capacity(exits.len());
                 for target in exits {
                     if Some(target) != join {
+                        // A sibling path outside the loop may already own an
+                        // exit target when the enclosing conditional has no
+                        // common post-dominator.  The typed `Break` in the
+                        // loop body still represents the exit edge; do not
+                        // reject the whole tree or duplicate the continuation.
+                        let region = if self.owned.get(target).copied().unwrap_or(false) {
+                            StructuredRegion::Empty
+                        } else {
+                            self.build(target, join)?
+                        };
                         regions.push(LoopExitRegion {
                             target,
-                            region: Box::new(self.build(target, join)?),
+                            region: Box::new(region),
                         });
                     }
                 }
