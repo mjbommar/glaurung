@@ -55,3 +55,7 @@ Each command was `cargo test --features python-ext --lib
 ir::<module>::tests::<name> -- --exact`. No broad Rust, Python, fixture,
 DecBench, or Joern suite was run. Other semantic display-name consumers remain
 open under WP3.
+
+The loop-entry compatibility statement above is superseded by commit
+`07a67892`: this consumer no longer has a no-sidecar API or any `varN` parser.
+See `wp3-loop-entry-required-identities.md` for the focused release evidence.

@@ -2751,7 +2751,13 @@ provenance through lowering.
   sidecar. Commit `db6c4756` applies the same authority rule to exact high-bit
   and pointer-value type refinement, while promoted stack objects retain their
   separate storage-model eligibility. See
-  `results/wp3-semantic-name-fallbacks.md`. Compatibility and other product
+  `results/wp3-semantic-name-fallbacks.md`. Commit `07a67892` then removes the
+  loop-entry coalescer's no-sidecar compatibility API and final `varN` parser.
+  Its sole production caller must provide the pipeline-owned sidecar; all 17
+  owning tests now construct explicit identities, and a missing identity fails
+  closed regardless of spelling. The 12-lane loop slice and six
+  cross-architecture O0/O2 Hello cells remain green after a fresh release
+  build. See `results/wp3-loop-entry-required-identities.md`. Other product
   consumers remain. Commit `3e302824` removes an `argN` spelling decision from
   DWARF aggregate-field recovery: only roles seeded from the authoritative
   prototype are exempt from definition validation, so stale or fabricated

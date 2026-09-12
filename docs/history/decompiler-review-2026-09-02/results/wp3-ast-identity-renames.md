@@ -28,6 +28,10 @@ Commit `633df9f7` also closes the loop-entry coalescer's remaining semantic
 required; a missing or ambiguous record refuses the rewrite. The legacy spelling
 heuristic remains only for compatibility callers that supply no sidecar.
 
+That final compatibility route is removed by commit `07a67892`. Loop-entry
+coalescing now requires the identity sidecar at its type boundary, including in
+tests; see `wp3-loop-entry-required-identities.md`.
+
 The exact rename assertions were observed red before the pass returned a map
 and before `ValueIdentities::apply_renames` was available to AST passes. Focused
 validation after implementation:
