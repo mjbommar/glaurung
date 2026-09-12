@@ -189,10 +189,19 @@ pub(super) fn verify_tree(
     }
     let mut expected_tails = duplicated_tails.to_vec();
     expected_tails.retain(|tail| {
-        !controls.iter().any(|(from, transfer)| {
-            *from == tail.cloned_at_predecessor
-                && matches!(transfer, Transfer::Break { to, .. } if *to == tail.source_block)
-        })
+        let materialized_here =
+            materialized_tails
+                .iter()
+                .any(|(source_block, blocks, cloned_at_predecessor)| {
+                    *source_block == tail.source_block
+                        && *blocks == tail.blocks
+                        && *cloned_at_predecessor == tail.cloned_at_predecessor
+                });
+        materialized_here
+            || !controls.iter().any(|(from, transfer)| {
+                *from == tail.cloned_at_predecessor
+                    && matches!(transfer, Transfer::Break { to, .. } if *to == tail.source_block)
+            })
     });
     for (source_block, blocks, cloned_at_predecessor) in materialized_tails {
         if let Some(position) = expected_tails.iter().position(|tail| {
@@ -501,18 +510,12 @@ fn visit_tree<'a>(
             },
         )),
         StructuredRegion::SharedGoto { from, to, taken } => {
-            let expected = match taken {
-                Some(taken) => Transfer::Branch {
-                    to: *to,
-                    taken: *taken,
-                },
-                None => Transfer::Flow { to: *to },
-            };
-            if !candidate
-                .blocks()
-                .iter()
-                .any(|block| block.block == *from && block.transfers.contains(&expected))
-            {
+            if !candidate.blocks().iter().any(|block| {
+                block.block == *from
+                    && block.transfers.iter().any(|transfer| {
+                        transfer_target(transfer) == *to && transfer_taken(transfer) == *taken
+                    })
+            }) {
                 errors.push(TreeError::ControlTransferInvented {
                     from: *from,
                     to: *to,
@@ -785,6 +788,16 @@ fn transfer_target(transfer: &Transfer) -> usize {
         | Transfer::Break { to, .. }
         | Transfer::LocalGoto { to, .. } => *to,
         Transfer::Continue { header, .. } => *header,
+    }
+}
+
+fn transfer_taken(transfer: &Transfer) -> Option<bool> {
+    match transfer {
+        Transfer::Branch { taken, .. } => Some(*taken),
+        Transfer::Break { taken, .. }
+        | Transfer::Continue { taken, .. }
+        | Transfer::LocalGoto { taken, .. } => *taken,
+        Transfer::Flow { .. } => None,
     }
 }
 

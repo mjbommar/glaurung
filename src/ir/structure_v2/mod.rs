@@ -1428,6 +1428,40 @@ mod tests {
     }
 
     #[test]
+    fn real_two_returning_arms_materializes_its_planned_loop_exit_clone() {
+        let Some(lifted) = lift_real_fixture(
+            "212_loop_with_returning_arm-clang-O2.so",
+            "two_returning_arms",
+        ) else {
+            return;
+        };
+        let ssa = compute_ssa(&lifted);
+        let report = observe(&lifted, &ssa);
+
+        let tree = report
+            .tree
+            .as_ref()
+            .unwrap_or_else(|| panic!("planned terminal clone should recover: {report:#?}"));
+        let planned = report
+            .duplicated_tails
+            .iter()
+            .find(|tail| tail.source_block == 8 && tail.cloned_at_predecessor == 4)
+            .expect("loop-exit return clone provenance");
+        assert!(tree_has_region(&tree.root, |region| matches!(
+            region,
+            StructuredRegion::DuplicatedReturn {
+                source_block,
+                cloned_at_predecessor,
+                ..
+            } if source_block == &planned.source_block
+                && cloned_at_predecessor == &planned.cloned_at_predecessor
+        )));
+        assert!(report.verification_errors.is_empty(), "{report:#?}");
+        assert!(report.tree_verification_errors.is_empty(), "{report:#?}");
+        assert_prepared_c(&report);
+    }
+
+    #[test]
     fn real_dispatch_in_loop_o0_materializes_switch_exit_paths() {
         for binary in [
             "206_aarch64_wide_dispatch-clang-O0.so",

@@ -481,11 +481,37 @@ impl TreeBuilder<'_> {
                     if Some(target) != join {
                         // A sibling path outside the loop may already own an
                         // exit target when the enclosing conditional has no
-                        // common post-dominator.  The typed `Break` in the
-                        // loop body still represents the exit edge; do not
-                        // reject the whole tree or duplicate the continuation.
+                        // common post-dominator.  Reuse only a clone that the
+                        // bounded tail planner proved for this exact loop-exit
+                        // predecessor.  An empty continuation would silently
+                        // turn the typed `Break` into a fall off the function.
                         let region = if self.owned.get(target).copied().unwrap_or(false) {
-                            StructuredRegion::Empty
+                            let (from, transfer) = loop_info
+                                .exits
+                                .iter()
+                                .filter(|(_, to)| *to == target)
+                                .find_map(|(from, _)| {
+                                    self.candidate_block(*from)?
+                                        .transfers
+                                        .iter()
+                                        .find(|transfer| transfer_target(transfer) == target)
+                                        .map(|transfer| (*from, transfer.clone()))
+                                })?;
+                            if let Some(tail) = self.duplicated_tails.iter().find(|tail| {
+                                tail.source_block == target && tail.cloned_at_predecessor == from
+                            }) {
+                                StructuredRegion::DuplicatedReturn {
+                                    source_block: target,
+                                    blocks: tail.blocks.clone(),
+                                    cloned_at_predecessor: tail.cloned_at_predecessor,
+                                }
+                            } else {
+                                StructuredRegion::SharedGoto {
+                                    from,
+                                    to: target,
+                                    taken: transfer_taken(&transfer),
+                                }
+                            }
                         } else {
                             self.build(target, join)?
                         };

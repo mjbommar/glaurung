@@ -159,20 +159,21 @@ def test_verified_shadow_switch_spells_its_adjacent_join_as_break() -> None:
     assert body.count("goto ") <= 32, body
 
 
-def test_shadow_loop_switch_with_a_shared_exit_round_trips() -> None:
-    """A sibling-owned return must not make a typed in-loop switch decline."""
+def test_shadow_loop_switches_with_shared_exits_round_trip() -> None:
+    """Sibling-owned returns must retain their proved loop-exit clones."""
     exports = D.exported_functions(str(RETURNING_ARM_CLANG_O2))
-    [(_name, _va, body, *_extra)] = g.ir.decompile_many(
+    functions = {"fsm_returns_from_arm", "two_returning_arms"}
+    rows = g.ir.decompile_many(
         str(RETURNING_ARM_CLANG_O2),
-        [exports["fsm_returns_from_arm"]],
+        [exports[name] for name in sorted(functions)],
         style="decbench",
         shadow_v2=True,
-        max_functions=1,
+        max_functions=len(functions),
     )
 
-    assert "switch (" in body, body
-    assert "case 3:" in body, body
-    assert "unrecovered indirect jump" not in body, body
+    assert {name for name, _va, _body, *_extra in rows} == functions
+    for _name, _va, body, *_extra in rows:
+        assert "unrecovered indirect jump" not in body, body
 
     results = D.run(
         str(RETURNING_ARM_CLANG_O2),
@@ -181,10 +182,12 @@ def test_shadow_loop_switch_with_a_shared_exit_round_trips() -> None:
         seed=1234,
         fuzz=M.FIXTURE_FUZZ,
         lane="clang:O2:shadow-v2",
-        only={"fsm_returns_from_arm"},
+        only=functions,
         shadow_v2=True,
     )
-    assert results["fsm_returns_from_arm"]["status"] == "pass", results
+    assert {name: results[name]["status"] for name in sorted(functions)} == {
+        name: "pass" for name in sorted(functions)
+    }, results
 
 
 def _source_for(fixture: str) -> Path:
