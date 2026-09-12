@@ -5800,6 +5800,15 @@ relevant ratchet's accepted-regression record.
    37 focused high-variable tests pass. Exact reaching-copy identity remains
    deliberately unchanged. See `results/wp3-pointer-refinement-identities.md`
    and `results/wp3-unsigned-literal-identities.md`.
+   Commit `07b900ce` closes that exact reaching-copy limitation for pointer
+   origin recovery. A pipeline-attributed copy may now carry several legal SSA
+   candidates through phi/copy coalescing; recursive definition, conflict,
+   unsafe-use, and pointer-width checks remain independently fail-closed, and
+   display spelling remains non-semantic. Its observed-red diffutils
+   `lf_skip`-shaped contract, all 37 high-variable tests, eight call fixture
+   lanes, and the six-cell cross-architecture Hello checkpoint pass against an
+   exact release build. See
+   `results/wp3-coalesced-pointer-copy-identity.md`.
    Commit `27910f65` applies one-storage classification to packed-dword concat
    lowering. Same-lane coalesced operands retain the defined 64-bit high-half
    shift; mixed lanes decline. Its observed-red contract, five focused tests,
