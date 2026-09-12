@@ -2604,6 +2604,16 @@ provenance through lowering.
   failures were proven to be identifiers appearing only in analyst comments,
   which the invariant now excludes. See
   `results/wp3-loop-clause-address-temporaries.md`.
+  Commit `b6fd4d4e` closes the next render-time expression-carrier boundary.
+  Attributed local compound assignments and exact-sized global unit updates
+  now retain the same `+=` and `++` spelling as their plain equivalents,
+  without stripping value-changing numeric conversions. Both observed-red
+  contracts, adjacent controls, and the unit-step filter pass. Exact release
+  parent/tip comparison proves that GCC and Clang O0 `counter_reset` improve
+  from a cast-heavy assignment to `generation++`; all four O0/O2 fixture lanes
+  remain semantically green. O2 remains unchanged because its update travels
+  through a temporary, which is the next stable-identity/dataflow boundary.
+  See `results/wp3-readable-update-expression-carriers.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
