@@ -71,6 +71,46 @@ identity failures and the i386 two-word parameter carrier. General source-value
 identity still belongs in WP3; this bounded authoritative ABI fact must not
 grow into a parallel name-based type system.
 
+## Source-identity presentation follow-on
+
+Behavior commits `c27bb0a2` and `e4b370c2` close the later presentation
+regression exposed by the same ARM32 O2 cells. Wide-parameter materialization had correctly replaced
+the two machine words with one `arg0` source identity, but role naming did not
+receive that newly synthesized, prototype-owned identity. The pre-structuring
+type map also retained the superseded high machine word and therefore inflated
+the rendered signature back to two parameters.
+
+The pipeline now publishes a synthetic source-argument role only when the
+prototype-directed wide-parameter pass actually materializes it. The renderer
+accepts an authoritative source arity when every argument referenced by the
+body fits that declaration, while continuing to reject the declaration if the
+body genuinely references an additional argument. On ILP32, declaration-
+redundant integer casts are compared using the target-width spelling, removing
+the stale `(unsigned long)(op)` truncation around the high-word shift. The
+fixture now renders the intended boundary and projection:
+
+```c
+int wide_selector_dense(unsigned long long op) {
+    /* ... */
+    op >> 32
+}
+```
+
+The regression was observed red in a focused renderer contract. The two arity
+contracts, the ILP32 cast contract, all nine adjacent renderer identity tests,
+the authoritative naming contract, and all seven pipeline request/order tests
+pass. The post-source Python gate exposed and the follow-on commit corrected an
+overbroad first version that could enlarge a two-parameter body to a
+three-parameter analyst declaration. Both wrong-arity controls now pass. After
+a release extension rebuild, the exact ARMv7, ARMv7 A32, i386, and two host
+semantic controls pass (six pytest cells total). This is a bounded
+WP3 identity-carrier and WP6/WP9 presentation repair; it does not close the
+general type solver, big-endian ordering, or residual A32 O0 storage work.
+The required post-source whole-Python fail-fast run passes the corrected
+analyst-prototype boundary and reaches the same existing 17% AArch64 O2
+`call_chain_in_loop` execution failure (`return 0 != 22176384` on `[0, 0]`);
+it reports no earlier failure.
+
 ## Rejected A32 O0 follow-on
 
 The two residual A32 O0 failures expose mixed aliases after lifting: frame

@@ -234,6 +234,15 @@ output with no attributable regression across the 60-cell architecture slice.
 Big-endian ordering, inferred prototypes, and residual A32 O0 storage defects
 remain deliberately open. See
 `results/wp6-wp9-aapcs32-wide-parameters.md`.
+Commits `c27bb0a2` and `e4b370c2` close the corresponding source-presentation
+identity boundary: materialized wide arguments retain their exact prototype-owned role,
+stale type-only machine words no longer inflate an authoritative signature,
+and redundant ILP32 casts no longer hide or truncate the clean `op >> 32`
+projection. The exact ARMv7, ARMv7 A32, i386, and host semantic controls are
+six-for-six after a release rebuild. The conservative control still rejects an
+authoritative declaration when the body actually references an additional
+argument or when a larger declaration would expand the recovered arity. See
+the follow-on section in the same result record.
 The matching i386 cdecl32 carrier is landed at `fcd9bd2d`, with baseline and
 census commits `9b307e0b` and `d1bf72a7`. Authoritatively declared eight-byte
 integer parameters now join their two adjacent incoming stack words without
