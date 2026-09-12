@@ -446,11 +446,17 @@ pub fn recover_types_for_with_identities(
         .map(|(value, _)| value.clone())
         .collect::<Vec<_>>();
     for value in numbered_values {
-        let Some(value_id) = identities.exact_value_id(&value) else {
+        let Some(value_ids) = identities.value_ids(&value) else {
             continue;
         };
-        if let Some(hint) = valued_types.get_by_id(value_id) {
-            tm.refine_from_value(value, hint);
+        let mut hints = value_ids
+            .into_iter()
+            .map(|value_id| valued_types.get_by_id(value_id));
+        let Some(Some(unanimous)) = hints.next() else {
+            continue;
+        };
+        if hints.all(|hint| hint == Some(unanimous)) {
+            tm.refine_from_value(value, unanimous);
         }
     }
     for value in identities.numbered_values() {

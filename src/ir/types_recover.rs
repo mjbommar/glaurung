@@ -5455,6 +5455,56 @@ int never_returns(void) { for (;;) {} }
     }
 
     #[test]
+    fn coalesced_numbered_use_accepts_unanimous_value_keyed_type() {
+        use crate::ir::call_args::CallConv;
+
+        let source = VReg::phys("coalesced_source");
+        let function = mk_block(vec![Op::Bin {
+            dst: VReg::phys("opaque_destination"),
+            op: BinOp::Add,
+            lhs: Value::Reg(source.clone()),
+            rhs: Value::Const(1),
+        }]);
+        let first = SsaValue {
+            base: VReg::phys("rdi"),
+            version: 1,
+        };
+        let second = SsaValue {
+            base: VReg::phys("rdi"),
+            version: 2,
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(source.clone(), first.clone());
+        identities.record(source.clone(), second.clone());
+        let mut valued_types = TypeMapV::default();
+        for identity in [first, second] {
+            valued_types.upsert(
+                identity,
+                TypeHint::Int {
+                    signed: true,
+                    width: 4,
+                },
+            );
+        }
+
+        let types = recover_types_for_with_identities(
+            &function,
+            CallConv::SysVAmd64,
+            &identities,
+            &valued_types,
+        );
+
+        assert_eq!(
+            types.get(&source),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 4,
+            }),
+            "all represented values agree that the rendered use is narrow"
+        );
+    }
+
+    #[test]
     fn arm_return_load_keeps_input_pointer_and_output_scalar_separate() {
         use crate::ir::call_args::CallConv;
 

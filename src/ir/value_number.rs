@@ -100,6 +100,7 @@ impl ValueIdentities {
     }
 
     /// Return the sole opaque value identity represented by `value`.
+    #[cfg(test)]
     pub(crate) fn exact_value_id(&self, value: &VReg) -> Option<ValueId> {
         self.value_id_by_ssa.get(self.exact(value)?).copied()
     }
