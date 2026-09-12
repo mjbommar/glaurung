@@ -506,11 +506,12 @@ pub fn prune_callee_saved_spills_with_identities(
     prune_callee_saved_spills_with_scope(f, cc, false, Some(identities));
 }
 
-/// Remove otherwise-dead callee saves nested by an experimental region tree.
+/// Remove otherwise-dead callee saves nested by structured control recovery.
 ///
 /// Unlike [`prune_callee_saved_spills`], this walks structured bodies. Callers
-/// must opt in only when the selected region has independent verification;
-/// register-looking nested assignments are not sufficient global provenance.
+/// must supply the same producer-owned storage and entry-value evidence used by
+/// the top-level pass; register-looking nested assignments are not sufficient
+/// global provenance.
 pub fn prune_callee_saved_spills_nested(f: &mut Function, cc: CallConv) {
     prune_callee_saved_spills_with_scope(f, cc, true, None);
 }
@@ -1060,14 +1061,20 @@ fn entry_value_base<'a>(
 ) -> Option<&'a str> {
     match identities {
         Some(identities) => {
-            let identity = identities.exact(source)?;
-            if identity.version != 0 {
-                return None;
-            }
-            let VReg::Phys(base) = &identity.base else {
+            let candidates = identities.candidates(source)?;
+            let mut candidates = candidates.iter();
+            let first = candidates.next()?;
+            let VReg::Phys(base) = &first.base else {
                 return None;
             };
-            Some(base)
+            let mut has_entry = first.version == 0;
+            for identity in candidates {
+                if !matches!(&identity.base, VReg::Phys(other) if other == base) {
+                    return None;
+                }
+                has_entry |= identity.version == 0;
+            }
+            has_entry.then_some(base.as_str())
         }
         None => {
             let VReg::Phys(name) = source else {
@@ -2173,6 +2180,55 @@ mod tests {
     }
 
     #[test]
+    fn coalesced_entry_callee_save_accepts_one_physical_register() {
+        let candidate = || Function {
+            name: "delayed_frame_setup".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Store {
+                    addr: Expr::Reg(reg("frame_save")),
+                    src: Expr::Reg(reg("kept_rbp")),
+                    size: 8,
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            reg("kept_rbp"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rbp"),
+                version: 0,
+            },
+        );
+        identities.record(
+            reg("kept_rbp"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rbp"),
+                version: 3,
+            },
+        );
+        identities.attach_machine_saved_slots(&HashSet::from(["frame_save".to_string()]));
+
+        let mut function = candidate();
+        prune_callee_saved_spills_with_identities(&mut function, CallConv::SysVAmd64, &identities);
+
+        assert_eq!(function.body, vec![Stmt::Return { value: None }]);
+
+        let mut mixed = identities.clone();
+        mixed.record(
+            reg("kept_rbp"),
+            crate::ir::ssa::SsaValue {
+                base: reg("rbx"),
+                version: 0,
+            },
+        );
+        let mut refused = candidate();
+        prune_callee_saved_spills_with_identities(&mut refused, CallConv::SysVAmd64, &mixed);
+        assert_eq!(refused.body.len(), 2, "mixed physical values were deleted");
+    }
+
+    #[test]
     fn typed_callee_save_cleanup_rejects_unowned_stack_spelling() {
         let mut function = Function {
             name: "typed_frame".into(),
@@ -2299,6 +2355,53 @@ mod tests {
                 value: Some(Expr::Const(7))
             }]
         );
+    }
+
+    #[test]
+    fn typed_nested_frame_save_accepts_coalesced_entry_identity() {
+        let candidate = || Function {
+            name: "guarded_frame".into(),
+            entry_va: 0,
+            body: vec![Stmt::If {
+                cond: Expr::Reg(reg("guard")),
+                then_body: vec![Stmt::Return { value: None }],
+                else_body: Some(vec![
+                    Stmt::Store {
+                        addr: Expr::Reg(reg("frame_save")),
+                        src: Expr::Reg(reg("kept_rbp")),
+                        size: 8,
+                    },
+                    Stmt::Return { value: None },
+                ]),
+            }],
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for version in [0, 2] {
+            identities.record(
+                reg("kept_rbp"),
+                crate::ir::ssa::SsaValue {
+                    base: reg("rbp"),
+                    version,
+                },
+            );
+        }
+        identities.attach_machine_saved_slots(&HashSet::from(["frame_save".to_string()]));
+        let mut function = candidate();
+
+        prune_callee_saved_spills_nested_with_identities(
+            &mut function,
+            CallConv::SysVAmd64,
+            &identities,
+        );
+
+        let Stmt::If {
+            else_body: Some(else_body),
+            ..
+        } = &function.body[0]
+        else {
+            panic!("guarded frame shape changed: {:#?}", function.body);
+        };
+        assert_eq!(else_body, &vec![Stmt::Return { value: None }]);
     }
 
     /// Production's historical pass is deliberately top-level-only. A nested

@@ -504,7 +504,6 @@ pub(super) fn run_ast_passes(
     cfg_health: crate::ir::health::CfgHealth,
     cc: crate::ir::call_args::CallConv,
     endianness: crate::core::binary::Endianness,
-    nested_machine_frame_cleanup: bool,
     prototype: Option<&crate::ir::types_recover::RecoveredPrototype>,
     param_slots: &mut std::collections::HashSet<usize>,
     locked_parameter_count: Option<usize>,
@@ -726,13 +725,6 @@ pub(super) fn run_ast_passes(
     // by stack-op rematerialisation.
     pass!("recognise_machine_frame", {
         recognise_machine_frame(f, cc, value_identities);
-        if nested_machine_frame_cleanup {
-            crate::ir::dead_stores::prune_callee_saved_spills_nested_with_identities(
-                f,
-                cc,
-                value_identities,
-            );
-        }
     });
     // Project a prototype-proven result while the raw ABI output register is
     // still present. ARM32/AArch64 reuse arg0's register for the result; the
@@ -879,7 +871,11 @@ pub(super) fn recognise_machine_frame(
     // pattern, the callee-saved spills themselves are still machine bookkeeping.
     // This runs for every convention. It also removes any independently proven
     // dead spill that an architecture recogniser deliberately left alone.
-    crate::ir::dead_stores::prune_callee_saved_spills_with_identities(f, cc, value_identities);
+    crate::ir::dead_stores::prune_callee_saved_spills_nested_with_identities(
+        f,
+        cc,
+        value_identities,
+    );
 }
 
 /// Apply the presentation-boundary semantic facts every renderer consumes.
@@ -1216,7 +1212,6 @@ pub(super) fn decompile_function(
         exception_sites,
         cc,
         image.endianness(),
-        render_options.shadow_v2,
         &callee_facts,
         address_names,
         string_pool,
@@ -1616,7 +1611,6 @@ pub(super) fn lower_and_run_ast_passes(
     exception_sites: &[crate::analysis::exception::ExceptionCallSite],
     cc: crate::ir::call_args::CallConv,
     endianness: crate::core::binary::Endianness,
-    nested_machine_frame_cleanup: bool,
     callee_facts: &DirectCalleeFacts,
     address_names: &std::collections::HashMap<u64, String>,
     string_pool: &std::collections::HashMap<u64, String>,
@@ -1667,7 +1661,6 @@ pub(super) fn lower_and_run_ast_passes(
         cfg_health,
         cc,
         endianness,
-        nested_machine_frame_cleanup,
         prototype.as_ref(),
         &mut param_slots,
         super::locked_parameter_count(prototype.as_ref()),
