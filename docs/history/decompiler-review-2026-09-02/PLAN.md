@@ -2926,6 +2926,14 @@ provenance through lowering.
   name. All 135 owning tests and the exact AArch64 O2 `call_chain_in_loop`
   fixture pass; no broad suite or corpus ran. See
   `results/wp3-loop-carried-call-identities.md`.
+  Commit `c39f41d2` closes the adjacent return-side identity defect exposed by
+  that exact AArch64 O2 function. Direct-output projection now distinguishes
+  the prototype-proven live-in result on an early path from the later
+  loop-carried result definition, while the no-sidecar compatibility path
+  continues to decline on a versioned write. All 24 owning tests, the exact
+  AArch64 execution differential, its two-function pytest control, and all four
+  host compiler/optimization siblings pass. See
+  `results/wp3-path-sensitive-live-in-results.md`.
   Commit `d7dfcf9f` then migrates pure hard-float AAPCS setup. Core, VFP, and
   unrelated destinations are classified from complete SSA identity candidate
   sets; cross-bank ambiguity declines instead of trusting `s0#version` text.
