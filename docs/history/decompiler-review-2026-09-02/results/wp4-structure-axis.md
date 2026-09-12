@@ -146,3 +146,34 @@ concurrent native-source diff named above; its CPython 3.12 hash is
 The next WP4 measurement is the clean pinned full comparison after those shared
 changes land. Until then, quality work should proceed on the remaining explicit
 per-function regressions or on WP5 rather than repeatedly running the corpus.
+
+## Loop-local partial switch joins
+
+Commit `40f06b60` fixes the remaining three `fsm_returns_from_arm` suffix
+gotos at their ownership source. A returning case means the latch cannot
+post-dominate the whole switch. The tree builder now accepts a partial
+loop-local join only when at least two in-loop arm entries either are one exact
+candidate block or have that block as their sole successor. Out-of-loop arms
+are typed exits and do not vote; the loop header, guard, dispatch, active, and
+already-owned blocks are all excluded. Thus the rule derives one continuation
+from CFG identities without matching labels or rendered text.
+
+The real Clang O2 fixture test was observed red with three `goto L_113c`
+transfers. It now renders ordinary `break` arms, owns the latch once after the
+switch, and has zero gotos. All 47 structure-v2 tests and all four executable
+fixture-212 differentials pass. The post-commit focused report at
+`$HOME/.cache/glaurung/tmp/structure-v2-212-40f06b60.json` records:
+
+- `fsm_returns_from_arm`: distance 25 to 23, gotos 3 to 0, and 1,642 to 1,619
+  shadow bytes relative to the preceding commit;
+- aggregate shadow distance 372 to 370, versus production at 380;
+- aggregate shadow gotos 43 to 40, versus production at 58;
+- aggregate shadow output 19,899 to 19,876 bytes, versus production at 15,432.
+
+The required post-source Python fail-fast gate again reached 17% without an
+earlier failure and stopped at the existing AArch64 `call_chain_in_loop`
+mismatch. The report names `40f06b60`; the CPython 3.12 extension hash is
+`2a087b14b4655b97b2de1e0f1394fdee52c8cf9d6a4cdb6c566f2d6a9a4289d4`.
+The build still includes the concurrent native-source diff whose hash is
+`8526d3054b53773d2ed4ad3a2272c626d124387867787a11e84f1030897ac396`,
+so the clean pinned full comparison remains the promotion boundary.

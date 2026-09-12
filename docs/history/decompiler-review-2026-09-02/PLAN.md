@@ -5261,6 +5261,13 @@ relevant ratchet's accepted-regression record.
    the focused family's aggregate structure deficit; it does not close the
    clean pinned full-sample, accounting, or budget promotion criteria. See
    `results/wp4-structure-axis.md`.
+   Commit `40f06b60` then recovers a shared loop-local switch continuation
+   even when a returning case prevents it from post-dominating the entire
+   dispatch. The rule is CFG-derived and deliberately bounded to arm entries
+   that are the one candidate or flow directly to it. `fsm_returns_from_arm`
+   now has a normal four-case switch with zero gotos; the focused family moves
+   from shadow distance 372 to 370 against production's 380, with all execution
+   verdicts retained. The clean full-sample promotion evidence remains open.
 5. Extend the landed WP5 shared typed-case transport across the remaining
    fixture/compiler/architecture execution cells and classify every residual
    decline. At `9ad9414d`, `Cfg` is the single producer of immutable ordered
