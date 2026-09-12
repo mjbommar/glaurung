@@ -2,7 +2,7 @@
 
 use crate::ir::ast::{Function, Stmt};
 
-/// Remove lexical `else` nesting after an arm that returns on every path.
+/// Remove lexical `else` nesting after an arm that exits on every path.
 ///
 /// This runs only for selected structure-v2 output and only after region
 /// adaptation has fixed block ownership and joins. It changes no condition,
@@ -12,17 +12,22 @@ pub(crate) fn flatten_terminal_elses(function: &mut Function) {
     flatten_in_body(&mut function.body);
 }
 
-fn returns_on_all_paths(body: &[Stmt]) -> bool {
+fn exits_on_all_paths(body: &[Stmt]) -> bool {
     let Some(last) = body.last() else {
         return false;
     };
     match last.semantic() {
-        Stmt::Return { .. } => true,
+        Stmt::Return { .. }
+        | Stmt::Throw { .. }
+        | Stmt::Goto { .. }
+        | Stmt::IndirectGoto { .. }
+        | Stmt::Continue
+        | Stmt::Break => true,
         Stmt::If {
             then_body,
             else_body: Some(else_body),
             ..
-        } => returns_on_all_paths(then_body) && returns_on_all_paths(else_body),
+        } => exits_on_all_paths(then_body) && exits_on_all_paths(else_body),
         _ => false,
     }
 }
@@ -84,7 +89,7 @@ fn flatten_in_body(body: &mut Vec<Stmt>) {
                 then_body,
                 else_body: Some(_),
                 ..
-            } if returns_on_all_paths(then_body)
+            } if exits_on_all_paths(then_body)
         );
         if !qualifies {
             index += 1;
@@ -175,5 +180,37 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn terminal_goto_arm_becomes_an_attributed_early_exit() {
+        let owner = OriginSet::one(0x1020);
+        let mut function = Function {
+            name: "goto_exit".into(),
+            entry_va: 0x1000,
+            body: vec![Stmt::If {
+                cond: Expr::Const(1),
+                then_body: vec![Stmt::Goto { target: 0x2000 }],
+                else_body: Some(vec![Stmt::Assign {
+                    dst: crate::ir::types::VReg::phys("result"),
+                    src: Expr::Const(2),
+                }]),
+            }
+            .with_origins(owner.clone())],
+        };
+
+        flatten_terminal_elses(&mut function);
+
+        assert_eq!(function.body.len(), 2);
+        assert_eq!(function.body[0].origins(), Some(&owner));
+        assert!(matches!(
+            function.body[0].semantic(),
+            Stmt::If {
+                then_body,
+                else_body: None,
+                ..
+            } if matches!(then_body.as_slice(), [Stmt::Goto { target: 0x2000 }])
+        ));
+        assert!(matches!(function.body[1].semantic(), Stmt::Assign { .. }));
     }
 }
