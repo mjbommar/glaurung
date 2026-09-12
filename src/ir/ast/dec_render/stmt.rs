@@ -246,7 +246,7 @@ fn write_assignment_value_dec(dst: &VReg, src: &Expr, out: &mut String) {
 /// remains valid C and preserves the exact four-byte write.
 fn write_store_value_dec(src: &Expr, size: u8, out: &mut String) {
     if expression_has_pointer_representation(src) {
-        if let Expr::Reg(reg @ VReg::Phys(_)) = src {
+        if let Expr::Reg(reg @ VReg::Phys(_)) = src.semantic() {
             let _ = write!(out, "({})((long)", store_pointee_ctype(size));
             write_reg_lvalue_dec(reg, out);
             out.push(')');
@@ -378,7 +378,7 @@ pub(in crate::ir::ast) fn write_stmt_dec(s: &Stmt, out: &mut String, level: usiz
             // A store whose address is a bare promoted stack local (`local_0`,
             // `stack_1`, …) is a plain variable assignment, not a pointer
             // write: emit `local_0 = src` rather than `*(long *)(local_0) = src`.
-            if let Expr::Reg(VReg::Phys(name)) = addr {
+            if let Expr::Reg(VReg::Phys(name)) = addr.semantic() {
                 if is_promoted_local(name) && !dec_is_stack_object(name) {
                     let destination = VReg::phys(name);
                     if !write_int_compound_assignment_dec(&destination, src, out) {
@@ -485,7 +485,7 @@ pub(in crate::ir::ast) fn write_stmt_dec(s: &Stmt, out: &mut String, level: usiz
                     // whole object is the result before this spelling is used.
                     match (
                         crate::ir::abi::synthesised_return_definition(&return_type),
-                        e,
+                        e.semantic(),
                     ) {
                         (Some(_), Expr::Deref { addr, .. }) => {
                             let _ = write!(out, "*({return_type} *)(");

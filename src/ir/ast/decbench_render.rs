@@ -117,21 +117,17 @@ fn inline_scalar_declarations(
         for (index, statement) in body.iter().enumerate() {
             let source = match statement.semantic() {
                 super::Stmt::Assign { dst, src } if dst == &target => Some(src),
-                super::Stmt::Store {
-                    addr: super::Expr::Reg(dst),
-                    src,
-                    ..
-                } if dst == &target => Some(src),
+                super::Stmt::Store { addr, src, .. } if matches!(addr.semantic(), super::Expr::Reg(dst) if dst == &target) => {
+                    Some(src)
+                }
                 _ => None,
             };
             let for_source = match statement.semantic() {
                 super::Stmt::For { init, .. } => match init.semantic() {
                     super::Stmt::Assign { dst, src } if dst == &target => Some(src),
-                    super::Stmt::Store {
-                        addr: super::Expr::Reg(dst),
-                        src,
-                        ..
-                    } if dst == &target => Some(src),
+                    super::Stmt::Store { addr, src, .. } if matches!(addr.semantic(), super::Expr::Reg(dst) if dst == &target) => {
+                        Some(src)
+                    }
                     _ => None,
                 },
                 _ => None,

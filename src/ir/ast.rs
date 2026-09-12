@@ -5641,6 +5641,33 @@ function f @ 0x1000 {
     }
 
     #[test]
+    fn attributed_promoted_local_store_matches_plain_assignment() {
+        let render = |address: Expr| {
+            render_decbench(&Function {
+                name: "set_local".to_string(),
+                entry_va: 0x10,
+                body: vec![Stmt::Store {
+                    addr: address,
+                    src: Expr::Const(7),
+                    size: 4,
+                }],
+            })
+        };
+
+        let plain = render(Expr::Reg(VReg::phys("local_8")));
+        let attributed =
+            render(Expr::Reg(VReg::phys("local_8")).with_origins(OriginSet::one(0x10)));
+
+        assert_eq!(
+            attributed, plain,
+            "an owner changed local assignment semantics"
+        );
+        assert!(attributed.contains("local_8 = 7;"), "{attributed}");
+        assert!(!attributed.contains("*(int *)(local_8)"), "{attributed}");
+        assert_looks_like_c(&attributed);
+    }
+
+    #[test]
     fn rendering_the_same_prepared_ast_twice_is_identical_and_leaves_it_unchanged() {
         // Formatting-only means: no hidden state, no mutation, no dependence on
         // render order (the thread-locals the renderer uses are reset per call).
@@ -9567,6 +9594,78 @@ function f @ 0x1000 {
             "the emitted declaration, not a hidden pointer fact, determines whether the copy needs a representation cast:\n{text}"
         );
         assert_looks_like_c(&text);
+    }
+
+    #[test]
+    fn attributed_pointer_register_store_matches_plain_representation() {
+        use crate::ir::types_recover::{TypeHint, TypeMap};
+
+        let render = |source: Expr| {
+            let function = Function {
+                name: "store_pointer_bits".to_string(),
+                entry_va: 0x40,
+                body: vec![Stmt::Store {
+                    addr: Expr::Reg(VReg::phys("arg0")),
+                    src: source,
+                    size: 8,
+                }],
+            };
+            let mut types = TypeMap::default();
+            types.upsert_public(VReg::phys("arg0"), TypeHint::Pointer { pointee_width: 8 });
+            types.upsert_public(VReg::phys("var13"), TypeHint::Pointer { pointee_width: 1 });
+            render_decbench_typed(&function, Some(&types), None)
+        };
+
+        let plain = render(Expr::Reg(VReg::phys("var13")));
+        let attributed = render(Expr::Reg(VReg::phys("var13")).with_origins(OriginSet::one(0x44)));
+
+        assert_eq!(attributed, plain, "an owner changed pointer-store spelling");
+        assert_looks_like_c(&attributed);
+    }
+
+    #[test]
+    fn attributed_synthesised_aggregate_return_matches_plain_object_load() {
+        use crate::ir::types_recover::RecoveredOutputKind;
+
+        let render = |value: Expr| {
+            let function = Function {
+                name: "return_pair".to_string(),
+                entry_va: 0x40,
+                body: vec![Stmt::Return { value: Some(value) }],
+            };
+            let prototype = CallPrototype {
+                return_type: "struct __glaurung_sse_pair".to_string(),
+                parameter_types: Vec::new(),
+                variadic: false,
+                authority: CallPrototypeAuthority::Authoritative,
+            };
+            render_decbench_typed_with_output_and_prototype(
+                &function,
+                None,
+                None,
+                RecoveredOutputKind::Direct,
+                Some(&prototype),
+            )
+        };
+        let value = || Expr::Deref {
+            addr: Box::new(Expr::StackAddr {
+                object: VReg::phys("local_10"),
+                size: 16,
+            }),
+            size: 16,
+        };
+
+        let plain = render(value());
+        let attributed = render(value().with_origins(OriginSet::one(0x44)));
+
+        assert_eq!(
+            attributed, plain,
+            "an owner changed a synthesised aggregate return"
+        );
+        assert!(
+            attributed.contains("return *(struct __glaurung_sse_pair *)(&local_10[0]);"),
+            "{attributed}"
+        );
     }
 
     #[test]
