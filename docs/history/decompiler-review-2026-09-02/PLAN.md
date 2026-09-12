@@ -19,11 +19,14 @@ with selective substrate cleanup still open under WP10. WP4 now has a pinned
 715-function structural comparison and a 334-candidate execution comparison
 with zero unexplained structural regressions, zero execution regressions, and
 nested post-tested branches preserved; it still lacks the remaining promotion
-measurements. Commit `300b7f66` additionally closes the Clang O2
+measurements. Commits `300b7f66` and `99eae1f7` additionally close the Clang O2
 `fsm_returns_from_arm` sibling-owned loop-exit decline: the verified shadow
 route now emits the recovered four-case switch and passes all 27 deterministic
 execution cases where production v1 fails. See
-`results/wp4-sibling-owned-loop-exits.md`. WP5, WP8, WP9, and WP10 have production or shadow vertical slices
+`results/wp4-sibling-owned-loop-exits.md`. The adjacent
+`two_returning_arms` cell remains execution-correct through an exactly planned
+return-tail clone rather than an empty loop exit. WP5, WP8, WP9, and WP10 have
+production or shadow vertical slices
 but have not met their full exit criteria. WP6 has its first per-use signedness
 slice and the O0 `classify` signed-result vertical slice, but not the general
 solver. Its latest bounded edge at `8ab39b50` preserves an authoritative
@@ -3829,11 +3832,15 @@ that preserves honest local gotos when required.
   explicitly non-executable. See `results/wp4-nested-control-safety.md` and
   `results/wp4-nested-post-tested-rendering.md`.
 - [~] Returning switch arms with sibling-owned exits no longer force a whole-tree
-  decline. Commit `300b7f66` preserves the loop's typed `Break` while leaving
-  an already-owned return continuation single-owned. The real Clang O2
+  decline. Commits `300b7f66` and `99eae1f7` preserve the loop's typed `Break`
+  while leaving an already-owned return continuation single-owned or cloning
+  it only under exact bounded-tail provenance. The real Clang O2
   `fsm_returns_from_arm` shadow output carries all four cases through the normal
   typed pipeline, removes the unrecovered-indirect-jump marker, and passes 27
   deterministic execution cases; production v1 fails the same differential.
+  The sibling `two_returning_arms` cell stays green over 22 cases, yielding one
+  improvement, one stable pass, zero regressions, and zero infrastructure
+  findings in the pinned two-candidate execution slice.
   Residual case-suffix gotos and the corpus-wide promotion measurements remain
   open. See `results/wp4-sibling-owned-loop-exits.md`.
 - [ ] No unexplained block/edge accounting findings.
