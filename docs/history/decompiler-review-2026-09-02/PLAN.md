@@ -2572,6 +2572,14 @@ provenance through lowering.
   contract and all 25 canary tests pass; an exact release build retains the
   AArch64 O2 `graph_bfs` lane and both stack-protected return cases. See
   `results/wp3-canary-numeric-conversion-origins.md`.
+  Commit `73b8fbba` closes the adjacent static-glibc failure-call boundary.
+  A proved canary save followed by a structured call to the exact hidden alias
+  `__stack_chk_fail_local` now collapses with the same semantics as the public
+  `__stack_chk_fail` spelling, so the saved `local_10` no longer survives as an
+  undefined source local. All 26 canary tests pass, and the exact release
+  build-configuration check removes both static-executable findings. The
+  distinct frame-pointer `rbp` source-identity failure remains red. See
+  `results/wp3-static-canary-alias.md`.
   Commit `327b6734` closes the adjacent lazy-call saturation consumer. Constant
   arms, signed range predicates, doubled call results, promoted destinations,
   and saturation recognition now see through expression owners, while the
