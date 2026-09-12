@@ -2614,6 +2614,14 @@ provenance through lowering.
   remain semantically green. O2 remains unchanged because its update travels
   through a temporary, which is the next stable-identity/dataflow boundary.
   See `results/wp3-readable-update-expression-carriers.md`.
+  Commit `c08b6dd9` closes the adjacent full-width memory-rendering boundary.
+  Attributed 16-byte loads and stores now retain the same wide-local and
+  `memcpy`/`memmove` representation as plain expressions. The observed-red
+  contract previously narrowed both operations to one machine word and emitted
+  invalid C array assignment; it and three adjacent controls now pass. An
+  exact release build retains all 16 fixture-188 function cells across
+  GCC/Clang O0/O2, including the transformed-lane negative control. See
+  `results/wp3-wide-copy-expression-carriers.md`.
   The remaining wildcard consumers and universal production attribution remain
   open.
 
