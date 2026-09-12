@@ -416,6 +416,7 @@ const AST_PASS_ORDER: &[&str] = &[
     "split_call_result_lifetimes",
     "canary+strings",
     "promote_stack_locals",
+    "resolve_promoted_function_tables",
     "bind_indirect_result_buffers",
     "recognise_machine_frame",
     "materialize_direct_output",
@@ -693,6 +694,19 @@ pub(super) fn run_ast_passes(
     value_identities.attach_promoted_stack_objects(stack_facts.sizes.keys());
     value_identities.attach_promoted_stack_parameter_slots(&stack_facts.parameter_slots);
     value_identities.attach_machine_saved_slots(&stack_facts.machine_saved_slots);
+    // A table base may have been spilled into a frame slot before the indirect
+    // call.  The early resolver cannot prove that alias while it is still raw
+    // stack arithmetic; after promotion the exact whole-object store and load
+    // share an authoritative identity, so resolve the target without repeating
+    // argument reconstruction.
+    pass!("resolve_promoted_function_tables", {
+        crate::ir::function_tables::resolve_promoted_function_table_entries(
+            f,
+            function_tables,
+            value_identities,
+            &stack_facts.sizes,
+        );
+    });
     // Now that the buffer is a named object, make it the destination of the
     // call that fills it. Before promotion its address is still `sp + k`
     // arithmetic, which no renderer can take the address of.

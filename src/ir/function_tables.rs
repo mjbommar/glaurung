@@ -400,7 +400,7 @@ fn is_image_relative(architecture: Architecture, flags: RelocationFlags) -> bool
 
 /// Replace exact pointer-sized loads from complete tables with semantic entries.
 pub fn resolve_function_table_entries(function: &mut Function, tables: &[FunctionPointerTable]) {
-    resolve_function_table_entries_impl(function, tables, None);
+    resolve_function_table_entries_impl(function, tables, None, None);
 }
 
 /// Replace exact pointer-sized loads using pipeline-owned SSA value identities.
@@ -409,18 +409,40 @@ pub fn resolve_function_table_entries_with_identities(
     tables: &[FunctionPointerTable],
     identities: &crate::ir::value_number::ValueIdentities,
 ) {
-    resolve_function_table_entries_impl(function, tables, Some(identities));
+    resolve_function_table_entries_impl(function, tables, Some(identities), None);
+}
+
+/// Resolve table loads through scalar stack objects created by stack promotion.
+pub(crate) fn resolve_promoted_function_table_entries(
+    function: &mut Function,
+    tables: &[FunctionPointerTable],
+    identities: &crate::ir::value_number::ValueIdentities,
+    promoted_stack_sizes: &HashMap<String, u8>,
+) {
+    resolve_function_table_entries_impl(
+        function,
+        tables,
+        Some(identities),
+        Some(promoted_stack_sizes),
+    );
 }
 
 fn resolve_function_table_entries_impl(
     function: &mut Function,
     tables: &[FunctionPointerTable],
     identities: Option<&crate::ir::value_number::ValueIdentities>,
+    promoted_stack_sizes: Option<&HashMap<String, u8>>,
 ) {
     if tables.is_empty() {
         return;
     }
-    resolve_body(&mut function.body, tables, &HashMap::new(), identities);
+    resolve_body(
+        &mut function.body,
+        tables,
+        &HashMap::new(),
+        identities,
+        promoted_stack_sizes,
+    );
 }
 
 fn resolve_body(
@@ -428,6 +450,7 @@ fn resolve_body(
     tables: &[FunctionPointerTable],
     inherited_definitions: &HashMap<VReg, Expr>,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
+    promoted_stack_sizes: Option<&HashMap<String, u8>>,
 ) {
     let mut definitions = inherited_definitions.clone();
     for statement in body {
@@ -461,9 +484,21 @@ fn resolve_body(
                 else_body,
             } => {
                 resolve_expr(cond, tables, &definitions);
-                resolve_body(then_body, tables, &definitions, identities);
+                resolve_body(
+                    then_body,
+                    tables,
+                    &definitions,
+                    identities,
+                    promoted_stack_sizes,
+                );
                 if let Some(else_body) = else_body.as_deref_mut() {
-                    resolve_body(else_body, tables, &definitions, identities);
+                    resolve_body(
+                        else_body,
+                        tables,
+                        &definitions,
+                        identities,
+                        promoted_stack_sizes,
+                    );
                 }
                 forget_definitions_written_in(then_body, &mut definitions, identities);
                 if let Some(else_body) = else_body.as_deref() {
@@ -472,7 +507,7 @@ fn resolve_body(
             }
             Stmt::While { cond, body } | Stmt::DoWhile { cond, body } => {
                 resolve_expr(cond, tables, &definitions);
-                resolve_body(body, tables, &definitions, identities);
+                resolve_body(body, tables, &definitions, identities, promoted_stack_sizes);
                 forget_definitions_written_in(body, &mut definitions, identities);
             }
             Stmt::For {
@@ -486,14 +521,16 @@ fn resolve_body(
                     tables,
                     &definitions,
                     identities,
+                    promoted_stack_sizes,
                 );
                 resolve_expr(cond, tables, &definitions);
-                resolve_body(body, tables, &definitions, identities);
+                resolve_body(body, tables, &definitions, identities, promoted_stack_sizes);
                 resolve_body(
                     std::slice::from_mut(step.as_mut()),
                     tables,
                     &definitions,
                     identities,
+                    promoted_stack_sizes,
                 );
                 forget_definitions_written_in(
                     std::slice::from_ref(init.as_ref()),
@@ -514,10 +551,16 @@ fn resolve_body(
             } => {
                 resolve_expr(discriminant, tables, &definitions);
                 for (_, case) in cases.iter_mut() {
-                    resolve_body(case, tables, &definitions, identities);
+                    resolve_body(case, tables, &definitions, identities, promoted_stack_sizes);
                 }
                 if let Some(default) = default.as_deref_mut() {
-                    resolve_body(default, tables, &definitions, identities);
+                    resolve_body(
+                        default,
+                        tables,
+                        &definitions,
+                        identities,
+                        promoted_stack_sizes,
+                    );
                 }
                 for (_, case) in cases.iter() {
                     forget_definitions_written_in(case, &mut definitions, identities);
@@ -527,9 +570,21 @@ fn resolve_body(
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                resolve_body(try_body, tables, &definitions, identities);
+                resolve_body(
+                    try_body,
+                    tables,
+                    &definitions,
+                    identities,
+                    promoted_stack_sizes,
+                );
                 for catch in catches.iter_mut() {
-                    resolve_body(&mut catch.body, tables, &definitions, identities);
+                    resolve_body(
+                        &mut catch.body,
+                        tables,
+                        &definitions,
+                        identities,
+                        promoted_stack_sizes,
+                    );
                 }
                 forget_definitions_written_in(try_body, &mut definitions, identities);
                 for catch in catches.iter() {
@@ -548,6 +603,19 @@ fn resolve_body(
 
         if let Stmt::Assign { dst, src } = statement.semantic() {
             definitions.insert(dst.clone(), src.clone());
+        } else if matches!(statement.semantic(), Stmt::Store { .. }) {
+            // A promoted stack object is memory, not an SSA register. Keep a
+            // store that covers the whole object as a reaching value, but
+            // invalidate all such facts at every other memory write: without
+            // alias analysis a pointer store may name any escaped local. This
+            // is deliberately more conservative than ordinary register
+            // definitions.
+            forget_promoted_stack_definitions(&mut definitions, identities);
+            if let Some((object, value)) =
+                covering_promoted_stack_store(statement, identities, promoted_stack_sizes)
+            {
+                definitions.insert(object, value);
+            }
         } else if matches!(
             statement.semantic(),
             Stmt::Call { .. } | Stmt::IndirectGoto { .. }
@@ -596,6 +664,81 @@ fn forget_definitions_written_in(
             _ => true,
         });
     }
+    if body_may_clobber_memory(body, 0) {
+        forget_promoted_stack_definitions(definitions, identities);
+    }
+}
+
+fn covering_promoted_stack_store(
+    statement: &Stmt,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    promoted_stack_sizes: Option<&HashMap<String, u8>>,
+) -> Option<(VReg, Expr)> {
+    let identities = identities?;
+    let promoted_stack_sizes = promoted_stack_sizes?;
+    let Stmt::Store { addr, src, size } = statement.semantic() else {
+        return None;
+    };
+    let Expr::Reg(object @ VReg::Phys(name)) = addr.semantic() else {
+        return None;
+    };
+    let object_size = promoted_stack_sizes.get(name)?;
+    (*size > 0 && *size >= *object_size && identities.is_promoted_stack_object(object))
+        .then(|| (object.clone(), src.clone()))
+}
+
+fn forget_promoted_stack_definitions(
+    definitions: &mut HashMap<VReg, Expr>,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
+    let Some(identities) = identities else {
+        return;
+    };
+    definitions.retain(|value, _| !identities.is_promoted_stack_object(value));
+}
+
+fn body_may_clobber_memory(body: &[Stmt], depth: usize) -> bool {
+    if depth >= 32 {
+        return true;
+    }
+    body.iter().any(|statement| match statement.semantic() {
+        Stmt::Store { .. } | Stmt::Call { .. } | Stmt::IndirectGoto { .. } => true,
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => {
+            body_may_clobber_memory(then_body, depth + 1)
+                || else_body
+                    .as_deref()
+                    .is_some_and(|body| body_may_clobber_memory(body, depth + 1))
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+            body_may_clobber_memory(body, depth + 1)
+        }
+        Stmt::For {
+            init, step, body, ..
+        } => {
+            body_may_clobber_memory(std::slice::from_ref(init.as_ref()), depth + 1)
+                || body_may_clobber_memory(body, depth + 1)
+                || body_may_clobber_memory(std::slice::from_ref(step.as_ref()), depth + 1)
+        }
+        Stmt::Switch { cases, default, .. } => {
+            cases
+                .iter()
+                .any(|(_, body)| body_may_clobber_memory(body, depth + 1))
+                || default
+                    .as_deref()
+                    .is_some_and(|body| body_may_clobber_memory(body, depth + 1))
+        }
+        Stmt::TryCatch { try_body, catches } => {
+            body_may_clobber_memory(try_body, depth + 1)
+                || catches
+                    .iter()
+                    .any(|catch| body_may_clobber_memory(&catch.body, depth + 1))
+        }
+        _ => false,
+    })
 }
 
 /// Push every register `body` assigns into `out`; return whether it also
@@ -1379,6 +1522,134 @@ mod tests {
             ),
             "expected the ops[] entry, got {src:?}"
         );
+    }
+
+    fn promoted_stack_table_fixture(
+        store_size: u8,
+        mut before_load: Vec<Stmt>,
+    ) -> (Function, String) {
+        let table = ops_table();
+        let object_name = "local_20".to_string();
+        let object = VReg::phys(object_name.clone());
+        let loaded = VReg::phys("rax#3");
+        let call = Stmt::Call {
+            target: Expr::Deref {
+                addr: Box::new(Expr::Lea {
+                    base: Some(loaded.clone()),
+                    index: Some(VReg::phys("which")),
+                    scale: 4,
+                    disp: 0,
+                    segment: None,
+                }),
+                size: 4,
+            },
+            args: Vec::new(),
+            dst: None,
+            call_spec: None,
+        };
+        before_load.extend([
+            Stmt::Assign {
+                dst: loaded,
+                src: Expr::Reg(object.clone()),
+            },
+            call,
+        ]);
+        (
+            Function {
+                name: "dispatch_loop".into(),
+                entry_va: 0x1200,
+                body: vec![
+                    Stmt::Store {
+                        addr: Expr::Reg(object.clone()),
+                        src: Expr::Addr(table.va),
+                        size: store_size,
+                    },
+                    Stmt::While {
+                        cond: Expr::Reg(VReg::phys("keep_going")),
+                        body: before_load,
+                    },
+                ],
+            },
+            object_name,
+        )
+    }
+
+    #[test]
+    fn promoted_stack_table_base_reaches_a_nested_call() {
+        let table = ops_table();
+        // The same physical slot previously carried a byte-wide predicate, so
+        // promotion conservatively records a one-byte object. The later
+        // four-byte store still covers it completely and is the exact value
+        // subsequently loaded for the call target.
+        let (mut function, object_name) = promoted_stack_table_fixture(4, Vec::new());
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object_name]);
+        let sizes = HashMap::from([(object_name, 1)]);
+
+        resolve_promoted_function_table_entries(&mut function, &[table], &identities, &sizes);
+
+        let Stmt::While { body, .. } = function.body[1].semantic() else {
+            unreachable!("fixture has a loop")
+        };
+        assert!(matches!(
+            body[1].semantic(),
+            Stmt::Call {
+                target: Expr::FunctionTableEntry {
+                    table_va: 0x4004,
+                    ..
+                },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn partial_promoted_stack_store_does_not_prove_a_table_base() {
+        let table = ops_table();
+        let (mut function, object_name) = promoted_stack_table_fixture(2, Vec::new());
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object_name]);
+        let sizes = HashMap::from([(object_name, 4)]);
+
+        resolve_promoted_function_table_entries(&mut function, &[table], &identities, &sizes);
+
+        let Stmt::While { body, .. } = function.body[1].semantic() else {
+            unreachable!("fixture has a loop")
+        };
+        assert!(matches!(
+            body[1].semantic(),
+            Stmt::Call {
+                target: Expr::Deref { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn unknown_store_invalidates_a_promoted_stack_table_base() {
+        let table = ops_table();
+        let clobber = Stmt::Store {
+            addr: Expr::Reg(VReg::phys("unknown_pointer")),
+            src: Expr::Const(0),
+            size: 4,
+        };
+        let (mut function, object_name) = promoted_stack_table_fixture(4, vec![clobber]);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object_name]);
+        let sizes = HashMap::from([(object_name, 1)]);
+
+        resolve_promoted_function_table_entries(&mut function, &[table], &identities, &sizes);
+
+        let Stmt::While { body, .. } = function.body[1].semantic() else {
+            unreachable!("fixture has a loop")
+        };
+        assert!(matches!(
+            body[2].semantic(),
+            Stmt::Call {
+                target: Expr::Deref { .. },
+                ..
+            }
+        ));
     }
 
     #[test]

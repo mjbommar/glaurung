@@ -250,7 +250,7 @@ def _prep_steps(
     Local helpers are expanded one level, so the two SSA recomputations show
     the sequence they actually run rather than a helper name.
     """
-    start, end = _fn_body(text, mask, "prepare_llir_for_lowering")
+    start, end = _fn_body(text, mask, "prepare_llir_for_lowering_with_shadow")
     body = text[start:end]
     body_mask = mask[start:end]
     steps: list[Step] = []
@@ -390,7 +390,7 @@ def generate(root: Path = ROOT, commit: str | None = None) -> str:
 
     out.append(
         "\n## Stage 1 -- LLIR preparation\n\n"
-        f"`prepare_llir_for_lowering`, `{PIPELINE.as_posix()}`. In source order;"
+        f"`prepare_llir_for_lowering_with_shadow`, `{PIPELINE.as_posix()}`. In source order;"
         " local helpers expanded one level. SSA is computed more than once on"
         " purpose -- a proven direct output turns an operand-free machine return"
         " into an explicit LLIR use, and the definedness oracle has to see it.\n\n"
