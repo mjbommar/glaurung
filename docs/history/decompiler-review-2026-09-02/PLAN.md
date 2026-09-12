@@ -2462,6 +2462,13 @@ provenance through lowering.
   contract and all 12 focused condition-lowering tests pass; the exact
   release-built four-lane polarity canary remains green. See
   `results/wp3-flag-condition-expression-origins.md`.
+  Commit `299fd4e8` closes the corresponding dead-flag liveness boundary.
+  Overwritten-flag pruning now uses the exhaustive origin-transparent flag
+  collector instead of a duplicate narrow walker that could delete a live
+  definition when its read was attributed. The observed-red contract and all
+  ten DCE tests pass; an exact release build retains all four polarity lanes
+  and the corrected eight-cell undeclared-local invariant. See
+  `results/wp3-dead-flag-expression-origins.md`.
   Commit `77839599` completes the select-condition sibling: an attributed
   select and independently attributed flag condition now accept the reaching
   comparison by replacing only the semantic condition. Comparison and
