@@ -90,8 +90,12 @@ pub(crate) fn materialize_prototype_output(
             _ => None,
         }
     });
-    let live_in_result =
-        live_in_result.filter(|_| !body_writes_abi_return_storage(&function.body, cc));
+    // Without an identity sidecar, a versioned write proves only that the
+    // live-in fallback is stale; it does not prove which version reaches each
+    // return. Preserve the established fail-closed compatibility behavior.
+    // Production supplies identities and can use the path-sensitive walk.
+    let live_in_result = live_in_result
+        .filter(|_| identities.is_some() || !body_writes_abi_return_storage(&function.body, cc));
     // This pass runs before role naming. A literal `ret` here may be a source
     // or debug spelling and is not evidence of machine result storage.
     materialize_direct_output_with_live_in(function, live_in_result, &|value| {
@@ -156,10 +160,107 @@ fn materialize_direct_output_with_live_in(
     let written = find_written_return_reg(&function.body, canonical_role_is_result)
         .or_else(|| find_written_float_result_reg(&function.body));
     if let Some(return_register) = written {
-        apply_default_return(&mut function.body, &return_register);
+        if let Some(live_in_result) = live_in_result {
+            apply_reaching_default_return(
+                &mut function.body,
+                live_in_result,
+                canonical_role_is_result,
+            );
+        } else {
+            apply_default_return(&mut function.body, &return_register);
+        }
     } else if let Some(return_register) = live_in_result.filter(|value| is_return_reg(value)) {
         apply_default_return(&mut function.body, return_register);
     }
+}
+
+/// Materialize bare returns from the result value reaching that lexical path.
+///
+/// AArch64 may return its live-in `x0` on an early path while a later path
+/// writes a numbered `x0#N`. Applying the later value globally makes the early
+/// return read a definition that only exists after its branch. Start from the
+/// prototype-proven live-in and advance only across result definitions that
+/// execute before the return. Conditional and loop-local definitions do not
+/// escape their region because that region may not execute.
+fn apply_reaching_default_return(
+    body: &mut [Stmt],
+    live_in_result: &VReg,
+    canonical_role_is_result: &impl Fn(&VReg) -> bool,
+) {
+    fn is_result(value: &VReg, canonical_role_is_result: &impl Fn(&VReg) -> bool) -> bool {
+        match value {
+            VReg::Phys(name) if name == "ret" => canonical_role_is_result(value),
+            _ => is_return_reg(value) || canonical_role_is_result(value),
+        }
+    }
+
+    fn walk(
+        body: &mut [Stmt],
+        mut reaching: VReg,
+        canonical_role_is_result: &impl Fn(&VReg) -> bool,
+    ) {
+        for statement in body {
+            match statement.semantic_mut() {
+                Stmt::Origin { .. } => {
+                    unreachable!("semantic statement cannot be an origin wrapper")
+                }
+                Stmt::Assign { dst, .. } if is_result(dst, canonical_role_is_result) => {
+                    reaching = dst.clone();
+                }
+                Stmt::Call { dst: Some(dst), .. } if is_result(dst, canonical_role_is_result) => {
+                    reaching = dst.clone();
+                }
+                Stmt::Return { value } if value.is_none() => {
+                    *value = Some(Expr::Reg(reaching.clone()));
+                }
+                Stmt::If {
+                    then_body,
+                    else_body,
+                    ..
+                } => {
+                    walk(then_body, reaching.clone(), canonical_role_is_result);
+                    if let Some(else_body) = else_body {
+                        walk(else_body, reaching.clone(), canonical_role_is_result);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                    walk(body, reaching.clone(), canonical_role_is_result)
+                }
+                Stmt::For {
+                    init, step, body, ..
+                } => {
+                    walk(
+                        std::slice::from_mut(init.as_mut()),
+                        reaching.clone(),
+                        canonical_role_is_result,
+                    );
+                    walk(body, reaching.clone(), canonical_role_is_result);
+                    walk(
+                        std::slice::from_mut(step.as_mut()),
+                        reaching.clone(),
+                        canonical_role_is_result,
+                    );
+                }
+                Stmt::Switch { cases, default, .. } => {
+                    for (_, case_body) in cases {
+                        walk(case_body, reaching.clone(), canonical_role_is_result);
+                    }
+                    if let Some(default_body) = default {
+                        walk(default_body, reaching.clone(), canonical_role_is_result);
+                    }
+                }
+                Stmt::TryCatch { try_body, catches } => {
+                    walk(try_body, reaching.clone(), canonical_role_is_result);
+                    for catch in catches {
+                        walk(&mut catch.body, reaching.clone(), canonical_role_is_result);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    walk(body, live_in_result.clone(), canonical_role_is_result);
 }
 
 /// Remove machine output operands once prototype recovery has established that
@@ -928,6 +1029,68 @@ mod tests {
             vec![Stmt::Return {
                 value: Some(Expr::Reg(VReg::phys("x0"))),
             }]
+        );
+    }
+
+    #[test]
+    fn aarch64_early_return_uses_live_in_before_loop_result_definition() {
+        let mut prototype = RecoveredPrototype::default();
+        prototype.apply_locked_parameters(CallConv::Aarch64, &[Some(int32())]);
+        prototype.apply_locked_output(RecoveredOutputKind::Direct, Some(int32()));
+        let loop_result = VReg::phys("x0#1");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            loop_result.clone(),
+            SsaValue {
+                base: VReg::phys("x0"),
+                version: 1,
+            },
+        );
+        let mut function = Function {
+            name: "loop_identity".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::If {
+                    cond: Expr::Reg(VReg::phys("zf")),
+                    then_body: vec![Stmt::Return { value: None }],
+                    else_body: None,
+                },
+                Stmt::Assign {
+                    dst: loop_result.clone(),
+                    src: Expr::Reg(VReg::phys("x0")),
+                },
+                Stmt::DoWhile {
+                    body: vec![Stmt::Assign {
+                        dst: loop_result.clone(),
+                        src: Expr::Const(7),
+                    }],
+                    cond: Expr::Reg(VReg::phys("more")),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        materialize_prototype_output(
+            &mut function,
+            CallConv::Aarch64,
+            Some(&prototype),
+            Some(&identities),
+        );
+
+        let Stmt::If { then_body, .. } = &function.body[0] else {
+            panic!("expected early branch: {function:#?}");
+        };
+        assert_eq!(
+            then_body,
+            &[Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("x0"))),
+            }]
+        );
+        assert_eq!(
+            function.body.last(),
+            Some(&Stmt::Return {
+                value: Some(Expr::Reg(loop_result)),
+            })
         );
     }
 
