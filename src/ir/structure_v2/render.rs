@@ -18,7 +18,8 @@ pub(super) fn render_pseudocode(
     tree: &StructuredTree,
 ) -> Option<RenderedPseudocode> {
     let region = adapt_tree(lf, tree)?;
-    let function = crate::ir::ast::lower(lf, &region, format!("sub_{:x}", lf.entry_va));
+    let mut function = crate::ir::ast::lower(lf, &region, format!("sub_{:x}", lf.entry_va));
+    super::presentation::flatten_terminal_elses(&mut function);
     let raw = crate::ir::ast::render_c(&function);
     let prepared = crate::ir::ast::prepare_for_decbench(&function);
     Some(RenderedPseudocode {

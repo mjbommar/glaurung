@@ -1564,6 +1564,7 @@ pub(super) struct PreparedLlir {
     pub(super) ssa: crate::ir::ssa::SsaInfo,
     pub(super) region: crate::ir::structure::Region,
     pub(super) shadow_v2_region: Option<crate::ir::structure::Region>,
+    pub(super) selected_shadow_v2: bool,
     pub(super) cfg_health: crate::ir::health::CfgHealth,
     pub(super) numbered: crate::ir::types::LlirFunction,
     pub(super) value_identities: crate::ir::value_number::ValueIdentities,
@@ -1628,6 +1629,7 @@ pub(super) fn lower_and_run_ast_passes(
         parameter_slots: mut param_slots,
         inferred_prototype,
         mut prototype,
+        selected_shadow_v2,
         ..
     } = prepared;
     if let Some(prototype) = prototype.as_mut() {
@@ -1678,6 +1680,9 @@ pub(super) fn lower_and_run_ast_passes(
         got_targets,
         &mut value_identities,
     )?;
+    if selected_shadow_v2 {
+        crate::ir::structure_v2::presentation::flatten_terminal_elses(&mut function);
+    }
     let ast_value_identities = value_identities
         .with_role_aliases_and_parameter_slots(&role_names, &param_slots)
         .with_source_parameter_slots(
@@ -1719,6 +1724,7 @@ impl PreparedLlir {
             .shadow_v2_region
             .take()
             .ok_or("verified structure v2 region unavailable")?;
+        self.selected_shadow_v2 = true;
         Ok(())
     }
 
@@ -1915,6 +1921,7 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
         ssa,
         region,
         shadow_v2_region,
+        selected_shadow_v2: false,
         cfg_health,
         numbered,
         value_identities,

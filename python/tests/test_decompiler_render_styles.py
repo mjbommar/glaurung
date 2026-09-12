@@ -62,9 +62,7 @@ RENDER_CASES = [
 WIDE_CLANG_O2 = FIXTURES / "build" / "154_wide_switch-clang-O2.so"
 LOOPS_GCC_O0 = FIXTURES / "build" / "03_loop_shapes-gcc-O0.so"
 PACKET_GCC_O0 = FIXTURES / "build" / "07_packet_parser-gcc-O0.so"
-RETURNING_ARM_CLANG_O2 = (
-    FIXTURES / "build" / "212_loop_with_returning_arm-clang-O2.so"
-)
+RETURNING_ARM_CLANG_O2 = FIXTURES / "build" / "212_loop_with_returning_arm-clang-O2.so"
 
 
 def test_shadow_batch_returns_each_verified_function() -> None:
@@ -175,10 +173,24 @@ def test_shadow_loop_switches_with_shared_exits_round_trip() -> None:
         shadow_v2=True,
         max_functions=len(functions),
     )
+    production_rows = g.ir.decompile_many(
+        str(RETURNING_ARM_CLANG_O2),
+        [exports[name] for name in sorted(functions)],
+        style="decbench",
+        max_functions=len(functions),
+    )
 
     assert {name for name, _va, _body, *_extra in rows} == functions
     for _name, _va, body, *_extra in rows:
         assert "unrecovered indirect jump" not in body, body
+    shadow_bodies = {name: body for name, _va, body, *_extra in rows}
+    production_bodies = {name: body for name, _va, body, *_extra in production_rows}
+    assert len(shadow_bodies["all_arms_break"].encode()) < len(
+        production_bodies["all_arms_break"].encode()
+    )
+    assert sum(len(body.encode()) for body in shadow_bodies.values()) < 2 * sum(
+        len(body.encode()) for body in production_bodies.values()
+    )
 
     results = D.run(
         str(RETURNING_ARM_CLANG_O2),
