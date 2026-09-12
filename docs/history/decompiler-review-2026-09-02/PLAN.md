@@ -5827,6 +5827,16 @@ relevant ratchet's accepted-regression record.
    lanes, and the six-cell cross-architecture Hello checkpoint pass against an
    exact release build. See
    `results/wp3-coalesced-pointer-copy-identity.md`.
+   Commit `7e97c4c8` migrates loop-entry coalescing eligibility from one exact
+   value to one unambiguous physical carrier. A carrier containing multiple
+   same-storage SSA versions may now lose its dead entry copy, while mixed
+   storage and every existing liveness, type, protected-local, goto, and
+   bypass refusal remain. Its observed-red same-storage contract, all 17
+   latch-predicate tests, all 12 loop fixture lanes, and the six-cell cross-
+   architecture Hello checkpoint pass against an exact release build. The
+   adjacent audit retains exactness for callee-save deletion, packed-vector
+   lifetime reconstruction, and DWARF register-local attribution. See
+   `results/wp3-coalesced-loop-entry-identities.md`.
    Commit `27910f65` applies one-storage classification to packed-dword concat
    lowering. Same-lane coalesced operands retain the defined 64-bit high-half
    shift; mixed lanes decline. Its observed-red contract, five focused tests,
