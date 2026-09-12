@@ -2409,7 +2409,7 @@
   "172_float_double_widths:gcc:O0": {
     "accumulate_narrow": "pass",
     "accumulate_wide": "pass",
-    "double_precision_horner": "fail",
+    "double_precision_horner": "pass",
     "narrow_after_double_math": "fail",
     "single_precision_horner": "pass",
     "width_disagreement": "pass"

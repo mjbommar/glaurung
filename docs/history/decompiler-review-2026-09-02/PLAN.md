@@ -5824,6 +5824,15 @@ relevant ratchet's accepted-regression record.
    Hello checkpoint pass without an attributable regression. The fixture lane
    retains its pre-existing wrong returned-value body and therefore remains a
    known failure. See `results/wp3-float-live-in-ssa-paths.md`.
+   Commit `6993a984` closes that fixture's returned-value follow-up. Early
+   prototype-output materialization now consults stable value identities, so a
+   helper result transported across `xmm0` and `rax` outranks an earlier
+   incoming value in `rax`; mixed non-result storage still declines and no
+   display spelling is semantic evidence. Its observed-red cross-bank
+   regression, all 23 direct-output tests, all four GCC/Clang O0/O2 Horner
+   cells, and the six-cell cross-architecture Hello checkpoint pass against an
+   exact release build. GCC O0 moves from known fail to pass. See
+   `results/wp3-prototype-return-value-identity.md`.
    Batch related migrations and use focused fixtures during
    development, paying whole-repository gates once per coherent source batch.
    Keep `Invalidate::All` as the legacy default while passes migrate.
