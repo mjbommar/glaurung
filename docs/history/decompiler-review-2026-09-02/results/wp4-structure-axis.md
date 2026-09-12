@@ -108,3 +108,41 @@ extension hash is
 `a98a8f60cd21e0de5308d7475a8b417981cb6af10bff48e49777b66be6ac5253`, and
 the remaining native-source diff hash is
 `8526d3054b53773d2ed4ad3a2272c626d124387867787a11e84f1030897ac396`.
+
+## Terminal-transfer presentation cleanup
+
+Commit `7d9335e6` generalises the same proved lexical rule from returns to every
+unconditional transfer represented by the typed AST: `return`, `throw`, direct
+or indirect `goto`, `break`, and `continue`. Once either transfer executes, the
+following `else` is unreachable; moving that body after the guard changes no
+condition, transfer, or statement order. A new attributed direct-goto test was
+observed red before the implementation. All 47 focused structure-v2 tests pass,
+and the release-built four-function execution differential remains green.
+
+The post-commit focused command is the command above with output path
+`$HOME/.cache/glaurung/tmp/structure-v2-212-7d9335e6.json`. All four functions
+remain jointly scored, and the result crosses the focused structure threshold:
+
+| Function | Production distance | Shadow distance | Movement |
+|---|---:|---:|---:|
+| `fsm_returns_from_arm` | 22 | 25 | +3 |
+| `two_returning_arms` | 40 | 31 | -9 |
+| `nested_loop_returning_arm` | 250 | 251 | +1 |
+| `all_arms_break` | 68 | 65 | -3 |
+| **Total** | **380** | **372** | **-8** |
+
+Compared with the preceding return-only cleanup, shadow distance falls from
+394 to 372 and output falls from 26,894 to 19,899 bytes. The dominant unrolled
+function falls from distance 273 to 251 and from 20,330 to 13,534 bytes. Goto
+counts remain 58 production versus 43 shadow, and all execution verdicts remain
+green. The post-source fail-fast Python gate again reached 17% with no earlier
+new failure and stopped at the existing AArch64 `call_chain_in_loop` mismatch
+(0 instead of 22176384 for `[0, 0]`).
+
+This proves favorable movement for the focused family, not WP4 promotion over
+the pinned full comparison. The release extension still includes the same
+concurrent native-source diff named above; its CPython 3.12 hash is
+`70feb570d1842d5700e8a14c1124a8da5cf2a2372a8314e666e7d689430c9f38`.
+The next WP4 measurement is the clean pinned full comparison after those shared
+changes land. Until then, quality work should proceed on the remaining explicit
+per-function regressions or on WP5 rather than repeatedly running the corpus.

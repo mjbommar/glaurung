@@ -5253,6 +5253,14 @@ relevant ratchet's accepted-regression record.
    from 34,753 to 26,894 bytes, with all execution verdicts retained. Production
    remains better at distance 380, so continue reducing the unrolled comparison
    ladder before the full promotion run.
+   Commit `7d9335e6` extends that proved lexical rule to direct and indirect
+   gotos, breaks, continues, and throws. The same execution-green slice now
+   improves aggregate shadow distance from 394 to 372 against production's 380
+   and reduces shadow output from 26,894 to 19,899 bytes. The unrolled
+   `nested_loop_returning_arm` gap contracts from +23 edits to +1. This closes
+   the focused family's aggregate structure deficit; it does not close the
+   clean pinned full-sample, accounting, or budget promotion criteria. See
+   `results/wp4-structure-axis.md`.
 5. Extend the landed WP5 shared typed-case transport across the remaining
    fixture/compiler/architecture execution cells and classify every residual
    decline. At `9ad9414d`, `Cfg` is the single producer of immutable ordered
