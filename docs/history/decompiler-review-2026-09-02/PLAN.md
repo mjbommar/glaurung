@@ -2602,6 +2602,17 @@ provenance through lowering.
   after 634 passes; `_start` is the valid image symbol and the assertion is
   corrected alongside the generated 5,349-test census. See
   `results/wp3-empty-identity-call-arguments.md`.
+  Commit `b0319768` closes the adjacent C++ cleanup-path definedness defect.
+  Producer-owned LSDA landing markers now reopen reachability after a normal
+  terminator, and an entry copy becomes an explicit unwinder-supplied unknown
+  only when stable value identity proves one unambiguous ABI integer-result
+  register. Rendered names and mixed storage candidates fail closed. All 22
+  label-pruning tests, both new identity contracts, the real GCC O0 Hello C++
+  verifier regression, and all four directly owning GCC/Clang O0/O2 exception
+  execution cells pass on an exact release overlay. Fixture 136's twelve
+  broader exception functions remain failed baseline debt. The post-commit
+  Python gate reaches an unrelated CFR corpus-size assertion after 569 passes.
+  See `results/wp3-exception-landing-inputs.md`.
   Commit `327b6734` closes the adjacent lazy-call saturation consumer. Constant
   arms, signed range predicates, doubled call results, promoted destinations,
   and saturation recognition now see through expression owners, while the

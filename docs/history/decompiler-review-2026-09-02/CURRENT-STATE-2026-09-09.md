@@ -2,7 +2,7 @@
 
 **Branch:** `master`
 
-**Implementation revision summarized:** `daf54c45`
+**Implementation revision summarized:** `b0319768`
 
 **Operational authority:** [`PLAN.md`](PLAN.md)
 
@@ -62,6 +62,14 @@ or as a one-function scoped batch. This does not replace the 419-pair
 before/after identity sweep, but it catches batch-population leaks during the
 ordinary narrow loop.
 
+The latest WP3 slice fixes exceptional control-flow entry rather than another
+display-name consumer. LSDA-proven landing markers now survive a preceding
+normal return, and an unwinder-supplied exception object becomes an explicit
+external unknown only when stable identity proves the ABI register. GCC O0
+Hello C++ `main` moves from two undefined reads to zero without inventing a
+local definition; all four directly owning GCC/Clang O0/O2 exception cells
+remain green.
+
 Detailed evidence:
 
 - [`results/wp3-coalesced-integer-declaration-types.md`](results/wp3-coalesced-integer-declaration-types.md)
@@ -72,40 +80,45 @@ Detailed evidence:
 - [`results/wp3-coalesced-packed-lane-lowering.md`](results/wp3-coalesced-packed-lane-lowering.md)
 - [`results/wp3-scoped-byte-neutrality.md`](results/wp3-scoped-byte-neutrality.md)
 - [`results/wp3-phi-plumbing-identities.md`](results/wp3-phi-plumbing-identities.md)
+- [`results/wp3-exception-landing-inputs.md`](results/wp3-exception-landing-inputs.md)
 
 ## Latest validation boundary
 
-The exact release build of source commit `a957c94c` produced native SHA-256:
+The isolated exact-source release overlay for `b0319768` produced native
+SHA-256:
 
 ```text
-adcfc4c55299b0b02d7c577d7781c8a1cf05cd72f5c8754d573fea1781925722
+de6e45554988f2cc8497f6db9ea285d0bd85357aeff520be4f29615463436a20
 ```
 
 Latest focused evidence:
 
-- opaque phi-plumbing regression: 1 passed;
-- two adjacent phi-parameter controls: 2 passed;
-- named coalescing filter: 49 passed in 0.21 seconds;
-- one scoped AArch64 O2 `11_call_shapes` lane: no regression;
-- scoped decompile byte-neutrality contract: 1 passed in about 1.5 seconds;
-- periodic GCC symbols/PIE Hello checkpoint: 6/6 canonical across x86-64,
-  AArch64, and ARMv7 at O0 and O2.
+- identity-proven and ambiguous landing-input contracts: 2/2 passed;
+- label-pruning module: 22/22 passed;
+- real GCC O0 Hello C++ definedness regression: passed with zero verifier
+  findings;
+- directly owning `cpp_exception` cells: 4/4 passed across GCC/Clang O0/O2;
+- broader fixture 136 exception slice: unchanged at its 12 failed baselines.
 
-No broad Rust or Python suite, complete fixture matrix, 419-pair identity sweep,
-DecBench, Joern, GED, performance, or corpus-wide measurement was run for the
-last two increments. These results support the bounded changes only and are not
-a release-green claim.
+The required post-source-commit Python suite reached an unrelated CFR corpus-
+size assertion after 569 passes, 15 skips, three xfails, and two subtests. Only
+eight eligible retrieval queries were available where that test requires 20.
+The exception module's current 12/13 result also retains one older AArch64 GOT
+throw assertion whose expected nested-cast shape differs from the recovered
+single-cast throw. These results support the bounded change only and are not a
+release-green claim. No complete fixture matrix, 419-pair identity sweep,
+DecBench, Joern, GED, performance, or corpus-wide measurement was run.
 
-The detached-build freshness guard reported the main checkout's extension as
-stale because it checks the main package path. Before using its documented
-override, the detached worktree was verified at exact commit `a957c94c`, the
-loaded native module was verified under that worktree, and main/detached
-`src/ir/value_number.rs` hashes were identical. See the phi-plumbing result
-record for the exact hashes and command boundary.
+The release measurement used the isolated verifier rather than the stale main-
+checkout extension. The result record names the exact overlays, native hash,
+commands, and limitations; it is the authority for this increment.
 
 ## Ordered resume point
 
 1. Continue WP3 before starting a new dependent WP6/WP7B architecture layer.
+   Triage the older AArch64 throw assertion first because it is now the nearest
+   owning-module red boundary; fix the implementation only if semantic evidence
+   shows the emitted single cast is wrong.
 2. Audit remaining production `ssa_base`, `split_once('#')`, `argN`,
    `local_`, and `stack_` readers. Classify each as:
    - semantic identity requiring `ValueIdentities`/`ValueId` migration;
@@ -132,7 +145,7 @@ identity evidence.
 
 ## Workspace handoff
 
-At this handoff, `master` and `origin/master` both point to `daf54c45`. The main
+At this handoff, `master` and `origin/master` both point to `b0319768`. The main
 checkout contains concurrent uncommitted work under `src/csource/`,
 `src/syntax/`, `src/python_bindings/source_metrics.rs`, `src/lib.rs`, and
 `src/ir/stack_locals/indexed_objects.rs`. Those paths were neither staged nor
