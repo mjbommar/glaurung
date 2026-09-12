@@ -293,3 +293,34 @@ build-configuration failures: the static-executable canary `local_10` leak and
 the static/frame-pointer undefined-local checks (`local_10` and `rbp`). It was
 stopped after those failures made the broad gate decisively red; this is a
 partial gate attempt, not a full-green claim.
+
+Commit `61e26ad3` closes the remaining fixture-191 ARM table-call argument
+cells. ARM PIC code forms the table base by adding a literal displacement to
+the architectural PC value. Both demand discovery and the pre-SSA call-effect
+proof now recognise that exact checked affine form, so all relocation-proven
+table entries are analysed before dead-code elimination and their complete
+AAPCS `r0`/`r1`/`r2` may-use set survives into argument reconstruction.
+Unknown arithmetic continues to decline.
+
+The observed-red demand and call-effect tests, all 20 function-table tests, all
+17 direct-callee-contract tests, and all 163 call-argument tests pass. An exact
+release sweep of the six previously failing Thumb/A32 cells reports six
+improvements and no scoped regression. In particular, Thumb O2 now renders:
+
+```c
+ret = ((int (*)(int *, int, int))(T191_OPS[which]))(scratch, a, b);
+```
+
+The six `arch_baseline.json` entries are ratcheted. Together with `fded1081`,
+fixture 191's relocation-proven table-call target and complete argument
+contract now pass on every recorded architecture/optimisation cell. This does
+not close unrelated ARM structuring, type, or indirect-transfer failures in
+other fixture families.
+
+The repository-wide Python gate was also started from a clean detached verifier
+at exact source commit `61e26ad3`, after a fresh release extension build. It
+reached 9% and reproduced the same three already-triaged failures: the
+static-executable canary/interface leak for `local_10`, the corresponding
+undefined `local_10`, and the frame-pointer undefined `rbp`. The run was stopped
+once the broad gate was decisively red. This is a partial gate attempt, not a
+full-green claim; no fixture-191 regression appeared before the stop.

@@ -5906,9 +5906,13 @@ relevant ratchet's accepted-regression record.
    `StackLocalFacts` extent and refusing partial or interveningly clobbered
    stores. Fixture 191 i386 O2 consequently materialises
    `T191_OPS[var20](...)`, moves from fail to pass, and is ratcheted after a
-   four-cell i386 O0/O2 control run with no regression. The i386 table-call
-   target/argument execution gap is therefore closed; the distinct ARMv7 and
-   ARMv7-A32 O2 failures remain open. See
+   four-cell i386 O0/O2 control run with no regression. Commit `61e26ad3`
+   closes the remaining ARM side: demand discovery and the pre-SSA call-effect
+   proof now compose a checked literal displacement with ARM's architectural
+   PC address, preserving the complete AAPCS `r0`/`r1`/`r2` may-use set. All
+   six previously red Thumb/A32 fixture-191 cells move to pass without a scoped
+   regression. Fixture 191's table target/argument package is therefore green
+   on every recorded architecture/optimisation cell. See
    `results/wp3-flat-table-call-arguments.md`.
    Commit `20364f46` then migrates shared integer declaration typing from one
    exact SSA identity to one unambiguous physical storage base. Same-carrier
