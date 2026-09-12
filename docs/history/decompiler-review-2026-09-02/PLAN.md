@@ -5881,7 +5881,16 @@ relevant ratchet's accepted-regression record.
    those pre-materialised semantic arguments authoritative over the later local
    backward scan; GCC O2 fixture 191's three-argument table call then also
    improves from fail to pass with no scoped regression. Cross-architecture
-   coverage and the remaining corpus zero/partial-argument query stay open. See
+   coverage lands in `0ff541e3` and `6bcff0c2`: checked affine address facts
+   recognize AArch64 `ADRP(page) + offset` materialisation, including an
+   in-place table-entry load whose destination overwrites its base. All 16
+   focused callee-contract tests, all 16 function-table tests, and all 131
+   call-argument tests pass. An exact-release 24-lane sweep of fixtures 95 and
+   191 across six architectures and O0/O2 has zero attributable regressions and
+   seven fail-to-pass movements: all three previously red AArch64 O2 table-call
+   functions plus the four x86-64/x86-64-GCC15 O2 loop cells. The remaining
+   corpus zero/partial-argument query and the distinct ARMv7/i386 O2 failures
+   stay open. See
    `results/wp3-flat-table-call-arguments.md`.
    Commit `20364f46` then migrates shared integer declaration typing from one
    exact SSA identity to one unambiguous physical storage base. Same-carrier

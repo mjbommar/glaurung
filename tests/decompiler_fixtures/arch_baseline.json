@@ -7953,8 +7953,8 @@
   "191_indirect_table_args:aarch64:O2": {
     "t191_computed_args": "pass",
     "t191_direct_control": "pass",
-    "t191_dispatch": "fail",
-    "t191_fold": "fail"
+    "t191_dispatch": "pass",
+    "t191_fold": "pass"
   },
   "191_indirect_table_args:armv7:O0": {
     "t191_computed_args": "pass",
@@ -8002,7 +8002,7 @@
     "t191_computed_args": "pass",
     "t191_direct_control": "pass",
     "t191_dispatch": "pass",
-    "t191_fold": "fail"
+    "t191_fold": "pass"
   },
   "191_indirect_table_args:x86_64_gcc15:O0": {
     "t191_computed_args": "pass",
@@ -8014,7 +8014,7 @@
     "t191_computed_args": "pass",
     "t191_direct_control": "pass",
     "t191_dispatch": "pass",
-    "t191_fold": "fail"
+    "t191_fold": "pass"
   },
   "192_pointer_chased_list:aarch64:O0": {
     "l192_chase_keys": "pass",
@@ -14406,7 +14406,7 @@
   },
   "95_function_pointer_table:aarch64:O2": {
     "dispatch_operation": "pass",
-    "fold_operations": "fail"
+    "fold_operations": "pass"
   },
   "95_function_pointer_table:armv7:O0": {
     "dispatch_operation": "pass",
@@ -14438,7 +14438,7 @@
   },
   "95_function_pointer_table:x86_64:O2": {
     "dispatch_operation": "pass",
-    "fold_operations": "fail"
+    "fold_operations": "pass"
   },
   "95_function_pointer_table:x86_64_gcc15:O0": {
     "dispatch_operation": "pass",
@@ -14446,7 +14446,7 @@
   },
   "95_function_pointer_table:x86_64_gcc15:O2": {
     "dispatch_operation": "pass",
-    "fold_operations": "fail"
+    "fold_operations": "pass"
   },
   "96_integer_promotion:aarch64:O0": {
     "promote_narrow_product": "pass",

@@ -1,7 +1,6 @@
 # WP3 flat-CFG function-table call arguments
 
-Status: bounded production migration landed in `a9001bd1`, `af320048`, and
-`87dc4167` on `master`.
+Status: bounded production migration landed through `6bcff0c2` on `master`.
 
 ## Result
 
@@ -84,14 +83,75 @@ After ratcheting both baseline entries, the same selection at documentation
 commit `2411d01b` reports no regressions and no pending improvements against
 the unchanged exact release extension.
 
+## Cross-architecture affine-address closure
+
+Commits `0ff541e3` and `6bcff0c2` close the AArch64 address-materialisation
+boundary exposed by the first cross-architecture slice. AArch64 commonly
+forms the table address as `ADRP(page)` followed by `ADD(page_offset)`, and may
+then use the same register as both load base and load destination. The original
+proof recognized only a directly materialised final table VA and killed the
+destination before reading that in-place load's base.
+
+Demand discovery now follows checked `Addr/Const +/- constant` facts within a
+straight-line block. The semantic pre-SSA proof carries the same checked facts
+across CFG edges using exact-agreement joins, reads every instruction's inputs
+before invalidating its output, and recognizes only pointer-width indexed or
+aligned in-bounds fixed loads from one complete relocation-proven table.
+Unknown arithmetic, overflow, conflicting predecessors, wrong scales and
+sizes, segmented loads, and incomplete entry contracts still decline.
+
+The focused Rust evidence was:
+
+```text
+TMPDIR=/home/mjbommar/.cache/glaurung/tmp \
+  cargo test --features python-ext --lib \
+  python_bindings::ir::callee_contracts::tests
+16 passed; 0 failed; 4,782 filtered out
+
+TMPDIR=/home/mjbommar/.cache/glaurung/tmp \
+  cargo test --features python-ext --lib ir::function_tables::tests
+16 passed; 0 failed; 4,781 filtered out
+
+TMPDIR=/home/mjbommar/.cache/glaurung/tmp \
+  cargo test --features python-ext --lib ir::call_args::tests
+131 passed; 0 failed; 4,666 filtered out
+```
+
+The exact detached verifier at `6bcff0c2` used a release extension with
+SHA-256
+`9827203abf7666182ad5904d5fb06c2cb7fdf8aaeb51c065eea8a11664e48b84`.
+The bounded integration command was:
+
+```text
+TMPDIR=/home/mjbommar/.cache/glaurung/tmp \
+  UV_PROJECT_ENVIRONMENT=/home/mjbommar/.cache/glaurung/verify-85afee69/.venv \
+  uv run --no-sync python tools/dectest.py \
+  95_function_pointer_table 191_indirect_table_args \
+  --arch i386 --arch armv7 --arch armv7_a32 --arch aarch64 \
+  --arch x86_64 --arch x86_64_gcc15 --full --jobs 6
+```
+
+All 24 selected architecture/optimisation lanes completed with no attributable
+regression. Seven function verdicts improve from fail to pass:
+
+- AArch64 O2: `t191_dispatch`, `t191_fold`, and `fold_operations`;
+- x86-64 O2: `t191_fold` and `fold_operations`;
+- x86-64 GCC 15 O2: `t191_fold` and `fold_operations`.
+
+The exact AArch64 dispatch now retains the complete three-input table contract,
+equivalent to `T191_OPS[which](scratch, a, b)`. These seven
+`arch_baseline.json` entries are ratcheted. Remaining failures in this bounded
+fixture family are ARMv7/ARMv7-A32 O2 call/structure cells and i386 O2
+`dispatch_operation`/`t191_fold`; they are not regressions from this increment.
+
 ## Remaining boundary
 
 This is not universal indirect-call recovery. It covers relocation-proven local
 tables whose complete entry layouts form a valid ABI prefix; writable,
 incomplete, disagreeing, non-relocated, and unassociated indirect targets still
-decline. The next table-call work is cross-architecture fixture coverage and a
-corpus query for remaining zero/partial-argument table calls. No DecBench or
-Joern run was made.
+decline. The next table-call work is the corpus query for remaining
+zero/partial-argument table calls, followed by the distinct ARMv7 and i386 O2
+encodings found by the bounded matrix. No DecBench or Joern run was made.
 
 The complete Python post-source-commit gate was attempted at the preceding
 `af320048` source revision. By 9% it had reproduced three unrelated existing
