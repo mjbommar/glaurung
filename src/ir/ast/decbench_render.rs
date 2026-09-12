@@ -431,6 +431,7 @@ pub(crate) fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_an
     if let Some(prototype) = declared_prototype.filter(|prototype| {
         prototype.authority == CallPrototypeAuthority::Authoritative
             && body_arg_count <= prototype.parameter_types.len()
+            && prototype.parameter_types.len() <= arg_count
     }) {
         arg_count = prototype.parameter_types.len();
     }
