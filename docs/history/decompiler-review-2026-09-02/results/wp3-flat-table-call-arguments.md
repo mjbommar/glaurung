@@ -80,6 +80,10 @@ green. The final exact revision then reports the independent
 with all three arguments `(scratch, accumulator, index + 1)` retained and no
 regression in the same scoped controls.
 
+After ratcheting both baseline entries, the same selection at documentation
+commit `2411d01b` reports no regressions and no pending improvements against
+the unchanged exact release extension.
+
 ## Remaining boundary
 
 This is not universal indirect-call recovery. It covers relocation-proven local
