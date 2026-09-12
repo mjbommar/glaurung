@@ -5734,6 +5734,15 @@ relevant ratchet's accepted-regression record.
    names still decline. Its observed-red same-base contract, all 129 focused
    `call_args` tests, and one exact-release Clang O0 `call_into_spill` control
    pass. See `results/wp3-coalesced-captured-frame-base.md`.
+   Commit `31f8c3a6` migrates spill-slot pointer typing from one exact frame SSA
+   value to equality of complete nonempty candidate sets. Store and reload
+   frame bases with the same coalesced identity can now share pointer evidence;
+   different SSA versions, mixed physical bases, and misleading names still
+   decline. Its observed-red equality contract, the pre-existing different-
+   version refusal, all 91 type-recovery tests, all four memory-effect fixture
+   lanes, and the six-cell cross-architecture Hello checkpoint pass against an
+   exact release build. See
+   `results/wp3-coalesced-frame-slot-identities.md`.
    Commit `1f58963c` migrates x86 prologue/epilogue physical-register
    classification to the same unambiguous-base fact. Coalesced versions of one
    register can retain callee-save and restore matching, while mixed bases and
