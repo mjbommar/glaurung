@@ -752,6 +752,27 @@ with zero outside a gate and passes all six census checks. The active native-
 decoder lane is excluded. The recent Hello checkpoint was not repeated. No
 broad suite or corpus ran.
 
+## Coalesced frame-save identities
+
+Commit `02c2fd19` removes the remaining non-LTO undefined `rbp`/`stack_0`
+frame-save output. Cleanup requires producer-owned machine-save storage plus a
+coalesced identity whose candidates all share one physical-register base and
+include version zero; mixed bases decline. Recursive structured cleanup is now
+owned by the single production frame pass rather than repeated behind the
+shadow-structurer switch.
+
+All 51 owning Rust tests pass. A clean release-visible run of the exact
+build-configuration invariant passes ten configurations with the declared LTO
+case xfailed. Direct output for both formerly failing functions contains no
+frame-save artifact. The periodic x86-64 GCC O0/O2 Hello `main` check has no
+such artifact; O0 retains two older exception-path undefined reads.
+
+The mandatory `pytest python/tests/ -x` post-commit gate reached 11 percent:
+632 passed before the pre-existing `_start`/`__libc_start_main` argument test
+failed. A release parent A/B reproduces that exact failure. See
+`docs/history/decompiler-review-2026-09-02/results/wp3-coalesced-frame-save-identities.md`
+for commands, rendered-output conclusions, and scope limits.
+
 ## Ground rules
 
 Verified before any claim of done: `cargo test --features python-ext`,

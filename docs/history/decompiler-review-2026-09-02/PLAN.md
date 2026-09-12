@@ -2580,6 +2580,18 @@ provenance through lowering.
   build-configuration check removes both static-executable findings. The
   distinct frame-pointer `rbp` source-identity failure remains red. See
   `results/wp3-static-canary-alias.md`.
+  Commit `02c2fd19` closes that frame-pointer identity failure. A coalesced
+  source value is now accepted as the saved entry register only when every SSA
+  candidate has the same physical base and at least one is version zero;
+  producer-owned machine-save storage remains mandatory and mixed bases fail
+  closed. The same proof now runs recursively from the one production frame
+  pass, removing the shadow-only duplicate orchestration. All 51 owning tests
+  pass. A release build passes all ten supported build configurations, leaving
+  only the declared LTO xfail, and direct output for `bc_many_parameters` and
+  `bc_pointer_walk` contains no undefined `rbp`/`stack_0`. The post-commit gate
+  advances from the old 8 percent stop to a pre-existing `_start` call-argument
+  failure at 11 percent after 632 passes; parent A/B reproduces it. See
+  `results/wp3-coalesced-frame-save-identities.md`.
   Commit `327b6734` closes the adjacent lazy-call saturation consumer. Constant
   arms, signed range predicates, doubled call results, promoted destinations,
   and saturation recognition now see through expression owners, while the
