@@ -19,8 +19,9 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::ir::ssa::SsaInfo;
 use crate::ir::types::{BinOp, LlirFunction, MemOp, Op, VReg, Value};
-use crate::ir::use_def::{def_uses, use_is_proven_input};
+use crate::ir::use_def::{def_uses, use_is_proven_input, InstrAddr};
 
 fn scalar_float_intrinsic_name_width(name: &str) -> Option<u8> {
     match name {
@@ -197,11 +198,13 @@ fn scalar_float_source_width(name: &str) -> Option<u8> {
 /// only when at least one scalar-float instruction consumes its incoming value
 /// and EVERY such instruction reads eight bytes; a single binary32 consumer, or
 /// no consumer at all, leaves the four-byte floor exactly where it was. Reads
-/// after the slot has been defined are ignored — they are about the function's
-/// own value, not its parameter — which is the same rule
-/// [`float_live_in_slots`] applies to the spelling.
+/// Reads of any SSA version after zero are ignored — they are about the
+/// function's own value, not its parameter — which is the same rule
+/// [`float_live_in_slots`] applies to the spelling. Using the version also
+/// keeps a definition on one branch from suppressing an entry read on a sibling.
 pub(super) fn x86_binary64_live_in_slots(
     lf: &LlirFunction,
+    ssa: &SsaInfo,
     cc: crate::ir::call_args::CallConv,
 ) -> HashSet<usize> {
     use crate::ir::call_args::CallConv;
@@ -210,40 +213,30 @@ pub(super) fn x86_binary64_live_in_slots(
     }
     // slot -> the source widths every scalar-float consumer of its live-in read.
     let mut evidence: HashMap<usize, HashSet<u8>> = HashMap::new();
-    let mut defined: HashSet<usize> = HashSet::new();
-    // Entry block first, for the reason `float_live_in_slots` states: the block
-    // vector is a CFG collection and a join block can precede the entry.
-    let blocks = lf
-        .blocks
-        .iter()
-        .filter(|block| block.start_va == lf.entry_va)
-        .chain(
-            lf.blocks
-                .iter()
-                .filter(|block| block.start_va != lf.entry_va),
-        );
-    for block in blocks {
-        for instruction in &block.instrs {
-            let (definition, uses) = def_uses(&instruction.op);
+    for (block_idx, block) in lf.blocks.iter().enumerate() {
+        for (instr_idx, instruction) in block.instrs.iter().enumerate() {
+            let (_, uses) = def_uses(&instruction.op);
+            let addr = InstrAddr {
+                block_idx,
+                instr_idx,
+            };
             if let Op::Intrinsic { name, .. } = &instruction.op {
                 if let Some(width) = scalar_float_source_width(name) {
-                    for (use_index, used) in uses.iter().enumerate() {
+                    for (use_index, _) in uses.iter().enumerate() {
                         if !use_is_proven_input(&instruction.op, use_index) {
                             continue;
                         }
-                        let Some(slot) = float_argument_bank_slot(cc, used) else {
+                        let Some(identity) = ssa.use_value_ref(lf, addr, use_index) else {
                             continue;
                         };
-                        if defined.contains(&slot) {
+                        if identity.version != 0 {
                             continue;
                         }
+                        let Some(slot) = float_argument_bank_slot(cc, &identity.base) else {
+                            continue;
+                        };
                         evidence.entry(slot).or_default().insert(width);
                     }
-                }
-            }
-            if let Some(definition) = definition {
-                if let Some(slot) = float_argument_bank_slot(cc, &definition) {
-                    defined.insert(slot);
                 }
             }
         }
@@ -272,8 +265,10 @@ pub(super) fn has_float_argument_bank(cc: crate::ir::call_args::CallConv) -> boo
 /// with the EXACT register spelling that touch used.
 ///
 /// A hard-float argument is a version-zero use.  A scratch/result register is
-/// defined before it is read.  Requiring a contiguous `s0..sN` prefix follows
-/// AAPCS allocation and rejects isolated callee-saved/scratch registers.
+/// read at a later SSA version. Requiring a contiguous `s0..sN` prefix follows
+/// AAPCS allocation and rejects isolated callee-saved/scratch registers. SSA
+/// identity makes this CFG-correct: a write on one branch cannot suppress the
+/// version-zero entry value read on a sibling branch.
 ///
 /// The spelling is returned because AAPCS64's `v0` has two scalar views —
 /// `s0` is binary32 and `d0` binary64 — which this IR's SSA tracks as unrelated
@@ -295,31 +290,18 @@ pub(super) fn has_float_argument_bank(cc: crate::ir::call_args::CallConv) -> boo
 /// `movd eax, xmm0` and nothing else, which is exactly fixture 174.
 pub(super) fn float_live_in_slots(
     lf: &LlirFunction,
+    ssa: &SsaInfo,
     cc: crate::ir::call_args::CallConv,
 ) -> Vec<(usize, String)> {
     let mut first_touch: HashMap<usize, bool> = HashMap::new();
     let mut spelling: HashMap<usize, String> = HashMap::new();
-    // Slots whose storage has been defined. After a definition, a read is no
-    // longer evidence about the ENTRY value, so it must not revise the entry
-    // spelling either.
-    let mut defined: HashSet<usize> = HashSet::new();
-    // `LlirFunction::blocks` is a CFG collection, not a guaranteed address or
-    // dominance order. A join/return block can therefore precede the entry
-    // block in the vector and make the function's final `s0` result definition
-    // look like the first touch of its incoming `s0` parameter. Always examine
-    // the entry block first; only it has an unconditional machine entry state.
-    let blocks = lf
-        .blocks
-        .iter()
-        .filter(|block| block.start_va == lf.entry_va)
-        .chain(
-            lf.blocks
-                .iter()
-                .filter(|block| block.start_va != lf.entry_va),
-        );
-    for block in blocks {
-        for instruction in &block.instrs {
-            let (definition, uses) = def_uses(&instruction.op);
+    for (block_idx, block) in lf.blocks.iter().enumerate() {
+        for (instr_idx, instruction) in block.instrs.iter().enumerate() {
+            let (_, uses) = def_uses(&instruction.op);
+            let addr = InstrAddr {
+                block_idx,
+                instr_idx,
+            };
             // `CallEffects.args` is an ABI-wide may-read set, not evidence
             // that all of those registers entered THIS function live. Real
             // parameter evidence comes from machine instructions before the
@@ -335,7 +317,13 @@ pub(super) fn float_live_in_slots(
                 if !use_is_proven_input(&instruction.op, use_index) {
                     continue;
                 }
-                if let Some(slot) = float_argument_bank_slot(cc, &used) {
+                let Some(identity) = ssa.use_value_ref(lf, addr, use_index) else {
+                    continue;
+                };
+                if identity.version != 0 {
+                    continue;
+                }
+                if let Some(slot) = float_argument_bank_slot(cc, &identity.base) {
                     let VReg::Phys(name) = &used else {
                         continue;
                     };
@@ -350,7 +338,6 @@ pub(super) fn float_live_in_slots(
                         // a transport copy. Nothing replaces a whole register.
                         std::collections::hash_map::Entry::Occupied(entry)
                             if *entry.get()
-                                && !defined.contains(&slot)
                                 && !is_scalarised_vector_lane(cc, name)
                                 && spelling.get(&slot).is_some_and(|current| {
                                     is_scalarised_vector_lane(cc, current)
@@ -360,12 +347,6 @@ pub(super) fn float_live_in_slots(
                         }
                         std::collections::hash_map::Entry::Occupied(_) => {}
                     }
-                }
-            }
-            if let Some(definition) = definition {
-                if let Some(slot) = float_argument_bank_slot(cc, &definition) {
-                    first_touch.entry(slot).or_insert(false);
-                    defined.insert(slot);
                 }
             }
         }

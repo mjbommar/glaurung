@@ -1854,8 +1854,8 @@ pub fn recover_prototype_with_arm_vfp_args(
         // the one convention whose register spelling cannot answer. It raises
         // the floor and only the floor: a slot it does not name keeps the four
         // bytes it had.
-        let binary64_slots = x86_binary64_live_in_slots(lf, cc);
-        let vfp_parameters: Vec<RecoveredParameter> = float_live_in_slots(lf, cc)
+        let binary64_slots = x86_binary64_live_in_slots(lf, ssa, cc);
+        let vfp_parameters: Vec<RecoveredParameter> = float_live_in_slots(lf, ssa, cc)
             .into_iter()
             .map(|(slot, observed)| {
                 let width = if observed.starts_with('d') || binary64_slots.contains(&slot) {
@@ -3811,7 +3811,62 @@ int never_returns(void) { for (;;) {} }
         };
 
         assert_eq!(
-            float_live_in_slots(&lf, crate::ir::call_args::CallConv::ArmHardFloat),
+            float_live_in_slots(
+                &lf,
+                &compute_ssa(&lf),
+                crate::ir::call_args::CallConv::ArmHardFloat,
+            ),
+            vec![(0, "s0".to_string())]
+        );
+    }
+
+    #[test]
+    fn float_live_in_on_one_branch_survives_a_sibling_definition() {
+        let lf = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![
+                LlirBlock {
+                    start_va: 0x1000,
+                    end_va: 0x1004,
+                    instrs: vec![],
+                    succs: vec![0x1100, 0x1200],
+                },
+                // Deliberately precedes the read branch in storage order. A
+                // whole-function `defined` set used to let this sibling write
+                // erase the genuine entry value read below.
+                LlirBlock {
+                    start_va: 0x1100,
+                    end_va: 0x1104,
+                    instrs: vec![LlirInstr {
+                        va: 0x1100,
+                        op: Op::Assign {
+                            dst: VReg::phys("s0"),
+                            src: Value::Const(0),
+                        },
+                    }],
+                    succs: vec![],
+                },
+                LlirBlock {
+                    start_va: 0x1200,
+                    end_va: 0x1204,
+                    instrs: vec![LlirInstr {
+                        va: 0x1200,
+                        op: Op::Assign {
+                            dst: VReg::Temp(0),
+                            src: Value::Reg(VReg::phys("s0")),
+                        },
+                    }],
+                    succs: vec![],
+                },
+            ],
+        };
+
+        assert_eq!(
+            float_live_in_slots(
+                &lf,
+                &compute_ssa(&lf),
+                crate::ir::call_args::CallConv::ArmHardFloat,
+            ),
             vec![(0, "s0".to_string())]
         );
     }
