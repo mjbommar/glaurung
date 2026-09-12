@@ -643,10 +643,17 @@ fn collapse_break_one(body: &mut Vec<Stmt>) -> bool {
             return true;
         }
         if index + 1 < body.len() {
-            let left = break_guard_condition(&body[index]);
-            let right = break_guard_condition(&body[index + 1]);
-            if let (Some(left), Some(right)) = (left, right) {
+            let left = break_guard(&body[index]);
+            let right = break_guard(&body[index + 1]);
+            if let (Some((left_condition, left_break)), Some((right_condition, right_break))) =
+                (left, right)
+            {
                 let origins = match (body[index].origins(), body[index + 1].origins()) {
+                    (Some(left), Some(right)) => Some(left.union(right)),
+                    (Some(origins), None) | (None, Some(origins)) => Some(origins.clone()),
+                    (None, None) => None,
+                };
+                let break_origins = match (left_break.origins(), right_break.origins()) {
                     (Some(left), Some(right)) => Some(left.union(right)),
                     (Some(origins), None) | (None, Some(origins)) => Some(origins.clone()),
                     (None, None) => None,
@@ -654,10 +661,10 @@ fn collapse_break_one(body: &mut Vec<Stmt>) -> bool {
                 body[index] = Stmt::If {
                     cond: Expr::Bin {
                         op: BinOp::LogicalOr,
-                        lhs: Box::new(left),
-                        rhs: Box::new(right),
+                        lhs: Box::new(left_condition),
+                        rhs: Box::new(right_condition),
                     },
-                    then_body: vec![Stmt::Break],
+                    then_body: vec![Stmt::Break.with_optional_origins(break_origins)],
                     else_body: None,
                 }
                 .with_optional_origins(origins);
@@ -709,8 +716,8 @@ fn redundant_copy_between_break_guards(body: &[Stmt], guard_index: usize) -> Opt
     if guard_index < 2 || guard_index + 2 >= body.len() {
         return None;
     }
-    let first_condition = break_guard_condition(&body[guard_index])?;
-    break_guard_condition(&body[guard_index + 2])?;
+    let (first_condition, _) = break_guard(&body[guard_index])?;
+    break_guard(&body[guard_index + 2])?;
     if !is_short_circuit_safe_boolean(&first_condition) {
         return None;
     }
@@ -851,7 +858,7 @@ fn terminal_guard(statement: &Stmt) -> Option<(Expr, &Stmt)> {
     matches!(returned.semantic(), Stmt::Return { .. }).then(|| (cond.clone(), returned))
 }
 
-fn break_guard_condition(statement: &Stmt) -> Option<Expr> {
+fn break_guard(statement: &Stmt) -> Option<(Expr, &Stmt)> {
     let Stmt::If {
         cond,
         then_body,
@@ -860,8 +867,10 @@ fn break_guard_condition(statement: &Stmt) -> Option<Expr> {
     else {
         return None;
     };
-    matches!(then_body.as_slice(), [statement] if matches!(statement.semantic(), Stmt::Break))
-        .then(|| cond.clone())
+    let [break_statement] = then_body.as_slice() else {
+        return None;
+    };
+    matches!(break_statement.semantic(), Stmt::Break).then(|| (cond.clone(), break_statement))
 }
 
 fn collapse_assignment_one(
@@ -1610,6 +1619,69 @@ mod tests {
         assert_eq!(rendered.matches(" || ").count(), 1, "{rendered}");
         assert_eq!(rendered.matches("break;").count(), 1, "{rendered}");
         assert!(rendered.contains("iteration = 1;"), "{rendered}");
+    }
+
+    #[test]
+    fn attributed_adjacent_break_guards_preserve_both_exit_origins() {
+        let mut function = Function {
+            name: "attributed_stop".into(),
+            entry_va: 0x1310,
+            body: vec![Stmt::While {
+                cond: Expr::Const(1),
+                body: vec![
+                    Stmt::If {
+                        cond: Expr::Reg(reg("first")).with_origins(OriginSet::one(0x1312)),
+                        then_body: vec![Stmt::Break.with_origins(OriginSet::one(0x1314))],
+                        else_body: None,
+                    }
+                    .with_origins(OriginSet::one(0x1310)),
+                    Stmt::If {
+                        cond: Expr::Reg(reg("second")).with_origins(OriginSet::one(0x131a)),
+                        then_body: vec![Stmt::Break.with_origins(OriginSet::one(0x131c))],
+                        else_body: None,
+                    }
+                    .with_origins(OriginSet::one(0x1318)),
+                ],
+            }],
+        };
+
+        super::collapse_adjacent_break_guards(&mut function);
+
+        let Stmt::While { body, .. } = function.body[0].semantic() else {
+            panic!("expected loop")
+        };
+        assert_eq!(body.len(), 1);
+        assert_eq!(
+            body[0]
+                .origins()
+                .expect("combined guard origins")
+                .addresses(),
+            &[0x1310, 0x1318]
+        );
+        let Stmt::If {
+            cond, then_body, ..
+        } = body[0].semantic()
+        else {
+            panic!("expected combined guard")
+        };
+        let Expr::Bin { lhs, rhs, .. } = cond.semantic() else {
+            panic!("expected disjunction")
+        };
+        assert_eq!(
+            lhs.origins().expect("first predicate origin").addresses(),
+            &[0x1312]
+        );
+        assert_eq!(
+            rhs.origins().expect("second predicate origin").addresses(),
+            &[0x131a]
+        );
+        assert_eq!(
+            then_body[0]
+                .origins()
+                .expect("combined break origins")
+                .addresses(),
+            &[0x1314, 0x131c]
+        );
     }
 
     #[test]
