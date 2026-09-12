@@ -3490,6 +3490,18 @@ spelling, but does not complete WP3 or permit compatibility-tag deletion. See
 Purpose: replace whole-function structural fallback with a total algorithm
 that preserves honest local gotos when required.
 
+Commit `921dfd9b` closes the historical pinned-Clang O2 `bst_search`
+duplicated-loop xfail at the WP4/WP7B boundary. The function now has one
+faithful loop, and a new exact final-AST rule combines adjacent else-free
+guards with identical single-return bodies into one left-to-right disjunction.
+Its validation prefix is one three-way guard, with three terminal returns and
+no goto. All 27 guard-chain tests and both exact fixture execution round trips
+pass. The old combined xfail is split: the independent
+`bst_inorder_checksum` loop-depth-copy/two-break defect remains strict and
+named. See `results/wp4-wp7b-adjacent-return-guards.md`. This improves v1
+output while the shadow v2 replacement remains under construction; it does not
+complete WP4 or the planned general SSA idiom framework.
+
 ### New implementation boundary
 
 - [x] Create `src/ir/structure_v2/` rather than mutating the current structurer
