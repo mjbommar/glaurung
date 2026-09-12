@@ -5240,6 +5240,13 @@ relevant ratchet's accepted-regression record.
    this family closure for WP4 completion; its 28% text growth and the much
    larger `nested_loop_returning_arm` output remain inputs to the promotion
    budget decision.
+   Commit `156b641e` adds the missing fail-closed source-relative structure
+   axis to the same comparison report. Its first four-function fixture-212
+   slice is deliberately not favorable: two rows improve and two regress, and
+   aggregate distance moves from 380 to 416 because the compiler-unrolled
+   `nested_loop_returning_arm` tree expands by 35 edits. See
+   `results/wp4-structure-axis.md`. Reduce that expansion and rerun the focused
+   slice before spending time on the clean pinned full comparison.
 5. Extend the landed WP5 shared typed-case transport across the remaining
    fixture/compiler/architecture execution cells and classify every residual
    decline. At `9ad9414d`, `Cfg` is the single producer of immutable ordered
