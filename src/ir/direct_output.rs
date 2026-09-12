@@ -23,7 +23,11 @@ use crate::ir::types_recover::{RecoveredOutputKind, RecoveredPrototype};
 
 /// Project a body-written return register onto every remaining bare return.
 pub(crate) fn materialize_direct_output(function: &mut Function) {
-    materialize_direct_output_with_live_in(function, None, &|_| true);
+    materialize_direct_output_with_live_in(
+        function,
+        None,
+        &|value| matches!(value, VReg::Phys(name) if name == "ret"),
+    );
 }
 
 /// Project body-written output using pipeline-owned role authority.
@@ -33,6 +37,9 @@ pub(crate) fn materialize_direct_output_with_identities(
 ) {
     materialize_direct_output_with_live_in(function, None, &|value| {
         identities.is_result_role(value)
+            || identities
+                .unambiguous_physical_base(value)
+                .is_some_and(is_projected_result_register)
     });
 }
 
@@ -709,7 +716,7 @@ fn clear_body_return_values(body: &mut [Stmt]) {
     }
 }
 
-/// The first-tier result register the body writes, in body order.
+/// The latest first-tier result value written before a bare fallthrough return.
 ///
 /// `ret` — the canonical role name `apply_role_names` leaves behind — is one of
 /// the first-tier names, so [`is_return_reg`] already covers it. It was also
@@ -719,12 +726,17 @@ fn find_written_return_reg(
     body: &[Stmt],
     canonical_role_is_result: &impl Fn(&VReg) -> bool,
 ) -> Option<VReg> {
-    let is_result = |value: &VReg| {
-        is_return_reg(value)
-            && (!matches!(value, VReg::Phys(name) if name == "ret")
-                || canonical_role_is_result(value))
+    let is_result = |value: &VReg| match value {
+        // `ret` can be a user/source spelling, so only pipeline ownership may
+        // authorize it. Other values may be the unversioned compatibility
+        // spelling or an exact SSA identity proved to occupy result storage.
+        VReg::Phys(name) if name == "ret" => canonical_role_is_result(value),
+        _ => is_return_reg(value) || canonical_role_is_result(value),
     };
-    for statement in body {
+    // SSA-numbered names distinguish successive values in the same machine
+    // carrier. Search backwards so a pre-call argument transport in `rax`
+    // cannot beat the later `rax#N` value that actually reaches the return.
+    for statement in body.iter().rev() {
         let found = match statement.semantic() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, .. } if is_result(dst) => Some(dst.clone()),
@@ -733,22 +745,21 @@ fn find_written_return_reg(
                 then_body,
                 else_body,
                 ..
-            } => find_written_return_reg(then_body, canonical_role_is_result).or_else(|| {
-                else_body
-                    .as_deref()
-                    .and_then(|body| find_written_return_reg(body, canonical_role_is_result))
-            }),
+            } => else_body
+                .as_deref()
+                .and_then(|body| find_written_return_reg(body, canonical_role_is_result))
+                .or_else(|| find_written_return_reg(then_body, canonical_role_is_result)),
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
                 find_written_return_reg(body, canonical_role_is_result)
             }
             Stmt::For { body, .. } => find_written_return_reg(body, canonical_role_is_result),
-            Stmt::Switch { cases, default, .. } => cases
-                .iter()
-                .find_map(|(_, body)| find_written_return_reg(body, canonical_role_is_result))
+            Stmt::Switch { cases, default, .. } => default
+                .as_deref()
+                .and_then(|body| find_written_return_reg(body, canonical_role_is_result))
                 .or_else(|| {
-                    default
-                        .as_deref()
-                        .and_then(|body| find_written_return_reg(body, canonical_role_is_result))
+                    cases.iter().rev().find_map(|(_, body)| {
+                        find_written_return_reg(body, canonical_role_is_result)
+                    })
                 }),
             _ => None,
         };
@@ -1096,6 +1107,59 @@ mod tests {
             function.body.last(),
             Some(&Stmt::Return {
                 value: Some(Expr::Reg(VReg::phys("ret"))),
+            })
+        );
+    }
+
+    #[test]
+    fn attributed_output_uses_the_latest_reaching_result_identity() {
+        let incoming = VReg::phys("rax");
+        let call_result = VReg::phys("rax#2");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            incoming.clone(),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 0,
+            },
+        );
+        identities.record(
+            call_result.clone(),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 2,
+            },
+        );
+        let mut function = Function {
+            name: "forward_double_call".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: incoming,
+                    src: Expr::Reg(VReg::phys("arg0")),
+                },
+                Stmt::Assign {
+                    dst: call_result.clone(),
+                    src: Expr::Call {
+                        target: Box::new(Expr::Named {
+                            va: 0x2000,
+                            name: "helper".into(),
+                        }),
+                        args: vec![Expr::Reg(VReg::phys("arg0"))],
+                        call_spec: None,
+                        result_width: Some(8),
+                    },
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        materialize_direct_output_with_identities(&mut function, &identities);
+
+        assert_eq!(
+            function.body.last(),
+            Some(&Stmt::Return {
+                value: Some(Expr::Reg(call_result)),
             })
         );
     }
