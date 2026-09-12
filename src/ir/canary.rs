@@ -302,7 +302,11 @@ fn is_stack_chk_fail_call(stmt: &Stmt) -> bool {
     let Stmt::Call { target, .. } = stmt.semantic() else {
         return false;
     };
-    matches!(target.semantic(), Expr::Named { name, .. } if name.split('@').next() == Some("__stack_chk_fail"))
+    matches!(target.semantic(), Expr::Named { name, .. }
+        if name
+            .split('@')
+            .next()
+            .is_some_and(|base| base == "__stack_chk_fail" || base == "__stack_chk_fail_local"))
 }
 
 fn expr_mentions_slot(e: &Expr, slot: &str) -> bool {
@@ -1655,6 +1659,44 @@ mod tests {
                 },
                 Stmt::Return {
                     value: Some(Expr::Const(0)),
+                },
+            ],
+        };
+
+        collapse_canary_save(&mut f);
+
+        assert_eq!(f.body.len(), 3, "got: {:?}", f.body);
+        assert!(matches!(&f.body[1], Stmt::Comment(s) if s == "stack-canary check"));
+        assert!(matches!(&f.body[2], Stmt::Return { .. }));
+    }
+
+    #[test]
+    fn structured_static_glibc_failure_alias_collapses_with_a_proven_save() {
+        use crate::ir::types::{CmpOp, VReg};
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Comment("stack canary: save guard to %local_10".to_string()),
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Ne,
+                        lhs: Box::new(Expr::Reg(VReg::phys("local_10"))),
+                        rhs: Box::new(Expr::Const(CANARY_DISP)),
+                    },
+                    then_body: vec![Stmt::Call {
+                        target: Expr::Named {
+                            va: 0x4010e0,
+                            name: "__stack_chk_fail_local".into(),
+                        },
+                        args: vec![],
+                        dst: None,
+                        call_spec: None,
+                    }],
+                    else_body: None,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Const(7)),
                 },
             ],
         };
