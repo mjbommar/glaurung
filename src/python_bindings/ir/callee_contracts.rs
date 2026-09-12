@@ -541,8 +541,84 @@ fn apply_recovered_table_call_effects(
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum TableValue {
-        Base(u64),
+        Address(u64),
         Entry(u64),
+    }
+
+    fn offset(address: u64, displacement: i64) -> Option<u64> {
+        if displacement >= 0 {
+            address.checked_add(displacement as u64)
+        } else {
+            address.checked_sub(displacement.unsigned_abs())
+        }
+    }
+
+    fn exact_address(value: &Value, state: &HashMap<VReg, TableValue>) -> Option<u64> {
+        match value {
+            Value::Addr(address) => Some(*address),
+            Value::Const(address) => u64::try_from(*address).ok(),
+            Value::Reg(source) => match state.get(source) {
+                Some(TableValue::Address(address)) => Some(*address),
+                Some(TableValue::Entry(_)) | None => None,
+            },
+        }
+    }
+
+    fn assigned_value(value: &Value, state: &HashMap<VReg, TableValue>) -> Option<TableValue> {
+        match value {
+            Value::Reg(source) => state.get(source).copied(),
+            Value::Addr(_) | Value::Const(_) => {
+                exact_address(value, state).map(TableValue::Address)
+            }
+        }
+    }
+
+    fn register_address(register: &VReg, state: &HashMap<VReg, TableValue>) -> Option<u64> {
+        match state.get(register) {
+            Some(TableValue::Address(address)) => Some(*address),
+            Some(TableValue::Entry(_)) | None => None,
+        }
+    }
+
+    fn derived_address(
+        op: crate::ir::types::BinOp,
+        lhs: &Value,
+        rhs: &Value,
+        state: &HashMap<VReg, TableValue>,
+    ) -> Option<u64> {
+        use crate::ir::types::BinOp;
+        match (op, lhs, rhs) {
+            (BinOp::Add, Value::Reg(base), Value::Const(displacement))
+            | (BinOp::Add, Value::Const(displacement), Value::Reg(base)) => {
+                register_address(base, state).and_then(|address| offset(address, *displacement))
+            }
+            (BinOp::Sub, Value::Reg(base), Value::Const(displacement)) => {
+                register_address(base, state)
+                    .and_then(|address| offset(address, displacement.saturating_neg()))
+            }
+            _ => None,
+        }
+    }
+
+    fn loaded_table(
+        address: u64,
+        indexed: bool,
+        scale: u8,
+        size: u8,
+        tables: &[crate::ir::function_tables::FunctionPointerTable],
+    ) -> Option<u64> {
+        tables.iter().find_map(|table| {
+            if size != table.pointer_size {
+                return None;
+            }
+            if indexed {
+                return (scale == table.pointer_size && address == table.va).then_some(table.va);
+            }
+            let displacement = address.checked_sub(table.va)?;
+            (displacement % u64::from(table.pointer_size) == 0
+                && displacement / u64::from(table.pointer_size) < table.targets.len() as u64)
+                .then_some(table.va)
+        })
     }
 
     fn merge(states: impl Iterator<Item = HashMap<VReg, TableValue>>) -> HashMap<VReg, TableValue> {
@@ -613,22 +689,19 @@ fn apply_recovered_table_call_effects(
             let mut state = incoming;
             for instruction in &function.blocks[block_index].instrs {
                 let definition = crate::ir::use_def::def_ref(&instruction.op).cloned();
+                let derived = match &instruction.op {
+                    Op::Assign { src, .. } => assigned_value(src, &state),
+                    Op::Bin { op, lhs, rhs, .. } => {
+                        derived_address(*op, lhs, rhs, &state).map(TableValue::Address)
+                    }
+                    _ => None,
+                };
                 if let Some(definition) = definition.as_ref() {
                     state.remove(definition);
                 }
                 match &instruction.op {
-                    Op::Assign { dst, src } => {
-                        let value = match src {
-                            Value::Addr(address) => tables_by_va
-                                .contains_key(address)
-                                .then_some(TableValue::Base(*address)),
-                            Value::Const(address) => u64::try_from(*address)
-                                .ok()
-                                .filter(|address| tables_by_va.contains_key(address))
-                                .map(TableValue::Base),
-                            Value::Reg(source) => state.get(source).copied(),
-                        };
-                        if let Some(value) = value {
+                    Op::Assign { dst, .. } | Op::Bin { dst, .. } => {
+                        if let Some(value) = derived {
                             state.insert(dst.clone(), value);
                         }
                     }
@@ -636,24 +709,26 @@ fn apply_recovered_table_call_effects(
                         let Some(base) = addr.base.as_ref() else {
                             continue;
                         };
-                        let Some(TableValue::Base(table_va)) = state.get(base).copied() else {
+                        let Some(TableValue::Address(base_address)) = state.get(base).copied()
+                        else {
                             continue;
                         };
-                        let Some(table) = tables_by_va.get(&table_va) else {
+                        if addr.segment.is_some() {
                             continue;
-                        };
-                        let indexed = addr.index.is_some() && addr.scale == table.pointer_size;
-                        let fixed = addr.index.is_none()
-                            && addr.disp >= 0
-                            && (addr.disp as u64) % u64::from(table.pointer_size) == 0
-                            && (addr.disp as u64) / u64::from(table.pointer_size)
-                                < table.targets.len() as u64;
-                        if addr.segment.is_none()
-                            && addr.size == table.pointer_size
-                            && (indexed || fixed)
-                        {
-                            state.insert(dst.clone(), TableValue::Entry(table_va));
                         }
+                        let Some(address) = offset(base_address, addr.disp) else {
+                            continue;
+                        };
+                        let Some(table_va) = loaded_table(
+                            address,
+                            addr.index.is_some(),
+                            addr.scale,
+                            addr.size,
+                            tables,
+                        ) else {
+                            continue;
+                        };
+                        state.insert(dst.clone(), TableValue::Entry(table_va));
                     }
                     Op::Call { .. } => state.retain(|register, _| !is_caller_saved(register)),
                     _ => {}
@@ -678,22 +753,19 @@ fn apply_recovered_table_call_effects(
         };
         for instruction in &mut function.blocks[block_index].instrs {
             let definition = crate::ir::use_def::def_ref(&instruction.op).cloned();
+            let derived = match &instruction.op {
+                Op::Assign { src, .. } => assigned_value(src, &state),
+                Op::Bin { op, lhs, rhs, .. } => {
+                    derived_address(*op, lhs, rhs, &state).map(TableValue::Address)
+                }
+                _ => None,
+            };
             if let Some(definition) = definition.as_ref() {
                 state.remove(definition);
             }
             match &mut instruction.op {
-                Op::Assign { dst, src } => {
-                    let value = match src {
-                        Value::Addr(address) => tables_by_va
-                            .contains_key(address)
-                            .then_some(TableValue::Base(*address)),
-                        Value::Const(address) => u64::try_from(*address)
-                            .ok()
-                            .filter(|address| tables_by_va.contains_key(address))
-                            .map(TableValue::Base),
-                        Value::Reg(source) => state.get(source).copied(),
-                    };
-                    if let Some(value) = value {
+                Op::Assign { dst, .. } | Op::Bin { dst, .. } => {
+                    if let Some(value) = derived {
                         state.insert(dst.clone(), value);
                     }
                 }
@@ -701,24 +773,21 @@ fn apply_recovered_table_call_effects(
                     let Some(base) = addr.base.as_ref() else {
                         continue;
                     };
-                    let Some(TableValue::Base(table_va)) = state.get(base).copied() else {
+                    let Some(TableValue::Address(base_address)) = state.get(base).copied() else {
                         continue;
                     };
-                    let Some(table) = tables_by_va.get(&table_va) else {
+                    if addr.segment.is_some() {
                         continue;
-                    };
-                    let indexed = addr.index.is_some() && addr.scale == table.pointer_size;
-                    let fixed = addr.index.is_none()
-                        && addr.disp >= 0
-                        && (addr.disp as u64) % u64::from(table.pointer_size) == 0
-                        && (addr.disp as u64) / u64::from(table.pointer_size)
-                            < table.targets.len() as u64;
-                    if addr.segment.is_none()
-                        && addr.size == table.pointer_size
-                        && (indexed || fixed)
-                    {
-                        state.insert(dst.clone(), TableValue::Entry(table_va));
                     }
+                    let Some(address) = offset(base_address, addr.disp) else {
+                        continue;
+                    };
+                    let Some(table_va) =
+                        loaded_table(address, addr.index.is_some(), addr.scale, addr.size, tables)
+                    else {
+                        continue;
+                    };
+                    state.insert(dst.clone(), TableValue::Entry(table_va));
                 }
                 Op::Call {
                     target: CallTarget::Indirect(Value::Reg(target)),
@@ -1524,6 +1593,154 @@ mod tests {
         assert_eq!(effects.args, [VReg::phys("rdi"), VReg::phys("rsi")]);
         assert_eq!(effects.proven_args, effects.args);
         assert!(effects.args_are_exact);
+    }
+
+    #[test]
+    fn affine_page_table_call_gets_exact_pre_ssa_arguments() {
+        use crate::ir::types::{CallTarget, LlirInstr, Op, VReg, Value};
+
+        let mut function = flat_loop_table_call();
+        function.blocks[0].end_va = 0x100c;
+        function.blocks[0].instrs = vec![
+            LlirInstr {
+                va: 0x1000,
+                op: Op::Assign {
+                    dst: VReg::phys("r13"),
+                    src: Value::Addr(0x3000),
+                },
+            },
+            LlirInstr {
+                va: 0x1004,
+                op: Op::Bin {
+                    dst: VReg::phys("r13"),
+                    op: crate::ir::types::BinOp::Add,
+                    lhs: Value::Reg(VReg::phys("r13")),
+                    rhs: Value::Const(0xe60),
+                },
+            },
+        ];
+        let mut facts = super::DirectCalleeFacts::default();
+        for target in [0x2000, 0x2100] {
+            facts
+                .table_entry_layouts
+                .insert(target, vec![VReg::phys("x0"), VReg::phys("x1")]);
+        }
+
+        super::apply_recovered_table_call_effects(
+            &mut function,
+            crate::ir::call_args::CallConv::Aarch64,
+            &facts,
+            &[table(&[0x2000, 0x2100])],
+        );
+
+        let Op::Call {
+            target: CallTarget::Indirect(Value::Reg(target)),
+            effects: Some(effects),
+        } = &function.blocks[1].instrs[1].op
+        else {
+            panic!("expected annotated indirect call")
+        };
+        assert_eq!(target, &VReg::Temp(0));
+        assert_eq!(effects.args, [VReg::phys("x0"), VReg::phys("x1")]);
+        assert_eq!(effects.proven_args, effects.args);
+        assert!(effects.args_are_exact);
+    }
+
+    #[test]
+    fn copied_affine_table_entry_keeps_exact_pre_ssa_arguments() {
+        use crate::ir::types::{CallTarget, LlirInstr, Op, VReg, Value};
+
+        let mut function = flat_loop_table_call();
+        function.blocks[0].instrs = vec![
+            LlirInstr {
+                va: 0x1000,
+                op: Op::Assign {
+                    dst: VReg::phys("r13"),
+                    src: Value::Addr(0x3000),
+                },
+            },
+            LlirInstr {
+                va: 0x1004,
+                op: Op::Bin {
+                    dst: VReg::phys("r13"),
+                    op: crate::ir::types::BinOp::Add,
+                    lhs: Value::Reg(VReg::phys("r13")),
+                    rhs: Value::Const(0xe60),
+                },
+            },
+        ];
+        function.blocks[1].instrs.insert(
+            1,
+            LlirInstr {
+                va: 0x1106,
+                op: Op::Assign {
+                    dst: VReg::Temp(1),
+                    src: Value::Reg(VReg::Temp(0)),
+                },
+            },
+        );
+        let Op::Call { target, .. } = &mut function.blocks[1].instrs[2].op else {
+            panic!("expected indirect call")
+        };
+        *target = CallTarget::Indirect(Value::Reg(VReg::Temp(1)));
+        let mut facts = super::DirectCalleeFacts::default();
+        for target in [0x2000, 0x2100] {
+            facts
+                .table_entry_layouts
+                .insert(target, vec![VReg::phys("x0")]);
+        }
+
+        super::apply_recovered_table_call_effects(
+            &mut function,
+            crate::ir::call_args::CallConv::Aarch64,
+            &facts,
+            &[table(&[0x2000, 0x2100])],
+        );
+
+        let Op::Call {
+            target: CallTarget::Indirect(Value::Reg(target)),
+            effects: Some(effects),
+        } = &function.blocks[1].instrs[2].op
+        else {
+            panic!("expected annotated copied indirect call")
+        };
+        assert_eq!(target, &VReg::Temp(1));
+        assert_eq!(effects.proven_args, [VReg::phys("x0")]);
+        assert!(effects.args_are_exact);
+    }
+
+    #[test]
+    fn unknown_page_arithmetic_does_not_narrow_table_call() {
+        use crate::ir::types::{LlirInstr, Op, VReg, Value};
+
+        let mut function = flat_loop_table_call();
+        function.blocks[0].instrs.push(LlirInstr {
+            va: 0x1004,
+            op: Op::Bin {
+                dst: VReg::phys("r13"),
+                op: crate::ir::types::BinOp::Mul,
+                lhs: Value::Reg(VReg::phys("r13")),
+                rhs: Value::Const(1),
+            },
+        });
+        let mut facts = super::DirectCalleeFacts::default();
+        for target in [0x2000, 0x2100] {
+            facts
+                .table_entry_layouts
+                .insert(target, vec![VReg::phys("rdi")]);
+        }
+
+        super::apply_recovered_table_call_effects(
+            &mut function,
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &facts,
+            &[table(&[0x2000, 0x2100])],
+        );
+
+        let Op::Call { effects, .. } = &function.blocks[1].instrs[1].op else {
+            panic!("expected indirect call")
+        };
+        assert!(effects.is_none());
     }
 
     #[test]

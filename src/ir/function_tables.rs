@@ -211,6 +211,65 @@ pub fn tables_referenced_by<'tables>(
             _ => {}
         }
     }
+
+    // AArch64 commonly materialises a data address as ADRP(page) followed by
+    // ADD(page_offset), so neither instruction contains the final table VA on
+    // its own. This is a demand-discovery scan, not the semantic call-site
+    // proof: a false positive only asks callee recovery for an unused table.
+    // Track exact affine addresses within each straight-line block so those
+    // tables are not missed while refusing unknown arithmetic and joins.
+    fn offset(address: u64, displacement: i64) -> Option<u64> {
+        if displacement >= 0 {
+            address.checked_add(displacement as u64)
+        } else {
+            address.checked_sub(displacement.unsigned_abs())
+        }
+    }
+    for block in &caller.blocks {
+        let mut addresses: HashMap<VReg, u64> = HashMap::new();
+        for instruction in &block.instrs {
+            let definition = crate::ir::use_def::def_ref(&instruction.op).cloned();
+            let derived = match &instruction.op {
+                Op::Assign { src, .. } => match src {
+                    Value::Addr(address) => Some(*address),
+                    Value::Const(address) => u64::try_from(*address).ok(),
+                    Value::Reg(source) => addresses.get(source).copied(),
+                },
+                Op::Bin {
+                    op: BinOp::Add,
+                    lhs,
+                    rhs,
+                    ..
+                } => match (lhs, rhs) {
+                    (Value::Reg(base), Value::Const(displacement))
+                    | (Value::Const(displacement), Value::Reg(base)) => addresses
+                        .get(base)
+                        .copied()
+                        .and_then(|address| offset(address, *displacement)),
+                    _ => None,
+                },
+                Op::Bin {
+                    op: BinOp::Sub,
+                    lhs: Value::Reg(base),
+                    rhs: Value::Const(displacement),
+                    ..
+                } => addresses
+                    .get(base)
+                    .copied()
+                    .and_then(|address| offset(address, displacement.saturating_neg())),
+                _ => None,
+            };
+            if let Some(definition) = definition.as_ref() {
+                addresses.remove(definition);
+            }
+            if let (Some(definition), Some(address)) = (definition, derived) {
+                addresses.insert(definition, address);
+                if tables.iter().any(|table| table.va == address) {
+                    seen.insert(address);
+                }
+            }
+        }
+    }
     tables
         .iter()
         .filter(|table| seen.contains(&table.va))
@@ -1200,6 +1259,78 @@ mod tests {
                 },
             ],
         }
+    }
+
+    #[test]
+    fn aarch64_page_plus_offset_marks_referenced_table() {
+        use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, Value};
+
+        let caller = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1008,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x1000,
+                        op: Op::Assign {
+                            dst: VReg::phys("x22"),
+                            src: Value::Addr(0x3000),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1004,
+                        op: Op::Bin {
+                            dst: VReg::phys("x22"),
+                            op: BinOp::Add,
+                            lhs: Value::Reg(VReg::phys("x22")),
+                            rhs: Value::Const(0x1004),
+                        },
+                    },
+                ],
+                succs: vec![],
+            }],
+        };
+        let table = ops_table();
+
+        let referenced = tables_referenced_by(&caller, std::slice::from_ref(&table));
+
+        assert_eq!(referenced, [&table]);
+    }
+
+    #[test]
+    fn unknown_page_arithmetic_does_not_mark_referenced_table() {
+        use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, Value};
+
+        let caller = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1008,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x1000,
+                        op: Op::Assign {
+                            dst: VReg::phys("x22"),
+                            src: Value::Addr(0x3000),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1004,
+                        op: Op::Bin {
+                            dst: VReg::phys("x22"),
+                            op: BinOp::Mul,
+                            lhs: Value::Reg(VReg::phys("x22")),
+                            rhs: Value::Const(2),
+                        },
+                    },
+                ],
+                succs: vec![],
+            }],
+        };
+        let table = ops_table();
+
+        assert!(tables_referenced_by(&caller, &[table]).is_empty());
     }
 
     /// `mov 0x10(%eax,%edx,4),%eax` with `eax` holding `_GLOBAL_OFFSET_TABLE_`:
