@@ -4749,6 +4749,18 @@ intrinsics, with exact register/memory lane tests and no adjacent vector/HFA
 regression. This improves fixture 217's Clang O2 output but does not close its
 complex-helper call boundary. See `results/wp9-packed-float-arithmetic.md`.
 
+Commit `ca0927e7` closes the two strict AArch64 `signed_remainder` definedness
+xfails at the WP3/WP9 boundary. Target-local `negs` lifting now defines both
+its negated destination and the fresh zero/sign facts consumed by a following
+conditional select. O0 and O2 recover the source's single parameter without
+undefined operands; all 47 AArch64 lifter tests and both 16-cell definedness
+and arity invariant families pass. The invariant now also scans named
+predicate identities instead of only `varN`. See
+`results/wp3-wp9-aarch64-negs-definedness.md`. This is one instruction and
+def-use-chain closure, not completion of WP3 or WP9. Its one-test census update
+is deferred until the concurrent lane's 17 uncommitted tests land, so the
+generated ledger does not absorb unfinished foreign work.
+
 ### Tests
 
 - [ ] Byte-identical fixture sweep for each architecture-only migration.

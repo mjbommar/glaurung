@@ -113,7 +113,7 @@ By compiler: clang 29, gcc 13, rustc 6. Fixtures: `102_duffs_device` 6,
 | `test_decompiler_control_flow_semantics.py:207` | 1 | clang 14 -O2 `fsm`: no `switch`, `goto L_1153` / `goto L_113b`; `detect_raw_dispatch_loop` declines on `exits.len() < 3`; `BackEdgeUnowned { 3 -> 4 }` |
 | `test_build_configuration_invariants.py:531, 865, 915` | 3 (`lto` config) | `-flto`: all five return types collapse to `void`; parameters degrade to register width; `bc_buffer_and_scalars` recovers no frame object (`long rsp; rsp = rsp - 88`) |
 | `test_build_configuration_invariants.py:732-743, 810-816` | 10 configs (`DECIDABLE_GUARD_KNOWN_BAD`) | the stack-guard load is modelled so the canary compare is statically decidable; every lane but `no_stack_protector` |
-| `test_decompiler_emission_invariants.py:336` | 1 arch x 2 opts | AArch64 `signed_remainder`: the negative arm reads unassigned `var3` |
+| `test_decompiler_emission_invariants.py:336` | 0 | Resolved at `ca0927e7`: AArch64 `negs` now defines its result and fresh condition facts; both `signed_remainder` xfails were removed |
 | `test_decompiler_emission_invariants.py:296` | 0 | `FRAME_OVERLAP_KNOWN_BAD = set()`; `:570-576` records the aarch64 -O2 entry removed on XPASS 2026-08-16 |
 | `test_variadic_abi_invariants.py:318, 505` | 24 | x86-64 register save area: `va_start` spills rsi/rdx/rcx/r8/r9/xmm0-7/`al` that nothing defines (5 to 38 undefined reads); the recovered prototype does not declare `...` |
 | `test_recovered_tree_buildability.py:79` | 0 | `_KNOWN_BROKEN = {}` |
