@@ -1129,6 +1129,32 @@ mod tests {
     }
 
     #[test]
+    fn authoritative_source_argument_identity_survives_presentation() {
+        let function = Function {
+            name: "wide_parameter".into(),
+            entry_va: 0x1010,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Reg(reg("arg0"))),
+            }],
+        };
+        let role_names = role_names_with_identities(
+            &function,
+            CallConv::Arm,
+            &std::collections::HashSet::from([0]),
+            &HashMap::from([("r0".to_string(), 0), ("arg0".to_string(), 0)]),
+            &HashMap::new(),
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
+
+        assert_eq!(role_names.get("arg0").map(String::as_str), Some("arg0"));
+        assert_eq!(
+            role_named_render_view(&function, &role_names),
+            function,
+            "an exact synthetic source argument must not become scratch"
+        );
+    }
+
+    #[test]
     fn origin_wrapped_ssa_return_carrier_keeps_the_output_role() {
         let mut function = Function {
             name: "f".into(),

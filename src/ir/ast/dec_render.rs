@@ -1429,7 +1429,7 @@ fn redundant_declared_integer_cast(expr: &Expr) -> Option<&VReg> {
         return None;
     };
     if let Expr::Reg(reg @ VReg::Phys(_)) = inner.semantic() {
-        return (declared_reg_ctype(reg) == int_ctype(*signed, *width)).then_some(reg);
+        return (declared_reg_ctype(reg) == target_int_ctype(*signed, *width)).then_some(reg);
     }
     let Expr::Cast {
         signed: inner_signed,

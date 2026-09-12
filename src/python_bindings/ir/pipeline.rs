@@ -542,7 +542,7 @@ pub(super) fn run_ast_passes(
         })
         .map(|(target, layout)| (*target, layout.clone()))
         .collect::<std::collections::HashMap<_, _>>();
-    let parameter_roles = prototype
+    let mut parameter_roles = prototype
         .map(crate::ir::types_recover::RecoveredPrototype::parameter_role_map)
         .unwrap_or_default();
     if dump {
@@ -784,7 +784,7 @@ pub(super) fn run_ast_passes(
         crate::ir::value_split::split_argument_storage_reuse(f, cc, split_unspilled_dual_role)
     );
     if let Some(prototype) = prototype {
-        pass!(
+        let materialized = pass!(
             "materialize_32bit_wide_parameters",
             crate::ir::wide_parameters::materialize_32bit_wide_parameters(
                 f,
@@ -793,6 +793,18 @@ pub(super) fn run_ast_passes(
                 endianness,
             )
         );
+        if materialized != 0 {
+            // The materializer replaces multiple machine-word identities by
+            // one synthetic source identity. Publish that exact prototype-
+            // owned role to presentation naming; do not make naming parse and
+            // trust arbitrary `argN` spellings.
+            for (slot, _) in prototype.wide_integer_parameter_parts() {
+                parameter_roles.insert(format!("arg{slot}"), slot);
+            }
+            for (slot, _) in prototype.wide_integer_stack_parameter_parts() {
+                parameter_roles.insert(format!("arg{slot}"), slot);
+            }
+        }
     }
     let role_names = crate::ir::naming::role_names_with_identities(
         f,

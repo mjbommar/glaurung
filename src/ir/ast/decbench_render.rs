@@ -409,7 +409,8 @@ pub(crate) fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_an
     // elimination (e.g. a `switch` whose cases were lost to `goto`s) still has a
     // type-map entry and must still appear in the signature (an ABI/prototype
     // property, not a "still referenced after DCE" one).
-    let mut arg_count = ids.max_arg.map(|m| m + 1).unwrap_or(0);
+    let body_arg_count = ids.max_arg.map(|m| m + 1).unwrap_or(0);
+    let mut arg_count = body_arg_count;
     if let Some(tm) = tm {
         for (v, _) in tm.iter() {
             if let VReg::Phys(n) = v {
@@ -418,6 +419,20 @@ pub(crate) fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_an
                 }
             }
         }
+    }
+    // A source-level parameter may occupy multiple machine words. Once the
+    // body has been materialized onto that source identity, its superseded
+    // word can remain in the pre-structuring TypeMap even though it is no
+    // longer an independent argument. An authoritative declaration owns that
+    // boundary: ignore only type-only trailing slots, and only when every
+    // argument still referenced by the body fits inside the declaration.
+    // A genuine body reference beyond the declared arity keeps the mismatch
+    // visible and rejects the declaration below.
+    if let Some(prototype) = declared_prototype.filter(|prototype| {
+        prototype.authority == CallPrototypeAuthority::Authoritative
+            && body_arg_count <= prototype.parameter_types.len()
+    }) {
+        arg_count = prototype.parameter_types.len();
     }
     // `main` is the one C function whose ordinary hosted signature is part of
     // the language/runtime contract even when debug information is absent.
@@ -1081,6 +1096,111 @@ pub(crate) fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_an
 mod identity_census_tests {
     use super::*;
     use crate::ir::ast::{Expr, Stmt};
+    use crate::ir::types_recover::TypeHint;
+
+    fn render_with_stale_second_parameter(body: Vec<Stmt>) -> String {
+        let function = Function {
+            name: "wide_parameter".into(),
+            entry_va: 0,
+            body,
+        };
+        let mut types = TypeMap::default();
+        types.upsert_public(
+            VReg::phys("arg0"),
+            TypeHint::Int {
+                signed: false,
+                width: 8,
+            },
+        );
+        types.upsert_public(
+            VReg::phys("arg1"),
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        );
+        let prototype = CallPrototype {
+            return_type: "int".to_string(),
+            parameter_types: vec!["unsigned long long".to_string()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+
+        render_decbench_typed_with_output_and_prototype(
+            &function,
+            Some(&types),
+            None,
+            crate::ir::types_recover::RecoveredOutputKind::Direct,
+            Some(&prototype),
+        )
+    }
+
+    #[test]
+    fn authoritative_arity_ignores_a_stale_type_only_machine_word() {
+        let text = render_with_stale_second_parameter(vec![Stmt::Return {
+            value: Some(Expr::Reg(VReg::phys("arg0"))),
+        }]);
+
+        assert!(
+            text.contains("int wide_parameter(unsigned long long arg0)"),
+            "{text}"
+        );
+        assert!(!text.contains("arg1"), "{text}");
+    }
+
+    #[test]
+    fn authoritative_arity_does_not_hide_a_body_referenced_parameter() {
+        let text = render_with_stale_second_parameter(vec![Stmt::Return {
+            value: Some(Expr::Reg(VReg::phys("arg1"))),
+        }]);
+
+        assert!(text.contains("arg1"), "{text}");
+        assert!(
+            !text.contains("int wide_parameter(unsigned long long arg0)"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn ilp32_wide_parameter_shift_drops_its_redundant_wide_cast() {
+        let function = Function {
+            name: "wide_shift".into(),
+            entry_va: 0,
+            body: vec![Stmt::Return {
+                value: Some(Expr::Bin {
+                    op: crate::ir::types::BinOp::Shr,
+                    lhs: Box::new(Expr::Cast {
+                        signed: false,
+                        width: 8,
+                        expr: Box::new(Expr::Reg(VReg::phys("arg0"))),
+                    }),
+                    rhs: Box::new(Expr::Const(32)),
+                }),
+            }],
+        };
+        let prototype = CallPrototype {
+            return_type: "int".to_string(),
+            parameter_types: vec!["unsigned long long".to_string()],
+            variadic: false,
+            authority: CallPrototypeAuthority::Authoritative,
+        };
+        let text = render_decbench_typed_with_output_and_prototype_and_dwarf_types_and_local_types_and_parameter_names_and_identities(
+            &function,
+            None,
+            None,
+            crate::ir::types_recover::RecoveredOutputKind::Direct,
+            Some(&prototype),
+            Some(&[Some("op".to_string())]),
+            &[],
+            4,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+            None,
+        );
+
+        assert!(text.contains("op >> 32"), "{text}");
+        assert!(!text.contains("(unsigned long)(op)"), "{text}");
+    }
 
     #[test]
     fn zero_argument_hosted_main_has_the_c_language_return_contract() {
