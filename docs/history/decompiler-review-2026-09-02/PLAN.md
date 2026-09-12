@@ -5837,6 +5837,16 @@ relevant ratchet's accepted-regression record.
    adjacent audit retains exactness for callee-save deletion, packed-vector
    lifetime reconstruction, and DWARF register-local attribution. See
    `results/wp3-coalesced-loop-entry-identities.md`.
+   Commit `00a652e7` removes display-name parsing from the shared proven-call-
+   input predicate in the two value-numbered production consumers. ABI-wide
+   call may-uses now become signature evidence only when the `proven_args`
+   operand has the same unambiguous physical identity; misleading matching
+   `rdi#`/`edi#` text backed by different storage declines. The explicit raw
+   no-sidecar entry point retains compatibility parsing. Its observed-red
+   adversarial contract, all 16 use/def tests, all 65 value-numbering tests,
+   eight call fixture lanes, and the six-cell cross-architecture Hello sample
+   pass against a fresh exact release build. See
+   `results/wp3-proven-call-input-identities.md`.
    Commit `27910f65` applies one-storage classification to packed-dword concat
    lowering. Same-lane coalesced operands retain the defined 64-bit high-half
    shift; mixed lanes decline. Its observed-red contract, five focused tests,
