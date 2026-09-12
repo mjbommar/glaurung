@@ -3502,6 +3502,22 @@ named. See `results/wp4-wp7b-adjacent-return-guards.md`. This improves v1
 output while the shadow v2 replacement remains under construction; it does not
 complete WP4 or the planned general SSA idiom framework.
 
+Commit `fa4ac102` closes that isolated `bst_inorder_checksum` defect. The late
+guard cleanup now accepts one additional fail-closed shape: two immediately
+reaching definitions assign a depth carrier and its destination the same
+stable casted register/constant value, a pure break guard follows, and the only
+intervening statement before the next break guard copies the carrier back to
+the already-equal destination. The redundant copy is removed without crossing
+either exit path, its origins are retained on the surviving definition, and
+the ordinary adjacent-break rule recovers `current < 0 || n <= current`.
+Unequal, self-dependent, effectful, non-adjacent, and otherwise unknown shapes
+still decline. The strict xfail is now an ordinary fixture-backed regression;
+all 29 guard-chain tests, both exact Clang O2 BST output tests, and both exact
+execution round trips pass after a release extension rebuild. No broad suite
+or corpus ran. See `results/wp3-wp4-equal-value-loop-exits.md`. This is another
+bounded production-v1 WP3/WP4 increment, not completion of authoritative SSA
+or total-structurer promotion.
+
 ### New implementation boundary
 
 - [x] Create `src/ir/structure_v2/` rather than mutating the current structurer

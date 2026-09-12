@@ -44,6 +44,11 @@ exposes this exact source-level shape in `bst_search`.
   separated by a loop-carried depth copy and cannot be fused by this adjacency
   rule without a stronger identity proof.
 
+That final statement records the state at `921dfd9b` and is superseded by
+`fa4ac102`: the exact equal-value reaching-definition proof is now implemented,
+the `bst_inorder_checksum` xfail is retired, and its evidence lives in
+`wp3-wp4-equal-value-loop-exits.md`.
+
 The generated census remains deferred while the shared checkout contains 17
 uncommitted Rust tests from another lane in addition to this workstream's three
 new tests. No broad suite, DecBench run, or upstream interaction was performed.
