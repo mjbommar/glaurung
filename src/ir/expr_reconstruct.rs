@@ -522,11 +522,19 @@ fn for_each_expr_in_stmt(s: &Stmt, visit: &mut impl FnMut(&Expr)) {
         Stmt::If { cond, .. } | Stmt::While { cond, .. } | Stmt::DoWhile { cond, .. } => {
             visit(cond)
         }
+        Stmt::For {
+            init, cond, step, ..
+        } => {
+            for_each_expr_in_stmt(init, visit);
+            visit(cond);
+            for_each_expr_in_stmt(step, visit);
+        }
         Stmt::Return { value } => {
             if let Some(e) = value {
                 visit(e);
             }
         }
+        Stmt::Throw { value } => visit(value),
         Stmt::Push { value } => visit(value),
         Stmt::Switch { discriminant, .. } => visit(discriminant),
         _ => {}
@@ -1129,6 +1137,76 @@ mod tests {
             text.contains("%t0 ="),
             "the index temp's definition was removed but its use was not \
              substituted, so the address reads an undefined name:\n{text}"
+        );
+    }
+
+    #[test]
+    fn a_temp_used_as_a_for_initializer_address_keeps_its_definition() {
+        let temporary = VReg::Temp(0);
+        let mut function = Function {
+            name: "indexed_loop".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: temporary.clone(),
+                    src: Expr::Reg(VReg::phys("base")),
+                },
+                Stmt::For {
+                    init: Box::new(Stmt::Assign {
+                        dst: VReg::phys("cursor"),
+                        src: Expr::Lea {
+                            base: Some(temporary.clone()),
+                            index: None,
+                            scale: 1,
+                            disp: 8,
+                            segment: None,
+                        },
+                    }),
+                    cond: Expr::Const(1),
+                    step: Box::new(Stmt::Nop),
+                    body: Vec::new(),
+                },
+            ],
+        };
+
+        reconstruct(&mut function);
+
+        assert_eq!(
+            function.body.len(),
+            2,
+            "the address base cannot be substituted, so its definition must survive: {function:#?}"
+        );
+    }
+
+    #[test]
+    fn a_temp_used_as_a_throw_address_keeps_its_definition() {
+        let temporary = VReg::Temp(0);
+        let mut function = Function {
+            name: "throw_address".into(),
+            entry_va: 0x1000,
+            body: vec![
+                Stmt::Assign {
+                    dst: temporary.clone(),
+                    src: Expr::Reg(VReg::phys("base")),
+                },
+                Stmt::Throw {
+                    value: Expr::Lea {
+                        base: Some(temporary),
+                        index: None,
+                        scale: 1,
+                        disp: 8,
+                        segment: None,
+                    },
+                },
+            ],
+        };
+
+        reconstruct(&mut function);
+
+        assert_eq!(
+            function.body.len(),
+            2,
+            "the thrown address cannot be substituted, so its definition must survive: {function:#?}"
         );
     }
 
