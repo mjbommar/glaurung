@@ -2794,6 +2794,15 @@ provenance through lowering.
   fixture remains red in the concurrently dirty build and is recorded without
   attribution because this pass explicitly excludes ordinary `int *` types.
   See `results/wp3-call-contract-required-identities.md`.
+  Commit `092fec66` threads the required sidecar through high-variable
+  positive-value use analysis. An unowned operand spelled `arg99` can no longer
+  impersonate a wide signed comparison domain and flip an exact narrow
+  high-bit constant to unsigned; only a value with stable storage or parameter
+  identity can justify that rewrite. The observed-red regression, 38 owning
+  high-variable tests, 97 adjacent type/fold tests, and one release-built
+  signed-bound fixture cell pass. The standalone no-sidecar declaration helper
+  remains for a separately tested compatibility surface. See
+  `results/wp3-signed-comparison-domain-identities.md`.
   Commit `3e302824`
   removes an `argN` spelling decision from
   DWARF aggregate-field recovery: only roles seeded from the authoritative
