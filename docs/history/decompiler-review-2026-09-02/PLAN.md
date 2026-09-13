@@ -2860,12 +2860,21 @@ provenance through lowering.
   graph-fidelity report without running identity-free AST preparation as a
   side effect. The selected tree still enters the common production lowerer
   after value numbering, where the authoritative identity sidecar exists. The
-  explicit public diagnostic observer retains compatibility text for review
+  diagnostic observer initially retained compatibility text for review
   evidence. The observed-red missing-API contract, all 30 structure-v2 tests,
   the feature-gated tree-only contract, and the real wide-switch production
   handoff pass. Continue by classifying the remaining early no-sidecar
   copy/constant preparation entry points before removing `tag_phys`. See
   `results/wp3-structure-v2-tree-only-observation.md`.
+  Commit `a0dcdfb1` completes that structure-v2 classification: diagnostic
+  text observation and its identity-free prepared-text renderer are now
+  test-only, while the production `render::adapt_tree` boundary remains
+  available to the pipeline. An initial whole-module gate was observed red
+  because it also hid that required adapter; the corrected boundary passes a
+  non-test library check, all 30 structure-v2 tests, the exact tree-only
+  contract, and the real wide-switch production handoff. No output movement is
+  claimed because shipped tree selection and lowering are unchanged. See
+  `results/wp3-structure-v2-diagnostics-test-only.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
