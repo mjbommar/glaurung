@@ -270,16 +270,19 @@ fn run_context_free_ast_passes(
     }
     glaurung::ir::dead_stores::prune_callee_saved_spills(f, cc);
     glaurung::ir::value_split::split_argument_storage_reuse(f, cc, false);
-    glaurung::ir::naming::apply_role_names_with_parameter_roles(
-        f,
-        cc,
-        &param_slots,
-        &HashMap::new(),
-    );
     glaurung::ir::canary::collapse_canary_save(f);
     glaurung::ir::dead_stores::eliminate_dead_stores(f, cc);
     glaurung::ir::stack_idiom::rematerialise_stack_ops(f);
     glaurung::ir::label_prune::prune_unreferenced_labels(f);
+    let roles = glaurung::ir::naming::role_names_with_identities(
+        f,
+        cc,
+        &param_slots,
+        &HashMap::new(),
+        &HashMap::new(),
+        value_identities,
+    );
+    *f = glaurung::ir::naming::role_named_render_view(f, &roles);
     param_slots
 }
 

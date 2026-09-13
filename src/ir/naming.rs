@@ -74,6 +74,7 @@ fn arg_slot_tables(cc: CallConv) -> &'static [&'static [&'static str]] {
 }
 
 /// Rename registers in `f` according to the given calling convention.
+#[cfg(test)]
 pub fn apply_role_names(f: &mut Function, cc: CallConv) {
     // Default: recover the live-in parameter slots from the AST body.
     let param_slots = live_in_arg_slots(&f.body, cc);
@@ -87,6 +88,7 @@ pub fn apply_role_names(f: &mut Function, cc: CallConv) {
 /// computed on the LLIR (see `value_number::live_in_arg_slots_llir`) is reliable
 /// there. Using it prevents a scratch `rdx`/`rcx` from becoming a spurious `argN`
 /// and inflating the recovered arity.
+#[cfg(test)]
 pub fn apply_role_names_with_params(
     f: &mut Function,
     cc: CallConv,
@@ -100,6 +102,7 @@ pub fn apply_role_names_with_params(
 /// whose argument storage classes are disjoint (for example ARM hard-float
 /// `s0` versus core-register `r0`) and deliberately does not merge those names
 /// in the global ABI table.
+#[cfg(test)]
 pub fn apply_role_names_with_parameter_roles(
     f: &mut Function,
     cc: CallConv,
@@ -111,6 +114,7 @@ pub fn apply_role_names_with_parameter_roles(
 
 /// Apply role names while trusting only stack-parameter identities published
 /// by stack promotion, rather than parsing an arbitrary `argN` spelling.
+#[cfg(test)]
 pub(crate) fn apply_role_names_with_parameter_roles_and_stack_parameters(
     f: &mut Function,
     cc: CallConv,
@@ -128,6 +132,7 @@ pub(crate) fn apply_role_names_with_parameter_roles_and_stack_parameters(
     )
 }
 
+#[cfg(test)]
 fn apply_role_names_impl(
     f: &mut Function,
     cc: CallConv,
@@ -149,7 +154,11 @@ fn apply_role_names_impl(
 }
 
 /// Compute presentation aliases without changing semantic AST identities.
-pub(crate) fn role_names_with_identities(
+///
+/// This is the supported typed boundary for external pipeline/benchmark
+/// consumers. It requires the same authoritative identity sidecar as the
+/// production renderer.
+pub fn role_names_with_identities(
     f: &Function,
     cc: CallConv,
     param_slots: &std::collections::HashSet<usize>,
@@ -173,10 +182,7 @@ pub(crate) fn apply_role_name_mapping(f: &mut Function, role: &HashMap<String, S
 }
 
 /// Build a presentation-only function view while preserving the semantic AST.
-pub(crate) fn role_named_render_view(
-    function: &Function,
-    role: &HashMap<String, String>,
-) -> Function {
+pub fn role_named_render_view(function: &Function, role: &HashMap<String, String>) -> Function {
     let mut view = function.clone();
     apply_role_name_mapping(&mut view, role);
     view
@@ -535,6 +541,7 @@ fn collect_direct_return_carriers(body: &[Stmt], out: &mut Vec<String>) {
 /// The prologue of an `-O0` function spills each real parameter first thing
 /// (`mov [rbp-x], edi`), i.e. reads it, so real parameters are reliably
 /// classified as live-in by this first-touch scan.
+#[cfg(test)]
 fn live_in_arg_slots(body: &[Stmt], cc: CallConv) -> std::collections::HashSet<usize> {
     let mut slot_of: HashMap<&str, usize> = HashMap::new();
     for (i, names) in arg_slot_tables(cc).iter().enumerate() {
@@ -560,6 +567,7 @@ fn live_in_arg_slots(body: &[Stmt], cc: CallConv) -> std::collections::HashSet<u
 /// Walk a statement emitting `(register_name, is_write)` events in execution
 /// order: the reads of a statement are reported before its write. Memory stores
 /// write memory, not a register, so their operands are all reads.
+#[cfg(test)]
 fn walk_stmt_rw(s: &Stmt, cb: &mut impl FnMut(&str, bool)) {
     match s.semantic() {
         Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
