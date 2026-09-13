@@ -3495,7 +3495,7 @@ provenance through lowering.
   Commit `32698e2e` replaces the final plain-typed-render caller with numbered
   type recovery plus exact role/identity projection; the guessed remapper no
   longer exists.
-- [~] Keep naming as a render mapping, not a program rewrite. Commit
+- [x] Keep naming as a render mapping, not a program rewrite. Commit
   `b6e1f92d` adds the production identity-aware naming entry point and removes
   direct-return role classification's dependence on numbered display text.
   Follow-on `358e0408` makes role-map computation read-only and separates the
@@ -3509,9 +3509,13 @@ provenance through lowering.
   well. Every shared semantic AST pass now sees the unrenamed identity space;
   commit `a15e92a7` then preserves that semantic AST through rendering and
   applies roles only to a cloned view inside the one shared renderer. Production
-  naming is now a render projection. The explicitly mutating compatibility APIs
-  remain until the final `tag_phys` migration, so this package stays partial. See
-  `results/wp3-return-role-naming-identities.md`.
+  naming is now a render projection. Commit `a1080d7d` completes the boundary:
+  the composed decompile benchmark applies naming only after its semantic
+  passes, through the same identity-required role map and cloned render view as
+  production. Those typed functions are the public library surface; the four
+  mutating, identity-free wrappers and their AST-only live-in inference are
+  test-only. See `results/wp3-return-role-naming-identities.md` and
+  `results/wp3-typed-naming-only.md`.
 
 ### Origin and mapping surface
 
