@@ -80,7 +80,9 @@ use glaurung::ir::lift_function::lift_function_from_image;
 use glaurung::ir::ssa::{compute_ssa, SsaInfo};
 use glaurung::ir::structure::{recover_verified_with_health_and_destinations, Region};
 use glaurung::ir::types::{LlirFunction, VReg};
-use glaurung::ir::value_number::value_number_with_parameter_slots;
+use glaurung::ir::value_number::{
+    value_number_with_parameter_slots_lifetimes_and_identities, ValueIdentities,
+};
 use glaurung::program::image::ProgramImage;
 use glaurung::program::session::ProgramSession;
 use glaurung::target::abi::CallConv;
@@ -203,6 +205,7 @@ struct Prepared {
     normalized_lf: LlirFunction,
     ssa: SsaInfo,
     numbered: LlirFunction,
+    value_identities: ValueIdentities,
     region: Region,
     /// After `ast::lower`, before the AST pass pipeline.
     lowered: ast::Function,
@@ -236,11 +239,15 @@ fn normalize_definedness_and_compute_ssa(
 /// `should_split_unspilled_dual_role` is `pub(crate)`, but it returns `false`
 /// unconditionally when no prototype was recovered -- which is this
 /// composition's case -- so passing `false` is exact rather than a guess.
-fn run_context_free_ast_passes(f: &mut ast::Function, cc: CallConv) -> HashSet<usize> {
+fn run_context_free_ast_passes(
+    f: &mut ast::Function,
+    cc: CallConv,
+    value_identities: &ValueIdentities,
+) -> HashSet<usize> {
     let mut param_slots: HashSet<usize> = HashSet::new();
     let no_layouts: HashMap<u64, Vec<VReg>> = HashMap::new();
 
-    glaurung::ir::vector_copy::recover_wide_copies(f);
+    glaurung::ir::vector_copy::recover_wide_copies_with_identities(f, value_identities);
     glaurung::ir::expr_reconstruct::reconstruct(f);
     glaurung::ir::const_fold::fold_constants(f);
     glaurung::ir::select_fold::fold_boolean_masks(f);
@@ -284,11 +291,12 @@ fn decompile_one(session: &ProgramSession, func: &Function, cc: CallConv) -> Opt
     let exception_sites = image.exception_call_sites();
     let mut lf = lift_function_from_image(image, func).ok()?;
     let ssa = normalize_definedness_and_compute_ssa(&mut lf, &exception_sites, cc);
-    let (numbered, _widths, _slots) = value_number_with_parameter_slots(&lf, &ssa, cc);
+    let (numbered, _widths, _slots, value_identities) =
+        value_number_with_parameter_slots_lifetimes_and_identities(&lf, &ssa, cc, &[]);
     let destinations = resolve_indirect_jumps(&lf, &ssa, &image.relocated_symbol_slots());
     let (region, _health) = recover_verified_with_health_and_destinations(&lf, &ssa, &destinations);
     let mut f = ast::lower(&numbered, &region, func.name.clone());
-    run_context_free_ast_passes(&mut f, cc);
+    run_context_free_ast_passes(&mut f, cc, &value_identities);
     Some(ast::render(&f))
 }
 
@@ -351,7 +359,8 @@ fn prepare(target: &Target) -> Option<Prepared> {
     let raw_lf = lift_function_from_image(session.image(), &func).ok()?;
     let mut normalized_lf = raw_lf.clone();
     let ssa = normalize_definedness_and_compute_ssa(&mut normalized_lf, &exception_sites, cc);
-    let (numbered, _widths, _slots) = value_number_with_parameter_slots(&normalized_lf, &ssa, cc);
+    let (numbered, _widths, _slots, value_identities) =
+        value_number_with_parameter_slots_lifetimes_and_identities(&normalized_lf, &ssa, cc, &[]);
     let destinations = resolve_indirect_jumps(
         &normalized_lf,
         &ssa,
@@ -361,7 +370,7 @@ fn prepare(target: &Target) -> Option<Prepared> {
         recover_verified_with_health_and_destinations(&normalized_lf, &ssa, &destinations);
     let lowered = ast::lower(&numbered, &region, func.name.clone());
     let mut passed = lowered.clone();
-    run_context_free_ast_passes(&mut passed, cc);
+    run_context_free_ast_passes(&mut passed, cc, &value_identities);
 
     Some(Prepared {
         bytes,
@@ -373,6 +382,7 @@ fn prepare(target: &Target) -> Option<Prepared> {
         normalized_lf,
         ssa,
         numbered,
+        value_identities,
         region,
         lowered,
         passed,
@@ -470,7 +480,14 @@ fn bench_phases(c: &mut Criterion) {
                 |mut lf| {
                     let ssa =
                         normalize_definedness_and_compute_ssa(&mut lf, &p.exception_sites, p.cc);
-                    std::hint::black_box(value_number_with_parameter_slots(&lf, &ssa, p.cc))
+                    std::hint::black_box(
+                        value_number_with_parameter_slots_lifetimes_and_identities(
+                            &lf,
+                            &ssa,
+                            p.cc,
+                            &[],
+                        ),
+                    )
                 },
                 // PerIteration, not SmallInput: at the large tiers the cloned
                 // LLIR/AST is megabytes, and criterion's batched setup then
@@ -506,7 +523,13 @@ fn bench_phases(c: &mut Criterion) {
         group.bench_function(format!("ast_passes/{name}"), |b| {
             b.iter_batched(
                 || p.lowered.clone(),
-                |mut f| std::hint::black_box(run_context_free_ast_passes(&mut f, p.cc)),
+                |mut f| {
+                    std::hint::black_box(run_context_free_ast_passes(
+                        &mut f,
+                        p.cc,
+                        &p.value_identities,
+                    ))
+                },
                 BatchSize::PerIteration,
             )
         });

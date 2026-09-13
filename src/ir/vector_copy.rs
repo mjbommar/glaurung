@@ -743,8 +743,10 @@ fn attach_origins(statement: Stmt, origins: OriginSet) -> Stmt {
     }
 }
 
-/// Rejoin exact four-lane load/store batches into one 128-bit copy.
-pub fn recover_wide_copies(function: &mut Function) {
+/// Test-only compatibility route for hand-written ASTs without an identity
+/// sidecar. Production and benchmark callers must use the typed entry point.
+#[cfg(test)]
+fn recover_wide_copies(function: &mut Function) {
     recover_wide_copies_with_optional_identities(function, None);
 }
 
