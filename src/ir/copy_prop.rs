@@ -709,6 +709,44 @@ mod tests {
     }
 
     #[test]
+    fn exception_dead_copy_cleanup_preserves_owned_opaque_stack_objects() {
+        let object_name = "frame_object".to_string();
+        let object = reg(&object_name);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object_name]);
+        let mut function = Function {
+            name: "owned_catch_local".into(),
+            entry_va: 0,
+            body: vec![Stmt::TryCatch {
+                try_body: vec![],
+                catches: vec![crate::ir::ast::CatchClause {
+                    type_name: "int".into(),
+                    binding: reg("exception_0"),
+                    body: vec![
+                        Stmt::Assign {
+                            dst: object.clone(),
+                            src: Expr::Const(9),
+                        },
+                        Stmt::Return {
+                            value: Some(Expr::Const(-1)),
+                        },
+                    ],
+                }],
+            }],
+        };
+
+        propagate_copies_with_identities(&mut function, &identities);
+
+        let Stmt::TryCatch { catches, .. } = function.body[0].semantic() else {
+            panic!("exception region disappeared: {:#?}", function.body)
+        };
+        assert!(matches!(
+            catches[0].body.as_slice(),
+            [Stmt::Assign { dst, .. }, Stmt::Return { .. }] if dst == &object
+        ));
+    }
+
+    #[test]
     fn identity_aware_copy_cleanup_removes_unowned_local_spelling() {
         let mut function = Function {
             name: "unowned_spelling".into(),
