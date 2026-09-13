@@ -3143,6 +3143,16 @@ provenance through lowering.
   failure. This is an authority/API closure, not an output or timing claim.
   Continue the remaining semantic-reader audit before WP3 invalidation
   closure. See `results/wp3-naming-internal-authority.md`.
+  Commit `153591fa` closes the stack-canary collapse internal optional identity
+  engine. Every non-test recursive path now carries exact `ValueIdentities`
+  authority for promoted-stack ownership; the `stack_*` spelling
+  compatibility authority is test-only. All 26 owning tests and the non-test
+  library check pass. A fresh native build passes its guard, and the required
+  whole-Python fail-fast gate again reaches the same independent committed-
+  baseline inconsistency at 17% with no earlier failure. This is an
+  authority/API closure, not an output or timing claim. Continue the remaining
+  semantic-reader audit before WP3 invalidation closure. See
+  `results/wp3-canary-internal-authority.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
