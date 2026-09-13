@@ -52,6 +52,21 @@ unrepresentable as `None`. The native build includes unrelated concurrent
 dirty source, so it proves the live tree builds rather than exact-clean commit
 provenance. No corpus matrix, DecBench, or Joern run was performed.
 
+The required post-commit Python gate used fail-fast mode because the preceding
+commit had already established a reproducible baseline failure:
+
+```text
+uv run pytest python/tests/ -q -x
+stopped at 11%: 1 failed
+```
+
+No ordinary failure preceded
+`test_real_thumb_leaf_frame_save_does_not_become_a_source_local`. It reproduced
+the already-recorded ARM Thumb machine-frame defect, including the spurious
+`*(int *)((&local_18[0] + 20)) = var0;` save. The gate is red, not complete;
+fail-fast avoided running the remaining unrelated tests after that known
+failure.
+
 ## Next boundary
 
 Classify the now-unreferenced spelling-only helper implementations reported by
