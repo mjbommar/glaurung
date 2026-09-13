@@ -97,6 +97,7 @@ pub(crate) use prepare::{
 };
 pub use prepare::{
     prepare_for_decbench, prepare_for_decbench_with_output, settle_copies_and_constants,
+    settle_copies_and_constants_with_identities,
 };
 pub use return_folds::{fold_exhaustive_if_returns, fold_exhaustive_switch_returns};
 pub(crate) use return_folds::{

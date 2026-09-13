@@ -23,7 +23,7 @@
 //!    * `ir_dataflow/ast_pipeline/...` — the AST dataflow chain.
 //!    * `ir_dataflow/copyprop_constfold_fixpoint/...` — the bounded four-round
 //!      copy-propagation / constant-folding fixpoint from `prepare_for_decbench`,
-//!      which clones and structurally compares the whole body once per round.
+//!      using the same authoritative value-identity sidecar as production.
 //!
 //!    Several of these passes are worst-case quadratic in block or instruction
 //!    count, so throughput is declared in LLIR instructions: a pass that is
@@ -161,6 +161,7 @@ struct Lifted {
     normalized: LlirFunction,
     normalized_ssa: SsaInfo,
     param_slots: HashSet<usize>,
+    value_identities: value_number::ValueIdentities,
     /// The lowered AST, before any AST pass has run.
     ast: ast::Function,
     /// Input state for each AST pass, parallel to [`ast_passes`].
@@ -215,11 +216,16 @@ fn load(subject: &Subject) -> Option<Lifted> {
             ssa::compute_ssa(&normalized)
         };
 
-    let (numbered, _definition_widths, param_slots) =
-        value_number::value_number_with_parameter_slots(&normalized, &normalized_ssa, cc);
+    let (numbered, _definition_widths, param_slots, value_identities) =
+        value_number::value_number_with_parameter_slots_lifetimes_and_identities(
+            &normalized,
+            &normalized_ssa,
+            cc,
+            &[],
+        );
     let region = structure::recover_verified(&normalized, &normalized_ssa);
     let ast = ast::lower(&numbered, &region, subject.symbol);
-    let ast_prefixes = ast_prefix_states(&ast, cc, &param_slots);
+    let ast_prefixes = ast_prefix_states(&ast, cc, &param_slots, &value_identities);
 
     let blocks = normalized.blocks.len();
     let instrs = normalized
@@ -238,6 +244,7 @@ fn load(subject: &Subject) -> Option<Lifted> {
         normalized,
         normalized_ssa,
         param_slots,
+        value_identities,
         ast,
         ast_prefixes,
         blocks,
@@ -252,34 +259,36 @@ fn load(subject: &Subject) -> Option<Lifted> {
 /// owns; the naming, structuring and rendering passes belong elsewhere.
 type AstPass = (
     &'static str,
-    fn(&mut ast::Function, CallConv, &HashSet<usize>),
+    fn(&mut ast::Function, CallConv, &HashSet<usize>, &value_number::ValueIdentities),
 );
 
 fn ast_passes() -> Vec<AstPass> {
     vec![
-        ("expr_reconstruct::reconstruct", |f, _, _| {
+        ("expr_reconstruct::reconstruct", |f, _, _, _| {
             expr_reconstruct::reconstruct(f)
         }),
-        ("const_fold::fold_constants", |f, _, _| {
-            let _ = const_fold::fold_constants(f);
+        ("const_fold::fold_constants", |f, _, _, identities| {
+            let _ = const_fold::fold_constants_with_identities(f, identities);
         }),
-        ("dce::prune_overwritten_flags", |f, _, _| {
+        ("dce::prune_overwritten_flags", |f, _, _, _| {
             dce::prune_overwritten_flags(f)
         }),
-        ("dce::prune_dead_flags", |f, _, _| dce::prune_dead_flags(f)),
-        ("call_args::reconstruct_args", |f, cc, slots| {
+        ("dce::prune_dead_flags", |f, _, _, _| {
+            dce::prune_dead_flags(f)
+        }),
+        ("call_args::reconstruct_args", |f, cc, slots, _| {
             call_args::reconstruct_args_with_params(f, cc, slots)
         }),
-        ("copy_prop::propagate_copies", |f, _, _| {
-            let _ = copy_prop::propagate_copies(f);
+        ("copy_prop::propagate_copies", |f, _, _, identities| {
+            let _ = copy_prop::propagate_copies_with_identities(f, identities);
         }),
-        ("stack_locals::promote_stack_locals_typed", |f, cc, _| {
+        ("stack_locals::promote_stack_locals_typed", |f, cc, _, _| {
             let _ = stack_locals::promote_stack_locals_typed(f, Some(cc));
         }),
-        ("dead_stores::eliminate_dead_stores", |f, cc, _| {
+        ("dead_stores::eliminate_dead_stores", |f, cc, _, _| {
             dead_stores::eliminate_dead_stores(f, cc)
         }),
-        ("dead_stores::prune_callee_saved_spills", |f, cc, _| {
+        ("dead_stores::prune_callee_saved_spills", |f, cc, _, _| {
             dead_stores::prune_callee_saved_spills(f, cc)
         }),
     ]
@@ -293,21 +302,27 @@ fn ast_prefix_states(
     base: &ast::Function,
     cc: CallConv,
     slots: &HashSet<usize>,
+    identities: &value_number::ValueIdentities,
 ) -> Vec<ast::Function> {
     let mut current = base.clone();
     let mut states = Vec::with_capacity(ast_passes().len());
     for (_, pass) in ast_passes() {
         states.push(current.clone());
-        pass(&mut current, cc, slots);
+        pass(&mut current, cc, slots, identities);
     }
     states
 }
 
 /// The AST dataflow chain, composed. Mirrors `run_ast_passes`' ordering for the
 /// passes in scope here.
-fn run_ast_pipeline(f: &mut ast::Function, cc: CallConv, slots: &HashSet<usize>) {
+fn run_ast_pipeline(
+    f: &mut ast::Function,
+    cc: CallConv,
+    slots: &HashSet<usize>,
+    identities: &value_number::ValueIdentities,
+) {
     for (_, pass) in ast_passes() {
-        pass(f, cc, slots);
+        pass(f, cc, slots, identities);
     }
 }
 
@@ -317,13 +332,15 @@ fn run_ast_pipeline(f: &mut ast::Function, cc: CallConv, slots: &HashSet<usize>)
 /// Worth its own bench: it is the one place in the AST schedule that runs a
 /// pass more than once, so a per-pass regression is multiplied here.
 ///
-/// This calls `ast::settle_copies_and_constants` — the schedule's own function
-/// — rather than restating the loop. It used to restate it, and that cost a
-/// real measurement: the loop's clone-and-compare was replaced in
-/// `prepare.rs`, and the bench went on measuring the old shape, so the change
-/// could not be observed here at all.
-fn run_copyprop_constfold_fixpoint(f: &mut ast::Function) {
-    ast::settle_copies_and_constants(f);
+/// This calls `ast::settle_copies_and_constants_with_identities` — the
+/// schedule's own typed function — rather than restating the loop. It used to
+/// restate the loop, and later discarded the sidecar, so benchmark results did
+/// not measure the route shipped by the decompiler.
+fn run_copyprop_constfold_fixpoint(
+    f: &mut ast::Function,
+    identities: &value_number::ValueIdentities,
+) {
+    ast::settle_copies_and_constants_with_identities(f, identities);
 }
 
 // ----------------------------------------------------------------- LLIR tier
@@ -465,7 +482,7 @@ fn bench_micro_passes(c: &mut Criterion) {
         group.bench_function(name, |b| {
             b.iter_batched(
                 || input.clone(),
-                |mut f| pass(&mut f, cc, &subject.param_slots),
+                |mut f| pass(&mut f, cc, &subject.param_slots, &subject.value_identities),
                 BatchSize::SmallInput,
             )
         });
@@ -528,7 +545,14 @@ fn bench_ast_pipeline(c: &mut Criterion) {
             |b, subject| {
                 b.iter_batched(
                     || subject.ast.clone(),
-                    |mut f| run_ast_pipeline(&mut f, subject.cc, &subject.param_slots),
+                    |mut f| {
+                        run_ast_pipeline(
+                            &mut f,
+                            subject.cc,
+                            &subject.param_slots,
+                            &subject.value_identities,
+                        )
+                    },
                     BatchSize::SmallInput,
                 )
             },
@@ -545,6 +569,7 @@ fn bench_copyprop_constfold_fixpoint(c: &mut Criterion) {
         // The fixpoint runs on the expression-reconstructed body, which is the
         // second prefix state (index 1: after `expr_reconstruct::reconstruct`).
         let input = &subject.ast_prefixes[1];
+        let identities = &subject.value_identities;
         group.throughput(Throughput::Elements(subject.instrs as u64));
         group.bench_with_input(
             BenchmarkId::from_parameter(subject.label),
@@ -552,7 +577,7 @@ fn bench_copyprop_constfold_fixpoint(c: &mut Criterion) {
             |b, input| {
                 b.iter_batched(
                     || input.clone(),
-                    |mut f| run_copyprop_constfold_fixpoint(&mut f),
+                    |mut f| run_copyprop_constfold_fixpoint(&mut f, identities),
                     BatchSize::SmallInput,
                 )
             },

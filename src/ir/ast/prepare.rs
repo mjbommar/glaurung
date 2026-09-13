@@ -183,10 +183,18 @@ pub(crate) fn drop_machine_frame_comments(body: &mut Vec<super::Stmt>) {
 /// `benches/ir_dataflow.rs` calls this function rather than restating the loop,
 /// so the bench cannot drift from the schedule it claims to measure.
 pub fn settle_copies_and_constants(owned: &mut Function) -> FixpointReport {
-    settle_copies_and_constants_with_identities(owned, None)
+    settle_copies_and_constants_with_optional_identities(owned, None)
 }
 
-fn settle_copies_and_constants_with_identities(
+/// Run the production copy/constant fixpoint with authoritative value identity.
+pub fn settle_copies_and_constants_with_identities(
+    owned: &mut Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> FixpointReport {
+    settle_copies_and_constants_with_optional_identities(owned, Some(identities))
+}
+
+fn settle_copies_and_constants_with_optional_identities(
     owned: &mut Function,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> FixpointReport {
@@ -356,7 +364,8 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
     // Copy propagation exposes algebraic flag identities, while folding those
     // identities changes use counts and exposes new one-use copies. Iterate the
     // monotone pair to a small bounded fixpoint — see the function's own docs.
-    let copies_and_constants = settle_copies_and_constants_with_identities(&mut owned, identities);
+    let copies_and_constants =
+        settle_copies_and_constants_with_optional_identities(&mut owned, identities);
     // Folding can prove that an initially composite narrow-register rebuild is
     // exactly its incoming argument (`(arg & ~255) | (arg & 255) == arg`). Run
     // the same guarded home analysis again so byte/halfword parameter spills
@@ -658,7 +667,7 @@ mod fixpoint_tests {
             ],
         };
 
-        settle_copies_and_constants_with_identities(&mut function, Some(&identities));
+        settle_copies_and_constants_with_identities(&mut function, &identities);
 
         assert_eq!(function.body.len(), 2);
         assert!(matches!(

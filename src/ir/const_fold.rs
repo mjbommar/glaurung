@@ -74,7 +74,7 @@ pub fn fold_constants(f: &mut Function) -> bool {
 }
 
 /// Fold constants while recognizing parameters only from exact AST identities.
-pub(crate) fn fold_constants_with_identities(
+pub fn fold_constants_with_identities(
     f: &mut Function,
     identities: &crate::ir::value_number::ValueIdentities,
 ) -> bool {
