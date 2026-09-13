@@ -2975,6 +2975,17 @@ provenance through lowering.
   failure first at 11%. Next isolate the optional-identity internals behind
   explicit test adapters and continue the remaining production parser audit.
   See `results/wp3-dead-store-apis-require-identities.md`.
+  Commit `0f657984` makes two more shipped contracts identity-required rather
+  than identity-optional. Indirect aggregate-result hinting and binding now
+  accept `&ValueIdentities`, and bare canary-save collapse is test-only. The
+  composed benchmark and canary diagnostic retain their existing snapshots,
+  matching both production rendering paths. Six indirect-result tests, 26
+  canary tests, the benchmark, and the diagnostic example pass focused checks;
+  the native build is fresh, and the required fail-fast Python gate reaches
+  the unchanged ARM Thumb leaf-frame failure first at 11%. Next isolate or
+  delete the internal no-sidecar adapters and continue the production parser
+  audit before treating WP3 identity authority as complete. See
+  `results/wp3-result-canary-apis-require-identities.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
