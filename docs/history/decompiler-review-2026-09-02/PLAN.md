@@ -3164,6 +3164,18 @@ provenance through lowering.
   authority/API closure, not an output or timing claim. Continue the remaining
   semantic-reader audit before WP3 invalidation closure. See
   `results/wp3-arm64-prologue-internal-authority.md`.
+  Commit `79ff0bee` closes the optional identity engine shared by x86-64 frame
+  recognition and cdecl32 alignment/realignment recovery. Both production
+  pipeline call sites already supplied exact `ValueIdentities`; promoted-slot,
+  parameter, callee-save, multi-exit restore, prologue, and recursive epilogue
+  proofs now carry that closed authority throughout. Display-name parsers and
+  spelling authority are test-only. All 45 owning tests and the non-test
+  library check pass. A fresh native build passes its guard, and the required
+  whole-Python fail-fast gate again reaches the same independent committed-
+  baseline inconsistency at 17% with no earlier failure. This is an
+  authority/API closure, not an output or timing claim. Continue the remaining
+  semantic-reader audit before WP3 invalidation closure. See
+  `results/wp3-x86-frame-internal-authority.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
