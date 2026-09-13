@@ -5,6 +5,7 @@ use crate::ir::structure::Region;
 use crate::ir::types::LlirFunction;
 
 /// Two deterministic views derived from one faithfully adapted shadow AST.
+#[cfg(test)]
 pub(super) struct RenderedPseudocode {
     pub raw: String,
     pub prepared: String,
@@ -13,6 +14,7 @@ pub(super) struct RenderedPseudocode {
 /// Render a verified tree through the production AST lowerer and the shared
 /// source-level preparation pass when every shape has a faithful region
 /// spelling.
+#[cfg(test)]
 pub(super) fn render_pseudocode(
     lf: &LlirFunction,
     tree: &StructuredTree,

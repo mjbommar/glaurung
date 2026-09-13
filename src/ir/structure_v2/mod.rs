@@ -68,6 +68,7 @@ pub struct ShadowReport {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TextObservation {
+    #[cfg(test)]
     Diagnostic,
     None,
 }
@@ -77,6 +78,7 @@ enum TextObservation {
 /// The text is compatibility output for the shadow report. It is not suitable
 /// for production selection because this graph-only boundary has neither a
 /// calling convention nor pipeline-owned value identities.
+#[cfg(test)]
 pub fn observe(lf: &LlirFunction, ssa: &SsaInfo) -> ShadowReport {
     let cfg = crate::ir::structure::Cfg::from(lf, ssa);
     observe_cfg(&cfg, lf)
@@ -95,6 +97,7 @@ pub(crate) fn observe_tree(lf: &LlirFunction, ssa: &SsaInfo) -> ShadowReport {
 
 /// Observe the exact typed graph already built for production v1, including
 /// legacy diagnostic text.
+#[cfg(test)]
 pub(crate) fn observe_cfg(cfg: &crate::ir::structure::Cfg, lf: &LlirFunction) -> ShadowReport {
     observe_cfg_with_text(cfg, lf, TextObservation::Diagnostic)
 }
@@ -147,14 +150,24 @@ fn observe_cfg_with_text(
                 } else {
                     None
                 };
-                let rendered = (text == TextObservation::Diagnostic)
-                    .then(|| {
-                        tree.as_ref()
-                            .and_then(|tree| render::render_pseudocode(lf, tree))
-                    })
-                    .flatten();
-                let raw_pseudocode = rendered.as_ref().map(|rendered| rendered.raw.clone());
-                let prepared_pseudocode = rendered.map(|rendered| rendered.prepared);
+                #[cfg(test)]
+                let (raw_pseudocode, prepared_pseudocode) = {
+                    let rendered = match text {
+                        TextObservation::Diagnostic => tree
+                            .as_ref()
+                            .and_then(|tree| render::render_pseudocode(lf, tree)),
+                        TextObservation::None => None,
+                    };
+                    (
+                        rendered.as_ref().map(|rendered| rendered.raw.clone()),
+                        rendered.map(|rendered| rendered.prepared),
+                    )
+                };
+                #[cfg(not(test))]
+                let (raw_pseudocode, prepared_pseudocode) = {
+                    let _ = (lf, text);
+                    (None, None)
+                };
                 ShadowReport {
                     block_count,
                     edge_count,
