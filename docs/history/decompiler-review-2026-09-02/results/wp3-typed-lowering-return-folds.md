@@ -57,8 +57,21 @@ O0 and O2 on x86-64, AArch64, and ARMv7.
 
 This is an authority and correctness-boundary change, not an output or timing
 claim. No fixture matrix, DecBench, Joern, GED, or performance run was used.
-The required post-source-commit fail-fast Python gate is recorded separately
-below after it runs. WP3 remains open: the compatibility lowering surface and
-remaining spelling-only helpers still require caller classification, and
-general origin/invalidation closure is not complete.
 
+The required post-source-commit Python gate ran in fail-fast mode:
+
+```text
+uv run pytest python/tests/ -q -x
+stopped at 11%: 1 failed
+```
+
+No ordinary failure preceded
+`test_real_thumb_leaf_frame_save_does_not_become_a_source_local`. It reproduced
+the established ARM Thumb machine-frame defect: the generated function still
+contains `*(int *)((&local_18[0] + 20)) = var0;`. This is the same first failure
+recorded before the increment, so the run gives no evidence of a new failure;
+the whole Python gate remains red and incomplete.
+
+WP3 remains open: the compatibility lowering surface and remaining
+spelling-only helpers still require caller classification, and general
+origin/invalidation closure is not complete.

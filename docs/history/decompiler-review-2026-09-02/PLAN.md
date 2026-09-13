@@ -2904,7 +2904,9 @@ provenance through lowering.
   lowering; no benchmark still calls bare `ast::lower`. Three focused semantic
   contracts, the non-test library, the affected benchmarks and example, a
   fresh native build, and six exact cross-architecture Hello cells pass. This
-  is an authority-boundary change, not an output or timing claim. Continue by
+  is an authority-boundary change, not an output or timing claim. The required
+  fail-fast whole-Python gate again reaches 11% before reproducing the known
+  ARM Thumb frame-save failure as its first ordinary failure. Continue by
   classifying the explicit compatibility lowerer and the remaining unused
   spelling-only helpers. See
   `results/wp3-typed-lowering-return-folds.md`.
