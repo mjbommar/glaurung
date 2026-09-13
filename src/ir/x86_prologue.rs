@@ -31,6 +31,7 @@ use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 use crate::ir::types::{BinOp, CmpOp, VReg};
 
 /// Run the pass over `f`'s body.
+#[cfg(test)]
 pub fn recognise_x86_prologue(f: &mut Function) {
     collapse_omit_frame_pointer_frame(&mut f.body, None);
     collapse_prologue(&mut f.body, None);
@@ -75,6 +76,7 @@ pub fn drop_implicit_main_runtime_call(f: &mut Function) {
 /// surviving subtraction/addition are ABI alignment rather than C state. Only
 /// an adjacent, arity-exact pair is removed; dynamic stack use and mismatched
 /// cleanup remain visible.
+#[cfg(test)]
 pub fn recognise_cdecl32_call_alignment(f: &mut Function) {
     recognise_cdecl32_call_alignment_impl(f, None);
 }

@@ -266,7 +266,7 @@ fn run_context_free_ast_passes(
     glaurung::ir::stack_locals::promote_stack_locals_with_facts(f, Some(cc), None, &[]);
     glaurung::ir::aapcs64_indirect_result::bind_indirect_result_buffers(f, cc);
     if matches!(cc, CallConv::SysVAmd64 | CallConv::Win64) {
-        glaurung::ir::x86_prologue::recognise_x86_prologue(f);
+        glaurung::ir::x86_prologue::recognise_x86_prologue_with_identities(f, value_identities);
     }
     glaurung::ir::dead_stores::prune_callee_saved_spills(f, cc);
     glaurung::ir::value_split::split_argument_storage_reuse(f, cc, false);
