@@ -2885,9 +2885,17 @@ provenance through lowering.
   value identities through numbering, lowering, folding, and its final render
   projection. The non-test library, all examples, four focused fixpoint tests,
   two exact legacy controls, the real canary example, and a fresh native build
-  pass. Continue by making the internal preparation engine require identities
-  and leaving any legacy inference strictly inside test helpers. See
+  pass. See
   `results/wp3-public-preparation-requires-identities.md`.
+  Commit `edb9b91d` completes the internal half of that boundary. The shared
+  preparation entry point now requires `&ValueIdentities`; a closed authority
+  enum selects the typed route in product builds, while its legacy-spelling
+  variant and every corresponding match arm exist only under `#[cfg(test)]`.
+  The old optional-identity fixpoint no longer exists, and bare constant/copy
+  entry points are now test-only. A non-test library check, four fixpoint
+  contracts, one legacy preparation control, the exact production wide-switch
+  handoff, and a native rebuild pass. Output is intended to be unchanged. See
+  `results/wp3-internal-preparation-requires-identities.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
