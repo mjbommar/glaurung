@@ -724,7 +724,7 @@ pub fn value_number_with_parameter_slots_lifetimes_and_identities(
         &definition_widths_by_site,
         &phi_copies.incoming_widths,
         source_lifetimes,
-        Some(&identities),
+        &identities,
     );
     identities.apply_renames(&renames);
     identities.attach_abi_parameter_slots(cc, &parameter_slots);

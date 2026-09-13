@@ -11,10 +11,17 @@ use std::collections::{HashMap, HashSet};
 use crate::ir::types::{LlirFunction, Op, VReg, Value};
 use crate::ir::use_def::{def_ref, def_uses, for_each_def, for_each_use, InstrAddr};
 
-use super::architectural_reads::{
-    architecturally_read_names, architecturally_read_names_with_identities,
-};
+#[cfg(test)]
+use super::architectural_reads::architecturally_read_names;
+use super::architectural_reads::architecturally_read_names_with_identities;
 use super::vreg_walk::for_each_vreg_mut;
+
+#[derive(Clone, Copy)]
+enum CoalescingAuthority<'a> {
+    Exact(&'a super::ValueIdentities),
+    #[cfg(test)]
+    LegacySpelling,
+}
 
 /// A source variable's authoritative residence in one machine register.
 ///
@@ -40,28 +47,29 @@ pub(crate) type DefinitionWidthsBySite = HashMap<(InstrAddr, usize), u8>;
 /// pipeline binds by spelling — a live-in parameter (version 0), a structural
 /// frame register, or a return value [`KeepBare`] deliberately did not version —
 /// and renaming any of them would move a source-level identity, not a temporary.
-fn coalescable<'a>(
-    value: &'a VReg,
-    identities: Option<&'a super::ValueIdentities>,
-) -> Option<(&'a str, u32)> {
-    if let Some(identities) = identities {
-        let identity = identities.exact(value)?;
-        let VReg::Phys(base) = &identity.base else {
-            return None;
-        };
-        // A kept-bare ABI carrier can have a nonzero SSA identity, but it is
-        // intentionally not an out-of-SSA temporary and must not be renamed.
-        // The tagger changes the value key for every ordinary numbered value;
-        // use that typed relationship rather than decoding `base#version`.
-        return (identity.version != 0 && value != &identity.base)
-            .then_some((base.as_str(), identity.version));
+fn coalescable<'a>(value: &'a VReg, authority: CoalescingAuthority<'a>) -> Option<(&'a str, u32)> {
+    match authority {
+        CoalescingAuthority::Exact(identities) => {
+            let identity = identities.exact(value)?;
+            let VReg::Phys(base) = &identity.base else {
+                return None;
+            };
+            // A kept-bare ABI carrier can have a nonzero SSA identity, but it is
+            // intentionally not an out-of-SSA temporary and must not be renamed.
+            // The tagger changes the value key for every ordinary numbered value;
+            // use that typed relationship rather than decoding `base#version`.
+            (identity.version != 0 && value != &identity.base)
+                .then_some((base.as_str(), identity.version))
+        }
+        #[cfg(test)]
+        CoalescingAuthority::LegacySpelling => {
+            let VReg::Phys(name) = value else {
+                return None;
+            };
+            let (base, version) = name.rsplit_once('#')?;
+            Some((base, version.parse().ok()?))
+        }
     }
-
-    let VReg::Phys(name) = value else {
-        return None;
-    };
-    let (base, version) = name.rsplit_once('#')?;
-    Some((base, version.parse().ok()?))
 }
 
 /// Successor block indices, resolved from each block's successor VAs.
@@ -347,12 +355,15 @@ fn consumed_live_ins_before_phi_copy(
     out: &LlirFunction,
     names: &HashSet<VReg>,
     copies: &[(VReg, VReg)],
-    identities: Option<&super::ValueIdentities>,
+    authority: CoalescingAuthority<'_>,
 ) -> HashSet<VReg> {
     let copy_pairs: HashSet<(VReg, VReg)> = copies.iter().cloned().collect();
-    let architecturally_read = match identities {
-        Some(identities) => architecturally_read_names_with_identities(out, identities),
-        None => architecturally_read_names(out),
+    let architecturally_read = match authority {
+        CoalescingAuthority::Exact(identities) => {
+            architecturally_read_names_with_identities(out, identities)
+        }
+        #[cfg(test)]
+        CoalescingAuthority::LegacySpelling => architecturally_read_names(out),
     };
     let definitions: HashSet<VReg> = out
         .blocks
@@ -474,14 +485,14 @@ pub(crate) fn coalesce_phi_copies(
     copies: &[(VReg, VReg)],
     definition_widths: &mut HashMap<VReg, u8>,
 ) {
-    coalesce_phi_copies_with_definition_sites(
+    coalesce_phi_copies_impl(
         out,
         copies,
         definition_widths,
         &DefinitionWidthsBySite::new(),
         &[],
         &[],
-        None,
+        CoalescingAuthority::LegacySpelling,
     );
 }
 
@@ -492,14 +503,14 @@ pub(crate) fn coalesce_phi_copies_with_identities(
     definition_widths: &mut HashMap<VReg, u8>,
     identities: &super::ValueIdentities,
 ) -> HashMap<VReg, VReg> {
-    coalesce_phi_copies_with_definition_sites(
+    coalesce_phi_copies_impl(
         out,
         copies,
         definition_widths,
         &DefinitionWidthsBySite::new(),
         &[],
         &[],
-        Some(identities),
+        CoalescingAuthority::Exact(identities),
     )
 }
 
@@ -510,14 +521,14 @@ pub(crate) fn coalesce_phi_copies_with_lifetimes(
     definition_widths: &mut HashMap<VReg, u8>,
     lifetimes: &[SourceRegisterLifetime],
 ) {
-    coalesce_phi_copies_with_definition_sites(
+    coalesce_phi_copies_impl(
         out,
         copies,
         definition_widths,
         &DefinitionWidthsBySite::new(),
         &[],
         lifetimes,
-        None,
+        CoalescingAuthority::LegacySpelling,
     );
 }
 
@@ -535,7 +546,27 @@ pub(crate) fn coalesce_phi_copies_with_definition_sites(
     definition_widths_by_site: &DefinitionWidthsBySite,
     incoming_widths: &[Option<u8>],
     source_lifetimes: &[SourceRegisterLifetime],
-    identities: Option<&super::ValueIdentities>,
+    identities: &super::ValueIdentities,
+) -> HashMap<VReg, VReg> {
+    coalesce_phi_copies_impl(
+        out,
+        copies,
+        definition_widths,
+        definition_widths_by_site,
+        incoming_widths,
+        source_lifetimes,
+        CoalescingAuthority::Exact(identities),
+    )
+}
+
+fn coalesce_phi_copies_impl(
+    out: &mut LlirFunction,
+    copies: &[(VReg, VReg)],
+    definition_widths: &mut HashMap<VReg, u8>,
+    definition_widths_by_site: &DefinitionWidthsBySite,
+    incoming_widths: &[Option<u8>],
+    source_lifetimes: &[SourceRegisterLifetime],
+    authority: CoalescingAuthority<'_>,
 ) -> HashMap<VReg, VReg> {
     if copies.is_empty() {
         return HashMap::new();
@@ -545,7 +576,7 @@ pub(crate) fn coalesce_phi_copies_with_definition_sites(
     let mut index: HashMap<VReg, usize> = HashMap::new();
     let mut names: Vec<VReg> = Vec::new();
     let intern = |v: &VReg, index: &mut HashMap<VReg, usize>, names: &mut Vec<VReg>| {
-        coalescable(v, identities)?;
+        coalescable(v, authority)?;
         Some(*index.entry(v.clone()).or_insert_with(|| {
             names.push(v.clone());
             names.len() - 1
@@ -584,7 +615,7 @@ pub(crate) fn coalesce_phi_copies_with_definition_sites(
                 let Some(&value_index) = index.get(&value) else {
                     continue;
                 };
-                let Some((base, _version)) = coalescable(&value, identities) else {
+                let Some((base, _version)) = coalescable(&value, authority) else {
                     continue;
                 };
                 for (lifetime_index, lifetime) in source_lifetimes.iter().enumerate() {
@@ -686,7 +717,7 @@ pub(crate) fn coalesce_phi_copies_with_definition_sites(
         coalescing_definition_claims(out, definition_widths, definition_widths_by_site);
     let candidate_names: HashSet<VReg> = names.iter().cloned().collect();
     let consumed_live_ins =
-        consumed_live_ins_before_phi_copy(out, &candidate_names, copies, identities);
+        consumed_live_ins_before_phi_copy(out, &candidate_names, copies, authority);
     let mut width: Vec<ClassWidth> = class_widths_with_incoming_values(
         &names,
         &index,
@@ -736,7 +767,7 @@ pub(crate) fn coalesce_phi_copies_with_definition_sites(
     for i in 0..n {
         let root = find(&mut parent, i);
         let version = |k: usize| {
-            coalescable(&names[k], identities)
+            coalescable(&names[k], authority)
                 .map(|(_, version)| version)
                 .unwrap_or(0)
         };
