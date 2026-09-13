@@ -20,6 +20,35 @@ use crate::ir::types::{BinOp, VReg};
 const MIN_ENTRIES: usize = 2;
 const MAX_ENTRIES: usize = 64;
 
+#[derive(Clone, Copy)]
+enum FunctionTableAuthority<'a> {
+    Exact(&'a crate::ir::value_number::ValueIdentities),
+    #[cfg(test)]
+    LegacySpelling,
+}
+
+impl FunctionTableAuthority<'_> {
+    fn is_versioned_value(self, register: &VReg) -> bool {
+        match self {
+            Self::Exact(identities) => identities.candidates(register).is_some_and(|values| {
+                !values.is_empty() && values.iter().all(|value| value.version > 0)
+            }),
+            #[cfg(test)]
+            Self::LegacySpelling => {
+                matches!(register, VReg::Phys(name) if name.contains('#'))
+            }
+        }
+    }
+
+    fn is_promoted_stack_object(self, value: &VReg) -> bool {
+        match self {
+            Self::Exact(identities) => identities.is_promoted_stack_object(value),
+            #[cfg(test)]
+            Self::LegacySpelling => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionPointerTable {
     pub va: u64,
@@ -404,8 +433,14 @@ fn is_image_relative(architecture: Architecture, flags: RelocationFlags) -> bool
 }
 
 /// Replace exact pointer-sized loads from complete tables with semantic entries.
+#[cfg(test)]
 pub fn resolve_function_table_entries(function: &mut Function, tables: &[FunctionPointerTable]) {
-    resolve_function_table_entries_impl(function, tables, None, None);
+    resolve_function_table_entries_impl(
+        function,
+        tables,
+        FunctionTableAuthority::LegacySpelling,
+        None,
+    );
 }
 
 /// Replace exact pointer-sized loads using pipeline-owned SSA value identities.
@@ -414,7 +449,12 @@ pub fn resolve_function_table_entries_with_identities(
     tables: &[FunctionPointerTable],
     identities: &crate::ir::value_number::ValueIdentities,
 ) {
-    resolve_function_table_entries_impl(function, tables, Some(identities), None);
+    resolve_function_table_entries_impl(
+        function,
+        tables,
+        FunctionTableAuthority::Exact(identities),
+        None,
+    );
 }
 
 /// Resolve table loads through scalar stack objects created by stack promotion.
@@ -427,7 +467,7 @@ pub(crate) fn resolve_promoted_function_table_entries(
     resolve_function_table_entries_impl(
         function,
         tables,
-        Some(identities),
+        FunctionTableAuthority::Exact(identities),
         Some(promoted_stack_sizes),
     );
 }
@@ -435,7 +475,7 @@ pub(crate) fn resolve_promoted_function_table_entries(
 fn resolve_function_table_entries_impl(
     function: &mut Function,
     tables: &[FunctionPointerTable],
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: FunctionTableAuthority<'_>,
     promoted_stack_sizes: Option<&HashMap<String, u8>>,
 ) {
     if tables.is_empty() {
@@ -445,7 +485,7 @@ fn resolve_function_table_entries_impl(
         &mut function.body,
         tables,
         &HashMap::new(),
-        identities,
+        authority,
         promoted_stack_sizes,
     );
 }
@@ -454,7 +494,7 @@ fn resolve_body(
     body: &mut [Stmt],
     tables: &[FunctionPointerTable],
     inherited_definitions: &HashMap<VReg, Expr>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: FunctionTableAuthority<'_>,
     promoted_stack_sizes: Option<&HashMap<String, u8>>,
 ) {
     let mut definitions = inherited_definitions.clone();
@@ -493,7 +533,7 @@ fn resolve_body(
                     then_body,
                     tables,
                     &definitions,
-                    identities,
+                    authority,
                     promoted_stack_sizes,
                 );
                 if let Some(else_body) = else_body.as_deref_mut() {
@@ -501,19 +541,19 @@ fn resolve_body(
                         else_body,
                         tables,
                         &definitions,
-                        identities,
+                        authority,
                         promoted_stack_sizes,
                     );
                 }
-                forget_definitions_written_in(then_body, &mut definitions, identities);
+                forget_definitions_written_in(then_body, &mut definitions, authority);
                 if let Some(else_body) = else_body.as_deref() {
-                    forget_definitions_written_in(else_body, &mut definitions, identities);
+                    forget_definitions_written_in(else_body, &mut definitions, authority);
                 }
             }
             Stmt::While { cond, body } | Stmt::DoWhile { cond, body } => {
                 resolve_expr(cond, tables, &definitions);
-                resolve_body(body, tables, &definitions, identities, promoted_stack_sizes);
-                forget_definitions_written_in(body, &mut definitions, identities);
+                resolve_body(body, tables, &definitions, authority, promoted_stack_sizes);
+                forget_definitions_written_in(body, &mut definitions, authority);
             }
             Stmt::For {
                 init,
@@ -525,28 +565,28 @@ fn resolve_body(
                     std::slice::from_mut(init.as_mut()),
                     tables,
                     &definitions,
-                    identities,
+                    authority,
                     promoted_stack_sizes,
                 );
                 resolve_expr(cond, tables, &definitions);
-                resolve_body(body, tables, &definitions, identities, promoted_stack_sizes);
+                resolve_body(body, tables, &definitions, authority, promoted_stack_sizes);
                 resolve_body(
                     std::slice::from_mut(step.as_mut()),
                     tables,
                     &definitions,
-                    identities,
+                    authority,
                     promoted_stack_sizes,
                 );
                 forget_definitions_written_in(
                     std::slice::from_ref(init.as_ref()),
                     &mut definitions,
-                    identities,
+                    authority,
                 );
-                forget_definitions_written_in(body, &mut definitions, identities);
+                forget_definitions_written_in(body, &mut definitions, authority);
                 forget_definitions_written_in(
                     std::slice::from_ref(step.as_ref()),
                     &mut definitions,
-                    identities,
+                    authority,
                 );
             }
             Stmt::Switch {
@@ -556,22 +596,22 @@ fn resolve_body(
             } => {
                 resolve_expr(discriminant, tables, &definitions);
                 for (_, case) in cases.iter_mut() {
-                    resolve_body(case, tables, &definitions, identities, promoted_stack_sizes);
+                    resolve_body(case, tables, &definitions, authority, promoted_stack_sizes);
                 }
                 if let Some(default) = default.as_deref_mut() {
                     resolve_body(
                         default,
                         tables,
                         &definitions,
-                        identities,
+                        authority,
                         promoted_stack_sizes,
                     );
                 }
                 for (_, case) in cases.iter() {
-                    forget_definitions_written_in(case, &mut definitions, identities);
+                    forget_definitions_written_in(case, &mut definitions, authority);
                 }
                 if let Some(default) = default.as_deref() {
-                    forget_definitions_written_in(default, &mut definitions, identities);
+                    forget_definitions_written_in(default, &mut definitions, authority);
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
@@ -579,7 +619,7 @@ fn resolve_body(
                     try_body,
                     tables,
                     &definitions,
-                    identities,
+                    authority,
                     promoted_stack_sizes,
                 );
                 for catch in catches.iter_mut() {
@@ -587,13 +627,13 @@ fn resolve_body(
                         &mut catch.body,
                         tables,
                         &definitions,
-                        identities,
+                        authority,
                         promoted_stack_sizes,
                     );
                 }
-                forget_definitions_written_in(try_body, &mut definitions, identities);
+                forget_definitions_written_in(try_body, &mut definitions, authority);
                 for catch in catches.iter() {
-                    forget_definitions_written_in(&catch.body, &mut definitions, identities);
+                    forget_definitions_written_in(&catch.body, &mut definitions, authority);
                 }
             }
             Stmt::Pop { .. }
@@ -615,9 +655,9 @@ fn resolve_body(
             // alias analysis a pointer store may name any escaped local. This
             // is deliberately more conservative than ordinary register
             // definitions.
-            forget_promoted_stack_definitions(&mut definitions, identities);
+            forget_promoted_stack_definitions(&mut definitions, authority);
             if let Some((object, value)) =
-                covering_promoted_stack_store(statement, identities, promoted_stack_sizes)
+                covering_promoted_stack_store(statement, authority, promoted_stack_sizes)
             {
                 definitions.insert(object, value);
             }
@@ -648,7 +688,7 @@ fn resolve_body(
 fn forget_definitions_written_in(
     body: &[Stmt],
     definitions: &mut HashMap<VReg, Expr>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: FunctionTableAuthority<'_>,
 ) {
     if definitions.is_empty() {
         return;
@@ -659,27 +699,20 @@ fn forget_definitions_written_in(
         definitions.remove(&register);
     }
     if clobbers_registers {
-        definitions.retain(|register, _| match register {
-            VReg::Phys(name) => match identities {
-                Some(identities) => identities.candidates(register).is_some_and(|values| {
-                    !values.is_empty() && values.iter().all(|value| value.version > 0)
-                }),
-                None => name.contains('#'),
-            },
-            _ => true,
+        definitions.retain(|register, _| {
+            !matches!(register, VReg::Phys(_)) || authority.is_versioned_value(register)
         });
     }
     if body_may_clobber_memory(body, 0) {
-        forget_promoted_stack_definitions(definitions, identities);
+        forget_promoted_stack_definitions(definitions, authority);
     }
 }
 
 fn covering_promoted_stack_store(
     statement: &Stmt,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: FunctionTableAuthority<'_>,
     promoted_stack_sizes: Option<&HashMap<String, u8>>,
 ) -> Option<(VReg, Expr)> {
-    let identities = identities?;
     let promoted_stack_sizes = promoted_stack_sizes?;
     let Stmt::Store { addr, src, size } = statement.semantic() else {
         return None;
@@ -688,18 +721,15 @@ fn covering_promoted_stack_store(
         return None;
     };
     let object_size = promoted_stack_sizes.get(name)?;
-    (*size > 0 && *size >= *object_size && identities.is_promoted_stack_object(object))
+    (*size > 0 && *size >= *object_size && authority.is_promoted_stack_object(object))
         .then(|| (object.clone(), src.clone()))
 }
 
 fn forget_promoted_stack_definitions(
     definitions: &mut HashMap<VReg, Expr>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: FunctionTableAuthority<'_>,
 ) {
-    let Some(identities) = identities else {
-        return;
-    };
-    definitions.retain(|value, _| !identities.is_promoted_stack_object(value));
+    definitions.retain(|value, _| !authority.is_promoted_stack_object(value));
 }
 
 fn body_may_clobber_memory(body: &[Stmt], depth: usize) -> bool {
