@@ -15,6 +15,20 @@ metric: published source CFG, stored decompiled C, and stored GED. Another
 3,318 stored cells in 15 binaries cannot be recomputed because their source
 CFGs are absent from the published tree.
 
+We separately ran both providers on those 18 unscored files, so the full
+94,575-function manifest is accounted for rather than inferred from the scored
+subset. Stored C contains 94,358 definition markers; 217 manifest names are
+absent from the stored C and cannot be parsed by either frontend. Glaurung
+reports all 94,358/94,358 definitions with zero extra names. Java reports
+94,334/94,358, missing one `__idle_thread` and 23 `blocking_handler`
+non-returning definitions. Java also emits 78,902 names beyond definition
+markers across the 803 files; every graph is one node with zero edges and none
+is nontrivial. They are prototypes/declarations, not executable coverage.
+
+For the 18-file tail, Glaurung took 0.60 seconds and 121,492 KiB peak RSS;
+Java took 356.10 seconds and 2,690,784 KiB peak RSS. Both had zero provider
+failures and covered all 4,380 definitions in that tail.
+
 Java reproduced all 85,645 stored values exactly with no provider failure or
 uncovered cell. It used 79 checkpointed shards, 11,716.9 seconds of summed
 shard wall time, and a peak shard RSS of 9,255,808 KiB.

@@ -47,6 +47,14 @@ cells are in 15 binaries whose source CFGs were not published and cannot be
 recomputed from this dataset. They remain an explicit dataset gap rather than
 being silently dropped from a claimed 94K denominator.
 
+All 803 stored decompiled C files do exist. A separate fail-closed coverage
+pass therefore runs both providers over the 18 files excluded from the GED
+oracle, including three NuttX files with no stored GED cells. Joining that pass
+to the scored ledgers accounts for the whole manifest: 94,358 of the 94,575
+manifest functions have a `// Function:` definition in stored C; 217 do not.
+The provider denominator is 94,358 definitions, while 94,575 remains the
+manifest denominator. Neither is silently relabelled as the other.
+
 ## Method
 
 Both providers receive the same stored decompiled C and are compared with the
@@ -99,6 +107,26 @@ input under `$TMPDIR`, but Joern still left `joern-predef*.sc` under `/tmp`.
 That run was stopped, its scalar-only shards were rejected as final evidence,
 and the graph-preserving run restarted with Java's temporary directory fixed.
 
+The 18 files without matching published source CFGs are coverage-audited rather
+than assigned a fabricated GED:
+
+```bash
+PYTHONPATH="$DECBENCH_DIR:$DECBENCH_DIR/.venv/lib/python3.12/site-packages" \
+  .venv/bin/python tools/source_cfg_unscored_coverage.py \
+  "$HOME/.cache/glaurung/decbench-full/tree" \
+  --provider glaurung --column glaurung-229fbb1-clean \
+  --details-jsonl unscored-glaurung-details.jsonl \
+  --output-json unscored-glaurung-report.json
+
+JAVA_TOOL_OPTIONS="-Djava.io.tmpdir=$TMPDIR" \
+PYTHONPATH="$DECBENCH_DIR:$DECBENCH_DIR/.venv/lib/python3.12/site-packages" \
+  .venv/bin/python tools/source_cfg_unscored_coverage.py \
+  "$HOME/.cache/glaurung/decbench-full/tree" \
+  --provider joern --column glaurung-229fbb1-clean \
+  --details-jsonl unscored-joern-details.jsonl \
+  --output-json unscored-joern-report.json
+```
+
 ## Results
 
 ### Glaurung replacement: complete
@@ -135,6 +163,36 @@ The fail-closed aggregate verified ordinals 0 through 784 exactly once, all
 85,645 stored identities exactly once, and agreement between every shard report
 and its JSONL ledger. Thus the stored Java values are fully reproduced for the
 published 785-binary comparison universe.
+
+### Whole-manifest coverage: complete
+
+| Population or result | Count |
+|---|---:|
+| Manifest binaries / functions | 803 / 94,575 |
+| Stored C definition markers | 94,358 |
+| Manifest names absent from stored C | 217 |
+| Scored definitions in 785 files | 89,978 |
+| Unscored definitions in 18 files | 4,380 |
+| Glaurung definition coverage | **94,358/94,358** |
+| Glaurung provider failures / extra names | **0 / 0** |
+| Java definition coverage | **94,334/94,358** |
+| Java definition misses | 24 |
+| Java names beyond definition markers | 78,902 |
+| Nontrivial Java extras | **0** |
+
+The 217 absent manifest names are upstream decompilation-output omissions, not
+source-CFG frontend misses: neither provider is given a definition to parse.
+Java happens to surface 27 of them as prototypes, but that is not executable
+definition coverage. Its 24 real definition misses are the one `__idle_thread`
+and 23 `blocking_handler` non-returning functions already reviewed below;
+Glaurung returns each without inventing a fall-through exit.
+
+On the 18-file tail alone, Glaurung covered 4,380/4,380 in 0.60 seconds at
+121,492 KiB peak RSS. Java covered 4,380/4,380 in 356.10 seconds at 2,690,784
+KiB peak RSS and emitted 2,590 extra prototype graphs. All 2,590 were one node,
+zero edges. Across all 803 files, every one of Java's 78,902 extra names has
+that same declaration-like shape; there are zero nontrivial extras. This is why
+Glaurung's narrower output is absence of noise, not lost executable coverage.
 
 ### Joined audit and declaration noise
 
@@ -277,6 +335,11 @@ The lossless artifacts are stored outside Git under
 | `glaurung-ternary-loop-details.jsonl` | `86831de11abb572335f6078edb8c9ca50582ec9b80e2692684ec20dfdd2ebe53` |
 | `aggregate-ternary-loop.json` | `9e551540143ae282b0d383a86d410e0a5705d6bc57bf811fcc7e4f7810480654` |
 | `aggregate-ternary-loop.md` | `0ca6315c0b8c5c9174ed999037fbe067cdc6a7f373f17a28aa47aff14523e837` |
+| `unscored-glaurung-report.json` | `c18d1cc1a86bf421bc7c162695ab133e911550b602ea8f6db49a7f6d9e90ac50` |
+| `unscored-glaurung-details.jsonl` | `58965f39e37aa8ab5e1f689b1ea30a02c56b4daae037bb2bc9f92475029cacbb` |
+| `unscored-joern-report.json` | `4da18430ecb488bc1495d285262fe601273f7528675ff54baf61cccca017fca5` |
+| `unscored-joern-details.jsonl` | `46953b51a8bf396058dba6990c5f00178480ebec090820112e3ad26429bf357e` |
+| `full-corpus-coverage.json` | `81be937bced098dffa87a9ec84854f636c1a8393eaec5fa41ea8ba849f6171da` |
 
 ## Required follow-up
 
