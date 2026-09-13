@@ -30,12 +30,20 @@
 use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 use crate::ir::types::{BinOp, CmpOp, VReg};
 
+#[derive(Clone, Copy)]
+enum IdentityAuthority<'a> {
+    Exact(&'a crate::ir::value_number::ValueIdentities),
+    #[cfg(test)]
+    LegacySpelling,
+}
+
 /// Run the pass over `f`'s body.
 #[cfg(test)]
 pub fn recognise_x86_prologue(f: &mut Function) {
-    collapse_omit_frame_pointer_frame(&mut f.body, None);
-    collapse_prologue(&mut f.body, None);
-    collapse_epilogue(&mut f.body, None);
+    let authority = IdentityAuthority::LegacySpelling;
+    collapse_omit_frame_pointer_frame(&mut f.body, authority);
+    collapse_prologue(&mut f.body, authority);
+    collapse_epilogue(&mut f.body, authority);
 }
 
 /// Run x86-64 frame recognition with exact SSA value authority.
@@ -43,9 +51,10 @@ pub fn recognise_x86_prologue_with_identities(
     f: &mut Function,
     identities: &crate::ir::value_number::ValueIdentities,
 ) {
-    collapse_omit_frame_pointer_frame(&mut f.body, Some(identities));
-    collapse_prologue(&mut f.body, Some(identities));
-    collapse_epilogue(&mut f.body, Some(identities));
+    let authority = IdentityAuthority::Exact(identities);
+    collapse_omit_frame_pointer_frame(&mut f.body, authority);
+    collapse_prologue(&mut f.body, authority);
+    collapse_epilogue(&mut f.body, authority);
 }
 
 /// Remove MinGW's implicit constructor-runtime initialization from source main.
@@ -78,7 +87,7 @@ pub fn drop_implicit_main_runtime_call(f: &mut Function) {
 /// cleanup remain visible.
 #[cfg(test)]
 pub fn recognise_cdecl32_call_alignment(f: &mut Function) {
-    recognise_cdecl32_call_alignment_impl(f, None);
+    recognise_cdecl32_call_alignment_impl(f, IdentityAuthority::LegacySpelling);
 }
 
 /// Run cdecl32 frame recognition with producer-owned storage and parameter facts.
@@ -86,21 +95,15 @@ pub fn recognise_cdecl32_call_alignment_with_identities(
     f: &mut Function,
     identities: &crate::ir::value_number::ValueIdentities,
 ) {
-    recognise_cdecl32_call_alignment_impl(f, Some(identities));
+    recognise_cdecl32_call_alignment_impl(f, IdentityAuthority::Exact(identities));
 }
 
-fn recognise_cdecl32_call_alignment_impl(
-    f: &mut Function,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) {
+fn recognise_cdecl32_call_alignment_impl(f: &mut Function, authority: IdentityAuthority<'_>) {
     collapse_cdecl32_call_alignment_body(&mut f.body);
-    collapse_cdecl32_realign_frame(&mut f.body, identities);
+    collapse_cdecl32_realign_frame(&mut f.body, authority);
 }
 
-fn collapse_cdecl32_realign_frame(
-    body: &mut Vec<Stmt>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) {
+fn collapse_cdecl32_realign_frame(body: &mut Vec<Stmt>, authority: IdentityAuthority<'_>) {
     let mut start = 0usize;
     while start < body.len() && is_leading_frame_metadata(&body[start]) {
         start += 1;
@@ -136,7 +139,7 @@ fn collapse_cdecl32_realign_frame(
     } else if body.len().saturating_sub(start) >= 7
         && matches!(body[start + 1].semantic(), Stmt::Push { value }
             if matches!(value.semantic(), Expr::Reg(saved)
-                if is_promoted_stack_slot(saved, identities)))
+                if is_promoted_stack_slot(saved, authority)))
         && matches!(body[start + 2].semantic(), Stmt::Push { value }
             if matches!(value.semantic(), Expr::Reg(saved) if is_rbp(saved)))
         && matches!(body[start + 3].semantic(), Stmt::Assign { dst, src }
@@ -155,7 +158,7 @@ fn collapse_cdecl32_realign_frame(
         if push_count == 0
             || !matches!(body[cursor - 1].semantic(), Stmt::Push { value }
                 if matches!(value.semantic(), Expr::StackAddr { object, .. }
-                    if is_parameter_slot(object, 0, identities)))
+                    if is_parameter_slot(object, 0, authority)))
         {
             return;
         }
@@ -200,7 +203,7 @@ fn collapse_cdecl32_realign_frame(
         Stmt::Assign { dst, src }
             if is_rbp(dst)
                 && matches!(src.semantic(), Expr::Reg(saved)
-                    if is_promoted_stack_slot(saved, identities)) =>
+                    if is_promoted_stack_slot(saved, authority)) =>
         {
             let Expr::Reg(saved) = src.semantic() else {
                 unreachable!("guard established saved register")
@@ -391,10 +394,7 @@ struct SavedSlot {
 /// that Ghidra/angr correctly hide. This recogniser deliberately fails closed:
 /// the save area must be contiguous, every return must restore it exactly, and
 /// the fixed save slots may have no reads beyond those restores.
-fn collapse_omit_frame_pointer_frame(
-    body: &mut Vec<Stmt>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) {
+fn collapse_omit_frame_pointer_frame(body: &mut Vec<Stmt>, authority: IdentityAuthority<'_>) {
     let mut start = 0usize;
     while start < body.len() && is_leading_frame_metadata(&body[start]) {
         start += 1;
@@ -463,12 +463,12 @@ fn collapse_omit_frame_pointer_frame(
     // signature and therefore blocks the transformation.
     if saves[..saves.len().saturating_sub(1)]
         .iter()
-        .any(|save| !is_sysv_callee_saved(&save.value, identities))
+        .any(|save| !is_sysv_callee_saved(&save.value, authority))
     {
         return;
     }
-    if !is_sysv_callee_saved(&saves.last().expect("non-empty").value, identities)
-        && !value_base(&saves.last().expect("non-empty").value, identities)
+    if !is_sysv_callee_saved(&saves.last().expect("non-empty").value, authority)
+        && !value_base(&saves.last().expect("non-empty").value, authority)
             .is_some_and(|base| base != "rsp")
     {
         return;
@@ -476,7 +476,7 @@ fn collapse_omit_frame_pointer_frame(
 
     let mut candidate = body.clone();
     let Some((return_count, padding_restore_count)) =
-        collapse_balanced_exit_bodies(&mut candidate, &saves, identities)
+        collapse_balanced_exit_bodies(&mut candidate, &saves, authority)
     else {
         return;
     };
@@ -487,7 +487,7 @@ fn collapse_omit_frame_pointer_frame(
     // The only fixed reads of a non-volatile save slot must be its one restore
     // at each return. Alignment padding has no restore load at all.
     for save in &saves {
-        let expected = if is_sysv_callee_saved(&save.value, identities) {
+        let expected = if is_sysv_callee_saved(&save.value, authority) {
             return_count
         } else {
             padding_restore_count
@@ -522,10 +522,12 @@ fn origins_in_range(body: &[Stmt], start: usize, end: usize) -> OriginSet {
         .fold(OriginSet::empty(), |origins, next| origins.union(next))
 }
 
+#[cfg(test)]
 fn base_name(name: &str) -> &str {
     name.split_once('#').map_or(name, |(base, _)| base)
 }
 
+#[cfg(test)]
 fn base_name_of_vreg(register: &VReg) -> Option<&str> {
     match register {
         VReg::Phys(name) => Some(base_name(name)),
@@ -533,21 +535,16 @@ fn base_name_of_vreg(register: &VReg) -> Option<&str> {
     }
 }
 
-fn value_base<'a>(
-    register: &'a VReg,
-    identities: Option<&'a crate::ir::value_number::ValueIdentities>,
-) -> Option<&'a str> {
-    match identities {
-        Some(identities) => identities.unambiguous_physical_base(register),
-        None => base_name_of_vreg(register),
+fn value_base<'a>(register: &'a VReg, authority: IdentityAuthority<'a>) -> Option<&'a str> {
+    match authority {
+        IdentityAuthority::Exact(identities) => identities.unambiguous_physical_base(register),
+        #[cfg(test)]
+        IdentityAuthority::LegacySpelling => base_name_of_vreg(register),
     }
 }
 
-fn is_sysv_callee_saved(
-    register: &VReg,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) -> bool {
-    value_base(register, identities)
+fn is_sysv_callee_saved(register: &VReg, authority: IdentityAuthority<'_>) -> bool {
+    value_base(register, authority)
         .is_some_and(|base| matches!(base, "rbp" | "rbx" | "r12" | "r13" | "r14" | "r15"))
 }
 
@@ -586,11 +583,7 @@ fn is_rsp_add_width(statement: &Stmt, width: u8) -> bool {
     }
 }
 
-fn is_restore_load(
-    statement: &Stmt,
-    save: &SavedSlot,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) -> bool {
+fn is_restore_load(statement: &Stmt, save: &SavedSlot, authority: IdentityAuthority<'_>) -> bool {
     let Stmt::Assign {
         dst: VReg::Phys(destination),
         src,
@@ -601,8 +594,7 @@ fn is_restore_load(
     let Expr::Deref { addr, size } = src.semantic() else {
         return false;
     };
-    if value_base(&VReg::Phys(destination.clone()), identities)
-        != value_base(&save.value, identities)
+    if value_base(&VReg::Phys(destination.clone()), authority) != value_base(&save.value, authority)
         || *size != save.width
     {
         return false;
@@ -615,7 +607,7 @@ fn is_restore_load(
 fn is_padding_restore_load(
     statement: &Stmt,
     save: &SavedSlot,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: IdentityAuthority<'_>,
 ) -> bool {
     let Stmt::Assign {
         dst: VReg::Phys(destination),
@@ -627,8 +619,7 @@ fn is_padding_restore_load(
     let Expr::Deref { addr, size } = src.semantic() else {
         return false;
     };
-    if value_base(&VReg::Phys(destination.clone()), identities) == Some("rsp")
-        || *size != save.width
+    if value_base(&VReg::Phys(destination.clone()), authority) == Some("rsp") || *size != save.width
     {
         return false;
     }
@@ -694,7 +685,7 @@ fn balanced_exit_start(
     body: &[Stmt],
     return_index: usize,
     saves: &[SavedSlot],
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: IdentityAuthority<'_>,
 ) -> Option<(usize, usize)> {
     let mut cursor = return_index;
     let mut padding_restores = 0usize;
@@ -706,12 +697,12 @@ fn balanced_exit_start(
             return None;
         }
         cursor -= 1;
-        if is_sysv_callee_saved(&save.value, identities) {
-            if cursor == 0 || !is_restore_load(&body[cursor - 1], save, identities) {
+        if is_sysv_callee_saved(&save.value, authority) {
+            if cursor == 0 || !is_restore_load(&body[cursor - 1], save, authority) {
                 return None;
             }
             cursor -= 1;
-        } else if cursor > 0 && is_padding_restore_load(&body[cursor - 1], save, identities) {
+        } else if cursor > 0 && is_padding_restore_load(&body[cursor - 1], save, authority) {
             cursor -= 1;
             padding_restores += 1;
         }
@@ -725,7 +716,7 @@ fn balanced_exit_start(
 fn collapse_balanced_exit_bodies(
     body: &mut Vec<Stmt>,
     saves: &[SavedSlot],
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: IdentityAuthority<'_>,
 ) -> Option<(usize, usize)> {
     let mut count = 0usize;
     let mut padding_restores = 0usize;
@@ -739,38 +730,38 @@ fn collapse_balanced_exit_bodies(
                 else_body,
                 ..
             } => {
-                let nested = collapse_balanced_exit_bodies(then_body, saves, identities)?;
+                let nested = collapse_balanced_exit_bodies(then_body, saves, authority)?;
                 count += nested.0;
                 padding_restores += nested.1;
                 if let Some(else_body) = else_body {
-                    let nested = collapse_balanced_exit_bodies(else_body, saves, identities)?;
+                    let nested = collapse_balanced_exit_bodies(else_body, saves, authority)?;
                     count += nested.0;
                     padding_restores += nested.1;
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                let nested = collapse_balanced_exit_bodies(body, saves, identities)?;
+                let nested = collapse_balanced_exit_bodies(body, saves, authority)?;
                 count += nested.0;
                 padding_restores += nested.1;
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, case_body) in cases {
-                    let nested = collapse_balanced_exit_bodies(case_body, saves, identities)?;
+                    let nested = collapse_balanced_exit_bodies(case_body, saves, authority)?;
                     count += nested.0;
                     padding_restores += nested.1;
                 }
                 if let Some(default_body) = default {
-                    let nested = collapse_balanced_exit_bodies(default_body, saves, identities)?;
+                    let nested = collapse_balanced_exit_bodies(default_body, saves, authority)?;
                     count += nested.0;
                     padding_restores += nested.1;
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                let nested = collapse_balanced_exit_bodies(try_body, saves, identities)?;
+                let nested = collapse_balanced_exit_bodies(try_body, saves, authority)?;
                 count += nested.0;
                 padding_restores += nested.1;
                 for catch in catches {
-                    let nested = collapse_balanced_exit_bodies(&mut catch.body, saves, identities)?;
+                    let nested = collapse_balanced_exit_bodies(&mut catch.body, saves, authority)?;
                     count += nested.0;
                     padding_restores += nested.1;
                 }
@@ -787,7 +778,7 @@ fn collapse_balanced_exit_bodies(
         })
         .collect();
     for return_index in returns.into_iter().rev() {
-        let (start, restored_padding) = balanced_exit_start(body, return_index, saves, identities)?;
+        let (start, restored_padding) = balanced_exit_start(body, return_index, saves, authority)?;
         let epilogue_origins = origins_in_range(body, start, return_index);
         body.drain(start..return_index);
         body.insert(
@@ -919,12 +910,11 @@ fn is_rsp(v: &VReg) -> bool {
     matches!(v, VReg::Phys(n) if n == "rsp" || n == "esp")
 }
 
-fn is_promoted_stack_slot(
-    value: &VReg,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) -> bool {
-    identities.map_or_else(
-        || {
+fn is_promoted_stack_slot(value: &VReg, authority: IdentityAuthority<'_>) -> bool {
+    match authority {
+        IdentityAuthority::Exact(identities) => identities.is_promoted_stack_object(value),
+        #[cfg(test)]
+        IdentityAuthority::LegacySpelling => {
             matches!(
                 value,
                 VReg::Phys(name)
@@ -932,25 +922,21 @@ fn is_promoted_stack_slot(
                         || name.starts_with("stack_")
                         || name.starts_with("local_")
             )
-        },
-        |identities| identities.is_promoted_stack_object(value),
-    )
+        }
+    }
 }
 
-fn is_parameter_slot(
-    value: &VReg,
-    slot: usize,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) -> bool {
-    identities.map_or_else(
-        || {
+fn is_parameter_slot(value: &VReg, slot: usize, authority: IdentityAuthority<'_>) -> bool {
+    match authority {
+        IdentityAuthority::Exact(identities) => identities.parameter_slot(value) == Some(slot),
+        #[cfg(test)]
+        IdentityAuthority::LegacySpelling => {
             base_name_of_vreg(value)
                 .and_then(|name| name.strip_prefix("arg"))
                 .and_then(|index| index.parse::<usize>().ok())
                 == Some(slot)
-        },
-        |identities| identities.parameter_slot(value) == Some(slot),
-    )
+        }
+    }
 }
 
 fn rsp_sub_width(stmt: &Stmt) -> Option<i64> {
@@ -1032,10 +1018,7 @@ fn dead_rsp_sub_predicate(predicate: &Stmt, sub: &Stmt, suffix: &[Stmt]) -> Opti
     .then_some(width)
 }
 
-fn collapse_prologue(
-    body: &mut Vec<Stmt>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) {
+fn collapse_prologue(body: &mut Vec<Stmt>, authority: IdentityAuthority<'_>) {
     // Skip leading nops (the lifter emits them for ENDBR64).
     let mut i = 0usize;
     while i < body.len() && matches!(body[i].semantic(), Stmt::Nop) {
@@ -1060,7 +1043,7 @@ fn collapse_prologue(
         match (body[i + 1].semantic(), rsp_sub_width(&body[i])) {
             (Stmt::Store { addr, src, size }, Some(width))
                 if matches!(addr.semantic(), Expr::Reg(slot)
-                    if is_promoted_stack_slot(slot, identities))
+                    if is_promoted_stack_slot(slot, authority))
                     && matches!(src.semantic(), Expr::Reg(value) if is_rbp(value))
                     && width == i64::from(*size) =>
             {
@@ -1121,10 +1104,7 @@ fn collapse_prologue(
     );
 }
 
-fn collapse_epilogue(
-    body: &mut Vec<Stmt>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) {
+fn collapse_epilogue(body: &mut Vec<Stmt>, authority: IdentityAuthority<'_>) {
     // Returns can remain inside recovered branches/loops. Collapse those
     // lexical epilogues before handling this statement list itself.
     for statement in body.iter_mut() {
@@ -1137,20 +1117,20 @@ fn collapse_epilogue(
                 else_body,
                 ..
             } => {
-                collapse_epilogue(then_body, identities);
+                collapse_epilogue(then_body, authority);
                 if let Some(else_body) = else_body {
-                    collapse_epilogue(else_body, identities);
+                    collapse_epilogue(else_body, authority);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                collapse_epilogue(body, identities);
+                collapse_epilogue(body, authority);
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, case_body) in cases {
-                    collapse_epilogue(case_body, identities);
+                    collapse_epilogue(case_body, authority);
                 }
                 if let Some(default_body) = default {
-                    collapse_epilogue(default_body, identities);
+                    collapse_epilogue(default_body, authority);
                 }
             }
             _ => {}
@@ -1246,7 +1226,7 @@ fn collapse_epilogue(
                 Stmt::Assign { dst, src }
                     if is_rbp(dst)
                         && matches!(src.semantic(), Expr::Reg(slot)
-                            if is_promoted_stack_slot(slot, identities))
+                            if is_promoted_stack_slot(slot, authority))
             )
         {
             let start = if ret_idx >= 3
@@ -1303,7 +1283,7 @@ fn collapse_epilogue(
                 Stmt::Assign { dst, src }
                     if is_rbp(dst)
                         && matches!(src.semantic(), Expr::Reg(slot)
-                            if is_promoted_stack_slot(slot, identities))
+                            if is_promoted_stack_slot(slot, authority))
             )
         {
             let mut start = ret_idx - 1;
@@ -1435,13 +1415,16 @@ mod tests {
 
         assert!(is_sysv_callee_saved(
             &reg("opaque_entry"),
-            Some(&identities)
+            IdentityAuthority::Exact(&identities)
         ));
         assert!(!is_sysv_callee_saved(
             &reg("mixed_entry"),
-            Some(&identities)
+            IdentityAuthority::Exact(&identities)
         ));
-        assert!(!is_sysv_callee_saved(&reg("r15#0"), Some(&identities)));
+        assert!(!is_sysv_callee_saved(
+            &reg("r15#0"),
+            IdentityAuthority::Exact(&identities)
+        ));
     }
 
     fn push_rbp() -> Stmt {
