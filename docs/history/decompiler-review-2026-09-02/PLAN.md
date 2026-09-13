@@ -3176,6 +3176,18 @@ provenance through lowering.
   authority/API closure, not an output or timing claim. Continue the remaining
   semantic-reader audit before WP3 invalidation closure. See
   `results/wp3-x86-frame-internal-authority.md`.
+  Commit `c7f0facd` closes the ARM32 AAPCS frame recognizer's internal optional
+  identity engine. Its sole shipped pipeline caller already supplied exact
+  `ValueIdentities`; stack adjustment, saved-register and promoted-stack
+  ownership, linear-definition tracing, balanced epilogue proof, and residual
+  stack-pointer-use checks now carry that closed authority throughout. Display-
+  name parsing and spelling authority are test-only. All 14 owning tests and
+  the non-test library check pass. A fresh native build passes its guard, and
+  the required whole-Python fail-fast gate again reaches the same independent
+  committed-baseline inconsistency at 17% with no earlier failure. This is an
+  authority/API closure, not an output or timing claim. Continue the remaining
+  semantic-reader audit before WP3 invalidation closure. See
+  `results/wp3-arm32-frame-internal-authority.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
