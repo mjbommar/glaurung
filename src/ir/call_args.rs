@@ -1275,14 +1275,39 @@ fn fold_one_recovered_layout_call(
     if found.iter().any(Option::is_none) {
         return false;
     }
+    if !resolve_recovered_layout_sources(body, call_idx, &mut found, identities) {
+        return false;
+    }
+
+    // An impure setup expression (most importantly a frame load) cannot be
+    // moved into the call without proving intervening memory effects and C
+    // argument evaluation order. Keep the setup statement instead, but make
+    // the call read its exact SSA destination. Falling back to the layout's
+    // architectural spelling is unsound after value numbering: the current
+    // value may be named `value29`, not `s2`.
+    let setup_value_is_reassigned = found.iter().flatten().any(|(index, expression, _)| {
+        versioned_operand_is_reassigned(expression, body, *index, call_idx, identities)
+    });
+    if setup_value_is_reassigned {
+        return false;
+    }
     if found
         .iter()
         .flatten()
         .any(|(_, expression, _)| !is_pure_arg_normalisation(expression))
     {
-        return false;
-    }
-    if !resolve_recovered_layout_sources(body, call_idx, &mut found, identities) {
+        let arguments = found
+            .iter()
+            .flatten()
+            .map(|(index, _, destination)| {
+                Expr::Reg(destination.clone())
+                    .with_optional_origins(body[*index].origins().cloned())
+            })
+            .collect();
+        if let Stmt::Call { args, .. } = body[call_idx].semantic_mut() {
+            *args = arguments;
+            return true;
+        }
         return false;
     }
 
@@ -1306,12 +1331,6 @@ fn fold_one_recovered_layout_call(
     // setup and the call — see `versioned_operand_is_reassigned`. Declining here
     // falls back to the general backward scan, which keeps the setup in place
     // and names the argument register at the call.
-    if found.iter().flatten().any(|(index, expression, _)| {
-        versioned_operand_is_reassigned(expression, body, *index, call_idx, identities)
-    }) {
-        return false;
-    }
-
     let arguments: Vec<Expr> = found
         .iter()
         .flatten()
@@ -6159,7 +6178,7 @@ mod tests {
     }
 
     #[test]
-    fn attributed_recovered_layout_leaves_frame_loads_for_the_general_fold() {
+    fn attributed_recovered_layout_keeps_frame_load_as_exact_call_value() {
         let frame_load = Expr::Deref {
             addr: Box::new(Expr::Lea {
                 segment: None,
@@ -6179,14 +6198,20 @@ mod tests {
             call_to("callee").with_origins(crate::ir::ast::OriginSet::one(0x1018)),
         ];
 
-        assert!(!fold_one_recovered_layout_call(
+        assert!(fold_one_recovered_layout_call(
             &mut body,
             1,
             &[reg("s0")],
             None,
         ));
-        assert_eq!(body.len(), 2, "the general fold must retain the load root");
-        assert!(matches!(body[1].semantic(), Stmt::Call { args, .. } if args.is_empty()));
+        assert_eq!(body.len(), 2, "the frame load must remain statement-rooted");
+        assert!(matches!(
+            body[1].semantic(),
+            Stmt::Call { args, .. }
+                if args == &[Expr::Reg(reg("s0#1")).with_origins(
+                    crate::ir::ast::OriginSet::one(0x1014)
+                )]
+        ));
     }
 
     #[test]

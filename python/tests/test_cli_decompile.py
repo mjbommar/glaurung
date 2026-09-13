@@ -307,11 +307,19 @@ def test_real_arm_hard_float_compare_does_not_erase_three_call_args(
 
     assert "extern float arm_hf_three(float, float, float);" in generated, generated
     call_line = next(
-        (line for line in generated.splitlines() if " = arm_hf_three(" in line),
+        (
+            line
+            for line in generated.splitlines()
+            if "arm_hf_three(" in line and "extern " not in line
+        ),
         None,
     )
     assert call_line is not None, generated
     assert call_line.count(",") == 2, call_line
+    assert "value" in call_line, call_line
+    assert "-limit" in call_line, call_line
+    assert call_line.rsplit(",", 1)[1].strip().startswith("limit)"), call_line
+    assert "var" not in call_line, call_line
     assert "(*)(void)" not in call_line, call_line
 
 
