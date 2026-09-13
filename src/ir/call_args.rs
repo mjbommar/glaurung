@@ -59,6 +59,7 @@ use slot_marking::{
     mark_arg_reads_in_expr_with_identities, mark_arg_reads_in_stmt_with_identities,
     mark_arg_writes_in_stmt_with_identities, mark_slot_write_with_identities,
 };
+#[cfg(test)]
 pub use tail_calls::{
     recover_proven_vtable_tail_calls, recover_resolved_direct_tail_calls,
     recover_resolved_tail_calls,

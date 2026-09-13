@@ -37,11 +37,20 @@ use super::{arg_slots, mark_slot_write_with_identities, return_reg, CallConv};
 /// identity. When no argument register was set up locally, the jump forwards the
 /// complete ABI register state. Logical `argN` names record that fact without
 /// guessing a source prototype or a callee arity.
+#[cfg(test)]
 pub fn recover_resolved_tail_calls(f: &mut Function, arch: CallConv) {
-    recover_resolved_tail_calls_with_identities(f, arch, None);
+    recover_resolved_tail_calls_impl(f, arch, None);
 }
 
 pub(crate) fn recover_resolved_tail_calls_with_identities(
+    f: &mut Function,
+    arch: CallConv,
+    identities: &ValueIdentities,
+) {
+    recover_resolved_tail_calls_impl(f, arch, Some(identities));
+}
+
+fn recover_resolved_tail_calls_impl(
     f: &mut Function,
     arch: CallConv,
     identities: Option<&ValueIdentities>,
@@ -51,15 +60,25 @@ pub(crate) fn recover_resolved_tail_calls_with_identities(
 
 /// Recover a Rust trait-object terminal dispatch backed by a proven fat-pointer
 /// result from the preceding direct call.
+#[cfg(test)]
 pub fn recover_proven_vtable_tail_calls(
     f: &mut Function,
     arch: CallConv,
     prototypes: &std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>,
 ) {
-    recover_proven_vtable_tail_calls_with_identities(f, arch, prototypes, None);
+    recover_proven_vtable_tail_calls_impl(f, arch, prototypes, None);
 }
 
 pub(crate) fn recover_proven_vtable_tail_calls_with_identities(
+    f: &mut Function,
+    arch: CallConv,
+    prototypes: &std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>,
+    identities: &ValueIdentities,
+) {
+    recover_proven_vtable_tail_calls_impl(f, arch, prototypes, Some(identities));
+}
+
+fn recover_proven_vtable_tail_calls_impl(
     f: &mut Function,
     arch: CallConv,
     prototypes: &std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>,
@@ -77,15 +96,25 @@ pub(crate) fn recover_proven_vtable_tail_calls_with_identities(
 /// entry it targets. Converting only that exact combination avoids both a
 /// dangling `goto` and the old workaround of importing the callee's basic
 /// blocks into the caller.
+#[cfg(test)]
 pub fn recover_resolved_direct_tail_calls(
     f: &mut Function,
     arch: CallConv,
     names: &std::collections::HashMap<u64, String>,
 ) {
-    recover_resolved_direct_tail_calls_with_identities(f, arch, names, None);
+    recover_resolved_direct_tail_calls_impl(f, arch, names, None);
 }
 
 pub(crate) fn recover_resolved_direct_tail_calls_with_identities(
+    f: &mut Function,
+    arch: CallConv,
+    names: &std::collections::HashMap<u64, String>,
+    identities: &ValueIdentities,
+) {
+    recover_resolved_direct_tail_calls_impl(f, arch, names, Some(identities));
+}
+
+fn recover_resolved_direct_tail_calls_impl(
     f: &mut Function,
     arch: CallConv,
     names: &std::collections::HashMap<u64, String>,
@@ -931,7 +960,7 @@ mod tests {
             &mut exact,
             CallConv::SysVAmd64,
             &names,
-            Some(&identities),
+            &identities,
         );
         assert!(matches!(&exact.body[1], Stmt::Call { args, .. } if args.is_empty()));
 
@@ -940,7 +969,7 @@ mod tests {
             &mut misleading,
             CallConv::SysVAmd64,
             &names,
-            Some(&identities),
+            &identities,
         );
         assert!(matches!(&misleading.body[1], Stmt::Call { args, .. } if args.len() == 6));
     }
@@ -1141,7 +1170,7 @@ mod tests {
             &mut exact,
             CallConv::SysVAmd64,
             &wide_prototypes(),
-            Some(&identities),
+            &identities,
         );
         assert!(matches!(exact.body.last(), Some(Stmt::Return { .. })));
 
@@ -1150,7 +1179,7 @@ mod tests {
             &mut misleading,
             CallConv::SysVAmd64,
             &wide_prototypes(),
-            Some(&identities),
+            &identities,
         );
         assert!(matches!(
             misleading.body.last(),

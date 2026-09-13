@@ -608,18 +608,14 @@ pub(super) fn run_ast_passes(
             f,
             cc,
             addr_map,
-            Some(value_identities),
+            value_identities,
         );
-        crate::ir::call_args::recover_resolved_tail_calls_with_identities(
-            f,
-            cc,
-            Some(value_identities),
-        );
+        crate::ir::call_args::recover_resolved_tail_calls_with_identities(f, cc, value_identities);
         crate::ir::call_args::recover_proven_vtable_tail_calls_with_identities(
             f,
             cc,
             &callee_facts.prototypes,
-            Some(value_identities),
+            value_identities,
         );
     });
     pass!("reconstruct_args", {
