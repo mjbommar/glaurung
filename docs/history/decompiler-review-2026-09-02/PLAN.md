@@ -3057,6 +3057,13 @@ provenance through lowering.
   leaf-frame failure first at 11%. Continue the equivalent adapter audit in
   the remaining post-numbering consumers before starting WP3 invalidation
   closure. See `results/wp3-call-result-splitting-requires-identities.md`.
+  Commit `6d98184c` closes another benchmark-only downgrade. Both isolated
+  loop-recovery lanes in `ir_structure` now pass their already-owned identity
+  snapshot to counted-loop promotion instead of exercising legacy display
+  spelling. The focused benchmark check passes. No timing, output, corpus, or
+  broad-suite claim is made, and no post-source Python gate applied. Continue
+  classifying shipped raw consumers before WP3 invalidation closure. See
+  `results/wp3-loop-benchmark-retains-identities.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
