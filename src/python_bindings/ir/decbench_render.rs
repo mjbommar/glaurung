@@ -626,7 +626,7 @@ fn decbench_text_with_installed_environment(
                 &mut prepared,
                 cc,
                 recovered_prototype,
-                Some(&value_identities),
+                &value_identities,
             )
         );
     }

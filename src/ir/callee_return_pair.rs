@@ -70,15 +70,25 @@ pub fn pair_return_c_type(cc: CallConv) -> Option<&'static str> {
 /// [`returns_are_pair_composed`] then tells the renderer to keep the old
 /// signature too — the two decisions are one decision, and they read the same
 /// AST to make it.
+#[cfg(test)]
 pub fn compose_pair_returns(
     function: &mut Function,
     cc: CallConv,
     prototype: Option<&RecoveredPrototype>,
 ) -> bool {
-    compose_pair_returns_with_identities(function, cc, prototype, None)
+    compose_pair_returns_impl(function, cc, prototype, None)
 }
 
 pub fn compose_pair_returns_with_identities(
+    function: &mut Function,
+    cc: CallConv,
+    prototype: Option<&RecoveredPrototype>,
+    identities: &ValueIdentities,
+) -> bool {
+    compose_pair_returns_impl(function, cc, prototype, Some(identities))
+}
+
+fn compose_pair_returns_impl(
     function: &mut Function,
     cc: CallConv,
     prototype: Option<&RecoveredPrototype>,
@@ -577,7 +587,7 @@ mod tests {
             &mut exact,
             CallConv::SysVAmd64,
             Some(&prototype),
-            Some(&identities),
+            &identities,
         ));
 
         let mut misleading = body("rdx#looks_high", "opaque_low");
@@ -585,7 +595,7 @@ mod tests {
             &mut misleading,
             CallConv::SysVAmd64,
             Some(&prototype),
-            Some(&identities),
+            &identities,
         ));
 
         let mut sse_low = body("opaque_high", "opaque_sse_low");
@@ -593,7 +603,7 @@ mod tests {
             &mut sse_low,
             CallConv::SysVAmd64,
             Some(&prototype),
-            Some(&identities),
+            &identities,
         ));
     }
 

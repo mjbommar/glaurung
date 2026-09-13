@@ -111,16 +111,26 @@ fn bank_contract(cc: CallConv, class: ReturnClass) -> Option<BankContract> {
 /// requires. Returns `true` when the body changed.
 ///
 /// ALL OR NOTHING, for the reason in the module note.
+#[cfg(test)]
 pub fn compose_bank_returns(
     function: &mut Function,
     cc: CallConv,
     prototype: Option<&RecoveredPrototype>,
 ) -> bool {
-    compose_bank_returns_with_identities(function, cc, prototype, None)
+    compose_bank_returns_impl(function, cc, prototype, None)
 }
 
 /// Rewrite banked returns using promoted-object identity when available.
 pub fn compose_bank_returns_with_identities(
+    function: &mut Function,
+    cc: CallConv,
+    prototype: Option<&RecoveredPrototype>,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> bool {
+    compose_bank_returns_impl(function, cc, prototype, Some(identities))
+}
+
+fn compose_bank_returns_impl(
     function: &mut Function,
     cc: CallConv,
     prototype: Option<&RecoveredPrototype>,
@@ -153,15 +163,25 @@ pub fn compose_bank_returns_with_identities(
 /// definition which has not been clobbered by a call or a control-flow join.
 /// The transformation is applied to a clone so declining cannot leave a
 /// partially materialised object in the function.
+#[cfg(test)]
 pub fn materialize_register_split_returns(
     function: &mut Function,
     cc: CallConv,
     prototype: Option<&RecoveredPrototype>,
 ) -> bool {
-    materialize_register_split_returns_with_identities(function, cc, prototype, None)
+    materialize_register_split_returns_impl(function, cc, prototype, None)
 }
 
 pub fn materialize_register_split_returns_with_identities(
+    function: &mut Function,
+    cc: CallConv,
+    prototype: Option<&RecoveredPrototype>,
+    identities: &ValueIdentities,
+) -> bool {
+    materialize_register_split_returns_impl(function, cc, prototype, Some(identities))
+}
+
+fn materialize_register_split_returns_impl(
     function: &mut Function,
     cc: CallConv,
     prototype: Option<&RecoveredPrototype>,
@@ -193,15 +213,25 @@ pub fn materialize_register_split_returns_with_identities(
 /// compatibility views *after* a scalar whole-register definition, while a
 /// genuinely packed write is followed by a reconstructed whole-register
 /// bridge of its own.
+#[cfg(test)]
 pub fn materialize_register_sse_pair_returns(
     function: &mut Function,
     cc: CallConv,
     prototype: Option<&RecoveredPrototype>,
 ) -> bool {
-    materialize_register_sse_pair_returns_with_identities(function, cc, prototype, None)
+    materialize_register_sse_pair_returns_impl(function, cc, prototype, None)
 }
 
 pub fn materialize_register_sse_pair_returns_with_identities(
+    function: &mut Function,
+    cc: CallConv,
+    prototype: Option<&RecoveredPrototype>,
+    identities: &ValueIdentities,
+) -> bool {
+    materialize_register_sse_pair_returns_impl(function, cc, prototype, Some(identities))
+}
+
+fn materialize_register_sse_pair_returns_impl(
     function: &mut Function,
     cc: CallConv,
     prototype: Option<&RecoveredPrototype>,
@@ -1081,7 +1111,7 @@ mod tests {
             &mut f,
             CallConv::SysVAmd64,
             Some(&declared),
-            Some(&identities),
+            &identities,
         ));
     }
 
@@ -1108,7 +1138,7 @@ mod tests {
             &mut f,
             CallConv::SysVAmd64,
             Some(&declared),
-            Some(&identities),
+            &identities,
         ));
         assert_eq!(f, before);
     }
@@ -1309,7 +1339,7 @@ mod tests {
             &mut split,
             CallConv::SysVAmd64,
             Some(&split_prototype(true)),
-            Some(&identities),
+            &identities,
         ));
 
         let sse_body = |high: &str| {
@@ -1324,14 +1354,14 @@ mod tests {
             &mut exact,
             CallConv::SysVAmd64,
             Some(&sse_pair_prototype(8)),
-            Some(&identities),
+            &identities,
         ));
         let mut misleading = sse_body("xmm1#looks_high");
         assert!(!materialize_register_sse_pair_returns_with_identities(
             &mut misleading,
             CallConv::SysVAmd64,
             Some(&sse_pair_prototype(8)),
-            Some(&identities),
+            &identities,
         ));
     }
 

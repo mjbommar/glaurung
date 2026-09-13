@@ -741,13 +741,13 @@ pub(super) fn run_ast_passes(
                 f,
                 cc,
                 prototype,
-                Some(value_identities),
+                value_identities,
             );
             crate::ir::callee_return_bank::materialize_register_sse_pair_returns_with_identities(
                 f,
                 cc,
                 prototype,
-                Some(value_identities),
+                value_identities,
             );
             crate::ir::direct_output::materialize_prototype_output(
                 f,
@@ -764,7 +764,7 @@ pub(super) fn run_ast_passes(
                 f,
                 cc,
                 prototype,
-                Some(value_identities),
+                value_identities,
             );
         }
     });
