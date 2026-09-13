@@ -2896,6 +2896,18 @@ provenance through lowering.
   contracts, one legacy preparation control, the exact production wide-switch
   handoff, and a native rebuild pass. Output is intended to be unchanged. See
   `results/wp3-internal-preparation-requires-identities.md`.
+  Commit `122730b4` closes the adjacent final-lowering seam. Typed lowering now
+  requires `&ValueIdentities` and dispatches return materialization through the
+  typed fold, so an unowned value merely spelled `ret` cannot impersonate an
+  ABI result. The production Python pipeline, caller-environment path, canary
+  example, and all three IR/decompile benchmarks retain the sidecar through
+  lowering; no benchmark still calls bare `ast::lower`. Three focused semantic
+  contracts, the non-test library, the affected benchmarks and example, a
+  fresh native build, and six exact cross-architecture Hello cells pass. This
+  is an authority-boundary change, not an output or timing claim. Continue by
+  classifying the explicit compatibility lowerer and the remaining unused
+  spelling-only helpers. See
+  `results/wp3-typed-lowering-return-folds.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
