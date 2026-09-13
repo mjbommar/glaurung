@@ -88,7 +88,34 @@ O0/O2, fixture 172 at x86-64 O0, and fixture 81 at x86-64 O2. The dirty shared
 tree was not used to regenerate either ledger. No fixture matrix, DecBench,
 Joern, or corpus sweep ran.
 
-The downstream architectural-read and ARM-padding compatibility engines still
-accept optional identity state and are the next bounded closures. WP3 also
+Commit `b18a9cd1` closes those downstream compatibility engines. Architectural
+read collection and phi-copy recognition now expose separate plain-LLIR and
+exact-identity entry points backed by a closed internal authority. Both
+parameter inference and phi coalescing choose one explicitly. ARM alignment
+padding classification and use exclusion likewise expose separate plain and
+exact APIs; no optional identity state remains in any of these three modules.
+
+Focused evidence for the full chain remains:
+
+```text
+cargo test --features python-ext ir::value_number::tests:: --lib -- --test-threads=1
+65 passed; 0 failed; 4781 filtered out
+
+cargo check --features python-ext
+exit 0
+
+uv run maturin develop
+exit 0
+
+uv run python tools/build_guard.py
+fresh
+```
+
+The required Python fail-fast gate again reached 17% without an earlier
+failure, then stopped at the same committed baseline-ledger disagreement. No
+fixture matrix, DecBench, Joern, or corpus sweep ran. This is an authority/API
+closure, not an output-quality or timing claim.
+
+The typed input and parameter-evidence compatibility chain is now closed. WP3
 remains open for the remaining production semantic-reader audit, conservative
 invalidation, and universal origin preservation.

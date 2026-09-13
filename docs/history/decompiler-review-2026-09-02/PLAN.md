@@ -3051,6 +3051,16 @@ provenance through lowering.
   disagreement first at 17%. Next close the downstream architectural-read and
   ARM-padding compatibility engines. See
   `results/wp3-typed-input-facts-require-identities.md`.
+  Commit `b18a9cd1` closes both downstream engines. Architectural-read and
+  phi-copy analysis now have separate plain and exact APIs selected explicitly
+  by parameter inference and phi coalescing; ARM alignment-padding analysis has
+  the same closed split. No optional identity state remains in those modules.
+  All 65 value-numbering tests and the production build check pass, the native
+  extension is fresh, and the required Python fail-fast gate reaches the same
+  established ledger disagreement first at 17%. The typed input/signature
+  compatibility chain is complete; continue the residual semantic-reader and
+  invalidation audit. See
+  `results/wp3-typed-input-facts-require-identities.md`.
   Commit `79496134` closes the production tail-call recovery surface. Resolved
   indirect, resolved direct, and proven vtable tail-call routes now require an
   actual identity snapshot; their raw functions and top-level re-exports are
