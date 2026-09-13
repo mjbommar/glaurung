@@ -40,6 +40,36 @@ fn pointer_width(types: &TypeMap, name: &str) -> Option<u8> {
     }
 }
 
+#[test]
+fn recovered_pointer_parameter_survives_high_variable_revalidation() {
+    let parameter = VReg::phys("arg0");
+    let function = Function {
+        name: "parameter_pointer".into(),
+        entry_va: 0,
+        body: vec![Stmt::Return {
+            value: Some(Expr::Reg(parameter.clone())),
+        }],
+    };
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
+    identities.record(
+        parameter.clone(),
+        crate::ir::ssa::SsaValue {
+            base: VReg::phys("rdi"),
+            version: 0,
+        },
+    );
+    identities = identities.with_role_aliases_and_parameter_slots(
+        &std::collections::HashMap::new(),
+        &std::collections::HashSet::from([0]),
+    );
+    let mut types = TypeMap::default();
+    types.upsert_public(parameter, TypeHint::Pointer { pointee_width: 1 });
+
+    refine_pointer_high_variables_with_identities(&function, &mut types, &identities);
+
+    assert_eq!(pointer_width(&types, "arg0"), Some(1));
+}
+
 fn coalesced_same_storage_identities(
     value: &VReg,
     base: &str,

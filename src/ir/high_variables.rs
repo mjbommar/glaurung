@@ -50,8 +50,10 @@ pub(crate) fn refine_pointer_high_variables_with_identities(
     // The legacy map is keyed by raw storage. Before exact SSA definition-width
     // recovery the renderer intentionally ignored all scalar `varN` facts. The
     // integer and float facts reaching this pass are now projected from exact
-    // value identities, so preserve them; pointer-like classifications still
-    // need the prepared definition graph below to rule out storage collisions.
+    // value identities, so preserve them. Prototype-owned parameter pointers
+    // are already qualified live-in facts and are not high-variable guesses.
+    // Pointer-like local classifications still need the prepared definition
+    // graph below to rule out storage collisions.
     let stale_high_variables: Vec<_> = types
         .iter()
         .filter_map(|(reg, hint)| match reg {
@@ -60,6 +62,7 @@ pub(crate) fn refine_pointer_high_variables_with_identities(
             // requires prepared-AST revalidation here.
             VReg::Phys(name)
                 if identity_value_role(name, identities)
+                    && identities.parameter_slot(reg).is_none()
                     && !matches!(hint, TypeHint::Float { .. } | TypeHint::Int { .. }) =>
             {
                 Some(reg.clone())
