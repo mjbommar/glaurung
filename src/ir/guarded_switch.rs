@@ -19,9 +19,27 @@ use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 use crate::ir::types::{CmpOp, VReg};
 use crate::ir::types_recover::{TypeHint, TypeMap};
 
+#[derive(Clone, Copy)]
+enum IdentityAuthority<'a> {
+    Exact(&'a crate::ir::value_number::ValueIdentities),
+    #[cfg(test)]
+    LegacySpelling,
+}
+
+impl IdentityAuthority<'_> {
+    fn is_promoted_object(self, value: &VReg) -> bool {
+        match self {
+            Self::Exact(identities) => identities.is_promoted_stack_object(value),
+            #[cfg(test)]
+            Self::LegacySpelling => crate::ir::types::is_promoted_local_reg(value),
+        }
+    }
+}
+
 /// Remove redundant outer unsigned-range guards around proven switch statements.
+#[cfg(test)]
 pub fn collapse_range_guards(function: &mut Function) {
-    collapse_body(&mut function.body, None, None);
+    collapse_body(&mut function.body, None, IdentityAuthority::LegacySpelling);
 }
 
 /// Remove redundant range guards using pipeline-owned stack-object identity.
@@ -29,14 +47,23 @@ pub fn collapse_range_guards_with_identities(
     function: &mut Function,
     identities: &crate::ir::value_number::ValueIdentities,
 ) {
-    collapse_body(&mut function.body, None, Some(identities));
+    collapse_body(
+        &mut function.body,
+        None,
+        IdentityAuthority::Exact(identities),
+    );
 }
 
 /// Typed second chance for range guards whose discriminator explicitly narrows
 /// or widens a register. The recovered width proves whether that cast preserves
 /// the guarded value; without it the untyped pass deliberately leaves the guard.
+#[cfg(test)]
 pub fn collapse_range_guards_with_types(function: &mut Function, types: &TypeMap) {
-    collapse_body(&mut function.body, Some(types), None);
+    collapse_body(
+        &mut function.body,
+        Some(types),
+        IdentityAuthority::LegacySpelling,
+    );
 }
 
 /// Typed range-guard cleanup using pipeline-owned stack-object identity.
@@ -45,14 +72,14 @@ pub fn collapse_range_guards_with_types_and_identities(
     types: &TypeMap,
     identities: &crate::ir::value_number::ValueIdentities,
 ) {
-    collapse_body(&mut function.body, Some(types), Some(identities));
+    collapse_body(
+        &mut function.body,
+        Some(types),
+        IdentityAuthority::Exact(identities),
+    );
 }
 
-fn collapse_body(
-    body: &mut Vec<Stmt>,
-    types: Option<&TypeMap>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) {
+fn collapse_body(body: &mut Vec<Stmt>, types: Option<&TypeMap>, authority: IdentityAuthority<'_>) {
     for statement in body.iter_mut() {
         match statement.semantic_mut() {
             Stmt::If {
@@ -60,26 +87,26 @@ fn collapse_body(
                 else_body,
                 ..
             } => {
-                collapse_body(then_body, types, identities);
+                collapse_body(then_body, types, authority);
                 if let Some(else_body) = else_body {
-                    collapse_body(else_body, types, identities);
+                    collapse_body(else_body, types, authority);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                collapse_body(body, types, identities);
+                collapse_body(body, types, authority);
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, case_body) in cases {
-                    collapse_body(case_body, types, identities);
+                    collapse_body(case_body, types, authority);
                 }
                 if let Some(default) = default {
-                    collapse_body(default, types, identities);
+                    collapse_body(default, types, authority);
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                collapse_body(try_body, types, identities);
+                collapse_body(try_body, types, authority);
                 for catch in catches {
-                    collapse_body(&mut catch.body, types, identities);
+                    collapse_body(&mut catch.body, types, authority);
                 }
             }
             _ => {}
@@ -119,7 +146,7 @@ fn collapse_body(
         }
         let Some((temporary, value)) = body
             .get(index - 1)
-            .and_then(|statement| discriminant_copy(statement, types, identities))
+            .and_then(|statement| discriminant_copy(statement, types, authority))
         else {
             index += 1;
             continue;
@@ -492,7 +519,7 @@ fn known_width(expr: &Expr, types: Option<&TypeMap>) -> Option<u8> {
 fn discriminant_copy(
     statement: &Stmt,
     types: Option<&TypeMap>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: IdentityAuthority<'_>,
 ) -> Option<(VReg, Expr)> {
     match statement.semantic() {
         Stmt::Assign { dst, src } => Some((dst.clone(), src.clone())),
@@ -505,10 +532,8 @@ fn discriminant_copy(
         // retains the legacy promoted-local spelling check.
         Stmt::Store { addr, src, size } => match addr.semantic() {
             Expr::Reg(dst)
-                if identities.map_or_else(
-                    || crate::ir::types::is_promoted_local_reg(dst),
-                    |identities| identities.is_promoted_stack_object(dst),
-                ) && known_width(src, types).is_some_and(|width| width <= *size) =>
+                if authority.is_promoted_object(dst)
+                    && known_width(src, types).is_some_and(|width| width <= *size) =>
             {
                 Some((dst.clone(), src.clone()))
             }
