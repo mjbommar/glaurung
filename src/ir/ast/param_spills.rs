@@ -29,7 +29,7 @@
 //! `local_`/`stack_`, because that name is the renderer's only signal that the
 //! statement is an assignment rather than a store through a pointer.
 
-use super::{is_promoted_local, parse_arg_index, Expr, Stmt, VReg};
+use super::{Expr, Stmt, VReg};
 
 /// Coalesce a parameter's spill slot with the parameter. At `-O0` the compiler
 /// spills each parameter to a frame slot and reads it back; our lifting turns
@@ -44,7 +44,7 @@ use super::{is_promoted_local, parse_arg_index, Expr, Stmt, VReg};
 pub(super) fn coalesce_param_spills(
     body: &mut Vec<Stmt>,
     protected_locals: &std::collections::HashSet<String>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) {
     coalesce_frame_object_param_spills(body, identities);
     coalesce_named_param_spills(body, protected_locals, identities);
@@ -54,7 +54,7 @@ pub(super) fn coalesce_param_spills(
 pub(super) fn coalesce_named_param_spills(
     body: &mut Vec<Stmt>,
     protected_locals: &std::collections::HashSet<String>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) {
     // local name -> the single argument it is spilled from ("" = disqualified).
     let mut home: std::collections::HashMap<String, String> = std::collections::HashMap::new();
@@ -113,7 +113,7 @@ struct FrameParamHome {
 /// source-level reassignment, so this cannot erase mutable stack state.
 fn coalesce_frame_object_param_spills(
     body: &mut Vec<Stmt>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) {
     let mut homes = Vec::new();
     collect_frame_param_homes(body, &mut homes, identities);
@@ -262,15 +262,10 @@ fn expression_contains_stack_object(expr: &Expr) -> bool {
 
 fn parameter_source(
     expr: &Expr,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) -> Option<String> {
     match expr.semantic() {
-        Expr::Reg(register @ VReg::Phys(name))
-            if match identities {
-                Some(identities) => identities.parameter_slot(register).is_some(),
-                None => parse_arg_index(name).is_some(),
-            } =>
-        {
+        Expr::Reg(register @ VReg::Phys(name)) if identities.parameter_slot(register).is_some() => {
             Some(name.clone())
         }
         Expr::Cast { expr, .. } => parameter_source(expr, identities),
@@ -283,7 +278,7 @@ fn record_frame_store(
     size: u8,
     src: &Expr,
     homes: &mut Vec<FrameParamHome>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) {
     if !expression_contains_stack_object(addr) {
         return;
@@ -310,7 +305,7 @@ fn record_frame_store(
 fn collect_frame_param_homes(
     body: &[Stmt],
     homes: &mut Vec<FrameParamHome>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) {
     for statement in body {
         match statement.semantic() {
@@ -507,7 +502,7 @@ fn rewrite_frame_param_homes(body: &mut Vec<Stmt>, homes: &[FrameParamHome]) {
 fn slot_stores_to_assigns(
     body: &mut Vec<Stmt>,
     slots: &std::collections::HashMap<String, String>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) {
     for s in body.iter_mut() {
         let statement = s.semantic_mut();
@@ -575,7 +570,7 @@ fn slot_stores_to_assigns(
 fn collect_param_homes(
     body: &[Stmt],
     home: &mut std::collections::HashMap<String, String>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) {
     collect_param_homes_with_aliases(
         body,
@@ -588,7 +583,7 @@ fn collect_param_homes(
 fn parameter_alias(
     expr: &Expr,
     aliases: &std::collections::HashMap<VReg, String>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) -> Option<String> {
     match expr.semantic() {
         Expr::Reg(register) => aliases
@@ -611,7 +606,7 @@ fn collect_param_homes_with_aliases(
     body: &[Stmt],
     home: &mut std::collections::HashMap<String, String>,
     aliases: &mut std::collections::HashMap<VReg, String>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) {
     for s in body {
         match s.semantic() {
@@ -623,7 +618,7 @@ fn collect_param_homes_with_aliases(
                     aliases.remove(dst);
                 }
             }
-            Stmt::Store { addr, src, .. } if matches!(addr.semantic(), Expr::Reg(VReg::Phys(local)) if is_promoted_local(local)) =>
+            Stmt::Store { addr, src, .. } if matches!(addr.semantic(), Expr::Reg(value) if identities.is_promoted_stack_object(value)) =>
             {
                 let Expr::Reg(VReg::Phys(local)) = addr.semantic() else {
                     unreachable!("match guard proved a promoted named slot")
@@ -904,6 +899,17 @@ mod tests {
     use super::*;
     use crate::ir::ast::{OriginSet, ScalarType};
 
+    fn parameter_home_identities() -> crate::ir::value_number::ValueIdentities {
+        let mut identities = crate::ir::value_number::ValueIdentities::default()
+            .with_role_aliases_and_parameter_slots(
+                &std::collections::HashMap::new(),
+                &std::collections::HashSet::from([0]),
+            );
+        let local = "local_4".to_string();
+        identities.attach_promoted_stack_objects([&local]);
+        identities
+    }
+
     fn simple_named_home() -> Vec<Stmt> {
         vec![
             Stmt::Store {
@@ -922,23 +928,12 @@ mod tests {
         let identities = crate::ir::value_number::ValueIdentities::default();
         let mut unowned = simple_named_home();
 
-        coalesce_named_param_spills(
-            &mut unowned,
-            &std::collections::HashSet::new(),
-            Some(&identities),
-        );
+        coalesce_named_param_spills(&mut unowned, &std::collections::HashSet::new(), &identities);
         assert!(matches!(unowned[0].semantic(), Stmt::Store { .. }));
 
-        let parameter = identities.with_role_aliases_and_parameter_slots(
-            &std::collections::HashMap::new(),
-            &std::collections::HashSet::from([0]),
-        );
+        let parameter = parameter_home_identities();
         let mut owned = simple_named_home();
-        coalesce_named_param_spills(
-            &mut owned,
-            &std::collections::HashSet::new(),
-            Some(&parameter),
-        );
+        coalesce_named_param_spills(&mut owned, &std::collections::HashSet::new(), &parameter);
         assert!(matches!(owned[0].semantic(), Stmt::Nop));
         assert!(matches!(
             owned[1].semantic(),
@@ -972,7 +967,7 @@ mod tests {
 
         let identities = crate::ir::value_number::ValueIdentities::default();
         let mut unowned = frame_home();
-        coalesce_frame_object_param_spills(&mut unowned, Some(&identities));
+        coalesce_frame_object_param_spills(&mut unowned, &identities);
         assert_eq!(unowned.len(), 2);
 
         let parameter = identities.with_role_aliases_and_parameter_slots(
@@ -980,7 +975,7 @@ mod tests {
             &std::collections::HashSet::from([0]),
         );
         let mut owned = frame_home();
-        coalesce_frame_object_param_spills(&mut owned, Some(&parameter));
+        coalesce_frame_object_param_spills(&mut owned, &parameter);
         assert_eq!(owned.len(), 1);
         assert!(matches!(
             owned[0].semantic(),
@@ -1007,7 +1002,11 @@ mod tests {
             .with_origins(return_owner.clone()),
         ];
 
-        coalesce_named_param_spills(&mut body, &std::collections::HashSet::new(), None);
+        coalesce_named_param_spills(
+            &mut body,
+            &std::collections::HashSet::new(),
+            &parameter_home_identities(),
+        );
 
         assert_eq!(body.len(), 2);
         assert_eq!(body[0].origins(), Some(&spill_owner));
@@ -1037,7 +1036,11 @@ mod tests {
             },
         ];
 
-        coalesce_named_param_spills(&mut body, &std::collections::HashSet::new(), None);
+        coalesce_named_param_spills(
+            &mut body,
+            &std::collections::HashSet::new(),
+            &parameter_home_identities(),
+        );
 
         assert_eq!(body.len(), 2);
         assert!(
@@ -1071,7 +1074,11 @@ mod tests {
             },
         ];
 
-        coalesce_named_param_spills(&mut body, &std::collections::HashSet::new(), None);
+        coalesce_named_param_spills(
+            &mut body,
+            &std::collections::HashSet::new(),
+            &parameter_home_identities(),
+        );
 
         assert_eq!(body.len(), 2);
         assert!(matches!(body[0].semantic(), Stmt::Nop));
@@ -1104,7 +1111,7 @@ mod tests {
             .with_origins(return_owner.clone()),
         ];
 
-        coalesce_frame_object_param_spills(&mut body, None);
+        coalesce_frame_object_param_spills(&mut body, &parameter_home_identities());
 
         assert_eq!(body.len(), 1);
         assert_eq!(body[0].origins(), Some(&return_owner));
@@ -1142,7 +1149,7 @@ mod tests {
             },
         ];
 
-        coalesce_frame_object_param_spills(&mut body, None);
+        coalesce_frame_object_param_spills(&mut body, &parameter_home_identities());
 
         assert_eq!(body.len(), 1);
         let Stmt::Return { value: Some(value) } = body[0].semantic() else {
@@ -1187,7 +1194,7 @@ mod tests {
             },
         ];
 
-        coalesce_frame_object_param_spills(&mut body, None);
+        coalesce_frame_object_param_spills(&mut body, &parameter_home_identities());
 
         assert_eq!(body.len(), 1);
         let Stmt::Return {

@@ -3966,6 +3966,39 @@ function f @ 0x1000 {
         render_decbench(&prepare_for_decbench(f))
     }
 
+    fn prepare_with_test_identities(
+        f: &Function,
+        output_kind: crate::ir::types_recover::RecoveredOutputKind,
+        parameter_slots: &[usize],
+        promoted_names: &[&str],
+        value_names: &[&str],
+    ) -> Function {
+        let mut identities = crate::ir::value_number::ValueIdentities::default()
+            .with_source_parameter_slots(parameter_slots.iter().copied());
+        let promoted = promoted_names
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect::<Vec<_>>();
+        identities.attach_promoted_stack_objects(&promoted);
+        for (index, name) in value_names.iter().enumerate() {
+            identities.record(
+                VReg::phys(*name),
+                crate::ir::ssa::SsaValue {
+                    base: VReg::phys("test_value"),
+                    version: index as u32 + 1,
+                },
+            );
+        }
+        prepare_for_decbench_with_output_and_protected_locals_and_report(
+            f,
+            output_kind,
+            &std::collections::HashSet::new(),
+            8,
+            Some(&identities),
+        )
+        .0
+    }
+
     #[test]
     fn attributed_magic_constant_keeps_its_readability_annotation() {
         let function = Function {
@@ -5127,7 +5160,14 @@ function f @ 0x1000 {
                 },
             ],
         };
-        let text = render_decbench(&prepare_for_decbench(&f));
+        let prepared = prepare_with_test_identities(
+            &f,
+            crate::ir::types_recover::RecoveredOutputKind::Unknown,
+            &[0],
+            &["local_14"],
+            &[],
+        );
+        let text = render_decbench(&prepared);
         assert!(
             text.contains("arg0 + 1") && !text.contains("local_14"),
             "the spill slot must be folded into the parameter:\n{text}"
@@ -5165,7 +5205,13 @@ function f @ 0x1000 {
             ],
         };
 
-        let prepared = prepare_for_decbench(&f);
+        let prepared = prepare_with_test_identities(
+            &f,
+            crate::ir::types_recover::RecoveredOutputKind::Unknown,
+            &[0],
+            &[],
+            &[],
+        );
         let text = render(&prepared);
 
         assert!(text.contains("%local_14"), "{text}");
@@ -5265,7 +5311,13 @@ function f @ 0x1000 {
             ],
         };
 
-        let prepared = prepare_for_decbench(&f);
+        let prepared = prepare_with_test_identities(
+            &f,
+            crate::ir::types_recover::RecoveredOutputKind::Unknown,
+            &[0],
+            &["local_1c"],
+            &["eax_in", "eax"],
+        );
 
         assert!(
             prepared.body.iter().any(|statement| matches!(
@@ -5435,7 +5487,13 @@ function f @ 0x1000 {
             ],
         };
 
-        let prepared = prepare_for_decbench(&f);
+        let prepared = prepare_with_test_identities(
+            &f,
+            crate::ir::types_recover::RecoveredOutputKind::Unknown,
+            &[0],
+            &[],
+            &[],
+        );
         let text = render_decbench(&prepared);
 
         assert!(text.contains("return arg0;"), "{text}");
@@ -7354,9 +7412,12 @@ function f @ 0x1000 {
             ],
         };
 
-        let prepared = prepare_for_decbench_with_output(
+        let prepared = prepare_with_test_identities(
             &f,
             crate::ir::types_recover::RecoveredOutputKind::Direct,
+            &[1],
+            &["local_5"],
+            &["var1"],
         );
         let text = render(&prepared);
 
