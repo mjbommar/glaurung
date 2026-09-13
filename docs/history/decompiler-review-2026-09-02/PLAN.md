@@ -3696,6 +3696,16 @@ provenance through lowering.
   conversion transparency repaired it before commit. All 10 owning tests and
   the exact Clang O2 `cpp_exception` fixture pass, with 4,592 unrelated Rust
   tests filtered out. See `results/wp3-exception-stack-identities.md`.
+  Follow-on commit `54245e36` closes the remaining internal optional-identity
+  engine in integer exception recovery. Every non-test recursive path now
+  carries exact identity authority through RTTI address propagation and throw-
+  value recovery; the promoted-local spelling authority and three untyped
+  adapters are test-only. All 13 owning tests and the non-test library check
+  pass. A fresh native build passes its guard, and the required whole-Python
+  fail-fast gate again reaches the independent committed-baseline disagreement
+  at 17% with no earlier failure. This is an authority/API closure, not a new
+  output or timing claim. Continue the residual semantic-reader audit before
+  WP3 invalidation closure. See `results/wp3-exception-stack-identities.md`.
   Commit `50cc926d` then migrates store-backed counted-loop promotion from
   `local_`/`stack_` spelling to producer-owned stack identity. Opaque owned
   induction objects promote; misleading `local_i` spelling without ownership

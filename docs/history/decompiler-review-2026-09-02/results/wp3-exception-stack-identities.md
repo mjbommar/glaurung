@@ -43,3 +43,44 @@ The regenerated census records 5,139 declared Rust tests and zero outside
 every gate. No broad Rust/Python suite, fixture matrix, DecBench, or Joern lane
 ran. This proves the exception-recovery identity boundary and its established
 real regression cell, not all C++ exception ABIs or architectures.
+
+## Internal authority closure
+
+Follow-on commit `54245e36` removes the remaining optional-identity engine from
+integer exception recovery. Non-test builds can now construct only
+`ExceptionAuthority::Exact(&ValueIdentities)`; the three raw adapters and their
+promoted-local spelling authority compile only for legacy unit tests. RTTI
+address propagation and final throw-value recovery therefore cannot silently
+fall back to `local_*` or `stack_*` spelling in shipped code.
+
+Focused evidence:
+
+```text
+cargo test --features python-ext ir::exception_recover::tests:: --lib -- --test-threads=1
+13 passed; 0 failed; 4833 filtered out
+
+cargo check --features python-ext
+exit 0
+
+uv run maturin develop
+exit 0
+
+uv run python tools/build_guard.py
+fresh
+```
+
+The required post-commit Python gate ran once with fail-fast. It passed the
+former ARM Thumb and hard-float blockers and stopped at the independently known
+committed-baseline disagreement at 17%:
+
+```text
+uv run pytest -q python/tests/ -x
+FAILED test_decompiler_arch_roundtrip.py::test_the_committed_baseline_is_valid_and_has_a_clean_control_lane
+```
+
+That disagreement is the already-recorded x86-64 control verdict mismatch for
+fixtures 157, 172, and 81. Neither baseline was regenerated from the shared
+dirty checkout. No fixture sweep, DecBench, Joern, output, corpus, or timing
+claim accompanies this authority-only follow-on. The exception-recovery
+identity family is now internally closed; wider WP3 invalidation and origin
+work remains.
