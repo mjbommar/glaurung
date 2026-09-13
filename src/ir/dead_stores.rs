@@ -29,6 +29,7 @@ use crate::ir::call_args::CallConv;
 use crate::ir::types::{BinOp, VReg};
 
 /// Run dead-store elimination for the given calling convention.
+#[cfg(test)]
 pub fn eliminate_dead_stores(f: &mut Function, cc: CallConv) {
     let ret_regs = return_reg_aliases(cc);
     eliminate_body(&mut f.body, &ret_regs);
@@ -493,6 +494,7 @@ fn drop_unread_abi_zeros(body: &mut Vec<Stmt>) {
 /// cannot discard a computation. [`eliminate_dead_stores`] cannot make this
 /// call itself — it walks forward and stops at the first nested `If`, and these
 /// stores sit above all of a function's control flow.
+#[cfg(test)]
 pub fn prune_callee_saved_spills(f: &mut Function, cc: CallConv) {
     prune_callee_saved_spills_with_scope(f, cc, false, None);
 }
@@ -512,6 +514,7 @@ pub fn prune_callee_saved_spills_with_identities(
 /// must supply the same producer-owned storage and entry-value evidence used by
 /// the top-level pass; register-looking nested assignments are not sufficient
 /// global provenance.
+#[cfg(test)]
 pub fn prune_callee_saved_spills_nested(f: &mut Function, cc: CallConv) {
     prune_callee_saved_spills_with_scope(f, cc, true, None);
 }

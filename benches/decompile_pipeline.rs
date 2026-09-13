@@ -268,10 +268,10 @@ fn run_context_free_ast_passes(
     if matches!(cc, CallConv::SysVAmd64 | CallConv::Win64) {
         glaurung::ir::x86_prologue::recognise_x86_prologue_with_identities(f, value_identities);
     }
-    glaurung::ir::dead_stores::prune_callee_saved_spills(f, cc);
+    glaurung::ir::dead_stores::prune_callee_saved_spills_with_identities(f, cc, value_identities);
     glaurung::ir::value_split::split_argument_storage_reuse(f, cc, false);
     glaurung::ir::canary::collapse_canary_save(f);
-    glaurung::ir::dead_stores::eliminate_dead_stores(f, cc);
+    glaurung::ir::dead_stores::eliminate_dead_stores_with_identities(f, cc, value_identities);
     glaurung::ir::stack_idiom::rematerialise_stack_ops(f);
     glaurung::ir::label_prune::prune_unreferenced_labels(f);
     let roles = glaurung::ir::naming::role_names_with_identities(

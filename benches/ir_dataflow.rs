@@ -285,12 +285,18 @@ fn ast_passes() -> Vec<AstPass> {
         ("stack_locals::promote_stack_locals_typed", |f, cc, _, _| {
             let _ = stack_locals::promote_stack_locals_typed(f, Some(cc));
         }),
-        ("dead_stores::eliminate_dead_stores", |f, cc, _, _| {
-            dead_stores::eliminate_dead_stores(f, cc)
-        }),
-        ("dead_stores::prune_callee_saved_spills", |f, cc, _, _| {
-            dead_stores::prune_callee_saved_spills(f, cc)
-        }),
+        (
+            "dead_stores::eliminate_dead_stores",
+            |f, cc, _, identities| {
+                dead_stores::eliminate_dead_stores_with_identities(f, cc, identities)
+            },
+        ),
+        (
+            "dead_stores::prune_callee_saved_spills",
+            |f, cc, _, identities| {
+                dead_stores::prune_callee_saved_spills_with_identities(f, cc, identities)
+            },
+        ),
     ]
 }
 

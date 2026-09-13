@@ -86,7 +86,7 @@ fn main() {
     let _ = render(&role_named_render_view(&f, &roles));
     // Also: apply dead_stores + label_prune like the full pipeline, then
     // see if the shape got lost.
-    dead_stores::eliminate_dead_stores(&mut f, cc);
+    dead_stores::eliminate_dead_stores_with_identities(&mut f, cc, &identities);
     println!("\n=== After dead_stores ===");
     for (i, s) in f.body.iter().enumerate() {
         let text = format!("{:?}", s);
