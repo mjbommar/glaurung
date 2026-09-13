@@ -11,7 +11,9 @@ use std::collections::{HashMap, HashSet};
 use crate::ir::types::{LlirFunction, Op, VReg, Value};
 use crate::ir::use_def::{def_ref, def_uses, for_each_def, for_each_use, InstrAddr};
 
-use super::architectural_reads::architecturally_read_names;
+use super::architectural_reads::{
+    architecturally_read_names, architecturally_read_names_with_identities,
+};
 use super::vreg_walk::for_each_vreg_mut;
 
 /// A source variable's authoritative residence in one machine register.
@@ -348,7 +350,10 @@ fn consumed_live_ins_before_phi_copy(
     identities: Option<&super::ValueIdentities>,
 ) -> HashSet<VReg> {
     let copy_pairs: HashSet<(VReg, VReg)> = copies.iter().cloned().collect();
-    let architecturally_read = architecturally_read_names(out, identities);
+    let architecturally_read = match identities {
+        Some(identities) => architecturally_read_names_with_identities(out, identities),
+        None => architecturally_read_names(out),
+    };
     let definitions: HashSet<VReg> = out
         .blocks
         .iter()

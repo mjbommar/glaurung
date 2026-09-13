@@ -11,21 +11,15 @@ use crate::ir::use_def::{
     def_ref, for_each_use, use_is_proven_input, use_is_proven_input_with_identities, InstrAddr,
 };
 
-use super::architectural_reads::{architecturally_read_names, phi_copy_operands};
+use super::architectural_reads::{
+    architecturally_read_names, architecturally_read_names_with_identities, phi_copy_operands,
+    phi_copy_operands_with_identities,
+};
 
 #[derive(Clone, Copy)]
 enum ParameterIdentityAuthority<'a> {
     Exact(&'a super::ValueIdentities),
     PlainLlir,
-}
-
-impl<'a> ParameterIdentityAuthority<'a> {
-    fn identities(self) -> Option<&'a super::ValueIdentities> {
-        match self {
-            Self::Exact(identities) => Some(identities),
-            Self::PlainLlir => None,
-        }
-    }
 }
 
 /// Argument-passing registers in positional order (with width sub-names) per `cc`.
@@ -76,12 +70,22 @@ fn live_in_arg_slots_llir_impl(
     // phi copy launders the call may-uses this scan already refuses to trust:
     // the copy is an ordinary `Assign`, so the `Op::Call` guard below never sees
     // it, and its source is the bare (version-zero) live-in name.
-    let really_read = architecturally_read_names(lf, authority.identities());
-    let alignment_padding = crate::ir::arm_input_evidence::ArmAlignmentPadding::classify(
-        lf,
-        cc,
-        authority.identities(),
-    );
+    let really_read = match authority {
+        ParameterIdentityAuthority::Exact(identities) => {
+            architecturally_read_names_with_identities(lf, identities)
+        }
+        ParameterIdentityAuthority::PlainLlir => architecturally_read_names(lf),
+    };
+    let alignment_padding = match authority {
+        ParameterIdentityAuthority::Exact(identities) => {
+            crate::ir::arm_input_evidence::ArmAlignmentPadding::classify_with_identities(
+                lf, cc, identities,
+            )
+        }
+        ParameterIdentityAuthority::PlainLlir => {
+            crate::ir::arm_input_evidence::ArmAlignmentPadding::classify(lf, cc)
+        }
+    };
     let base_slot = |name: &str| slot_of.get(name.split('#').next().unwrap_or(name)).copied();
     let register_slot = |register: &VReg, require_entry: bool| match authority {
         ParameterIdentityAuthority::Exact(identities) => {
@@ -186,7 +190,13 @@ fn live_in_arg_slots_llir_impl(
                 // phi destination is really read; then the copy's SOURCE is what the
                 // function reads, and the destination is not an architectural
                 // definition of the register at all.
-                if let Some((dst, src)) = phi_copy_operands(&ins.op, authority.identities()) {
+                let phi_copy = match authority {
+                    ParameterIdentityAuthority::Exact(identities) => {
+                        phi_copy_operands_with_identities(&ins.op, identities)
+                    }
+                    ParameterIdentityAuthority::PlainLlir => phi_copy_operands(&ins.op),
+                };
+                if let Some((dst, src)) = phi_copy {
                     if really_read.contains(dst) {
                         // `read_slot`, not `base_slot`: the copy in the ENTRY
                         // predecessor of a loop-header phi reads the bare live-in
@@ -219,14 +229,19 @@ fn live_in_arg_slots_llir_impl(
                     if !proven {
                         return;
                     }
-                    if alignment_padding.excludes_use(
-                        InstrAddr {
-                            block_idx,
-                            instr_idx,
-                        },
-                        u,
-                        authority.identities(),
-                    ) {
+                    let site = InstrAddr {
+                        block_idx,
+                        instr_idx,
+                    };
+                    let excluded = match authority {
+                        ParameterIdentityAuthority::Exact(identities) => {
+                            alignment_padding.excludes_use_with_identities(site, u, identities)
+                        }
+                        ParameterIdentityAuthority::PlainLlir => {
+                            alignment_padding.excludes_use(site, u)
+                        }
+                    };
+                    if excluded {
                         return;
                     }
                     if read_slot(u) == Some(slot) {

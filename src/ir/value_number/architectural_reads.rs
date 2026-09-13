@@ -12,6 +12,12 @@ use std::collections::HashSet;
 use crate::ir::types::{LlirFunction, Op, VReg, Value};
 use crate::ir::use_def::{for_each_use, use_is_proven_input, use_is_proven_input_with_identities};
 
+#[derive(Clone, Copy)]
+enum ArchitecturalReadAuthority<'a> {
+    Exact(&'a super::ValueIdentities),
+    PlainLlir,
+}
+
 /// The `(destination, source)` register names of a phi copy: an `Assign` between
 /// two SSA versions of the *same* physical register.
 ///
@@ -25,9 +31,20 @@ use crate::ir::use_def::{for_each_use, use_is_proven_input, use_is_proven_input_
 ///
 /// Returns `None` on the raw (non-value-numbered) LLIR: without `#version` tags,
 /// equal bases mean equal names, which the `dst != src` guard rejects.
-pub(crate) fn phi_copy_operands<'a>(
+pub(crate) fn phi_copy_operands<'a>(op: &'a Op) -> Option<(&'a str, &'a str)> {
+    phi_copy_operands_impl(op, ArchitecturalReadAuthority::PlainLlir)
+}
+
+pub(crate) fn phi_copy_operands_with_identities<'a>(
     op: &'a Op,
-    identities: Option<&super::ValueIdentities>,
+    identities: &super::ValueIdentities,
+) -> Option<(&'a str, &'a str)> {
+    phi_copy_operands_impl(op, ArchitecturalReadAuthority::Exact(identities))
+}
+
+fn phi_copy_operands_impl<'a>(
+    op: &'a Op,
+    authority: ArchitecturalReadAuthority<'_>,
 ) -> Option<(&'a str, &'a str)> {
     let Op::Assign {
         dst: VReg::Phys(dst),
@@ -40,15 +57,17 @@ pub(crate) fn phi_copy_operands<'a>(
     if dst == src {
         return None;
     }
-    let same_storage = match identities {
-        Some(identities) => {
+    let same_storage = match authority {
+        ArchitecturalReadAuthority::Exact(identities) => {
             let dst_identity = identities.exact(&VReg::phys(dst))?;
             let src_identity = identities.exact(&VReg::phys(src))?;
             let dst_base = dst_identity.canonical_physical_base()?;
             let src_base = src_identity.canonical_physical_base()?;
             dst_base == src_base
         }
-        None => crate::ir::abi::ssa_base(dst) == crate::ir::abi::ssa_base(src),
+        ArchitecturalReadAuthority::PlainLlir => {
+            crate::ir::abi::ssa_base(dst) == crate::ir::abi::ssa_base(src)
+        }
     };
     same_storage.then_some((dst, src))
 }
@@ -67,15 +86,26 @@ pub(crate) fn phi_copy_operands<'a>(
 /// liveness fixpoint of the phi graph — with the difference that that
 /// one (in `insert_phi_copies`) deliberately counts the call may-uses, because an argument register a
 /// callee might read must stay defined.
-pub(crate) fn architecturally_read_names(
+pub(crate) fn architecturally_read_names(lf: &LlirFunction) -> HashSet<String> {
+    architecturally_read_names_impl(lf, ArchitecturalReadAuthority::PlainLlir)
+}
+
+pub(crate) fn architecturally_read_names_with_identities(
     lf: &LlirFunction,
-    identities: Option<&super::ValueIdentities>,
+    identities: &super::ValueIdentities,
+) -> HashSet<String> {
+    architecturally_read_names_impl(lf, ArchitecturalReadAuthority::Exact(identities))
+}
+
+fn architecturally_read_names_impl(
+    lf: &LlirFunction,
+    authority: ArchitecturalReadAuthority<'_>,
 ) -> HashSet<String> {
     let mut read: HashSet<String> = HashSet::new();
     let mut phi_copies: Vec<(&str, &str)> = Vec::new();
     for block in &lf.blocks {
         for ins in &block.instrs {
-            if let Some(pair) = phi_copy_operands(&ins.op, identities) {
+            if let Some(pair) = phi_copy_operands_impl(&ins.op, authority) {
                 phi_copies.push(pair);
                 continue;
             }
@@ -86,10 +116,12 @@ pub(crate) fn architecturally_read_names(
             for_each_use(&ins.op, |used| {
                 let index = use_index;
                 use_index += 1;
-                let proven = identities.map_or_else(
-                    || use_is_proven_input(&ins.op, index),
-                    |identities| use_is_proven_input_with_identities(&ins.op, index, identities),
-                );
+                let proven = match authority {
+                    ArchitecturalReadAuthority::Exact(identities) => {
+                        use_is_proven_input_with_identities(&ins.op, index, identities)
+                    }
+                    ArchitecturalReadAuthority::PlainLlir => use_is_proven_input(&ins.op, index),
+                };
                 if !proven {
                     return;
                 }

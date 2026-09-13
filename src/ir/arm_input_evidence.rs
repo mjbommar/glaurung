@@ -11,6 +11,12 @@ use crate::ir::types::{LlirFunction, MemOp, Op, VReg, Value};
 use crate::ir::use_def::{def_uses, InstrAddr};
 use crate::ir::value_number::ValueIdentities;
 
+#[derive(Clone, Copy)]
+enum ArmInputAuthority<'a> {
+    Exact(&'a ValueIdentities),
+    PlainLlir,
+}
+
 /// Proven LLIR operands that are stack-alignment padding, not source inputs.
 #[derive(Debug, Default)]
 pub(crate) struct ArmAlignmentPadding {
@@ -19,10 +25,22 @@ pub(crate) struct ArmAlignmentPadding {
 
 impl ArmAlignmentPadding {
     /// Recognize balanced caller-saved padding in `function`.
-    pub(crate) fn classify(
+    pub(crate) fn classify(function: &LlirFunction, convention: CallConv) -> Self {
+        Self::classify_impl(function, convention, ArmInputAuthority::PlainLlir)
+    }
+
+    pub(crate) fn classify_with_identities(
         function: &LlirFunction,
         convention: CallConv,
-        identities: Option<&ValueIdentities>,
+        identities: &ValueIdentities,
+    ) -> Self {
+        Self::classify_impl(function, convention, ArmInputAuthority::Exact(identities))
+    }
+
+    fn classify_impl(
+        function: &LlirFunction,
+        convention: CallConv,
+        authority: ArmInputAuthority<'_>,
     ) -> Self {
         if !matches!(convention, CallConv::Arm | CallConv::ArmHardFloat) {
             return Self::default();
@@ -38,8 +56,8 @@ impl ArmAlignmentPadding {
                 else {
                     continue;
                 };
-                if !has_base(saved_register, "r3", identities)
-                    || !is_word_stack_slot(saved_slot, identities)
+                if !has_base(saved_register, "r3", authority)
+                    || !is_word_stack_slot(saved_slot, authority)
                     || saved_slot.index.is_some()
                 {
                     continue;
@@ -56,8 +74,8 @@ impl ArmAlignmentPadding {
                     else {
                         return false;
                     };
-                    (has_base(register, "lr", identities) || has_base(register, "r14", identities))
-                        && same_stack_base(addr, saved_slot, identities)
+                    (has_base(register, "lr", authority) || has_base(register, "r14", authority))
+                        && same_stack_base(addr, saved_slot, authority)
                         && same_access_shape(addr, saved_slot)
                         && (addr.disp - saved_slot.disp).abs() == i64::from(saved_slot.size)
                 });
@@ -70,8 +88,8 @@ impl ArmAlignmentPadding {
                     .position(|candidate| {
                         matches!(&candidate.op,
                             Op::Load { dst, addr }
-                                if has_base(dst, "r3", identities)
-                                    && same_stack_slot(addr, saved_slot, identities))
+                                if has_base(dst, "r3", authority)
+                                    && same_stack_slot(addr, saved_slot, authority))
                     })
                     .map(|offset| store_idx + 1 + offset)
                 else {
@@ -101,7 +119,7 @@ impl ArmAlignmentPadding {
                         let (_, uses) = def_uses(&candidate.op);
                         !uses
                             .iter()
-                            .any(|register| has_base(register, "r3", identities))
+                            .any(|register| has_base(register, "r3", authority))
                     });
                 if returns_without_observing_r3 {
                     save_sites.insert(InstrAddr {
@@ -115,13 +133,26 @@ impl ArmAlignmentPadding {
     }
 
     /// Whether this exact use is the caller-saved padding operand.
-    pub(crate) fn excludes_use(
+    pub(crate) fn excludes_use(&self, site: InstrAddr, register: &VReg) -> bool {
+        self.excludes_use_impl(site, register, ArmInputAuthority::PlainLlir)
+    }
+
+    pub(crate) fn excludes_use_with_identities(
         &self,
         site: InstrAddr,
         register: &VReg,
-        identities: Option<&ValueIdentities>,
+        identities: &ValueIdentities,
     ) -> bool {
-        self.save_sites.contains(&site) && has_base(register, "r3", identities)
+        self.excludes_use_impl(site, register, ArmInputAuthority::Exact(identities))
+    }
+
+    fn excludes_use_impl(
+        &self,
+        site: InstrAddr,
+        register: &VReg,
+        authority: ArmInputAuthority<'_>,
+    ) -> bool {
+        self.save_sites.contains(&site) && has_base(register, "r3", authority)
     }
 }
 
@@ -129,26 +160,33 @@ fn is_unconditional_return(operation: &Op) -> bool {
     matches!(operation, Op::Return | Op::ReturnValue { .. })
 }
 
-fn has_base(register: &VReg, expected: &str, identities: Option<&ValueIdentities>) -> bool {
-    crate::ir::call_args::register_is_storage(register, expected, identities)
+fn has_base(register: &VReg, expected: &str, authority: ArmInputAuthority<'_>) -> bool {
+    match authority {
+        ArmInputAuthority::Exact(identities) => {
+            crate::ir::call_args::register_is_storage(register, expected, Some(identities))
+        }
+        ArmInputAuthority::PlainLlir => {
+            crate::ir::call_args::register_is_storage(register, expected, None)
+        }
+    }
 }
 
-fn is_word_stack_slot(access: &MemOp, identities: Option<&ValueIdentities>) -> bool {
+fn is_word_stack_slot(access: &MemOp, authority: ArmInputAuthority<'_>) -> bool {
     access.size == 4
         && matches!(&access.base, Some(base)
-            if has_base(base, "sp", identities) || has_base(base, "r13", identities))
+            if has_base(base, "sp", authority) || has_base(base, "r13", authority))
 }
 
-fn same_stack_base(left: &MemOp, right: &MemOp, identities: Option<&ValueIdentities>) -> bool {
-    is_word_stack_slot(left, identities)
-        && is_word_stack_slot(right, identities)
+fn same_stack_base(left: &MemOp, right: &MemOp, authority: ArmInputAuthority<'_>) -> bool {
+    is_word_stack_slot(left, authority)
+        && is_word_stack_slot(right, authority)
         && left
             .base
             .as_ref()
             .zip(right.base.as_ref())
             .is_some_and(|(left, right)| {
                 ["sp", "r13"].into_iter().any(|storage| {
-                    has_base(left, storage, identities) && has_base(right, storage, identities)
+                    has_base(left, storage, authority) && has_base(right, storage, authority)
                 })
             })
 }
@@ -161,8 +199,8 @@ fn same_access_shape(left: &MemOp, right: &MemOp) -> bool {
         && left.endian == right.endian
 }
 
-fn same_stack_slot(left: &MemOp, right: &MemOp, identities: Option<&ValueIdentities>) -> bool {
-    same_stack_base(left, right, identities)
+fn same_stack_slot(left: &MemOp, right: &MemOp, authority: ArmInputAuthority<'_>) -> bool {
+    same_stack_base(left, right, authority)
         && same_access_shape(left, right)
         && left.disp == right.disp
 }
