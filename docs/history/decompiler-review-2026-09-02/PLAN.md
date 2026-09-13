@@ -3062,6 +3062,16 @@ provenance through lowering.
   disagreement. No fixture matrix or corpus sweep ran. The tail-call identity
   slice is complete; continue the residual production semantic-reader and
   invalidation audit. See `results/wp3-tail-call-apis-require-identities.md`.
+  Commit `4631b33d` then makes call-result attribution's two legitimate input
+  modes explicit. Value-numbered production input selects exact identities;
+  deliberately unnumbered plain LLIR selects a separate plain-mode API. The
+  adjacent call-folding reader no longer forwards an optional identity state
+  across that boundary. All 3 direct attribution tests and all 132 owning
+  call-argument tests pass, as does the production build check; the extension
+  is fresh. The required Python fail-fast gate reached the same established
+  baseline-ledger disagreement first at 17%. Continue the residual semantic
+  reader and invalidation audit. See
+  `results/wp3-call-result-attribution-authority.md`.
   Commit `c3780881` closes the adjacent benchmark and diagnostic stack-frame
   boundary. The composed decompile benchmark, dataflow benchmark, and AArch64
   prologue diagnostic now retain the authoritative identity snapshot through
