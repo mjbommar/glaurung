@@ -3112,6 +3112,16 @@ provenance through lowering.
   authority/API closure rather than an output claim. Continue the residual
   optional-engine audit before WP3 invalidation closure. See
   `results/wp3-aggregate-return-internal-authority.md`.
+  Commit `5389ca0a` closes the guarded-switch cleanup authority seam. Both
+  shipped untyped and typed entry points now require `ValueIdentities`; the
+  spelling-only entry points and legacy promoted-local authority are test-only.
+  This prevents an unowned `local_*` spelling from turning a pointer store into
+  a switch-discriminator copy while preserving the existing exact production
+  path. All 20 owning tests and the non-test library check pass. A fresh native
+  build passes its guard, and the required fail-fast Python gate again reaches
+  the independent committed-baseline inconsistency at 17% with no earlier
+  failure. This is an authority/API closure supporting WP5, not a new output
+  claim. See `results/wp3-guarded-switch-identity-authority.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
