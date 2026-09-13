@@ -2824,6 +2824,15 @@ provenance through lowering.
   closes another semantic display-name reader but not the remaining WP3 audit
   or `tag_phys` removal. See
   `results/wp3-temporary-declaration-required-identities.md`.
+  Commit `b1bce1a1` applies the same rule to declaration planning. With a
+  pipeline-owned sidecar, recovered pointer, integer, width, and local
+  declaration facts require a typed parameter role, promoted stack object, or
+  unambiguous physical-storage identity; `varN` spelling is compatibility-only.
+  The observed-red contract, eight owning declaration-plan tests, 86 adjacent
+  renderer tests, and all six periodic release-built x86-64/AArch64/ARMv7 O0/O2
+  Hello cells pass. This closes another renderer-facing semantic reader but not
+  the remaining WP3 audit or `tag_phys` removal. See
+  `results/wp3-declaration-plan-required-identities.md`.
   Commit `3e302824`
   removes an `argN` spelling decision from
   DWARF aggregate-field recovery: only roles seeded from the authoritative
