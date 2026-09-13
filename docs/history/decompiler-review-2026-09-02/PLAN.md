@@ -2843,6 +2843,17 @@ provenance through lowering.
   through the remaining typed simplification, widening, and copy-propagation
   compatibility surfaces before removing `tag_phys`. See
   `results/wp3-typed-constant-fold-required-identities.md`.
+  Commit `76cf5679` deletes the identity-free entry points for consumed
+  machine-extension simplification and contextual widening. Both recursive
+  typed traversals require `ValueIdentities`; promoted-store eligibility is
+  producer-owned, declaration widths use the same sidecar, and target machine
+  width remains explicit. Legacy tests now declare parameter, promoted-object,
+  and generated-value identities instead of relying on `argN`, `local_`, or
+  `varN` spelling. All seven typed-simplify, 25 widening, 82 adjacent constant-
+  fold, and 86 renderer tests pass, as do all four release-built `@widths`
+  lanes. Continue with early copy propagation and the other classified pre-
+  sidecar compatibility paths before removing `tag_phys`. See
+  `results/wp3-typed-widening-required-identities.md`.
   Commit `3e302824`
   removes an `argN` spelling decision from
   DWARF aggregate-field recovery: only roles seeded from the authoritative
