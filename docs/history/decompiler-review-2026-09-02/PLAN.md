@@ -2910,6 +2910,15 @@ provenance through lowering.
   classifying the explicit compatibility lowerer and the remaining unused
   spelling-only helpers. See
   `results/wp3-typed-lowering-return-folds.md`.
+  Commit `feb3a9ab` completes the first resulting helper classification. Bare
+  direct-output materialization, unread-promoted-local pruning, void result-
+  restore pruning, and redundant constant-return cleanup are now test-only;
+  every shipped preparation branch already uses the corresponding
+  `ValueIdentities` form. Their 42 direct unit contracts remain green, while a
+  non-test library check no longer reports the four helpers as dead shipped
+  code. The identity-free public `lower` compatibility entry point remains a
+  separate audited boundary with example, integration-test, and diagnostic
+  callers. See `results/wp3-spelling-output-helpers-test-only.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
