@@ -2854,6 +2854,18 @@ provenance through lowering.
   lanes. Continue with early copy propagation and the other classified pre-
   sidecar compatibility paths before removing `tag_phys`. See
   `results/wp3-typed-widening-required-identities.md`.
+  Commit `67a0de6f` then separates verified structure-v2 tree recovery from
+  legacy diagnostic pseudocode rendering. Both production consumers now use a
+  tree-only observation that preserves the complete candidate/tree/refusal and
+  graph-fidelity report without running identity-free AST preparation as a
+  side effect. The selected tree still enters the common production lowerer
+  after value numbering, where the authoritative identity sidecar exists. The
+  explicit public diagnostic observer retains compatibility text for review
+  evidence. The observed-red missing-API contract, all 30 structure-v2 tests,
+  the feature-gated tree-only contract, and the real wide-switch production
+  handoff pass. Continue by classifying the remaining early no-sidecar
+  copy/constant preparation entry points before removing `tag_phys`. See
+  `results/wp3-structure-v2-tree-only-observation.md`.
   Commit `3e302824`
   removes an `argN` spelling decision from
   DWARF aggregate-field recovery: only roles seeded from the authoritative
