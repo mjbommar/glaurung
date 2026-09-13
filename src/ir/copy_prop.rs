@@ -54,16 +54,22 @@ mod scratch_liveness;
 mod subst;
 mod switch_entry;
 
+#[cfg(test)]
 pub use adjacent::{
-    move_adjacent_effectful_scratch_values, move_adjacent_effectful_scratch_values_with_identities,
-    propagate_adjacent_guard_values, propagate_adjacent_guard_values_with_identities,
-    propagate_adjacent_overwritten_values, propagate_adjacent_overwritten_values_with_identities,
-    propagate_adjacent_promoted_values, propagate_adjacent_typed_promoted_values,
+    move_adjacent_effectful_scratch_values, propagate_adjacent_guard_values,
+    propagate_adjacent_overwritten_values, propagate_adjacent_promoted_values,
+    propagate_adjacent_typed_promoted_values,
+};
+pub use adjacent::{
+    move_adjacent_effectful_scratch_values_with_identities,
+    propagate_adjacent_guard_values_with_identities,
+    propagate_adjacent_overwritten_values_with_identities,
+    propagate_adjacent_promoted_values_with_identities,
     propagate_adjacent_typed_promoted_values_with_identities,
 };
-pub use switch_entry::{
-    propagate_switch_entry_copies, propagate_switch_entry_copies_with_identities,
-};
+#[cfg(test)]
+pub use switch_entry::propagate_switch_entry_copies;
+pub use switch_entry::propagate_switch_entry_copies_with_identities;
 
 use alias::{invalidate_loads, invalidate_loads_for_store, is_scratch_reg};
 use dead::{dead_store_runs, eliminate_dead_copies};
@@ -72,17 +78,47 @@ use env::{
     is_self_ref, Copies,
 };
 use hash::RegMap;
-use reads::{count_reads_body, count_reads_body_with_identities};
+#[cfg(test)]
+use reads::count_reads_body;
+use reads::count_reads_body_with_identities;
 use scratch_liveness::prune_unobservable_scratch_dataflow;
 use subst::{subst, subst_store_addr};
+
+#[derive(Clone, Copy)]
+pub(super) enum IdentityAuthority<'a> {
+    Exact(&'a crate::ir::value_number::ValueIdentities),
+    #[cfg(test)]
+    LegacySpelling,
+}
+
+impl<'a> IdentityAuthority<'a> {
+    pub(super) fn is_promoted_stack_object(self, value: &crate::ir::types::VReg) -> bool {
+        match self {
+            Self::Exact(identities) => identities.is_promoted_stack_object(value),
+            #[cfg(test)]
+            Self::LegacySpelling => crate::ir::types::is_promoted_local_reg(value),
+        }
+    }
+}
 
 /// Exact whole-function read count for one structured value identity.
 ///
 /// Exposed to effect-moving passes so they can prove a call result has one
 /// consumer without duplicating this module's complete statement/expr walk.
+#[cfg(test)]
 pub(crate) fn register_read_count(function: &Function, target: &crate::ir::types::VReg) -> usize {
     let mut reads: RegMap<usize> = RegMap::default();
     count_reads_body(&function.body, &mut reads);
+    reads.get(target).copied().unwrap_or(0)
+}
+
+pub(crate) fn register_read_count_with_identities(
+    function: &Function,
+    target: &crate::ir::types::VReg,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> usize {
+    let mut reads: RegMap<usize> = RegMap::default();
+    count_reads_body_with_identities(&function.body, &mut reads, identities);
     reads.get(target).copied().unwrap_or(0)
 }
 
@@ -110,7 +146,7 @@ pub(crate) fn register_read_count(function: &Function, target: &crate::ir::types
 /// to prove that the value it wrote differs from the value it replaced.
 #[cfg(test)]
 pub(crate) fn propagate_copies(f: &mut Function) -> bool {
-    propagate_copies_impl(f, None)
+    propagate_copies_impl(f, IdentityAuthority::LegacySpelling)
 }
 
 /// Run copy propagation with pipeline-owned promoted-storage identity.
@@ -118,13 +154,10 @@ pub fn propagate_copies_with_identities(
     f: &mut Function,
     identities: &crate::ir::value_number::ValueIdentities,
 ) -> bool {
-    propagate_copies_impl(f, Some(identities))
+    propagate_copies_impl(f, IdentityAuthority::Exact(identities))
 }
 
-fn propagate_copies_impl(
-    f: &mut Function,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) -> bool {
+fn propagate_copies_impl(f: &mut Function, identities: IdentityAuthority<'_>) -> bool {
     #[cfg(debug_assertions)]
     let before = f.clone();
     // Global read counts. With SSA value-numbering upstream every scratch value
@@ -141,8 +174,11 @@ fn propagate_copies_impl(
     let mut changed = false;
     let mut reads: RegMap<usize> = RegMap::default();
     match identities {
-        Some(identities) => count_reads_body_with_identities(&f.body, &mut reads, identities),
-        None => count_reads_body(&f.body, &mut reads),
+        IdentityAuthority::Exact(exact) => {
+            count_reads_body_with_identities(&f.body, &mut reads, exact)
+        }
+        #[cfg(test)]
+        IdentityAuthority::LegacySpelling => count_reads_body(&f.body, &mut reads),
     }
     propagate_run_counted(&mut f.body, &reads, &mut changed, identities);
     propagate_run(&mut f.body, &mut changed, identities);
@@ -153,8 +189,11 @@ fn propagate_copies_impl(
         changed = true;
         let mut reads: RegMap<usize> = RegMap::default();
         match identities {
-            Some(identities) => count_reads_body_with_identities(&f.body, &mut reads, identities),
-            None => count_reads_body(&f.body, &mut reads),
+            IdentityAuthority::Exact(exact) => {
+                count_reads_body_with_identities(&f.body, &mut reads, exact)
+            }
+            #[cfg(test)]
+            IdentityAuthority::LegacySpelling => count_reads_body(&f.body, &mut reads),
         }
         propagate_run_counted(&mut f.body, &reads, &mut changed, identities);
     }
@@ -204,7 +243,7 @@ fn is_exact_return_guard(then_body: &[Stmt], else_body: &Option<Vec<Stmt>>) -> b
 fn propagate_run(
     stmts: &mut [Stmt],
     changed: &mut bool,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
 ) -> Copies {
     let mut copies = Copies::new();
     for s in stmts.iter_mut() {
@@ -331,7 +370,7 @@ fn propagate_run_counted(
     stmts: &mut [Stmt],
     reads: &RegMap<usize>,
     changed: &mut bool,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
 ) -> Copies {
     let mut copies = Copies::new();
     for s in stmts.iter_mut() {

@@ -488,9 +488,10 @@ fn decbench_text_with_installed_environment(
     // broadening Store interpretation. The pass proves whole-function single
     // use and moves rather than copies the call.
     pass!("fold_late_adjacent_single_use_call_results", {
-        crate::ir::lazy_call_select::fold_adjacent_single_use_call_results(
+        crate::ir::lazy_call_select::fold_adjacent_single_use_call_results_with_identities(
             &mut prepared,
             calling_convention_pointer_width(cc),
+            &value_identities,
         )
     });
     pass!("apply_authoritative_local_names", {

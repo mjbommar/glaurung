@@ -25,8 +25,9 @@
 //! *writes*, and must not be counted as reads.
 
 use super::hash::RegMap;
+use super::IdentityAuthority;
 use crate::ir::ast::{Expr, Stmt};
-use crate::ir::types::{is_promoted_local_reg, VReg};
+use crate::ir::types::VReg;
 
 /// Visit every register `e` READS, in source order.
 ///
@@ -99,8 +100,9 @@ pub(super) fn visit_expr_reads<F: FnMut(&VReg) -> bool>(e: &Expr, visit: &mut F)
 }
 
 /// [`visit_expr_reads`] over one statement, including any nested body.
+#[cfg(test)]
 pub(super) fn visit_stmt_reads<F: FnMut(&VReg) -> bool>(s: &Stmt, visit: &mut F) -> bool {
-    visit_stmt_reads_impl(s, visit, None)
+    visit_stmt_reads_impl(s, visit, IdentityAuthority::LegacySpelling)
 }
 
 pub(super) fn visit_stmt_reads_with_identities<F: FnMut(&VReg) -> bool>(
@@ -108,13 +110,13 @@ pub(super) fn visit_stmt_reads_with_identities<F: FnMut(&VReg) -> bool>(
     visit: &mut F,
     identities: &crate::ir::value_number::ValueIdentities,
 ) -> bool {
-    visit_stmt_reads_impl(s, visit, Some(identities))
+    visit_stmt_reads_impl(s, visit, IdentityAuthority::Exact(identities))
 }
 
 fn visit_stmt_reads_impl<F: FnMut(&VReg) -> bool>(
     s: &Stmt,
     visit: &mut F,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
 ) -> bool {
     match s {
         Stmt::Origin { stmt, .. } => visit_stmt_reads_impl(stmt, visit, identities),
@@ -124,12 +126,7 @@ fn visit_stmt_reads_impl<F: FnMut(&VReg) -> bool>(
         Stmt::Store { addr, src, .. } => {
             // `Store local_x = value` is how promoted scalar assignment is
             // encoded. Its bare local is a destination, not a pointer read.
-            let promoted = |value: &VReg| {
-                identities.map_or_else(
-                    || is_promoted_local_reg(value),
-                    |identities| identities.is_promoted_stack_object(value),
-                )
-            };
+            let promoted = |value: &VReg| identities.is_promoted_stack_object(value);
             if !matches!(addr.semantic(), Expr::Reg(dst) if promoted(dst))
                 && !visit_expr_reads(addr, visit)
             {
@@ -227,14 +224,15 @@ fn visit_stmt_reads_impl<F: FnMut(&VReg) -> bool>(
 }
 
 /// [`visit_stmt_reads`] over a statement list.
+#[cfg(test)]
 pub(super) fn visit_body_reads<F: FnMut(&VReg) -> bool>(body: &[Stmt], visit: &mut F) -> bool {
-    visit_body_reads_impl(body, visit, None)
+    visit_body_reads_impl(body, visit, IdentityAuthority::LegacySpelling)
 }
 
 fn visit_body_reads_impl<F: FnMut(&VReg) -> bool>(
     body: &[Stmt],
     visit: &mut F,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
 ) -> bool {
     for s in body {
         if !visit_stmt_reads_impl(s, visit, identities) {
@@ -280,6 +278,7 @@ pub(super) fn expr_reads_reg(e: &Expr, target: &VReg) -> bool {
     found
 }
 
+#[cfg(test)]
 pub(super) fn count_reads_stmt(s: &Stmt, reads: &mut RegMap<usize>) {
     visit_stmt_reads(s, &mut |r| {
         bump(reads, r);
@@ -302,6 +301,7 @@ pub(super) fn count_reads_stmt_with_identities(
     );
 }
 
+#[cfg(test)]
 pub(super) fn count_reads_body(body: &[Stmt], reads: &mut RegMap<usize>) {
     visit_body_reads(body, &mut |r| {
         bump(reads, r);
@@ -320,7 +320,7 @@ pub(super) fn count_reads_body_with_identities(
             bump(reads, r);
             true
         },
-        Some(identities),
+        IdentityAuthority::Exact(identities),
     );
 }
 

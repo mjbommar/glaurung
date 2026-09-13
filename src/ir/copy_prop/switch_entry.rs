@@ -22,6 +22,7 @@ use crate::ir::ast::{Function, Stmt};
 use super::dead::eliminate_dead_copies;
 use super::env::{invalidate, is_pure_copyable, is_self_ref, Copies};
 use super::subst::{subst, subst_store_addr};
+use super::IdentityAuthority;
 
 /// Carry a straight-line pure alias into a following structured switch.
 ///
@@ -29,8 +30,9 @@ use super::subst::{subst, subst_store_addr};
 /// compiler range guard has just been removed. It never carries an alias into
 /// or through a loop: a source that looks constant at loop entry may be updated
 /// by the body and therefore is not invariant on later iterations.
+#[cfg(test)]
 pub fn propagate_switch_entry_copies(f: &mut Function) {
-    propagate_switch_entry_copies_impl(f, None);
+    propagate_switch_entry_copies_impl(f, IdentityAuthority::LegacySpelling);
 }
 
 /// Identity-aware production form of [`propagate_switch_entry_copies`].
@@ -38,13 +40,10 @@ pub fn propagate_switch_entry_copies_with_identities(
     f: &mut Function,
     identities: &crate::ir::value_number::ValueIdentities,
 ) {
-    propagate_switch_entry_copies_impl(f, Some(identities));
+    propagate_switch_entry_copies_impl(f, IdentityAuthority::Exact(identities));
 }
 
-fn propagate_switch_entry_copies_impl(
-    f: &mut Function,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) {
+fn propagate_switch_entry_copies_impl(f: &mut Function, identities: IdentityAuthority<'_>) {
     if propagate_switch_entries_in_body(&mut f.body, identities) {
         while eliminate_dead_copies(&mut f.body, identities) {}
     }
@@ -53,10 +52,7 @@ fn propagate_switch_entry_copies_impl(
 /// Find switches in `body` and seed only their arms with aliases established by
 /// the immediately dominating straight-line prefix. Other control flow clears
 /// the environment; nested bodies are searched independently.
-fn propagate_switch_entries_in_body(
-    body: &mut [Stmt],
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) -> bool {
+fn propagate_switch_entries_in_body(body: &mut [Stmt], identities: IdentityAuthority<'_>) -> bool {
     let mut copies = Copies::new();
     let mut changed = false;
     for statement in body {
@@ -121,11 +117,7 @@ fn propagate_switch_entries_in_body(
 /// Apply switch-entry aliases within one arm. Nested branches inherit them,
 /// while every loop is a hard barrier so no entry snapshot is mistaken for a
 /// loop invariant.
-fn propagate_switch_arm(
-    body: &mut [Stmt],
-    incoming: &Copies,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) {
+fn propagate_switch_arm(body: &mut [Stmt], incoming: &Copies, identities: IdentityAuthority<'_>) {
     let mut copies = incoming.clone();
     for statement in body {
         match statement.semantic_mut() {

@@ -23,9 +23,10 @@
 //! does not.
 
 use crate::ir::ast::Expr;
-use crate::ir::types::{is_promoted_local_reg, VReg};
+use crate::ir::types::VReg;
 
 use super::env::Copies;
+use super::IdentityAuthority;
 
 /// Substitute copies in an indirect-store address without changing its lvalue
 /// category into a promoted-local assignment.
@@ -40,14 +41,9 @@ use super::env::Copies;
 pub(super) fn subst_store_addr(
     address: &mut Expr,
     copies: &Copies,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
 ) -> bool {
-    let promoted = |value: &VReg| {
-        identities.map_or_else(
-            || is_promoted_local_reg(value),
-            |identities| identities.is_promoted_stack_object(value),
-        )
-    };
+    let promoted = |value: &VReg| identities.is_promoted_stack_object(value);
     let trivial_lea_register = match address.semantic() {
         Expr::Lea {
             base: Some(register),
@@ -109,7 +105,11 @@ mod tests {
         identities.attach_promoted_stack_objects([&object_name]);
         let mut address = Expr::Reg(scratch.clone());
 
-        assert!(!subst_store_addr(&mut address, &copies, Some(&identities)));
+        assert!(!subst_store_addr(
+            &mut address,
+            &copies,
+            IdentityAuthority::Exact(&identities),
+        ));
         assert_eq!(address, Expr::Reg(scratch));
     }
 
@@ -120,7 +120,11 @@ mod tests {
         let copies = Copies::single(scratch.clone(), Expr::Reg(object));
         let mut address = Expr::Reg(scratch.clone());
 
-        assert!(!subst_store_addr(&mut address, &copies, None));
+        assert!(!subst_store_addr(
+            &mut address,
+            &copies,
+            IdentityAuthority::LegacySpelling,
+        ));
         assert_eq!(address, Expr::Reg(scratch));
     }
 }

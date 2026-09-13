@@ -20,12 +20,31 @@ pub fn collapse_lazy_call_diamonds_with_pointer_width(function: &mut Function, p
 /// This is the straight-line counterpart of the lazy-diamond recovery below.
 /// It moves—never copies—the effectful call, and only after the complete
 /// structured function proves that result identity has exactly one read.
+#[cfg(test)]
 pub fn fold_adjacent_single_use_call_results(function: &mut Function, pointer_width: u8) {
     let mut results = Vec::new();
     collect_call_results(&function.body, &mut results);
     let eligible = results
         .into_iter()
         .filter(|result| crate::ir::copy_prop::register_read_count(function, result) == 1)
+        .collect::<std::collections::HashSet<_>>();
+    fold_adjacent_call_results_in_body(&mut function.body, pointer_width, &eligible);
+}
+
+/// Identity-aware production form of [`fold_adjacent_single_use_call_results`].
+pub fn fold_adjacent_single_use_call_results_with_identities(
+    function: &mut Function,
+    pointer_width: u8,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    let mut results = Vec::new();
+    collect_call_results(&function.body, &mut results);
+    let eligible = results
+        .into_iter()
+        .filter(|result| {
+            crate::ir::copy_prop::register_read_count_with_identities(function, result, identities)
+                == 1
+        })
         .collect::<std::collections::HashSet<_>>();
     fold_adjacent_call_results_in_body(&mut function.body, pointer_width, &eligible);
 }

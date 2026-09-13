@@ -491,7 +491,11 @@ fn adjacent_unique_call_result_moves_into_its_consumer() {
         ],
     };
 
-    fold_adjacent_single_use_call_results(&mut function, 8);
+    fold_adjacent_single_use_call_results_with_identities(
+        &mut function,
+        8,
+        &crate::ir::value_number::ValueIdentities::default(),
+    );
 
     assert_eq!(function.body.len(), 1, "{function:#?}");
     assert!(matches!(

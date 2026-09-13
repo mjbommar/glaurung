@@ -462,7 +462,17 @@ fn prepare_for_decbench_with_authority(
     // an exit guard and blocks exact while/for/select recognition.
     crate::ir::dce::prune_overwritten_flags(&mut owned);
     crate::ir::dce::prune_dead_flags(&mut owned);
-    crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned);
+    match authority {
+        PreparationAuthority::Identities(identities) => {
+            crate::ir::copy_prop::propagate_adjacent_promoted_values_with_identities(
+                &mut owned, identities,
+            )
+        }
+        #[cfg(test)]
+        PreparationAuthority::LegacySpelling => {
+            crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned)
+        }
+    }
     match authority {
         PreparationAuthority::Identities(identities) => {
             crate::ir::copy_prop::propagate_adjacent_guard_values_with_identities(
@@ -503,7 +513,17 @@ fn prepare_for_decbench_with_authority(
     // and the inner alternative is unreachable because the enclosing arm already
     // decided `C`. Dominance, not definedness: the arm being dropped may well be
     // a defined value, it simply cannot be selected.
-    crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned);
+    match authority {
+        PreparationAuthority::Identities(identities) => {
+            crate::ir::copy_prop::propagate_adjacent_promoted_values_with_identities(
+                &mut owned, identities,
+            )
+        }
+        #[cfg(test)]
+        PreparationAuthority::LegacySpelling => {
+            crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned)
+        }
+    }
     match authority {
         PreparationAuthority::Identities(identities) => {
             crate::ir::copy_prop::propagate_adjacent_guard_values_with_identities(
@@ -650,7 +670,22 @@ fn prepare_for_decbench_with_authority(
     // assignment is a source expression, not a standalone temporary. Move the
     // call into that consumer after control flow is final so no transformation
     // can duplicate or reorder the effect.
-    crate::ir::lazy_call_select::fold_adjacent_single_use_call_results(&mut owned, pointer_width);
+    match authority {
+        PreparationAuthority::Identities(identities) => {
+            crate::ir::lazy_call_select::fold_adjacent_single_use_call_results_with_identities(
+                &mut owned,
+                pointer_width,
+                identities,
+            )
+        }
+        #[cfg(test)]
+        PreparationAuthority::LegacySpelling => {
+            crate::ir::lazy_call_select::fold_adjacent_single_use_call_results(
+                &mut owned,
+                pointer_width,
+            )
+        }
+    }
     // Calls are effects even when their ABI result is ignored. Remove only the
     // unused destination identity so source output says `puts("...");` rather
     // than inventing `var0 = puts("...");` and a declaration for `var0`.

@@ -21,21 +21,16 @@ use crate::ir::types::{BinOp, VReg};
 
 use super::env::Copies;
 use super::reads::expr_reads_reg;
+use super::IdentityAuthority;
 
 /// A register we're willing to delete a dead copy to: physical scratch/role
 /// registers, temporaries, and SSA-versioned predicate values, but NOT promoted
 /// stack locals (owned by dead-store elimination) or unversioned architectural
 /// flag names. A poisoned predicate is separately excluded from propagation.
-pub(super) fn is_scratch_reg(
-    v: &VReg,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) -> bool {
+pub(super) fn is_scratch_reg(v: &VReg, identities: IdentityAuthority<'_>) -> bool {
     match v {
         VReg::Temp(_) => true,
-        VReg::Phys(n) => identities.map_or_else(
-            || !n.starts_with("local_") && !n.starts_with("stack_"),
-            |identities| !identities.is_promoted_stack_object(v),
-        ),
+        VReg::Phys(_) => !identities.is_promoted_stack_object(v),
         VReg::FlagValue { .. } => true,
         VReg::Flag(_) => false,
     }

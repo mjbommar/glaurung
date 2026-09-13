@@ -29,7 +29,10 @@ use crate::ir::types::VReg;
 
 use super::alias::is_scratch_reg;
 use super::hash::{RegMap, RegSet};
-use super::reads::{visit_expr_reads, visit_stmt_reads, visit_stmt_reads_with_identities};
+#[cfg(test)]
+use super::reads::visit_stmt_reads;
+use super::reads::{visit_expr_reads, visit_stmt_reads_with_identities};
+use super::IdentityAuthority;
 
 /// Remove closed scratch-value graphs that cannot influence observable output.
 ///
@@ -48,7 +51,7 @@ use super::reads::{visit_expr_reads, visit_stmt_reads, visit_stmt_reads_with_ide
 /// Returns whether any assignment was removed.
 pub(super) fn prune_unobservable_scratch_dataflow(
     f: &mut Function,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
 ) -> bool {
     /// Add every register `expr` reads to `into`.
     ///
@@ -73,7 +76,7 @@ pub(super) fn prune_unobservable_scratch_dataflow(
         dependencies: &mut RegMap<RegSet>,
         roots: &mut RegSet,
         has_unknown: &mut bool,
-        identities: Option<&crate::ir::value_number::ValueIdentities>,
+        identities: IdentityAuthority<'_>,
     ) {
         for statement in body {
             match statement {
@@ -150,11 +153,12 @@ pub(super) fn prune_unobservable_scratch_dataflow(
                         true
                     };
                     match identities {
-                        Some(identities) => {
-                            visit_stmt_reads_with_identities(init, &mut add_root, identities);
-                            visit_stmt_reads_with_identities(step, &mut add_root, identities);
+                        IdentityAuthority::Exact(exact) => {
+                            visit_stmt_reads_with_identities(init, &mut add_root, exact);
+                            visit_stmt_reads_with_identities(step, &mut add_root, exact);
                         }
-                        None => {
+                        #[cfg(test)]
+                        IdentityAuthority::LegacySpelling => {
                             visit_stmt_reads(init, &mut add_root);
                             visit_stmt_reads(step, &mut add_root);
                         }
@@ -196,11 +200,7 @@ pub(super) fn prune_unobservable_scratch_dataflow(
         }
     }
 
-    fn prune_body(
-        body: &mut Vec<Stmt>,
-        live: &RegSet,
-        identities: Option<&crate::ir::value_number::ValueIdentities>,
-    ) -> bool {
+    fn prune_body(body: &mut Vec<Stmt>, live: &RegSet, identities: IdentityAuthority<'_>) -> bool {
         let before = body.len();
         body.retain(|statement| {
             !matches!(statement.semantic(), Stmt::Assign { dst, .. } if is_scratch_reg(dst, identities) && !live.contains(dst))
@@ -330,7 +330,7 @@ mod tests {
             ],
         };
 
-        prune_unobservable_scratch_dataflow(&mut f, None);
+        prune_unobservable_scratch_dataflow(&mut f, IdentityAuthority::LegacySpelling);
 
         let rendered = format!("{f:#?}");
         for dead in ["var15", "var18", "var22", "arg3", "local_28"] {
@@ -373,7 +373,7 @@ mod tests {
             ],
         };
 
-        prune_unobservable_scratch_dataflow(&mut f, None);
+        prune_unobservable_scratch_dataflow(&mut f, IdentityAuthority::LegacySpelling);
 
         let rendered = format!("{f:#?}");
         assert!(

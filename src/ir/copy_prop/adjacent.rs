@@ -38,7 +38,6 @@
 //! statement, changes this file. Changing an invalidation rule does not.
 
 use crate::ir::ast::{Expr, Function, Stmt};
-use crate::ir::types::is_promoted_local_reg;
 use crate::ir::types_recover::{TypeHint, TypeMap};
 
 use super::alias::{
@@ -46,31 +45,33 @@ use super::alias::{
 };
 use super::env::Copies;
 use super::hash::RegMap;
+#[cfg(test)]
+use super::reads::{count_reads_body, count_reads_stmt};
 use super::reads::{
-    count_reads_body, count_reads_body_with_identities, count_reads_stmt,
-    count_reads_stmt_with_identities, count_reg_uses,
+    count_reads_body_with_identities, count_reads_stmt_with_identities, count_reg_uses,
 };
 use super::subst::subst;
+use super::IdentityAuthority;
 
-fn count_body_reads(
-    body: &[Stmt],
-    reads: &mut RegMap<usize>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) {
+fn count_body_reads(body: &[Stmt], reads: &mut RegMap<usize>, identities: IdentityAuthority<'_>) {
     match identities {
-        Some(identities) => count_reads_body_with_identities(body, reads, identities),
-        None => count_reads_body(body, reads),
+        IdentityAuthority::Exact(exact) => count_reads_body_with_identities(body, reads, exact),
+        #[cfg(test)]
+        IdentityAuthority::LegacySpelling => count_reads_body(body, reads),
     }
 }
 
 fn count_statement_reads(
     statement: &Stmt,
     reads: &mut RegMap<usize>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
 ) {
     match identities {
-        Some(identities) => count_reads_stmt_with_identities(statement, reads, identities),
-        None => count_reads_stmt(statement, reads),
+        IdentityAuthority::Exact(exact) => {
+            count_reads_stmt_with_identities(statement, reads, exact)
+        }
+        #[cfg(test)]
+        IdentityAuthority::LegacySpelling => count_reads_stmt(statement, reads),
     }
 }
 
@@ -88,9 +89,26 @@ fn count_statement_reads(
 /// real write through a pointer held in the slot; local adjacency cannot prove
 /// which meaning applies. Ambiguous stores remain explicit until stack storage
 /// carries a distinct assignment representation.
+#[cfg(test)]
 pub fn propagate_adjacent_promoted_values(f: &mut Function) {
     loop {
-        if !fold_one_adjacent_promoted_value(&mut f.body, None, None) {
+        if !fold_one_adjacent_promoted_value(&mut f.body, None, IdentityAuthority::LegacySpelling) {
+            break;
+        }
+    }
+}
+
+/// Identity-aware production form of [`propagate_adjacent_promoted_values`].
+pub fn propagate_adjacent_promoted_values_with_identities(
+    f: &mut Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    loop {
+        if !fold_one_adjacent_promoted_value(
+            &mut f.body,
+            None,
+            IdentityAuthority::Exact(identities),
+        ) {
             break;
         }
     }
@@ -105,9 +123,14 @@ pub fn propagate_adjacent_promoted_values(f: &mut Function) {
 /// classified the rendered local as an integer or boolean, pointer and code-
 /// pointer interpretations are excluded and the same local def/use proof is
 /// safe. Unknown, float, pointer, and code-pointer destinations remain explicit.
+#[cfg(test)]
 pub fn propagate_adjacent_typed_promoted_values(f: &mut Function, types: &TypeMap) {
     loop {
-        if !fold_one_adjacent_promoted_value(&mut f.body, Some(types), None) {
+        if !fold_one_adjacent_promoted_value(
+            &mut f.body,
+            Some(types),
+            IdentityAuthority::LegacySpelling,
+        ) {
             break;
         }
     }
@@ -120,7 +143,11 @@ pub fn propagate_adjacent_typed_promoted_values_with_identities(
     identities: &crate::ir::value_number::ValueIdentities,
 ) {
     loop {
-        if !fold_one_adjacent_promoted_value(&mut f.body, Some(types), Some(identities)) {
+        if !fold_one_adjacent_promoted_value(
+            &mut f.body,
+            Some(types),
+            IdentityAuthority::Exact(identities),
+        ) {
             break;
         }
     }
@@ -139,8 +166,9 @@ pub fn propagate_adjacent_typed_promoted_values_with_identities(
 /// guard definition may also reach a read after the loop. Under these constraints
 /// the expression stays at the same observable evaluation point while the
 /// loop-form pass gets the source-level guard back.
+#[cfg(test)]
 pub fn propagate_adjacent_guard_values(f: &mut Function) {
-    propagate_adjacent_guard_values_impl(f, None);
+    propagate_adjacent_guard_values_impl(f, IdentityAuthority::LegacySpelling);
 }
 
 /// Identity-aware production form of [`propagate_adjacent_guard_values`].
@@ -148,13 +176,10 @@ pub fn propagate_adjacent_guard_values_with_identities(
     f: &mut Function,
     identities: &crate::ir::value_number::ValueIdentities,
 ) {
-    propagate_adjacent_guard_values_impl(f, Some(identities));
+    propagate_adjacent_guard_values_impl(f, IdentityAuthority::Exact(identities));
 }
 
-fn propagate_adjacent_guard_values_impl(
-    f: &mut Function,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) {
+fn propagate_adjacent_guard_values_impl(f: &mut Function, identities: IdentityAuthority<'_>) {
     loop {
         let mut reads = RegMap::default();
         count_body_reads(&f.body, &mut reads, identities);
@@ -172,8 +197,9 @@ fn propagate_adjacent_guard_values_impl(
 /// the second assignment's right-hand side, after which the same destination
 /// is overwritten. Moving a nontrapping, nonselect expression into that RHS is
 /// exact and does not rely on the physical register being globally SSA.
+#[cfg(test)]
 pub fn propagate_adjacent_overwritten_values(function: &mut Function) {
-    propagate_adjacent_overwritten_values_impl(function, None);
+    propagate_adjacent_overwritten_values_impl(function, IdentityAuthority::LegacySpelling);
 }
 
 /// Identity-aware production form of [`propagate_adjacent_overwritten_values`].
@@ -181,12 +207,12 @@ pub fn propagate_adjacent_overwritten_values_with_identities(
     function: &mut Function,
     identities: &crate::ir::value_number::ValueIdentities,
 ) {
-    propagate_adjacent_overwritten_values_impl(function, Some(identities));
+    propagate_adjacent_overwritten_values_impl(function, IdentityAuthority::Exact(identities));
 }
 
 fn propagate_adjacent_overwritten_values_impl(
     function: &mut Function,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
 ) {
     while fold_one_adjacent_overwritten_value(&mut function.body, identities) {}
 }
@@ -200,8 +226,9 @@ fn propagate_adjacent_overwritten_values_impl(
 /// comments separate that direct read from its definition, moving the
 /// expression is exact: its evaluation point crosses no observable statement,
 /// and removing the definition keeps the call count at one.
+#[cfg(test)]
 pub fn move_adjacent_effectful_scratch_values(function: &mut Function) {
-    move_adjacent_effectful_scratch_values_impl(function, None);
+    move_adjacent_effectful_scratch_values_impl(function, IdentityAuthority::LegacySpelling);
 }
 
 /// Identity-aware production form of [`move_adjacent_effectful_scratch_values`].
@@ -209,12 +236,12 @@ pub fn move_adjacent_effectful_scratch_values_with_identities(
     function: &mut Function,
     identities: &crate::ir::value_number::ValueIdentities,
 ) {
-    move_adjacent_effectful_scratch_values_impl(function, Some(identities));
+    move_adjacent_effectful_scratch_values_impl(function, IdentityAuthority::Exact(identities));
 }
 
 fn move_adjacent_effectful_scratch_values_impl(
     function: &mut Function,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
 ) {
     loop {
         let mut reads = RegMap::default();
@@ -228,14 +255,9 @@ fn move_adjacent_effectful_scratch_values_impl(
 fn move_one_adjacent_effectful_scratch_value(
     body: &mut Vec<Stmt>,
     reads: &RegMap<usize>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
 ) -> bool {
-    let promoted = |value: &crate::ir::types::VReg| {
-        identities.map_or_else(
-            || is_promoted_local_reg(value),
-            |identities| identities.is_promoted_stack_object(value),
-        )
-    };
+    let promoted = |value: &crate::ir::types::VReg| identities.is_promoted_stack_object(value);
     for index in 0..body.len().saturating_sub(1) {
         let Some((destination, mut source)) = (match body[index].semantic() {
             Stmt::Assign { dst, src }
@@ -335,7 +357,7 @@ fn move_one_adjacent_effectful_scratch_value(
 
 fn fold_one_adjacent_overwritten_value(
     body: &mut Vec<Stmt>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
 ) -> bool {
     for statement in body.iter_mut() {
         let changed = match statement.semantic_mut() {
@@ -421,7 +443,7 @@ fn fold_one_adjacent_overwritten_value(
 fn fold_one_adjacent_guard_value(
     body: &mut Vec<Stmt>,
     reads: &RegMap<usize>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
 ) -> bool {
     for statement in body.iter_mut() {
         let changed = match statement.semantic_mut() {
@@ -515,14 +537,9 @@ fn fold_one_adjacent_guard_value(
 fn fold_one_adjacent_promoted_value(
     body: &mut Vec<Stmt>,
     types: Option<&TypeMap>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
 ) -> bool {
-    let promoted = |value: &crate::ir::types::VReg| {
-        identities.map_or_else(
-            || is_promoted_local_reg(value),
-            |identities| identities.is_promoted_stack_object(value),
-        )
-    };
+    let promoted = |value: &crate::ir::types::VReg| identities.is_promoted_stack_object(value);
     for index in 0..body.len().saturating_sub(1) {
         let candidate = match body[index].semantic() {
             Stmt::Assign { dst, src }
@@ -1023,6 +1040,42 @@ mod tests {
                 value: Some(selected),
             }],
             "the one-use promoted temporary chain should disappear"
+        );
+    }
+
+    #[test]
+    fn exact_untyped_promoted_value_folds_opaque_owned_storage() {
+        let object_name = "frame_object".to_string();
+        let object = reg(&object_name);
+        let selected = Expr::Select {
+            cond: Box::new(Expr::Reg(reg("cond"))),
+            if_true: Box::new(Expr::Const(1)),
+            if_false: Box::new(Expr::Const(2)),
+            width: 4,
+        };
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object_name]);
+        let mut function = Function {
+            name: "opaque_promoted_select".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: object.clone(),
+                    src: selected.clone(),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(object)),
+                },
+            ],
+        };
+
+        propagate_adjacent_promoted_values_with_identities(&mut function, &identities);
+
+        assert_eq!(
+            function.body,
+            vec![Stmt::Return {
+                value: Some(selected),
+            }]
         );
     }
 

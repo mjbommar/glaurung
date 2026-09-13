@@ -23,16 +23,16 @@ use crate::ir::ast::Stmt;
 use super::alias::is_scratch_reg;
 use super::env::{is_pure_copyable, is_self_ref};
 use super::hash::RegMap;
-use super::reads::{count_reads_body, count_reads_body_with_identities, visit_expr_reads};
+#[cfg(test)]
+use super::reads::count_reads_body;
+use super::reads::{count_reads_body_with_identities, visit_expr_reads};
+use super::IdentityAuthority;
 
 /// Within each straight-line run, drop a scratch-register write that is
 /// overwritten by a later write before any intervening read (a dead store).
 /// Conservative: resets at every control-flow boundary and only removes writes
 /// whose source is side-effect-free.
-pub(super) fn dead_store_runs(
-    body: &mut Vec<Stmt>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) -> bool {
+pub(super) fn dead_store_runs(body: &mut Vec<Stmt>, identities: IdentityAuthority<'_>) -> bool {
     // last_write[reg] = index of the most recent not-yet-consumed removable
     // write to `reg` in this run.
     let mut last_write: RegMap<usize> = RegMap::default();
@@ -129,13 +129,16 @@ pub(super) fn dead_store_runs(
 /// clean scratch registers/temporaries the copy-prop just made dead.
 pub(super) fn eliminate_dead_copies(
     body: &mut Vec<Stmt>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
 ) -> bool {
     // Count reads of every register across the whole (nested) body.
     let mut reads: RegMap<usize> = RegMap::default();
     match identities {
-        Some(identities) => count_reads_body_with_identities(body, &mut reads, identities),
-        None => count_reads_body(body, &mut reads),
+        IdentityAuthority::Exact(exact) => {
+            count_reads_body_with_identities(body, &mut reads, exact)
+        }
+        #[cfg(test)]
+        IdentityAuthority::LegacySpelling => count_reads_body(body, &mut reads),
     }
     remove_dead(body, &reads, identities)
 }
@@ -143,7 +146,7 @@ pub(super) fn eliminate_dead_copies(
 fn remove_dead(
     body: &mut Vec<Stmt>,
     reads: &RegMap<usize>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
 ) -> bool {
     let mut changed = false;
     body.retain(|s| {
