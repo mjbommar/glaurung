@@ -242,7 +242,7 @@ fn normalize_definedness_and_compute_ssa(
 fn run_context_free_ast_passes(
     f: &mut ast::Function,
     cc: CallConv,
-    value_identities: &ValueIdentities,
+    value_identities: &mut ValueIdentities,
 ) -> HashSet<usize> {
     let mut param_slots: HashSet<usize> = HashSet::new();
     let no_layouts: HashMap<u64, Vec<VReg>> = HashMap::new();
@@ -261,7 +261,11 @@ fn run_context_free_ast_passes(
         &no_layouts,
     );
     glaurung::ir::call_contracts::apply_known_call_contracts(f);
-    glaurung::ir::call_result_split::split_call_result_lifetimes(f, cc);
+    glaurung::ir::call_result_split::split_call_result_lifetimes_with_identities(
+        f,
+        cc,
+        value_identities,
+    );
     glaurung::ir::canary::recognise_canary(f);
     glaurung::ir::stack_locals::promote_stack_locals_with_facts_and_identities(
         f,
@@ -304,13 +308,13 @@ fn decompile_one(session: &ProgramSession, func: &Function, cc: CallConv) -> Opt
     let exception_sites = image.exception_call_sites();
     let mut lf = lift_function_from_image(image, func).ok()?;
     let ssa = normalize_definedness_and_compute_ssa(&mut lf, &exception_sites, cc);
-    let (numbered, _widths, _slots, value_identities) =
+    let (numbered, _widths, _slots, mut value_identities) =
         value_number_with_parameter_slots_lifetimes_and_identities(&lf, &ssa, cc, &[]);
     let destinations = resolve_indirect_jumps(&lf, &ssa, &image.relocated_symbol_slots());
     let (region, _health) = recover_verified_with_health_and_destinations(&lf, &ssa, &destinations);
     let mut f =
         ast::lower_with_identities(&numbered, &region, func.name.clone(), &value_identities);
-    run_context_free_ast_passes(&mut f, cc, &value_identities);
+    run_context_free_ast_passes(&mut f, cc, &mut value_identities);
     Some(ast::render(&f))
 }
 
@@ -373,7 +377,7 @@ fn prepare(target: &Target) -> Option<Prepared> {
     let raw_lf = lift_function_from_image(session.image(), &func).ok()?;
     let mut normalized_lf = raw_lf.clone();
     let ssa = normalize_definedness_and_compute_ssa(&mut normalized_lf, &exception_sites, cc);
-    let (numbered, _widths, _slots, value_identities) =
+    let (numbered, _widths, _slots, mut value_identities) =
         value_number_with_parameter_slots_lifetimes_and_identities(&normalized_lf, &ssa, cc, &[]);
     let destinations = resolve_indirect_jumps(
         &normalized_lf,
@@ -385,7 +389,7 @@ fn prepare(target: &Target) -> Option<Prepared> {
     let lowered =
         ast::lower_with_identities(&numbered, &region, func.name.clone(), &value_identities);
     let mut passed = lowered.clone();
-    run_context_free_ast_passes(&mut passed, cc, &value_identities);
+    run_context_free_ast_passes(&mut passed, cc, &mut value_identities);
 
     Some(Prepared {
         bytes,
@@ -544,12 +548,12 @@ fn bench_phases(c: &mut Criterion) {
         // see `run_context_free_ast_passes`.
         group.bench_function(format!("ast_passes/{name}"), |b| {
             b.iter_batched(
-                || p.lowered.clone(),
-                |mut f| {
+                || (p.lowered.clone(), p.value_identities.clone()),
+                |(mut f, mut value_identities)| {
                     std::hint::black_box(run_context_free_ast_passes(
                         &mut f,
                         p.cc,
-                        &p.value_identities,
+                        &mut value_identities,
                     ))
                 },
                 BatchSize::PerIteration,

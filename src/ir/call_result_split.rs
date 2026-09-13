@@ -69,6 +69,7 @@ struct Splitter<'a> {
 }
 
 /// Version each consumed ABI call result and its proven reaching uses.
+#[cfg(test)]
 pub fn split_call_result_lifetimes(function: &mut Function, cc: CallConv) {
     let mut splitter = Splitter {
         cc,
