@@ -78,7 +78,7 @@ pub fn live_in_arg_slots_llir_with_identities(
     };
     // The slot a READ is evidence for. Production consults the opaque identity
     // and requires version zero; callers without the sidecar retain the legacy
-    // `tag_phys` spelling convention as an explicit compatibility path.
+    // The former value-tag spelling convention as an explicit compatibility path.
     let read_slot = |register: &VReg| register_slot(register, true);
     let block_by_va: std::collections::HashMap<u64, usize> = lf
         .blocks

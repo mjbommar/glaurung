@@ -7,9 +7,10 @@
 //! result) is one variable with one type — the source of the int↔pointer
 //! conflicts and of the incorrect address folding an AST rewrite cannot avoid.
 //!
-//! This pass rewrites each physical register occurrence to a **value-tagged**
-//! name `reg#version` using the already-computed [`SsaInfo`], so every SSA value
-//! becomes a distinct variable. Version 0 is the implicit entry-def (a live-in
+//! This pass rewrites each physical register occurrence to a snapshot-owned,
+//! opaque value key using the already-computed [`SsaInfo`], so every SSA value
+//! becomes a distinct variable without encoding machine storage in its name.
+//! Version 0 is the implicit entry-def (a live-in
 //! parameter), which stays the bare register so downstream argument/return
 //! naming is unchanged; explicit definitions (version ≥ 1) and the uses that
 //! read them get the tagged name. Reused temporaries are split by version, and
@@ -57,7 +58,7 @@ pub use parameter_slots::{live_in_arg_slots_llir, live_in_arg_slots_llir_with_id
 pub(crate) use vreg_walk::for_each_vreg_mut;
 
 use coalesce::{coalesce_phi_copies_with_definition_sites, DefinitionWidthsBySite};
-use tagging::{tag_op, tag_phys, VnCtx};
+use tagging::{key_value, tag_op, VnCtx};
 use temp_remap::build_temp_remap;
 
 /// Exact SSA identities carried beside value-numbered LLIR and its lowered AST.
@@ -610,7 +611,7 @@ pub fn value_number_with_parameter_slots_lifetimes_and_identities(
     ValueIdentities,
 ) {
     let keep = keep_bare::definitions(lf, ssa, cc);
-    let ctx = VnCtx::new(lf, keep, build_temp_remap(lf, ssa));
+    let ctx = VnCtx::new(lf, keep, build_temp_remap(lf, ssa), ssa);
 
     let mut out = lf.clone();
     let mut definition_widths = HashMap::new();
@@ -619,7 +620,7 @@ pub fn value_number_with_parameter_slots_lifetimes_and_identities(
     let mut identities = ValueIdentities::default();
     // One buffer for every instruction's use versions. The per-instruction
     // `Vec` was a heap allocation for a list that is normally one or two long.
-    let mut def_versions: Vec<u32> = Vec::new();
+    let mut def_values: Vec<Option<SsaValue>> = Vec::new();
     let mut use_values: Vec<Option<SsaValue>> = Vec::new();
     for (bi, block) in out.blocks.iter_mut().enumerate() {
         for (ii, ins) in block.instrs.iter_mut().enumerate() {
@@ -630,11 +631,11 @@ pub fn value_number_with_parameter_slots_lifetimes_and_identities(
             // Read out of the indexed SSA tables rather than the
             // address-keyed maps: same answer, no hashing. Keep the base as
             // well as the version so target-qualified aliases stay coherent.
-            def_versions.clear();
-            def_versions.extend((0..ssa_def_width(&ins.op)).map(|output_index| {
-                ssa.def_value_ref_at(lf, addr, output_index)
-                    .map_or(0, |value| value.version)
-            }));
+            def_values.clear();
+            def_values.extend(
+                (0..ssa_def_width(&ins.op))
+                    .map(|output_index| ssa.def_value_ref_at(lf, addr, output_index).cloned()),
+            );
             // Only the use ARITY is wanted here; `def_uses` would allocate a
             // vector of cloned register spellings to report it.
             use_values.clear();
@@ -658,7 +659,7 @@ pub fn value_number_with_parameter_slots_lifetimes_and_identities(
                     }
                 }
             }
-            tag_op(&mut ins.op, &def_versions, &use_values, &ctx);
+            tag_op(&mut ins.op, &def_values, &use_values, &ctx);
             let mut output_index = 0usize;
             for_each_def(&ins.op, |numbered| {
                 if let Some(identity) = ssa.def_value_ref_at(lf, addr, output_index) {
@@ -819,13 +820,13 @@ fn insert_phi_copies(
         let mut changed = false;
         for phi in &ssa.phis {
             let mut dst = phi.base.clone();
-            tag_phys(&mut dst, phi.dst_version, ctx);
+            key_value(&mut dst, phi.dst_version, ctx);
             if !read.contains(&dst) {
                 continue;
             }
             for (_pred, version) in &phi.incoming {
                 let mut src = phi.base.clone();
-                tag_phys(&mut src, *version, ctx);
+                key_value(&mut src, *version, ctx);
                 changed |= read.insert(src);
             }
         }
@@ -839,7 +840,7 @@ fn insert_phi_copies(
     let mut pending: Vec<Vec<Op>> = vec![Vec::new(); out.blocks.len()];
     for phi in &ssa.phis {
         let mut dst = phi.base.clone();
-        tag_phys(&mut dst, phi.dst_version, ctx);
+        key_value(&mut dst, phi.dst_version, ctx);
         let dst_identity = SsaValue {
             base: phi.base.clone(),
             version: phi.dst_version,
@@ -894,7 +895,7 @@ fn insert_phi_copies(
                 continue;
             }
             let mut src = phi.base.clone();
-            tag_phys(&mut src, *ver, ctx);
+            key_value(&mut src, *ver, ctx);
             let src_identity = SsaValue {
                 base: phi.base.clone(),
                 version: *ver,
@@ -1004,7 +1005,13 @@ mod tests {
             })
             .expect("lowered AST keeps the numbered register occurrence");
 
-        assert_eq!(numbered_use, &VReg::phys("rax#1"));
+        let VReg::Phys(numbered_name) = numbered_use else {
+            panic!("physical SSA value must retain a C variable key");
+        };
+        assert!(
+            !numbered_name.contains("rax") && !numbered_name.contains('#'),
+            "numbered value keys must be opaque, not encoded machine identity: {numbered_name}"
+        );
         assert_eq!(
             identities.exact(numbered_use),
             Some(&SsaValue {
@@ -1372,7 +1379,7 @@ mod tests {
 
         match &numbered.blocks[0].instrs[1].op {
             Op::SExt { src, from, to, .. } => {
-                assert_eq!(*src, Value::Reg(VReg::phys("rcx#1")));
+                assert_eq!(*src, Value::Reg(opaque_value(&ssa, "rcx", 1)));
                 assert_eq!((*from, *to), (Width::W16, Width::W64));
             }
             other => panic!("expected sign extension, got {other:?}"),
@@ -1411,12 +1418,12 @@ mod tests {
 
         assert_eq!(
             def_uses(&numbered.blocks[0].instrs[0].op).0,
-            Some(VReg::phys("r11#1"))
+            Some(opaque_value(&ssa, "r11", 1))
         );
         let Op::Load { addr, .. } = &numbered.blocks[0].instrs[1].op else {
             panic!("expected ARM frame load: {numbered:#?}")
         };
-        assert_eq!(addr.base, Some(VReg::phys("r11#1")));
+        assert_eq!(addr.base, Some(opaque_value(&ssa, "r11", 1)));
     }
 
     #[test]
@@ -1442,14 +1449,14 @@ mod tests {
 
         assert_eq!(
             def_uses(&numbered.blocks[0].instrs[0].op).0,
-            Some(VReg::phys("rdi#1"))
+            Some(opaque_value(&ssa, "rdi", 1))
         );
-        assert_eq!(widths.get(&VReg::phys("rdi#1")), Some(&4));
+        assert_eq!(widths.get(&opaque_value(&ssa, "rdi", 1)), Some(&4));
         assert_eq!(
             def_uses(&numbered.blocks[0].instrs[1].op).0,
-            Some(VReg::phys("rdi#2"))
+            Some(opaque_value(&ssa, "rdi", 2))
         );
-        assert_eq!(widths.get(&VReg::phys("rdi#2")), Some(&8));
+        assert_eq!(widths.get(&opaque_value(&ssa, "rdi", 2)), Some(&8));
     }
 
     #[test]
@@ -1544,10 +1551,15 @@ mod tests {
             .iter()
             .find(|phi| phi.base == VReg::phys("xmm0_d0"))
             .expect("loop must carry an XMM dword lane through a phi");
-        let phi_name = VReg::phys(format!("xmm0_d0#{}", phi.dst_version));
+        let phi_name = opaque_value(&ssa, "xmm0_d0", phi.dst_version);
 
-        let (numbered, widths) =
-            value_number_with_definition_widths(&lf, &ssa, CallConv::SysVAmd64);
+        let (numbered, widths, _, identities) =
+            value_number_with_parameter_slots_lifetimes_and_identities(
+                &lf,
+                &ssa,
+                CallConv::SysVAmd64,
+                &[],
+            );
 
         // The merged lane value is what the loop exit reads. Look the name up in
         // the numbered body rather than assuming the phi's own version survives:
@@ -1561,7 +1573,10 @@ mod tests {
                 Op::Assign {
                     dst: VReg::Phys(dst),
                     src: Value::Reg(VReg::Phys(src)),
-                } if dst.starts_with("rbx") && src.starts_with("xmm0_d0#") => {
+                } if identities.unambiguous_physical_base(&VReg::phys(dst)) == Some("rbx")
+                    && identities.unambiguous_physical_base(&VReg::phys(src))
+                        == Some("xmm0_d0") =>
+                {
                     Some(VReg::phys(src.clone()))
                 }
                 _ => None,
@@ -1595,6 +1610,17 @@ mod tests {
         }
     }
 
+    fn opaque_value(ssa: &crate::ir::ssa::SsaInfo, base: &str, version: u32) -> VReg {
+        VReg::phys(
+            ssa.value_id(&SsaValue {
+                base: VReg::phys(base),
+                version,
+            })
+            .expect("test SSA value must own an opaque ID")
+            .opaque_name(),
+        )
+    }
+
     #[test]
     fn explicit_return_preserves_exact_result_definition_identity() {
         let lf = mk(vec![
@@ -1612,14 +1638,14 @@ mod tests {
         assert_eq!(
             numbered.blocks[0].instrs[0].op,
             Op::Assign {
-                dst: VReg::phys("rax#1"),
+                dst: opaque_value(&ssa, "rax", 1),
                 src: Value::Const(42),
             }
         );
         assert_eq!(
             numbered.blocks[0].instrs[1].op,
             Op::ReturnValue {
-                value: Value::Reg(VReg::phys("rax#1")),
+                value: Value::Reg(opaque_value(&ssa, "rax", 1)),
             }
         );
     }
@@ -1657,18 +1683,18 @@ mod tests {
 
         assert_eq!(
             def_uses(&numbered.blocks[0].instrs[0].op).0,
-            Some(VReg::phys("rbp#1"))
+            Some(opaque_value(&ssa, "rbp", 1))
         );
         assert!(matches!(
             &numbered.blocks[0].instrs[1].op,
             Op::Assign {
                 src: Value::Reg(source),
                 ..
-            } if source == &VReg::phys("rbp#1")
+            } if source == &opaque_value(&ssa, "rbp", 1)
         ));
         assert_eq!(
             def_uses(&numbered.blocks[0].instrs[2].op).0,
-            Some(VReg::phys("rbp#2")),
+            Some(opaque_value(&ssa, "rbp", 2)),
             "the later rbp value must not overwrite an earlier call-input dependency"
         );
     }
@@ -1891,10 +1917,15 @@ mod tests {
     fn a_non_interfering_phi_web_needs_no_copies_at_all() {
         let lf = diamond();
         let ssa = compute_ssa(&lf);
-        let out = value_number(&lf, &ssa, CallConv::SysVAmd64);
+        let (out, _, _, identities) = value_number_with_parameter_slots_lifetimes_and_identities(
+            &lf,
+            &ssa,
+            CallConv::SysVAmd64,
+            &[],
+        );
         let carried: Vec<(String, String)> = register_copies(&out)
             .into_iter()
-            .filter(|(d, _)| d.starts_with("rbx"))
+            .filter(|(d, _)| identities.unambiguous_physical_base(&VReg::phys(d)) == Some("rbx"))
             .collect();
         assert_eq!(
             carried,
@@ -1912,7 +1943,11 @@ mod tests {
             .iter()
             .flat_map(|b| b.instrs.iter())
             .filter_map(|i| match def_uses(&i.op).0 {
-                Some(VReg::Phys(n)) if n.starts_with("rbx#") => Some(n),
+                Some(VReg::Phys(n))
+                    if identities.unambiguous_physical_base(&VReg::phys(&n)) == Some("rbx") =>
+                {
+                    Some(n)
+                }
                 _ => None,
             })
             .collect();
@@ -1988,7 +2023,12 @@ mod tests {
         // Read the *first* definition again after the join by appending a use of
         // its version explicitly: build the versioned form first, then check.
         let ssa = compute_ssa(&lf);
-        let out = value_number(&lf, &ssa, CallConv::SysVAmd64);
+        let (out, _, _, identities) = value_number_with_parameter_slots_lifetimes_and_identities(
+            &lf,
+            &ssa,
+            CallConv::SysVAmd64,
+            &[],
+        );
         // The phi result and `rbx#1` (the B0 definition, live into B2's path)
         // must stay distinct, because B2 contributes `rbx#1` to the merge while
         // B1 contributes `rbx#2` — coalescing all three would let B1's 20 be
@@ -1998,7 +2038,11 @@ mod tests {
             .iter()
             .flat_map(|b| b.instrs.iter())
             .filter_map(|i| match def_uses(&i.op).0 {
-                Some(VReg::Phys(n)) if n.starts_with("rbx#") => Some(n),
+                Some(VReg::Phys(n))
+                    if identities.unambiguous_physical_base(&VReg::phys(&n)) == Some("rbx") =>
+                {
+                    Some(n)
+                }
                 _ => None,
             })
             .collect();
@@ -3164,7 +3208,7 @@ mod tests {
 
     /// A phi on the RETURN register, whose versions `value_number` keeps bare.
     ///
-    /// `tag_phys` collapses a kept-bare version to the plain register name, so a phi
+    /// Value keying collapses a kept-bare version to the plain register name, so a phi
     /// whose destination and source both collapse would emit `rax = rax`, and a
     /// chain of them could in principle form a cycle. The insertion skips
     /// `src == dst` for exactly this reason; this pins that no self-copy and no
@@ -3261,22 +3305,22 @@ mod tests {
         assert_eq!(
             ops[0].op,
             Op::Assign {
-                dst: VReg::phys("rbx#1"),
+                dst: opaque_value(&ssa, "rbx", 1),
                 src: Value::Const(1)
             }
         );
         assert_eq!(
             ops[1].op,
             Op::Assign {
-                dst: VReg::phys("rbx#2"),
+                dst: opaque_value(&ssa, "rbx", 2),
                 src: Value::Const(2)
             }
         );
         assert_eq!(
             ops[2].op,
             Op::Assign {
-                dst: VReg::phys("rcx#1"),
-                src: Value::Reg(VReg::phys("rbx#2"))
+                dst: opaque_value(&ssa, "rcx", 1),
+                src: Value::Reg(opaque_value(&ssa, "rbx", 2))
             }
         );
     }
@@ -3303,8 +3347,8 @@ mod tests {
             out.blocks[0].instrs[1].op,
             Op::Intrinsic {
                 name: "vneg.f32".into(),
-                ins: vec![Value::Reg(VReg::phys("s15#1"))],
-                outs: vec![(VReg::phys("s15#2"), crate::ir::types::Width::W32)],
+                ins: vec![Value::Reg(opaque_value(&ssa, "s15", 1))],
+                outs: vec![(opaque_value(&ssa, "s15", 2), crate::ir::types::Width::W32)],
                 reads_mem: false,
                 writes_mem: false,
             }
@@ -3342,8 +3386,8 @@ mod tests {
         let Op::Intrinsic { outs, .. } = &numbered.blocks[0].instrs[0].op else {
             panic!("expected intrinsic");
         };
-        assert_eq!(outs[0].0, VReg::phys("rax#1"));
-        assert_eq!(outs[1].0, VReg::phys("rdx#1"));
+        assert_eq!(outs[0].0, opaque_value(&ssa, "rax", 1));
+        assert_eq!(outs[1].0, opaque_value(&ssa, "rdx", 1));
         assert_eq!(definition_widths.get(&outs[0].0), Some(&4));
         assert_eq!(definition_widths.get(&outs[1].0), Some(&8));
         assert!(matches!(
@@ -3395,8 +3439,8 @@ mod tests {
             &out.blocks[0].instrs[2].op,
             Op::Intrinsic { ins, outs, .. }
                 if ins == &[
-                    Value::Reg(VReg::phys("rdi#1")),
-                    Value::Reg(VReg::phys("rcx#1")),
+                    Value::Reg(opaque_value(&ssa, "rdi", 1)),
+                    Value::Reg(opaque_value(&ssa, "rcx", 1)),
                 ] && outs.is_empty()
         ));
     }
@@ -3443,14 +3487,14 @@ mod tests {
         assert_eq!(
             ops[0].op,
             Op::Assign {
-                dst: VReg::phys("rbx#1"),
+                dst: opaque_value(&ssa, "rbx", 1),
                 src: Value::Reg(VReg::phys("rdi")) // bare: the live-in parameter
             }
         );
         assert_eq!(
             ops[1].op,
             Op::Assign {
-                dst: VReg::phys("rdi#1"),
+                dst: opaque_value(&ssa, "rdi", 1),
                 src: Value::Const(5)
             }
         );
@@ -4091,20 +4135,22 @@ mod tests {
         // First rax def is version 1 (its lhs reads the live-in rax v0).
         match &ops[0].op {
             Op::Bin { dst, lhs, .. } => {
-                assert_eq!(*dst, VReg::phys("rbx#1"));
+                assert_eq!(*dst, opaque_value(&ssa, "rbx", 1));
                 assert_eq!(*lhs, Value::Reg(VReg::phys("rbx"))); // live-in
             }
             other => panic!("{:?}", other),
         }
         match &ops[1].op {
             Op::Load { dst, addr } => {
-                assert_eq!(*dst, VReg::phys("rbx#2"));
-                assert_eq!(addr.base, Some(VReg::phys("rbx#1")));
+                assert_eq!(*dst, opaque_value(&ssa, "rbx", 2));
+                assert_eq!(addr.base, Some(opaque_value(&ssa, "rbx", 1)));
             }
             other => panic!("{:?}", other),
         }
         match &ops[2].op {
-            Op::Bin { rhs, .. } => assert_eq!(*rhs, Value::Reg(VReg::phys("rbx#2"))),
+            Op::Bin { rhs, .. } => {
+                assert_eq!(*rhs, Value::Reg(opaque_value(&ssa, "rbx", 2)))
+            }
             other => panic!("{:?}", other),
         }
     }

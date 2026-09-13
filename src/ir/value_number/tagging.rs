@@ -13,22 +13,29 @@ use super::keep_bare::KeepBare;
 use super::temp_remap::TempRemap;
 
 /// Immutable context threaded through the tagging recursion.
-pub(crate) struct VnCtx {
+pub(crate) struct VnCtx<'a> {
     keep: KeepBare,
     temps: TempRemap,
     structural: Vec<&'static str>,
+    ssa: &'a crate::ir::ssa::SsaInfo,
 }
 
-impl VnCtx {
+impl<'a> VnCtx<'a> {
     /// Assemble the tagging context for `lf`.
     ///
     /// The structural-register set is derived from `lf` rather than passed in:
     /// it is a property of this function's frame and has no other consumer.
-    pub(crate) fn new(lf: &LlirFunction, keep: KeepBare, temps: TempRemap) -> Self {
+    pub(crate) fn new(
+        lf: &LlirFunction,
+        keep: KeepBare,
+        temps: TempRemap,
+        ssa: &'a crate::ir::ssa::SsaInfo,
+    ) -> Self {
         Self {
             keep,
             temps,
             structural: structural_registers(lf),
+            ssa,
         }
     }
 }
@@ -86,7 +93,7 @@ fn structural_registers(lf: &LlirFunction) -> Vec<&'static str> {
     }
 
     // A list of static names, not a `HashSet<String>`: every member is a
-    // literal, there are at most nine, and `tag_phys` asks whether a register is
+    // literal, there are at most nine, and value keying asks whether a register is
     // structural once per operand — a scan of nine short strings beats hashing
     // one, and it drops the owned copies entirely.
     let mut structural: Vec<&'static str> = vec!["rsp", "esp", "sp"];
@@ -99,10 +106,13 @@ fn structural_registers(lf: &LlirFunction) -> Vec<&'static str> {
     structural
 }
 
-/// The value-tagged name of a register at a given SSA version. Physical
-/// registers get a `reg#version` name (version 0 / structural / kept-bare stay
-/// bare); reused temporaries are remapped to their split id.
-pub(crate) fn tag_phys(v: &mut VReg, version: u32, ctx: &VnCtx) {
+/// The internal key of a register at a given SSA version.
+///
+/// Ordinary physical-register values receive a snapshot-owned opaque key.
+/// Version zero, structural registers, and deliberately kept-bare values retain
+/// their canonical machine spelling. Reused temporaries are remapped to their
+/// split id.
+pub(crate) fn key_value(v: &mut VReg, version: u32, ctx: &VnCtx<'_>) {
     match v {
         VReg::Phys(n) => {
             // Canonicalize a GP sub-register to its 64-bit parent so a value
@@ -127,7 +137,16 @@ pub(crate) fn tag_phys(v: &mut VReg, version: u32, ctx: &VnCtx) {
                 // sub-register view.
                 parent.map(str::to_string)
             } else {
-                Some(format!("{canon}#{version}"))
+                let identity = SsaValue {
+                    base: VReg::phys(canon),
+                    version,
+                };
+                Some(
+                    ctx.ssa
+                        .value_id(&identity)
+                        .expect("numbered physical value must have a snapshot-owned value ID")
+                        .opaque_name(),
+                )
             };
             if let Some(renamed) = renamed {
                 *n = renamed;
@@ -155,16 +174,24 @@ pub(crate) fn tag_phys(v: &mut VReg, version: u32, ctx: &VnCtx) {
 /// The base matters as much as the version: an x86 `ax` read may resolve to
 /// `rax#10`. Keeping the raw view spelling would manufacture a distinct
 /// `ax#10` variable that no instruction defines.
-fn tag_use_phys(v: &mut VReg, value: Option<&SsaValue>, ctx: &VnCtx) {
+fn tag_use_phys(v: &mut VReg, value: Option<&SsaValue>, ctx: &VnCtx<'_>) {
     if let Some(value) = value {
         *v = value.base.clone();
-        tag_phys(v, value.version, ctx);
+        key_value(v, value.version, ctx);
+    }
+}
+
+/// Apply the exact SSA identity of one definition.
+fn key_definition(v: &mut VReg, value: Option<&SsaValue>, ctx: &VnCtx<'_>) {
+    if let Some(value) = value {
+        *v = value.base.clone();
+        key_value(v, value.version, ctx);
     }
 }
 
 /// Rewrite a `Value`'s register (if any) to the identity at `use_values[*ui]`,
 /// advancing the use cursor exactly as `def_uses` enumerated it.
-fn tag_value(v: &mut Value, use_values: &[Option<SsaValue>], ui: &mut usize, ctx: &VnCtx) {
+fn tag_value(v: &mut Value, use_values: &[Option<SsaValue>], ui: &mut usize, ctx: &VnCtx<'_>) {
     if let Value::Reg(r) = v {
         tag_use_phys(r, use_values.get(*ui).and_then(Option::as_ref), ctx);
         *ui += 1;
@@ -175,7 +202,7 @@ fn tag_memop_uses(
     m: &mut crate::ir::types::MemOp,
     use_values: &[Option<SsaValue>],
     ui: &mut usize,
-    ctx: &VnCtx,
+    ctx: &VnCtx<'_>,
 ) {
     if let Some(b) = &mut m.base {
         tag_use_phys(b, use_values.get(*ui).and_then(Option::as_ref), ctx);
@@ -192,22 +219,22 @@ fn tag_memop_uses(
 /// operands left-to-right), so the SSA `use_versions` line up by index.
 pub(crate) fn tag_op(
     op: &mut Op,
-    def_versions: &[u32],
+    def_values: &[Option<SsaValue>],
     use_values: &[Option<SsaValue>],
-    ctx: &VnCtx,
+    ctx: &VnCtx<'_>,
 ) {
     let mut ui = 0usize;
-    let def_ver = def_versions.first().copied().unwrap_or(0);
+    let def_value = def_values.first().and_then(Option::as_ref);
     match op {
         Op::Assign { dst, src } => {
             tag_value(src, use_values, &mut ui, ctx);
-            tag_phys(dst, def_ver, ctx);
+            key_definition(dst, def_value, ctx);
         }
-        Op::Undef { dst, .. } => tag_phys(dst, def_ver, ctx),
+        Op::Undef { dst, .. } => key_definition(dst, def_value, ctx),
         Op::Bin { dst, lhs, rhs, .. } => {
             tag_value(lhs, use_values, &mut ui, ctx);
             tag_value(rhs, use_values, &mut ui, ctx);
-            tag_phys(dst, def_ver, ctx);
+            key_definition(dst, def_value, ctx);
         }
         // Computed target plus an optional normalized switch index, no def —
         // mirrors `use_def::def_uses`.
@@ -219,16 +246,16 @@ pub(crate) fn tag_op(
         }
         Op::Un { dst, src, .. } => {
             tag_value(src, use_values, &mut ui, ctx);
-            tag_phys(dst, def_ver, ctx);
+            key_definition(dst, def_value, ctx);
         }
         Op::Cmp { dst, lhs, rhs, .. } => {
             tag_value(lhs, use_values, &mut ui, ctx);
             tag_value(rhs, use_values, &mut ui, ctx);
-            tag_phys(dst, def_ver, ctx);
+            key_definition(dst, def_value, ctx);
         }
         Op::Load { dst, addr } => {
             tag_memop_uses(addr, use_values, &mut ui, ctx);
-            tag_phys(dst, def_ver, ctx);
+            key_definition(dst, def_value, ctx);
         }
         Op::CondLoad {
             dst,
@@ -241,7 +268,7 @@ pub(crate) fn tag_op(
             ui = 1;
             tag_memop_uses(addr, use_values, &mut ui, ctx);
             tag_value(fallback, use_values, &mut ui, ctx);
-            tag_phys(dst, def_ver, ctx);
+            key_definition(dst, def_value, ctx);
         }
         Op::Store { addr, src } => {
             tag_memop_uses(addr, use_values, &mut ui, ctx);
@@ -278,7 +305,7 @@ pub(crate) fn tag_op(
                     ui += 1;
                 }
                 if let Some(r) = e.result.as_mut() {
-                    tag_phys(r, def_ver, ctx);
+                    key_definition(r, def_value, ctx);
                 }
             }
         }
@@ -288,12 +315,12 @@ pub(crate) fn tag_op(
         | Op::Trunc { dst, src, .. }
         | Op::Extract { dst, src, .. } => {
             tag_value(src, use_values, &mut ui, ctx);
-            tag_phys(dst, def_ver, ctx);
+            key_definition(dst, def_value, ctx);
         }
         Op::Concat { dst, hi, lo } => {
             tag_value(hi, use_values, &mut ui, ctx);
             tag_value(lo, use_values, &mut ui, ctx);
-            tag_phys(dst, def_ver, ctx);
+            key_definition(dst, def_value, ctx);
         }
         Op::Ite {
             dst, cond, t, e, ..
@@ -303,7 +330,7 @@ pub(crate) fn tag_op(
             ui = 1;
             tag_value(t, use_values, &mut ui, ctx);
             tag_value(e, use_values, &mut ui, ctx);
-            tag_phys(dst, def_ver, ctx);
+            key_definition(dst, def_value, ctx);
         }
         // Intrinsic outputs are positional SSA definitions. This includes
         // effect-only operations, scalar VFP operations, and multi-output
@@ -313,9 +340,9 @@ pub(crate) fn tag_op(
                 tag_value(input, use_values, &mut ui, ctx);
             }
             for (output_index, (output, _)) in outs.iter_mut().enumerate() {
-                tag_phys(
+                key_definition(
                     output,
-                    def_versions.get(output_index).copied().unwrap_or(0),
+                    def_values.get(output_index).and_then(Option::as_ref),
                     ctx,
                 );
             }

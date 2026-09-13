@@ -64,6 +64,14 @@ impl SsaValue {
 pub(crate) struct ValueId(u32);
 
 impl ValueId {
+    /// Stable internal key for carrying this value through out-of-SSA AST work.
+    ///
+    /// This spelling is deliberately opaque: semantic consumers must query the
+    /// identity sidecar rather than recovering machine storage from the key.
+    pub(crate) fn opaque_name(self) -> String {
+        format!("value{}", self.0)
+    }
+
     #[cfg(test)]
     pub(crate) fn index(self) -> u32 {
         self.0

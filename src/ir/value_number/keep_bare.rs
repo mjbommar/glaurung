@@ -27,7 +27,7 @@ fn return_reg_names(cc: CallConv) -> &'static [&'static str] {
 /// Keyed by name rather than by `(name, version)` so a membership test can be
 /// asked with a borrowed `&str`. As a `HashSet<(String, u32)>` the only way to
 /// probe it was to clone the register spelling for the lookup key — and
-/// `tagging::tag_phys` asks once per register operand.
+/// Value keying asks once per register operand.
 #[derive(Debug, Default)]
 pub(crate) struct KeepBare(HashMap<String, Vec<u32>>);
 
@@ -84,7 +84,7 @@ pub(crate) fn definitions(
                             instr_idx: ii,
                         },
                     );
-                    // Key by the canonical (64-bit) name to match tag_phys.
+                    // Key by the canonical (64-bit) name to match value keying.
                     let canon = crate::ir::ssa::parent64(n)
                         .map(str::to_string)
                         .unwrap_or_else(|| n.clone());
