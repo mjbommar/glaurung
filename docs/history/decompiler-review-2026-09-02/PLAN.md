@@ -3978,6 +3978,20 @@ and x86-64 reports no scoped regression. This is an authority/API closure, not
 an output-quality claim; continue the remaining semantic-reader audit and SSA
 invalidation/origin work. See
 `results/wp3-type-recovery-internal-authority.md`.
+Commit `0ae50561` then fixes the concrete identity-handoff regression exposed
+by its Python-visible check. High-variable pointer revalidation was clearing
+every pointer-like fact attached to an exact identity, including prototype-
+qualified source parameters, and could not reconstruct parameters whose proof
+lived in pre-numbering spill/reload evidence. A stripped `byte_only` function
+therefore regressed from `char *arg0, char *arg1` to two `long` parameters even
+though the declaration map still held both pointer facts. Parameter-slot
+identity now distinguishes those qualified live-ins from speculative `varN`
+locals. The observed-red unit contract, all 39 owning tests, the three-case
+real-binary compile/decompile/recompile/execute test, seven adjacent
+declaration/return tests, and the 16-lane cross-architecture smoke set pass.
+This restores an actual output capability while retaining fail-closed local
+revalidation; see
+`results/wp3-pointer-parameter-high-variable-identity.md`.
 
 ### Tests
 
