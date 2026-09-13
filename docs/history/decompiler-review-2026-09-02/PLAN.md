@@ -524,6 +524,17 @@ commit `b5f96b91` closes the adjacent origin-transparency gap: expression
 origins no longer hide the scaled index, all 13 owning tests pass, and the exact
 fixture is green again. See
 `results/wp3-function-table-definition-identities.md`.
+Follow-on commit `58fa0cdf` closes the remaining internal optional-identity
+engine in this family. Every non-test function-table path now carries a closed
+exact identity authority through reaching-definition retention and promoted-
+stack invalidation; the `#version` spelling compatibility path and untyped
+entry point are test-only. All 20 owning tests and the non-test library check
+pass. A fresh native build passes its guard, and the required whole-Python
+fail-fast gate again reaches the independent committed-baseline disagreement
+at 17% with no earlier failure. This is an authority/API closure supporting
+WP5, not a new output or timing claim. Continue the residual semantic-reader
+audit before WP3 invalidation closure. See
+`results/wp3-function-table-definition-identities.md`.
 
 Commits `48cf15a0` and `6a7ec0b5` carry those identities through the pipeline-owned render
 entry point into the immutable declaration plan. An exact opaque role now

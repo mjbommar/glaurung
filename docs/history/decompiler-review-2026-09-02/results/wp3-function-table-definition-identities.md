@@ -45,3 +45,43 @@ fail` to no regression in scope.
 
 No broad Rust or Python suite, fixture sweep, DecBench run, or Joern run was
 performed for this bounded increment.
+
+## Internal authority closure
+
+Follow-on commit `58fa0cdf` removes the remaining optional-identity engine from
+function-table recovery. Non-test builds can now construct only
+`FunctionTableAuthority::Exact(&ValueIdentities)`; the legacy spelling route and
+the untyped top-level adapter compile only for unit tests over hand-written
+ASTs. Reaching-definition retention and promoted-stack invalidation therefore
+cannot silently fall back to `#version` spelling in shipped code.
+
+Focused evidence:
+
+```text
+cargo test --features python-ext ir::function_tables::tests:: --lib -- --test-threads=1
+20 passed; 0 failed; 4826 filtered out
+
+cargo check --features python-ext
+exit 0
+
+uv run maturin develop
+exit 0
+
+uv run python tools/build_guard.py
+fresh
+```
+
+The required post-commit Python gate was run once with fail-fast. It passed the
+former ARM Thumb and hard-float blockers, then stopped at the independently
+known committed-baseline disagreement at 17%:
+
+```text
+uv run pytest -q python/tests/ -x
+FAILED test_decompiler_arch_roundtrip.py::test_the_committed_baseline_is_valid_and_has_a_clean_control_lane
+```
+
+The disagreement is the already-recorded x86-64 control verdict mismatch for
+fixtures 157, 172, and 81. Neither baseline was regenerated from the shared
+dirty checkout. No fixture sweep, DecBench, Joern, output, corpus, or timing
+claim accompanies this authority-only follow-on. Function-table identity
+authority is now closed; wider WP3 invalidation and origin work remains.
