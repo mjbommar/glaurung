@@ -12,16 +12,23 @@ use std::collections::{HashMap, HashSet};
 use crate::debug::dwarf::{DwarfType, DwarfTypeKind};
 use crate::ir::ast::{Expr, Function, PdbFieldHint, Stmt};
 use crate::ir::call_contracts::CallPrototype;
-use crate::ir::types::{is_promoted_local_reg, BinOp, VReg};
+use crate::ir::types::{BinOp, VReg};
 
-fn is_promoted_stack_object(
-    value: &VReg,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) -> bool {
-    identities.map_or_else(
-        || is_promoted_local_reg(value),
-        |identities| identities.is_promoted_stack_object(value),
-    )
+#[derive(Clone, Copy)]
+enum DwarfFieldAuthority<'a> {
+    Exact(&'a crate::ir::value_number::ValueIdentities),
+    #[cfg(test)]
+    LegacySpelling,
+}
+
+impl DwarfFieldAuthority<'_> {
+    fn is_promoted_stack_object(self, value: &VReg) -> bool {
+        match self {
+            Self::Exact(identities) => identities.is_promoted_stack_object(value),
+            #[cfg(test)]
+            Self::LegacySpelling => crate::ir::types::is_promoted_local_reg(value),
+        }
+    }
 }
 
 /// Attach exact DWARF field identities to memory accesses in `function`.
@@ -32,7 +39,13 @@ pub fn annotate_function_fields(
     types: &[DwarfType],
     pointer_width: u8,
 ) -> HashMap<VReg, String> {
-    annotate_function_fields_impl(function, prototype, types, pointer_width, None)
+    annotate_function_fields_impl(
+        function,
+        prototype,
+        types,
+        pointer_width,
+        DwarfFieldAuthority::LegacySpelling,
+    )
 }
 
 /// Attach DWARF fields using promoted-object identity when available.
@@ -43,7 +56,13 @@ pub fn annotate_function_fields_with_identities(
     pointer_width: u8,
     identities: &crate::ir::value_number::ValueIdentities,
 ) -> HashMap<VReg, String> {
-    annotate_function_fields_impl(function, prototype, types, pointer_width, Some(identities))
+    annotate_function_fields_impl(
+        function,
+        prototype,
+        types,
+        pointer_width,
+        DwarfFieldAuthority::Exact(identities),
+    )
 }
 
 fn annotate_function_fields_impl(
@@ -51,7 +70,7 @@ fn annotate_function_fields_impl(
     prototype: Option<&CallPrototype>,
     types: &[DwarfType],
     pointer_width: u8,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: DwarfFieldAuthority<'_>,
 ) -> HashMap<VReg, String> {
     let Some(prototype) = prototype else {
         return HashMap::new();
@@ -90,7 +109,7 @@ fn annotate_function_fields_impl(
             &layouts,
             pointer_width,
             &mut pointer_types,
-            identities,
+            authority,
         ) {
             break;
         }
@@ -110,7 +129,7 @@ fn annotate_function_fields_impl(
                     &layouts,
                     pointer_width,
                     &pointer_types,
-                    identities,
+                    authority,
                 ))
                 .then_some(register.clone())
             })
@@ -128,7 +147,7 @@ fn annotate_function_fields_impl(
         pointer_width,
         &pointer_types,
         &mut HashMap::new(),
-        identities,
+        authority,
     );
     pointer_types
 }
@@ -140,11 +159,11 @@ fn all_definitions_compatible(
     layouts: &HashMap<String, &DwarfType>,
     pointer_width: u8,
     pointer_types: &HashMap<VReg, String>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: DwarfFieldAuthority<'_>,
 ) -> bool {
     let mut seen = false;
     let mut compatible = true;
-    visit_definitions(body, target, identities, &mut |source| {
+    visit_definitions(body, target, authority, &mut |source| {
         seen = true;
         compatible &= source.is_some_and(|source| {
             pointer_expression_compatible(source, expected, layouts, pointer_width, pointer_types)
@@ -156,7 +175,7 @@ fn all_definitions_compatible(
 fn visit_definitions<'a>(
     body: &'a [Stmt],
     target: &VReg,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: DwarfFieldAuthority<'_>,
     visitor: &mut impl FnMut(Option<&'a Expr>),
 ) {
     for statement in body {
@@ -167,7 +186,7 @@ fn visit_definitions<'a>(
                 if matches!(
                     addr.semantic(),
                     Expr::Reg(dst)
-                        if dst == target && is_promoted_stack_object(dst, identities)
+                        if dst == target && authority.is_promoted_stack_object(dst)
                 ) =>
             {
                 visitor(Some(src))
@@ -179,13 +198,13 @@ fn visit_definitions<'a>(
                 else_body,
                 ..
             } => {
-                visit_definitions(then_body, target, identities, visitor);
+                visit_definitions(then_body, target, authority, visitor);
                 if let Some(else_body) = else_body {
-                    visit_definitions(else_body, target, identities, visitor);
+                    visit_definitions(else_body, target, authority, visitor);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                visit_definitions(body, target, identities, visitor)
+                visit_definitions(body, target, authority, visitor)
             }
             Stmt::For {
                 init, step, body, ..
@@ -193,23 +212,23 @@ fn visit_definitions<'a>(
                 visit_definitions(
                     std::slice::from_ref(init.as_ref()),
                     target,
-                    identities,
+                    authority,
                     visitor,
                 );
-                visit_definitions(body, target, identities, visitor);
+                visit_definitions(body, target, authority, visitor);
                 visit_definitions(
                     std::slice::from_ref(step.as_ref()),
                     target,
-                    identities,
+                    authority,
                     visitor,
                 );
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, body) in cases {
-                    visit_definitions(body, target, identities, visitor);
+                    visit_definitions(body, target, authority, visitor);
                 }
                 if let Some(default) = default {
-                    visit_definitions(default, target, identities, visitor);
+                    visit_definitions(default, target, authority, visitor);
                 }
             }
             _ => {}
@@ -251,7 +270,7 @@ fn infer_body(
     layouts: &HashMap<String, &DwarfType>,
     pointer_width: u8,
     pointer_types: &mut HashMap<VReg, String>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: DwarfFieldAuthority<'_>,
 ) -> bool {
     let mut changed = false;
     for statement in body {
@@ -269,7 +288,7 @@ fn infer_body(
             Stmt::Store { addr, src, .. }
                 if matches!(
                     addr.semantic(),
-                    Expr::Reg(dst) if is_promoted_stack_object(dst, identities)
+                    Expr::Reg(dst) if authority.is_promoted_stack_object(dst)
                 ) =>
             {
                 let Expr::Reg(dst) = addr.semantic() else {
@@ -288,22 +307,22 @@ fn infer_body(
                 else_body,
                 ..
             } => {
-                changed |= infer_body(then_body, layouts, pointer_width, pointer_types, identities);
+                changed |= infer_body(then_body, layouts, pointer_width, pointer_types, authority);
                 if let Some(else_body) = else_body {
                     changed |=
-                        infer_body(else_body, layouts, pointer_width, pointer_types, identities);
+                        infer_body(else_body, layouts, pointer_width, pointer_types, authority);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                changed |= infer_body(body, layouts, pointer_width, pointer_types, identities);
+                changed |= infer_body(body, layouts, pointer_width, pointer_types, authority);
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, body) in cases {
-                    changed |= infer_body(body, layouts, pointer_width, pointer_types, identities);
+                    changed |= infer_body(body, layouts, pointer_width, pointer_types, authority);
                 }
                 if let Some(default) = default {
                     changed |=
-                        infer_body(default, layouts, pointer_width, pointer_types, identities);
+                        infer_body(default, layouts, pointer_width, pointer_types, authority);
                 }
             }
             Stmt::Store { .. }
@@ -436,7 +455,7 @@ fn annotate_body(
     pointer_width: u8,
     pointer_types: &HashMap<VReg, String>,
     definitions: &mut HashMap<VReg, Expr>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: DwarfFieldAuthority<'_>,
 ) {
     for statement in body {
         match statement.semantic_mut() {
@@ -458,7 +477,7 @@ fn annotate_body(
                 // the unrelated field store `local->first_field = value`.
                 if !matches!(
                     addr.semantic(),
-                    Expr::Reg(register) if is_promoted_stack_object(register, identities)
+                    Expr::Reg(register) if authority.is_promoted_stack_object(register)
                 ) {
                     annotate_address(
                         addr,
@@ -499,7 +518,7 @@ fn annotate_body(
                     pointer_width,
                     pointer_types,
                     &mut then_definitions,
-                    identities,
+                    authority,
                 );
                 if let Some(else_body) = else_body {
                     let mut else_definitions = definitions.clone();
@@ -509,7 +528,7 @@ fn annotate_body(
                         pointer_width,
                         pointer_types,
                         &mut else_definitions,
-                        identities,
+                        authority,
                     );
                 }
                 invalidate_written_definitions(statement, definitions);
@@ -537,7 +556,7 @@ fn annotate_body(
                     pointer_width,
                     pointer_types,
                     &mut loop_definitions,
-                    identities,
+                    authority,
                 );
                 invalidate_registers(&written, definitions);
             }
@@ -554,7 +573,7 @@ fn annotate_body(
                     pointer_width,
                     pointer_types,
                     &mut loop_definitions,
-                    identities,
+                    authority,
                 );
                 annotate_expr(
                     cond,
@@ -582,7 +601,7 @@ fn annotate_body(
                     pointer_width,
                     pointer_types,
                     definitions,
-                    identities,
+                    authority,
                 );
                 let mut loop_definitions = definitions.clone();
                 invalidate_registers(&written, &mut loop_definitions);
@@ -599,7 +618,7 @@ fn annotate_body(
                     pointer_width,
                     pointer_types,
                     &mut loop_definitions,
-                    identities,
+                    authority,
                 );
                 annotate_body(
                     std::slice::from_mut(step.as_mut()),
@@ -607,7 +626,7 @@ fn annotate_body(
                     pointer_width,
                     pointer_types,
                     &mut loop_definitions,
-                    identities,
+                    authority,
                 );
                 invalidate_registers(&written, definitions);
             }
@@ -630,7 +649,7 @@ fn annotate_body(
                         pointer_width,
                         pointer_types,
                         &mut definitions.clone(),
-                        identities,
+                        authority,
                     );
                 }
                 if let Some(default) = default {
@@ -640,7 +659,7 @@ fn annotate_body(
                         pointer_width,
                         pointer_types,
                         &mut definitions.clone(),
-                        identities,
+                        authority,
                     );
                 }
                 invalidate_written_definitions(statement, definitions);
@@ -658,7 +677,7 @@ fn annotate_body(
                     pointer_width,
                     pointer_types,
                     &mut definitions.clone(),
-                    identities,
+                    authority,
                 );
                 for catch in catches {
                     annotate_body(
@@ -667,7 +686,7 @@ fn annotate_body(
                         pointer_width,
                         pointer_types,
                         &mut definitions.clone(),
-                        identities,
+                        authority,
                     );
                 }
                 invalidate_written_definitions(statement, definitions);
