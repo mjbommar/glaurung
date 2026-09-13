@@ -54,8 +54,11 @@ positive-indegree node in 1,441. Glaurung now matches the published source graph
 isomorphically in 313 cases where Java does not. Of the original 2,334
 graph-size differences, 2,289 are explained constant-loop edge-policy
 differences. The literal-`if` correction resolved 14 of the 45 unaffected cases
-and the ternary-loop correction resolved nine more; 22 unaffected cells remain
-for root-cause review.
+and the ternary-loop correction resolved nine more. The final 22 are now
+classified: 12 are Java dropping reachable non-returning cycles, and ten are
+equivalent nested-ternary granularity differences where Glaurung retains the
+branch edges and has a lower source GED in every cell. The adjacent review
+contains the per-pattern graph shapes and scores.
 
 The complete commands, provenance, limitations, hashes, and follow-up are in
 the adjacent `README.md`. Lossless per-function graph ledgers and the

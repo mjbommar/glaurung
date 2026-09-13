@@ -155,5 +155,55 @@ A broader first rule was rejected by the corpus gate because it confused a
 ternary at the start of a loop body with one lexically inside the loop test: it
 changed 208 graphs, fixed 11 mismatches, and regressed 162 exact cells. Requiring
 the ternary span to be contained by the loop-condition span changed exactly the
-nine cells above. All nine became exact; no other cell changed. **The remaining
-unaffected graph-size queue is 22 cells.**
+nine cells above. All nine became exact; no other cell changed.
+
+## The final 22 unaffected graph-size cells
+
+All 22 are now classified. They collapse to eight source patterns after
+deduplicating optimization levels and identical firmware images.
+
+### 12: Java loses a reachable non-returning cycle
+
+These are `CMSIS_DAP:main` three times, `vAssertCalled` three times,
+`milli_sleep` once, U-Boot `hang` twice, `main_blinky` once, and U-Boot O2
+`done_word` and `insert_var_value_sub` once each. Their stored C has a reachable
+`while (1)` or backward self-`goto` on a fatal/wait path. Glaurung retains the
+cycle. Java deletes all or part of it:
+
+- the three `CMSIS_DAP:main` cells contain calls followed by an infinite loop;
+  Java reports 2 nodes/1 edge, Glaurung 3/4;
+- O0 `vAssertCalled` is 1/0 in Java versus 3/3 in Glaurung; its published
+  source graph is 4/4. At O2 and O2-noinline both have 3 nodes, but Java has
+  only 3 edges while Glaurung retains the fourth, cyclic edge;
+- `milli_sleep`, `hang`, and `main_blinky` have the same lost-loop signature;
+- O2 `done_word` and `insert_var_value_sub` each differ by exactly the one
+  loop node and two loop edges that terminate an allocation-failure path.
+  `insert_var_value_sub` also has Java's already-classified extra-entry flag.
+
+The source GED happens to favour Java by five for the last two because the
+published source CFG is itself Joern-generated. That does not make deleting a
+reachable non-returning path correct. This is the same independently reproduced
+Java defect as the 35 apparent Java wins above, not a new Glaurung defect.
+
+### 10: equivalent expression granularity, Glaurung closer to source
+
+The other ten contain decompiler-expanded nested ternaries. Glaurung retains
+the forks but contracts one redundant expression-granularity node that Java
+keeps. The authoritative source, Java, and Glaurung shapes and GEDs are:
+
+| Stored-C pattern | Cells | Source N/E | Java N/E, GED | Glaurung N/E, GED |
+|---|---:|---:|---:|---:|
+| `estimatePositionCrossingBeams` | 2 | 16/21 | 23/31, 27 | 21/29, **21** |
+| `find_wl_entry` | 2 | 17/23 | 46/59, 105 | 45/58, **102** |
+| `capMinThrust` | 2 | 3/2 | 9/12, 26 | 8/11, **23** |
+| `controllerBrescianini` | 2 | 52/74 | 39/56, 83 | 38/55, **60** |
+| `strsep` | 1 | 5/5 | 7/9, 10 | 6/9, **9** |
+| `ubifs_read_nnode` | 1 | 26/38 | 28/40, 14 | 27/40, **11** |
+
+This is a representation choice rather than lost control flow: the relevant
+branch edges remain, while the extra operator node does not correspond to a
+separate source statement. In all ten cells DecBench's own source distance
+favours Glaurung. Adding Java's redundant node would make the benchmark result
+worse and the compatibility graph less source-like, so these are retained and
+explained rather than forced to match. There is now no unclassified cell in
+the 22-case queue.

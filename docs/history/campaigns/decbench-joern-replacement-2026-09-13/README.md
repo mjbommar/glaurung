@@ -280,8 +280,6 @@ The lossless artifacts are stored outside Git under
 
 ## Required follow-up
 
-- Root-cause the remaining 22 unaffected graph-size differences, deduplicating
-  repeated functions across builds first.
 - Review all large deltas and a deterministic sample of small deltas against
   source text and graph invariants.
 - Decide whether an explicitly compatibility-only entry-flag emulator is worth
