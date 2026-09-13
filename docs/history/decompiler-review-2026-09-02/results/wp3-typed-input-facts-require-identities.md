@@ -58,7 +58,37 @@ an authority/API change, not an output or timing claim.
 
 ## Remaining boundary
 
-The raw and typed shared implementations still use internal optional identity
-parameters. WP3 remains open pending isolation of those compatibility engines,
-the remaining production parser audit, conservative invalidation, and
-universal origin preservation.
+Commit `082b00d2` closes the parameter-slot classifier's internal optional
+state. Its shared CFG walk now receives a closed `ParameterIdentityAuthority`:
+value-numbered callers select `Exact(&ValueIdentities)`, while legitimate
+pre-numbering consumers select `PlainLlir`. Exact slot lookup and proven-input
+classification dispatch on that authority directly, so a missing snapshot can
+no longer silently select spelling semantics inside signature recovery.
+
+Follow-on focused evidence:
+
+```text
+cargo test --features python-ext ir::value_number::tests:: --lib -- --test-threads=1
+65 passed; 0 failed; 4781 filtered out
+
+cargo check --features python-ext
+exit 0
+
+uv run maturin develop
+exit 0
+
+uv run python tools/build_guard.py
+fresh
+```
+
+The required post-source-commit Python gate was run once, fail-fast. It reached
+17% without an earlier failure, then stopped at the established disagreement
+between `arch_baseline.json` and `baseline.json` for fixture 157 at x86-64
+O0/O2, fixture 172 at x86-64 O0, and fixture 81 at x86-64 O2. The dirty shared
+tree was not used to regenerate either ledger. No fixture matrix, DecBench,
+Joern, or corpus sweep ran.
+
+The downstream architectural-read and ARM-padding compatibility engines still
+accept optional identity state and are the next bounded closures. WP3 also
+remains open for the remaining production semantic-reader audit, conservative
+invalidation, and universal origin preservation.

@@ -3042,6 +3042,15 @@ provenance through lowering.
   first at 11%. Next finish classifying the remaining optional-identity APIs
   and split shared compatibility implementations where the raw phase remains
   necessary. See `results/wp3-typed-input-facts-require-identities.md`.
+  Commit `082b00d2` closes the parameter-slot classifier's internal optional
+  identity state. Its CFG walk now receives either exact identities or an
+  explicit plain-LLIR mode, and exact slot/proven-input decisions dispatch on
+  that closed authority directly. All 65 value-numbering tests and the
+  production build check pass; the native extension is fresh. The required
+  Python fail-fast gate reached the same established baseline-ledger
+  disagreement first at 17%. Next close the downstream architectural-read and
+  ARM-padding compatibility engines. See
+  `results/wp3-typed-input-facts-require-identities.md`.
   Commit `79496134` closes the production tail-call recovery surface. Resolved
   indirect, resolved direct, and proven vtable tail-call routes now require an
   actual identity snapshot; their raw functions and top-level re-exports are
