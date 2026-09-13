@@ -298,7 +298,8 @@ fn decompile_one(session: &ProgramSession, func: &Function, cc: CallConv) -> Opt
         value_number_with_parameter_slots_lifetimes_and_identities(&lf, &ssa, cc, &[]);
     let destinations = resolve_indirect_jumps(&lf, &ssa, &image.relocated_symbol_slots());
     let (region, _health) = recover_verified_with_health_and_destinations(&lf, &ssa, &destinations);
-    let mut f = ast::lower(&numbered, &region, func.name.clone());
+    let mut f =
+        ast::lower_with_identities(&numbered, &region, func.name.clone(), &value_identities);
     run_context_free_ast_passes(&mut f, cc, &value_identities);
     Some(ast::render(&f))
 }
@@ -371,7 +372,8 @@ fn prepare(target: &Target) -> Option<Prepared> {
     );
     let (region, _health) =
         recover_verified_with_health_and_destinations(&normalized_lf, &ssa, &destinations);
-    let lowered = ast::lower(&numbered, &region, func.name.clone());
+    let lowered =
+        ast::lower_with_identities(&numbered, &region, func.name.clone(), &value_identities);
     let mut passed = lowered.clone();
     run_context_free_ast_passes(&mut passed, cc, &value_identities);
 
@@ -518,7 +520,14 @@ fn bench_phases(c: &mut Criterion) {
 
         // lower: structured LLIR -> AST.
         group.bench_function(format!("lower/{name}"), |b| {
-            b.iter(|| std::hint::black_box(ast::lower(&p.numbered, &p.region, p.func.name.clone())))
+            b.iter(|| {
+                std::hint::black_box(ast::lower_with_identities(
+                    &p.numbered,
+                    &p.region,
+                    p.func.name.clone(),
+                    &p.value_identities,
+                ))
+            })
         });
 
         // ast_passes: the optimize/cleanup pass pipeline over the AST. Subset --

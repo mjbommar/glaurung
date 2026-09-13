@@ -378,7 +378,12 @@ impl Stages {
                 cc,
                 &[],
             );
-        let ast = ast::lower(&numbered, &region, function.name.clone());
+        let ast = ast::lower_with_identities(
+            &numbered,
+            &region,
+            function.name.clone(),
+            &value_identities,
+        );
         let pointer_width = match cc {
             CallConv::Cdecl32 | CallConv::Arm | CallConv::ArmHardFloat => 4,
             CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Aarch64 => 8,
@@ -470,10 +475,11 @@ fn bench_micro(c: &mut Criterion) {
     // Region tree + value-numbered LLIR -> C AST.
     group.bench_function(format!("lower-region-to-ast/{id}"), |b| {
         b.iter(|| {
-            black_box(ast::lower(
+            black_box(ast::lower_with_identities(
                 &stages.numbered,
                 &stages.region,
                 stages.ast.name.clone(),
+                &stages.value_identities,
             ))
         })
     });
@@ -538,10 +544,11 @@ fn bench_shape_sweep(c: &mut Criterion) {
         group.throughput(Throughput::Elements(stages.blocks));
         group.bench_function(id, |b| {
             b.iter(|| {
-                black_box(ast::lower(
+                black_box(ast::lower_with_identities(
                     &stages.numbered,
                     &stages.region,
                     stages.ast.name.clone(),
+                    &stages.value_identities,
                 ))
             })
         });

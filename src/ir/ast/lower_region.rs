@@ -15,12 +15,12 @@
 //! that survive.
 
 use super::float_gate::scalar_float_semantics_are_closed_with_identities;
-use super::fold_returns;
 use super::lower_conds::{
     exit_is_taken_branch, extract_cond_and_strip, hoisting_the_header_is_safe, lower_block,
     negate_cmp_expr, strip_back_edge,
 };
 use super::lower_ops::{lower_value, switch_index_of};
+use super::{fold_returns, fold_returns_with_identities};
 use super::{Expr, Function, Stmt};
 use crate::ir::structure::{Region, SwitchEvidence};
 use crate::ir::types::{LlirFunction, Op, VReg};
@@ -1295,7 +1295,13 @@ fn lowering_stack_bytes() -> usize {
 
 #[cfg(test)]
 mod lowering_stack_tests {
-    use super::{lowering_stack_bytes, LOWERING_STACK_BYTES, MIN_LOWERING_STACK_MB};
+    use super::{
+        lower, lower_with_identities, lowering_stack_bytes, LOWERING_STACK_BYTES,
+        MIN_LOWERING_STACK_MB,
+    };
+    use crate::ir::ast::Stmt;
+    use crate::ir::structure::Region;
+    use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
 
     /// The env var is read per call, and these tests mutate process-global
     /// state, so they must not interleave. One test, sequential sections.
@@ -1352,6 +1358,51 @@ mod lowering_stack_tests {
             None => std::env::remove_var(VAR),
         }
     }
+
+    #[test]
+    fn typed_lowering_does_not_trust_an_unowned_result_spelling() {
+        let function = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1002,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x1000,
+                        op: Op::Assign {
+                            dst: VReg::phys("ret"),
+                            src: Value::Const(42),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x1001,
+                        op: Op::Return,
+                    },
+                ],
+                succs: vec![],
+            }],
+        };
+        let region = Region::Block(0);
+
+        let typed = lower_with_identities(
+            &function,
+            &region,
+            "typed",
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
+        assert_eq!(
+            typed.body.len(),
+            2,
+            "an unowned display spelling must not authorize a return fold: {typed:#?}"
+        );
+
+        let compatibility = lower(&function, &region, "compatibility");
+        assert_eq!(compatibility.body.len(), 1);
+        let Stmt::Return { value: Some(value) } = compatibility.body[0].semantic() else {
+            panic!("legacy control did not fold: {compatibility:#?}");
+        };
+        assert!(matches!(value.semantic(), crate::ir::ast::Expr::Const(42)));
+    }
 }
 
 /// Lower an entire function given its region tree.
@@ -1363,16 +1414,30 @@ mod lowering_stack_tests {
 /// `collect_goto_targets` and `deduplicate_labels` — so the whole body needs the
 /// headroom, not just the first pass.
 pub fn lower(lf: &LlirFunction, region: &Region, name: impl Into<String>) -> Function {
-    lower_with_identities(lf, region, name, None)
+    lower_on_reserved_stack(lf, region, name.into(), None)
 }
 
+/// Lower a function while retaining the authoritative identities assigned by
+/// value numbering.
+///
+/// Identity-sensitive folds use this sidecar instead of inferring ABI roles
+/// from rendered register spellings. Production callers that have completed
+/// value numbering should use this entry point.
 pub fn lower_with_identities(
     lf: &LlirFunction,
     region: &Region,
     name: impl Into<String>,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> Function {
+    lower_on_reserved_stack(lf, region, name.into(), Some(identities))
+}
+
+fn lower_on_reserved_stack(
+    lf: &LlirFunction,
+    region: &Region,
+    name: String,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Function {
-    let name = name.into();
     std::thread::scope(|scope| {
         std::thread::Builder::new()
             .name("glaurung-lower".to_string())
@@ -1416,6 +1481,9 @@ fn lower_on_this_stack(
         entry_va: lf.entry_va,
         body,
     };
-    fold_returns(&mut f.body);
+    match identities {
+        Some(identities) => fold_returns_with_identities(&mut f.body, identities),
+        None => fold_returns(&mut f.body),
+    }
     f
 }

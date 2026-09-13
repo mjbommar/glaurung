@@ -51,7 +51,7 @@ fn caller_ast(
         &numbered,
         &region,
         function.name.clone(),
-        Some(&identities),
+        &identities,
     );
     Some((lifted, ast, identities))
 }

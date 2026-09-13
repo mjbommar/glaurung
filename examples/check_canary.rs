@@ -27,7 +27,7 @@ fn main() {
     let r = recover(&lf, &ssa);
     let (numbered, _widths, param_slots, identities) =
         value_number_with_parameter_slots_lifetimes_and_identities(&lf, &ssa, cc, &[]);
-    let mut f = lower_with_identities(&numbered, &r, main_fn.name.clone(), Some(&identities));
+    let mut f = lower_with_identities(&numbered, &r, main_fn.name.clone(), &identities);
     reconstruct(&mut f);
     const_fold::fold_constants_with_identities(&mut f, &identities);
     dce::prune_dead_flags(&mut f);

@@ -224,7 +224,7 @@ fn load(subject: &Subject) -> Option<Lifted> {
             &[],
         );
     let region = structure::recover_verified(&normalized, &normalized_ssa);
-    let ast = ast::lower(&numbered, &region, subject.symbol);
+    let ast = ast::lower_with_identities(&numbered, &region, subject.symbol, &value_identities);
     let ast_prefixes = ast_prefix_states(&ast, cc, &param_slots, &value_identities);
 
     let blocks = normalized.blocks.len();
