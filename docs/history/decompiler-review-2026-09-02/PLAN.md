@@ -2785,6 +2785,15 @@ provenance through lowering.
   preparation declines this optimization. Eight owning tests, 20 preparation
   tests, two adjacent exact controls, and three release-built parameter-spill
   binaries pass. See `results/wp3-parameter-spill-required-identities.md`.
+  Commit `4e6c333d` removes the no-sidecar compatibility entry point and final
+  `argN` parser from canonical nominal call-contract refinement. A compatible
+  library use now sharpens an opaque caller parameter only when the prepared
+  AST sidecar owns one unambiguous source slot; an unowned value fails closed
+  regardless of spelling. All 25 owning Rust tests and all three release-built
+  libc-pointer round trips pass. An adjacent project-local `int *` forwarding
+  fixture remains red in the concurrently dirty build and is recorded without
+  attribution because this pass explicitly excludes ordinary `int *` types.
+  See `results/wp3-call-contract-required-identities.md`.
   Commit `3e302824`
   removes an `argN` spelling decision from
   DWARF aggregate-field recovery: only roles seeded from the authoritative
