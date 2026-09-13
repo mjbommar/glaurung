@@ -26,7 +26,7 @@ to review and share.
 | Input | Revision or identity |
 |---|---|
 | Glaurung code under test | `0892552157be6bd9267007231419ff6606a2dd38` |
-| Differential runner | `bd18b47332e2135ce7abeb7508274e2ac79217a1` |
+| Differential runner | `f67ef4d853cc0ff4a891a4dd605ad44e71a70814` |
 | Native extension SHA-256 | `12b095751310d866d4531e192df6e51699c39d73d7bf753fac76f48c0c666d28` |
 | DecBench | `f76dae075d4d82004fb21132b3f15e43b680e179` |
 | DecBench dataset | `e5eb576d66ee36793b800a4dd45e291e0add4472` (`full`) |
@@ -54,7 +54,8 @@ same published source CFG using DecBench's own `GEDMetric` policy:
 4. clamp a non-isomorphic result to at least 1.
 
 `tools/source_cfg_parity.py` records every function as `exact`, `mismatched`,
-`uncovered`, `no_source_cfg`, or `gained`. The Java run is divided into
+`uncovered`, `no_source_cfg`, or `gained`, together with the lossless
+metric-visible graph (entry/exit roles and directed edges). The Java run is divided into
 ten-binary shards. Each shard stores a JSON summary, per-function JSONL,
 stderr/progress, exit status, wall time, CPU percentage, and peak RSS. Completed
 shards are resumable and are never recomputed automatically.
@@ -86,7 +87,13 @@ PYTHONPATH="$DECBENCH_DIR:$DECBENCH_DIR/.venv/lib/python3.12/site-packages" \
 ```
 
 Java self-check uses the same command with `--provider joern`. The full run adds
-`--start N --limit 10` for each shard from 0 through 780.
+`--start N --limit 10 --capture-graphs` for each shard from 0 through 780 and
+sets `JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=$TMPDIR`.
+
+The first checkpointed attempt omitted that JVM property: pyjoern placed its C
+input under `$TMPDIR`, but Joern still left `joern-predef*.sc` under `/tmp`.
+That run was stopped, its scalar-only shards were rejected as final evidence,
+and the graph-preserving run restarted with Java's temporary directory fixed.
 
 ## Results so far
 
@@ -132,4 +139,3 @@ the full Java pass needs checkpoints.
   useful coverage.
 - Produce a concise, human-written Discord handoff with exact commands,
   qualifications, and artifact hashes.
-
