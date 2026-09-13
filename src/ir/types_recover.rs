@@ -1946,14 +1946,38 @@ fn reg_width_bytes(v: &VReg) -> u8 {
     8
 }
 
+/// Recover a register-view width from authoritative storage identity when the
+/// value-numbering sidecar is installed. Missing or ambiguous identity declines
+/// to the machine-word default instead of decoding a `base#version` display
+/// spelling.
+fn reg_width_bytes_with_optional_identities(
+    v: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> u8 {
+    let Some(identities) = identities else {
+        return reg_width_bytes(v);
+    };
+    identities
+        .unambiguous_physical_base(v)
+        .and_then(crate::ir::types::phys_reg_width)
+        .map_or(8, |width| (width.bits() / 8).max(1) as u8)
+}
+
 /// A signed integer hint whose width comes from the register's sub-name. This
 /// is the single biggest type-recovery signal at `-O0`: an `int` argument is
 /// spilled through the 32-bit view (`edi`/`w0`) while a `long`/pointer uses the
 /// 64-bit view (`rdi`/`x0`).
 fn int_for_reg(v: &VReg) -> TypeHint {
+    int_for_reg_with_optional_identities(v, None)
+}
+
+fn int_for_reg_with_optional_identities(
+    v: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> TypeHint {
     TypeHint::Int {
         signed: true,
-        width: reg_width_bytes(v),
+        width: reg_width_bytes_with_optional_identities(v, identities),
     }
 }
 
@@ -1998,7 +2022,7 @@ fn recover_types_with_optional_identities(
         for ins in &block.instrs {
             // Width-from-register-name for every value register (specific
             // classifications below still win via `upsert`).
-            tag_value_regs(&ins.op, &mut tm);
+            tag_value_regs(&ins.op, &mut tm, identities);
             match &ins.op {
                 // Any register used as the base of a memory op is a pointer.
                 Op::Load { addr, .. }
@@ -2019,7 +2043,7 @@ fn recover_types_with_optional_identities(
                             i.clone(),
                             TypeHint::Int {
                                 signed: false,
-                                width: reg_width_bytes(i),
+                                width: reg_width_bytes_with_optional_identities(i, identities),
                             },
                         );
                     }
@@ -2040,7 +2064,7 @@ fn recover_types_with_optional_identities(
                             dst.clone(),
                             TypeHint::Int {
                                 signed: false,
-                                width: reg_width_bytes(dst),
+                                width: reg_width_bytes_with_optional_identities(dst, identities),
                             },
                         );
                     }
@@ -2049,7 +2073,7 @@ fn recover_types_with_optional_identities(
                             r.clone(),
                             TypeHint::Int {
                                 signed: false,
-                                width: reg_width_bytes(r),
+                                width: reg_width_bytes_with_optional_identities(r, identities),
                             },
                         );
                     }
@@ -2058,7 +2082,7 @@ fn recover_types_with_optional_identities(
                             r.clone(),
                             TypeHint::Int {
                                 signed: false,
-                                width: reg_width_bytes(r),
+                                width: reg_width_bytes_with_optional_identities(r, identities),
                             },
                         );
                     }
@@ -2074,7 +2098,7 @@ fn recover_types_with_optional_identities(
                             r.clone(),
                             TypeHint::Int {
                                 signed: false,
-                                width: reg_width_bytes(r),
+                                width: reg_width_bytes_with_optional_identities(r, identities),
                             },
                         );
                     }
@@ -2129,7 +2153,7 @@ fn recover_types_with_optional_identities(
         .map(|(k, _)| k.clone())
         .collect();
     for k in to_demote {
-        let hint = int_for_reg(&k);
+        let hint = int_for_reg_with_optional_identities(&k, identities);
         tm.inner.insert(k, hint);
     }
 
@@ -2682,6 +2706,33 @@ mod tests {
     fn value_number_tags_do_not_change_register_view_width() {
         assert_eq!(reg_width_bytes(&VReg::phys("xmm0_d0#3")), 4);
         assert_eq!(reg_width_bytes(&VReg::phys("rax#7")), 8);
+    }
+
+    #[test]
+    fn identity_owned_width_does_not_parse_a_misleading_numbered_name() {
+        let misleading = VReg::phys("edi#7");
+        let function = mk_block(vec![Op::Assign {
+            dst: VReg::phys("rbx#1"),
+            src: Value::Reg(misleading.clone()),
+        }]);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            misleading.clone(),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 7,
+            },
+        );
+
+        let types = recover_types_with_identities(&function, &identities);
+
+        assert_eq!(
+            types.get(&misleading),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 8,
+            })
+        );
     }
 
     #[test]

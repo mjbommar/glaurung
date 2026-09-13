@@ -21,8 +21,9 @@ use std::collections::{BTreeSet, HashMap};
 use crate::ir::types::{BinOp, LlirFunction, Op, VReg, Value};
 
 use super::{
-    int_for_reg, recover_types, recover_types_with_identities, reg_width_bytes,
-    scalar_float_intrinsic_width, scalar_vfp_register, TypeHint, TypeMap,
+    int_for_reg_with_optional_identities, recover_types, recover_types_with_identities,
+    reg_width_bytes_with_optional_identities, scalar_float_intrinsic_width, scalar_vfp_register,
+    TypeHint, TypeMap,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -94,23 +95,32 @@ pub(super) fn classify_int_default() -> TypeHint {
     }
 }
 
-fn value_hint_for_reg(v: &VReg) -> TypeHint {
-    match v {
-        VReg::Phys(name)
+fn value_hint_for_reg(
+    v: &VReg,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> TypeHint {
+    let storage_name = identities
+        .and_then(|identities| identities.unambiguous_physical_base(v))
+        .or_else(|| match (identities, v) {
+            (None, VReg::Phys(name)) => Some(name.as_str()),
+            _ => None,
+        });
+    match storage_name {
+        Some(name)
             if name
                 .strip_prefix('s')
                 .is_some_and(|index| index.parse::<u8>().is_ok()) =>
         {
             TypeHint::Float { width: 4 }
         }
-        VReg::Phys(name)
+        Some(name)
             if name
                 .strip_prefix('d')
                 .is_some_and(|index| index.parse::<u8>().is_ok()) =>
         {
             TypeHint::Float { width: 8 }
         }
-        _ => int_for_reg(v),
+        _ => int_for_reg_with_optional_identities(v, identities),
     }
 }
 
@@ -118,10 +128,14 @@ fn value_hint_for_reg(v: &VReg) -> TypeHint {
 /// width-appropriate signed-int hint. The `upsert` policy keeps a more-specific
 /// classification (pointer / bool / code-pointer / narrower width), so this only
 /// fills in the width for registers nothing else has typed.
-pub(super) fn tag_value_regs(op: &Op, tm: &mut TypeMap) {
+pub(super) fn tag_value_regs(
+    op: &Op,
+    tm: &mut TypeMap,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) {
     let tag = |val: &Value, tm: &mut TypeMap| {
         if let Value::Reg(r @ VReg::Phys(_)) = val {
-            tm.upsert(r.clone(), value_hint_for_reg(r));
+            tm.upsert(r.clone(), value_hint_for_reg(r, identities));
         }
     };
     let bytes = |width: crate::ir::types::Width| width.bytes().min(u8::MAX as u16) as u8;
@@ -131,26 +145,26 @@ pub(super) fn tag_value_regs(op: &Op, tm: &mut TypeMap) {
         Op::IndirectJump { .. } => {}
         Op::Assign { dst, src } => {
             if let VReg::Phys(_) = dst {
-                tm.upsert(dst.clone(), value_hint_for_reg(dst));
+                tm.upsert(dst.clone(), value_hint_for_reg(dst, identities));
             }
             tag(src, tm);
         }
         Op::Store { src, .. } => tag(src, tm),
         Op::Load { dst, .. } | Op::CondLoad { dst, .. } => {
             if let VReg::Phys(_) = dst {
-                tm.upsert(dst.clone(), value_hint_for_reg(dst));
+                tm.upsert(dst.clone(), value_hint_for_reg(dst, identities));
             }
         }
         Op::Bin { dst, lhs, rhs, .. } => {
             if let VReg::Phys(_) = dst {
-                tm.upsert(dst.clone(), value_hint_for_reg(dst));
+                tm.upsert(dst.clone(), value_hint_for_reg(dst, identities));
             }
             tag(lhs, tm);
             tag(rhs, tm);
         }
         Op::Un { dst, src, .. } => {
             if let VReg::Phys(_) = dst {
-                tm.upsert(dst.clone(), value_hint_for_reg(dst));
+                tm.upsert(dst.clone(), value_hint_for_reg(dst, identities));
             }
             tag(src, tm);
         }
@@ -398,7 +412,7 @@ fn refine_return_type(
     };
     let w = identities
         .and_then(|identities| identities.unambiguous_definition_width(&dst))
-        .unwrap_or_else(|| reg_width_bytes(&dst));
+        .unwrap_or_else(|| reg_width_bytes_with_optional_identities(&dst, identities));
     if w == 0 || w >= 8 {
         // Full-width (or unknown) last definition: could legitimately be a
         // pointer or a `long`; leave the recovered classification alone.
