@@ -3030,6 +3030,15 @@ provenance through lowering.
   timing claim. Next classify the remaining raw stack-promotion surface and
   isolate the shared optional-identity test engines before closing WP3 identity
   authority. See `results/wp3-stack-frame-apis-require-identities.md`.
+  Commit `eca072a0` completes that public-surface classification. All five
+  identity-free stack-promotion entry points are now test-only, and the canary
+  diagnostic supplies its existing identity snapshot to the typed facts API.
+  All 92 stack-local tests and the non-test library/example check pass; the
+  native build is fresh, and the required fail-fast Python gate reaches the
+  unchanged ARM Thumb leaf-frame failure first at 11%. Next isolate or delete
+  the shared optional-identity test engines and continue the remaining
+  production parser audit. See
+  `results/wp3-raw-stack-promotion-test-only.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
