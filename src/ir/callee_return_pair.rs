@@ -45,6 +45,23 @@ use crate::ir::types::{BinOp, VReg};
 use crate::ir::types_recover::RecoveredPrototype;
 use crate::ir::value_number::ValueIdentities;
 
+#[derive(Clone, Copy)]
+enum IdentityAuthority<'a> {
+    Exact(&'a ValueIdentities),
+    #[cfg(test)]
+    LegacySpelling,
+}
+
+impl<'a> IdentityAuthority<'a> {
+    fn identities(self) -> Option<&'a ValueIdentities> {
+        match self {
+            Self::Exact(identities) => Some(identities),
+            #[cfg(test)]
+            Self::LegacySpelling => None,
+        }
+    }
+}
+
 /// The double-word integer spelling a two-register INTEGER result occupies, or
 /// `None` when this convention has no such contract.
 ///
@@ -76,7 +93,7 @@ pub fn compose_pair_returns(
     cc: CallConv,
     prototype: Option<&RecoveredPrototype>,
 ) -> bool {
-    compose_pair_returns_impl(function, cc, prototype, None)
+    compose_pair_returns_impl(function, cc, prototype, IdentityAuthority::LegacySpelling)
 }
 
 pub fn compose_pair_returns_with_identities(
@@ -85,14 +102,19 @@ pub fn compose_pair_returns_with_identities(
     prototype: Option<&RecoveredPrototype>,
     identities: &ValueIdentities,
 ) -> bool {
-    compose_pair_returns_impl(function, cc, prototype, Some(identities))
+    compose_pair_returns_impl(
+        function,
+        cc,
+        prototype,
+        IdentityAuthority::Exact(identities),
+    )
 }
 
 fn compose_pair_returns_impl(
     function: &mut Function,
     cc: CallConv,
     prototype: Option<&RecoveredPrototype>,
-    identities: Option<&ValueIdentities>,
+    authority: IdentityAuthority<'_>,
 ) -> bool {
     let Some(prototype) = prototype else {
         return false;
@@ -104,7 +126,7 @@ fn compose_pair_returns_impl(
         return false;
     };
     let mut composed = function.body.clone();
-    if !compose_body(&mut composed, cc, high, width, None, identities) {
+    if !compose_body(&mut composed, cc, high, width, None, authority) {
         return false;
     }
     function.body = composed;
@@ -135,14 +157,14 @@ fn compose_body(
     high: &str,
     width: u8,
     incoming: Option<VReg>,
-    identities: Option<&ValueIdentities>,
+    authority: IdentityAuthority<'_>,
 ) -> bool {
     let mut reaching = incoming;
     for statement in body.iter_mut() {
         match statement.semantic_mut() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, .. } | Stmt::Call { dst: Some(dst), .. }
-                if is_high_half(dst, high, identities) =>
+                if is_high_half(dst, high, authority) =>
             {
                 reaching = Some(dst.clone());
             }
@@ -162,7 +184,7 @@ fn compose_body(
                 // mixed INTEGER+SSE aggregates when incomplete class recovery
                 // says IntegerPair; composing that scalar double with `rdx`
                 // fabricates a 128-bit integer return.
-                if is_explicit_sse_result(&low_value, cc, identities) {
+                if is_explicit_sse_result(&low_value, cc, authority) {
                     return false;
                 }
                 let origins = low_value.origins().cloned();
@@ -184,51 +206,51 @@ fn compose_body(
                 else_body,
                 ..
             } => {
-                if !compose_body(then_body, cc, high, width, reaching.clone(), identities) {
+                if !compose_body(then_body, cc, high, width, reaching.clone(), authority) {
                     return false;
                 }
-                let mut redefined = defines_high_half(then_body, high, identities);
+                let mut redefined = defines_high_half(then_body, high, authority);
                 if let Some(else_body) = else_body {
-                    if !compose_body(else_body, cc, high, width, reaching.clone(), identities) {
+                    if !compose_body(else_body, cc, high, width, reaching.clone(), authority) {
                         return false;
                     }
-                    redefined |= defines_high_half(else_body, high, identities);
+                    redefined |= defines_high_half(else_body, high, authority);
                 }
                 if redefined {
                     reaching = None;
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                if !compose_body(body, cc, high, width, reaching.clone(), identities) {
+                if !compose_body(body, cc, high, width, reaching.clone(), authority) {
                     return false;
                 }
-                if defines_high_half(body, high, identities) {
+                if defines_high_half(body, high, authority) {
                     reaching = None;
                 }
             }
             Stmt::Switch { cases, default, .. } => {
                 let mut redefined = false;
                 for (_, case_body) in cases.iter_mut() {
-                    if !compose_body(case_body, cc, high, width, reaching.clone(), identities) {
+                    if !compose_body(case_body, cc, high, width, reaching.clone(), authority) {
                         return false;
                     }
-                    redefined |= defines_high_half(case_body, high, identities);
+                    redefined |= defines_high_half(case_body, high, authority);
                 }
                 if let Some(default) = default {
-                    if !compose_body(default, cc, high, width, reaching.clone(), identities) {
+                    if !compose_body(default, cc, high, width, reaching.clone(), authority) {
                         return false;
                     }
-                    redefined |= defines_high_half(default, high, identities);
+                    redefined |= defines_high_half(default, high, authority);
                 }
                 if redefined {
                     reaching = None;
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                if !compose_body(try_body, cc, high, width, reaching.clone(), identities) {
+                if !compose_body(try_body, cc, high, width, reaching.clone(), authority) {
                     return false;
                 }
-                let mut redefined = defines_high_half(try_body, high, identities);
+                let mut redefined = defines_high_half(try_body, high, authority);
                 for catch in catches.iter_mut() {
                     if !compose_body(
                         &mut catch.body,
@@ -236,11 +258,11 @@ fn compose_body(
                         high,
                         width,
                         reaching.clone(),
-                        identities,
+                        authority,
                     ) {
                         return false;
                     }
-                    redefined |= defines_high_half(&catch.body, high, identities);
+                    redefined |= defines_high_half(&catch.body, high, authority);
                 }
                 if redefined {
                     reaching = None;
@@ -258,7 +280,7 @@ fn compose_body(
 fn is_explicit_sse_result(
     expression: &Expr,
     cc: CallConv,
-    identities: Option<&ValueIdentities>,
+    authority: IdentityAuthority<'_>,
 ) -> bool {
     match expression.semantic() {
         Expr::FloatConst { .. }
@@ -268,8 +290,8 @@ fn is_explicit_sse_result(
         } => true,
         Expr::Reg(register) => crate::ir::abi::float_return_registers(cc)
             .iter()
-            .any(|storage| register_is_storage(register, storage, identities)),
-        Expr::Cast { expr, .. } => is_explicit_sse_result(expr, cc, identities),
+            .any(|storage| register_is_storage(register, storage, authority.identities())),
+        Expr::Cast { expr, .. } => is_explicit_sse_result(expr, cc, authority),
         _ => false,
     }
 }
@@ -379,42 +401,42 @@ fn wide_cast(expr: Expr, width: u8) -> Expr {
 /// Whether `value` is a definition of the high result register, at any SSA
 /// version. Sub-register spellings do not need listing: `regview::ssa_parent`
 /// has already canonicalised every total write onto its 64-bit parent.
-fn is_high_half(value: &VReg, high: &str, identities: Option<&ValueIdentities>) -> bool {
-    register_is_storage(value, high, identities)
+fn is_high_half(value: &VReg, high: &str, authority: IdentityAuthority<'_>) -> bool {
+    register_is_storage(value, high, authority.identities())
 }
 
-fn defines_high_half(body: &[Stmt], high: &str, identities: Option<&ValueIdentities>) -> bool {
+fn defines_high_half(body: &[Stmt], high: &str, authority: IdentityAuthority<'_>) -> bool {
     body.iter().any(|statement| match statement.semantic() {
         Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
         Stmt::Assign { dst, .. } | Stmt::Call { dst: Some(dst), .. } => {
-            is_high_half(dst, high, identities)
+            is_high_half(dst, high, authority)
         }
         Stmt::If {
             then_body,
             else_body,
             ..
         } => {
-            defines_high_half(then_body, high, identities)
+            defines_high_half(then_body, high, authority)
                 || else_body
                     .as_deref()
-                    .is_some_and(|body| defines_high_half(body, high, identities))
+                    .is_some_and(|body| defines_high_half(body, high, authority))
         }
         Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-            defines_high_half(body, high, identities)
+            defines_high_half(body, high, authority)
         }
         Stmt::Switch { cases, default, .. } => {
             cases
                 .iter()
-                .any(|(_, body)| defines_high_half(body, high, identities))
+                .any(|(_, body)| defines_high_half(body, high, authority))
                 || default
                     .as_deref()
-                    .is_some_and(|body| defines_high_half(body, high, identities))
+                    .is_some_and(|body| defines_high_half(body, high, authority))
         }
         Stmt::TryCatch { try_body, catches } => {
-            defines_high_half(try_body, high, identities)
+            defines_high_half(try_body, high, authority)
                 || catches
                     .iter()
-                    .any(|catch| defines_high_half(&catch.body, high, identities))
+                    .any(|catch| defines_high_half(&catch.body, high, authority))
         }
         _ => false,
     })

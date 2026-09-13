@@ -57,6 +57,31 @@ use crate::ir::types::{BinOp, VReg};
 use crate::ir::types_recover::RecoveredPrototype;
 use crate::ir::value_number::ValueIdentities;
 
+#[derive(Clone, Copy)]
+enum IdentityAuthority<'a> {
+    Exact(&'a ValueIdentities),
+    #[cfg(test)]
+    LegacySpelling,
+}
+
+impl<'a> IdentityAuthority<'a> {
+    fn identities(self) -> Option<&'a ValueIdentities> {
+        match self {
+            Self::Exact(identities) => Some(identities),
+            #[cfg(test)]
+            Self::LegacySpelling => None,
+        }
+    }
+
+    fn is_promoted_object(self, value: &VReg) -> bool {
+        match self {
+            Self::Exact(identities) => identities.is_promoted_stack_object(value),
+            #[cfg(test)]
+            Self::LegacySpelling => crate::ir::types::is_promoted_local_reg(value),
+        }
+    }
+}
+
 /// What a multi-bank result contract requires of the frame object that holds it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct BankContract {
@@ -117,7 +142,7 @@ pub fn compose_bank_returns(
     cc: CallConv,
     prototype: Option<&RecoveredPrototype>,
 ) -> bool {
-    compose_bank_returns_impl(function, cc, prototype, None)
+    compose_bank_returns_impl(function, cc, prototype, IdentityAuthority::LegacySpelling)
 }
 
 /// Rewrite banked returns using promoted-object identity when available.
@@ -127,19 +152,24 @@ pub fn compose_bank_returns_with_identities(
     prototype: Option<&RecoveredPrototype>,
     identities: &crate::ir::value_number::ValueIdentities,
 ) -> bool {
-    compose_bank_returns_impl(function, cc, prototype, Some(identities))
+    compose_bank_returns_impl(
+        function,
+        cc,
+        prototype,
+        IdentityAuthority::Exact(identities),
+    )
 }
 
 fn compose_bank_returns_impl(
     function: &mut Function,
     cc: CallConv,
     prototype: Option<&RecoveredPrototype>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: IdentityAuthority<'_>,
 ) -> bool {
     let Some(contract) = prototype.and_then(|p| bank_contract(cc, p.return_class())) else {
         return false;
     };
-    let Some((object, size)) = returned_stack_object(&function.body, identities) else {
+    let Some((object, size)) = returned_stack_object(&function.body, authority) else {
         return false;
     };
     if size != contract.bytes {
@@ -169,7 +199,12 @@ pub fn materialize_register_split_returns(
     cc: CallConv,
     prototype: Option<&RecoveredPrototype>,
 ) -> bool {
-    materialize_register_split_returns_impl(function, cc, prototype, None)
+    materialize_register_split_returns_impl(
+        function,
+        cc,
+        prototype,
+        IdentityAuthority::LegacySpelling,
+    )
 }
 
 pub fn materialize_register_split_returns_with_identities(
@@ -178,14 +213,19 @@ pub fn materialize_register_split_returns_with_identities(
     prototype: Option<&RecoveredPrototype>,
     identities: &ValueIdentities,
 ) -> bool {
-    materialize_register_split_returns_impl(function, cc, prototype, Some(identities))
+    materialize_register_split_returns_impl(
+        function,
+        cc,
+        prototype,
+        IdentityAuthority::Exact(identities),
+    )
 }
 
 fn materialize_register_split_returns_impl(
     function: &mut Function,
     cc: CallConv,
     prototype: Option<&RecoveredPrototype>,
-    identities: Option<&ValueIdentities>,
+    authority: IdentityAuthority<'_>,
 ) -> bool {
     let Some(prototype) = prototype else {
         return false;
@@ -200,7 +240,7 @@ fn materialize_register_split_returns_impl(
     materialize_register_returns(
         function,
         RegisterReturnContract::Split { integer_first },
-        identities,
+        authority,
     )
 }
 
@@ -219,7 +259,12 @@ pub fn materialize_register_sse_pair_returns(
     cc: CallConv,
     prototype: Option<&RecoveredPrototype>,
 ) -> bool {
-    materialize_register_sse_pair_returns_impl(function, cc, prototype, None)
+    materialize_register_sse_pair_returns_impl(
+        function,
+        cc,
+        prototype,
+        IdentityAuthority::LegacySpelling,
+    )
 }
 
 pub fn materialize_register_sse_pair_returns_with_identities(
@@ -228,14 +273,19 @@ pub fn materialize_register_sse_pair_returns_with_identities(
     prototype: Option<&RecoveredPrototype>,
     identities: &ValueIdentities,
 ) -> bool {
-    materialize_register_sse_pair_returns_impl(function, cc, prototype, Some(identities))
+    materialize_register_sse_pair_returns_impl(
+        function,
+        cc,
+        prototype,
+        IdentityAuthority::Exact(identities),
+    )
 }
 
 fn materialize_register_sse_pair_returns_impl(
     function: &mut Function,
     cc: CallConv,
     prototype: Option<&RecoveredPrototype>,
-    identities: Option<&ValueIdentities>,
+    authority: IdentityAuthority<'_>,
 ) -> bool {
     let Some(prototype) = prototype else {
         return false;
@@ -250,7 +300,7 @@ fn materialize_register_sse_pair_returns_impl(
     materialize_register_returns(
         function,
         RegisterReturnContract::SsePair { high_bytes },
-        identities,
+        authority,
     )
 }
 
@@ -275,18 +325,22 @@ impl RegisterReturnContract {
         }
     }
 
-    fn part(self, register: &VReg, identities: Option<&ValueIdentities>) -> Option<RegisterPart> {
+    fn part(self, register: &VReg, authority: IdentityAuthority<'_>) -> Option<RegisterPart> {
         match self {
-            Self::Split { integer_first } => match result_bank(register, identities)? {
+            Self::Split { integer_first } => match result_bank(register, authority)? {
                 ResultBank::Integer if integer_first => Some(RegisterPart::Low),
                 ResultBank::Integer => Some(RegisterPart::High),
                 ResultBank::Sse if integer_first => Some(RegisterPart::High),
                 ResultBank::Sse => Some(RegisterPart::Low),
             },
-            Self::SsePair { .. } if register_is_storage(register, "xmm0", identities) => {
+            Self::SsePair { .. }
+                if register_is_storage(register, "xmm0", authority.identities()) =>
+            {
                 Some(RegisterPart::Low)
             }
-            Self::SsePair { .. } if register_is_storage(register, "xmm1", identities) => {
+            Self::SsePair { .. }
+                if register_is_storage(register, "xmm1", authority.identities()) =>
+            {
                 Some(RegisterPart::High)
             }
             Self::SsePair { .. } => None,
@@ -296,17 +350,17 @@ impl RegisterReturnContract {
     fn projected_part(
         self,
         expression: &Expr,
-        identities: Option<&ValueIdentities>,
+        authority: IdentityAuthority<'_>,
     ) -> Option<RegisterPart> {
         match self {
-            Self::Split { integer_first } => match expression_bank(expression, identities)? {
+            Self::Split { integer_first } => match expression_bank(expression, authority)? {
                 ResultBank::Integer if integer_first => Some(RegisterPart::Low),
                 ResultBank::Integer => Some(RegisterPart::High),
                 ResultBank::Sse if integer_first => Some(RegisterPart::High),
                 ResultBank::Sse => Some(RegisterPart::Low),
             },
             Self::SsePair { .. } => match expression.semantic() {
-                Expr::Reg(register) => self.part(register, identities),
+                Expr::Reg(register) => self.part(register, authority),
                 _ => None,
             },
         }
@@ -323,7 +377,7 @@ impl RegisterReturnContract {
 fn materialize_register_returns(
     function: &mut Function,
     contract: RegisterReturnContract,
-    identities: Option<&ValueIdentities>,
+    authority: IdentityAuthority<'_>,
 ) -> bool {
     let object = VReg::phys(contract.object_name());
     let mut body = function.body.clone();
@@ -332,7 +386,7 @@ fn materialize_register_returns(
         &object,
         contract,
         RegisterParts::default(),
-        identities,
+        authority,
     ) else {
         return false;
     };
@@ -366,16 +420,16 @@ fn materialize_register_body(
     object: &VReg,
     contract: RegisterReturnContract,
     incoming: RegisterParts,
-    identities: Option<&ValueIdentities>,
+    authority: IdentityAuthority<'_>,
 ) -> Option<RegisterParts> {
     let mut reaching = incoming;
     let mut output = Vec::with_capacity(body.len() + 3);
     for statement in std::mem::take(body) {
         let (mut statement, owner) = statement.into_semantic_with_origins();
         match &mut statement {
-            Stmt::Assign { dst, .. } if contract.part(dst, identities).is_some() => {
+            Stmt::Assign { dst, .. } if contract.part(dst, authority).is_some() => {
                 let captured = dst.clone();
-                let part = contract.part(dst, identities).expect("checked above");
+                let part = contract.part(dst, authority).expect("checked above");
                 output.push(statement.with_optional_origins(owner.clone()));
                 output.push(
                     register_part_store(
@@ -394,7 +448,7 @@ fn materialize_register_body(
                 // Every call clobbers both result banks. Its attributed
                 // destination can immediately define one new bank.
                 reaching = RegisterParts::default();
-                if let Some(part) = dst.as_ref().and_then(|dst| contract.part(dst, identities)) {
+                if let Some(part) = dst.as_ref().and_then(|dst| contract.part(dst, authority)) {
                     let captured = dst.clone().expect("checked above");
                     output.push(statement.with_optional_origins(owner.clone()));
                     output.push(
@@ -417,11 +471,11 @@ fn materialize_register_body(
                 ..
             } => {
                 let then_out =
-                    materialize_register_body(then_body, object, contract, reaching, identities)?;
+                    materialize_register_body(then_body, object, contract, reaching, authority)?;
                 let else_out = match else_body {
-                    Some(else_body) => materialize_register_body(
-                        else_body, object, contract, reaching, identities,
-                    )?,
+                    Some(else_body) => {
+                        materialize_register_body(else_body, object, contract, reaching, authority)?
+                    }
                     None => reaching,
                 };
                 reaching = then_out.intersect(else_out);
@@ -430,18 +484,18 @@ fn materialize_register_body(
                 // A loop may execute zero times, so only the incoming capture
                 // is guaranteed after it. Returns inside the loop are checked
                 // against their own path while traversing the body.
-                let _ = materialize_register_body(body, object, contract, reaching, identities)?;
+                let _ = materialize_register_body(body, object, contract, reaching, authority)?;
             }
             Stmt::Switch { cases, default, .. } => {
                 let mut exits = Vec::with_capacity(cases.len() + 1);
                 for (_, case) in cases {
                     exits.push(materialize_register_body(
-                        case, object, contract, reaching, identities,
+                        case, object, contract, reaching, authority,
                     )?);
                 }
                 exits.push(match default {
                     Some(default) => {
-                        materialize_register_body(default, object, contract, reaching, identities)?
+                        materialize_register_body(default, object, contract, reaching, authority)?
                     }
                     None => reaching,
                 });
@@ -452,7 +506,7 @@ fn materialize_register_body(
             }
             Stmt::TryCatch { try_body, catches } => {
                 let mut exits = vec![materialize_register_body(
-                    try_body, object, contract, reaching, identities,
+                    try_body, object, contract, reaching, authority,
                 )?];
                 for catch in catches {
                     exits.push(materialize_register_body(
@@ -460,7 +514,7 @@ fn materialize_register_body(
                         object,
                         contract,
                         reaching,
-                        identities,
+                        authority,
                     )?);
                 }
                 reaching = exits
@@ -477,7 +531,7 @@ fn materialize_register_body(
                 // also accepting Clang's SSE-selected projection.
                 if let Some((part, projected)) = value.as_ref().and_then(|value| {
                     contract
-                        .projected_part(value, identities)
+                        .projected_part(value, authority)
                         .map(|part| (part, value.clone()))
                 }) {
                     output.push(
@@ -513,7 +567,7 @@ fn materialize_register_body(
                 reaching = RegisterParts::default();
             }
             Stmt::Pop { target } => {
-                if let Some(part) = contract.part(target, identities) {
+                if let Some(part) = contract.part(target, authority) {
                     set_part(&mut reaching, part, false);
                 }
             }
@@ -537,15 +591,15 @@ enum RegisterPart {
     High,
 }
 
-fn result_bank(register: &VReg, identities: Option<&ValueIdentities>) -> Option<ResultBank> {
+fn result_bank(register: &VReg, authority: IdentityAuthority<'_>) -> Option<ResultBank> {
     if crate::ir::abi::integer_return_registers(CallConv::SysVAmd64)
         .iter()
-        .any(|storage| register_is_storage(register, storage, identities))
+        .any(|storage| register_is_storage(register, storage, authority.identities()))
     {
         Some(ResultBank::Integer)
     } else if crate::ir::abi::float_return_registers(CallConv::SysVAmd64)
         .iter()
-        .any(|storage| register_is_storage(register, storage, identities))
+        .any(|storage| register_is_storage(register, storage, authority.identities()))
     {
         Some(ResultBank::Sse)
     } else {
@@ -555,12 +609,12 @@ fn result_bank(register: &VReg, identities: Option<&ValueIdentities>) -> Option<
 
 /// The exact scalar result bank an expression's outer operation belongs to.
 /// Unknown/pointer-like shapes are deliberately refused rather than guessed.
-fn expression_bank(expression: &Expr, identities: Option<&ValueIdentities>) -> Option<ResultBank> {
+fn expression_bank(expression: &Expr, authority: IdentityAuthority<'_>) -> Option<ResultBank> {
     use crate::ir::ast::ScalarType;
 
     match expression {
-        Expr::Origin { expr, .. } => expression_bank(expr, identities),
-        Expr::Reg(register) => result_bank(register, identities),
+        Expr::Origin { expr, .. } => expression_bank(expr, authority),
+        Expr::Reg(register) => result_bank(register, authority),
         Expr::FloatConst { .. } => Some(ResultBank::Sse),
         Expr::NumericConvert { to, .. } => Some(match to {
             ScalarType::Float(_) => ResultBank::Sse,
@@ -674,10 +728,7 @@ fn every_return_loads_one_object(body: &[Stmt], seen: &mut Option<(VReg, u16)>) 
 
 /// The one stack object every `return` in `body` takes its value from, with
 /// that object's recovered extent, or `None` when they do not agree on one.
-fn returned_stack_object(
-    body: &[Stmt],
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) -> Option<(VReg, u16)> {
+fn returned_stack_object(body: &[Stmt], authority: IdentityAuthority<'_>) -> Option<(VReg, u16)> {
     let mut found: Option<(VReg, u16)> = None;
     let mut any = false;
     if !scan_returns(
@@ -685,7 +736,7 @@ fn returned_stack_object(
         &mut std::collections::HashMap::new(),
         &mut found,
         &mut any,
-        identities,
+        authority,
     ) {
         return None;
     }
@@ -705,7 +756,7 @@ fn scan_returns(
     locals: &mut std::collections::HashMap<VReg, (VReg, u16)>,
     found: &mut Option<(VReg, u16)>,
     any: &mut bool,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: IdentityAuthority<'_>,
 ) -> bool {
     for statement in body {
         match statement.semantic() {
@@ -727,10 +778,7 @@ fn scan_returns(
                 let Expr::Reg(destination) = addr.semantic() else {
                     unreachable!("guard established promoted destination")
                 };
-                let promoted = identities.map_or_else(
-                    || crate::ir::types::is_promoted_local_reg(destination),
-                    |identities| identities.is_promoted_stack_object(destination),
-                );
+                let promoted = authority.is_promoted_object(destination);
                 if promoted {
                     match stack_object_load(src) {
                         Some(object) => {
@@ -765,7 +813,7 @@ fn scan_returns(
             Stmt::Label(_) => locals.clear(),
             _ => {
                 for nested in nested_bodies(statement) {
-                    if !scan_returns(nested, &mut locals.clone(), found, any, identities) {
+                    if !scan_returns(nested, &mut locals.clone(), found, any, authority) {
                         return false;
                     }
                 }
