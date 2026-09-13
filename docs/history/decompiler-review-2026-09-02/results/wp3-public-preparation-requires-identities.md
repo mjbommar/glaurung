@@ -68,6 +68,28 @@ example filters for. No corpus matrix, DecBench, or Joern run was performed.
 The native build included unrelated concurrent dirty source and therefore is a
 live-tree build check rather than exact-clean commit provenance.
 
+The required post-commit Python gate was started after the native rebuild and
+stopped at 11% when its first ordinary failure appeared, rather than spending
+the rest of the run after the gate was already red:
+
+```text
+uv run pytest python/tests/ -q
+interrupted at 11%: 1 failed; expected xfails and skips also observed
+
+uv run pytest \
+  python/tests/test_cli_decompile.py::test_real_thumb_leaf_frame_save_does_not_become_a_source_local \
+  -q -vv
+1 failed
+```
+
+The exact failure reproduces an ARM Thumb frame-model defect: the generated C
+contains `*(int *)((&local_18[0] + 20)) = var0;` for the machine-only
+`push {r7}` save. This commit cannot alter that runtime path: its product-code
+changes are Rust visibility/configuration boundaries, and its behavioral edits
+are confined to standalone examples. The failure is therefore recorded as
+live-tree baseline debt for the ARM32 machine-frame lane, not hidden or claimed
+as a passing full gate.
+
 ## Remaining boundary
 
 The shared internal preparation implementation still accepts
