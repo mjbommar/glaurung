@@ -50,7 +50,35 @@ an authority/API change, not an output or timing claim.
 
 ## Remaining boundary
 
-Tail-call internals retain optional identities only for legacy unit-test
-adapters. WP3 remains open pending isolation or deletion of those adapters,
-the remaining production parser audit, conservative invalidation, and
+Commit `5b2e8083` closes the internal compatibility boundary as well. The shared
+walkers now take a closed `TailCallAuthority`: production can construct only
+`Exact(&ValueIdentities)`, while `LegacySpelling` exists only under
+`#[cfg(test)]`. There is no optional-identity state inside tail-call recovery
+and no production route can accidentally fall back to rendered register names.
+
+Focused evidence for the follow-on commit:
+
+```text
+cargo test --features python-ext ir::call_args::tail_calls::tests:: --lib -- --test-threads=1
+16 passed; 0 failed; 4830 filtered out
+
+cargo check --features python-ext
+exit 0
+
+uv run maturin develop
+exit 0
+
+uv run python tools/build_guard.py
+fresh
+```
+
+The required post-source-commit Python gate was run once, fail-fast. It reached
+17% without an earlier failure, then stopped at the established disagreement
+between `arch_baseline.json` and `baseline.json` for fixture 157 at x86-64
+O0/O2, fixture 172 at x86-64 O0, and fixture 81 at x86-64 O2. The shared dirty
+tree was not used to regenerate either ledger. No fixture matrix, DecBench,
+Joern, or corpus sweep was run.
+
+The tail-call identity-authority slice is now complete. WP3 remains open for
+the residual production semantic-reader audit, conservative invalidation, and
 universal origin preservation.

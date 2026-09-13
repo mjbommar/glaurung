@@ -3052,6 +3052,16 @@ provenance through lowering.
   failure first at 11%. Next continue the residual public/raw API inventory and
   isolate the shared test compatibility engines before closing WP3 identity
   authority. See `results/wp3-tail-call-apis-require-identities.md`.
+  Commit `5b2e8083` closes the remaining internal tail-call compatibility
+  engine. Shared walkers now take a closed authority bundle: production can
+  supply only exact identities, while display-spelling compatibility is
+  compiled only for tests. All 16 owning tests and the production build check
+  pass; the native extension is fresh. The required Python fail-fast gate was
+  run once and reached 17% without an earlier failure, then stopped at the
+  established `arch_baseline.json` versus `baseline.json` control-lane
+  disagreement. No fixture matrix or corpus sweep ran. The tail-call identity
+  slice is complete; continue the residual production semantic-reader and
+  invalidation audit. See `results/wp3-tail-call-apis-require-identities.md`.
   Commit `c3780881` closes the adjacent benchmark and diagnostic stack-frame
   boundary. The composed decompile benchmark, dataflow benchmark, and AArch64
   prologue diagnostic now retain the authoritative identity snapshot through
