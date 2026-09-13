@@ -47,6 +47,15 @@ exit 0
 
 This is a fail-closed authority change, not an output or timing claim. No
 fixture matrix, DecBench, Joern, or corpus sweep was run. The required native
-rebuild and post-source-commit fail-fast Python gate are recorded after they
-run. WP3's remaining identity and origin/invalidation audit stays open.
+rebuild is fresh. The post-source-commit Python gate again reached 11% before
+its first ordinary failure:
 
+```text
+uv run pytest python/tests/ -q -x
+stopped at 11%: 1 failed
+```
+
+It reproduces the established ARM Thumb frame-save defect with the unchanged
+`*(int *)((&local_18[0] + 20)) = var0;` output. No ordinary failure appears
+earlier, but the whole gate remains red and incomplete. WP3's remaining
+identity and origin/invalidation audit stays open.

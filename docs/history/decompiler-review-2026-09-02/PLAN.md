@@ -2948,8 +2948,9 @@ provenance through lowering.
   now fail closed to the machine word unless `ValueIdentities` proves their
   storage view or definition width. The former permissive assertion was
   inverted and observed red first; all 93 type-recovery tests and the affected
-  dataflow benchmark check pass. See
-  `results/wp3-raw-register-width-names.md`.
+  dataflow benchmark check pass. Its native rebuild is fresh, and the required
+  fail-fast whole-Python gate again reaches the known ARM Thumb frame-save
+  failure first at 11%. See `results/wp3-raw-register-width-names.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
