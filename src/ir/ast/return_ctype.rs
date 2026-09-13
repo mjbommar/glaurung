@@ -2,7 +2,7 @@
 //!
 //! Separate from width *recovery*: by the time these run the `TypeMap` is
 //! settled, and the question is which C spelling the render will actually emit
-//! for an identifier ([`declared_int_type`]), for an expression
+//! for an identifier ([`declared_int_type_with_identities`]), for an expression
 //! ([`expr_ctype`]), and for the function's result ([`infer_return_ctype`]).
 //! The return answer is derived from the value actually returned rather than
 //! from a register literally named `ret`, because value renaming can move the
@@ -31,10 +31,6 @@ use super::{
 /// remain machine-word integers unless the prepared high-variable proof
 /// classifies them as pointers. Other raw machine registers and temps are also
 /// declared `long`.
-pub(crate) fn declared_int_type(ident: &str, tm: Option<&TypeMap>) -> Option<(bool, u8)> {
-    declared_int_type_with_identities(ident, tm, None)
-}
-
 /// The declared integer type, recognizing pipeline-owned SSA storage.
 pub(crate) fn declared_int_type_with_identities(
     ident: &str,
@@ -42,10 +38,9 @@ pub(crate) fn declared_int_type_with_identities(
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> Option<(bool, u8)> {
     let value = VReg::Phys(ident.to_string());
-    if is_high_variable(ident)
-        || identities
-            .is_some_and(|identities| identities.unambiguous_physical_base(&value).is_some())
-    {
+    let has_storage_identity =
+        identities.is_some_and(|identities| identities.unambiguous_physical_base(&value).is_some());
+    if has_storage_identity || identities.is_none() && is_high_variable(ident) {
         return match tm.and_then(|types| types.get(&value)) {
             Some(TypeHint::Int { signed, width }) => Some((signed, width)),
             Some(TypeHint::Pointer { .. } | TypeHint::CodePointer | TypeHint::Float { .. }) => None,
@@ -425,6 +420,23 @@ mod tests {
         assert_eq!(
             declared_int_type_with_identities("arg0", Some(&tm), Some(&parameter)),
             Some((false, 4))
+        );
+    }
+
+    #[test]
+    fn declared_integer_temporaries_require_identity_when_sidecar_is_installed() {
+        let tm = type_map(&[(
+            "var99",
+            TypeHint::Int {
+                signed: false,
+                width: 4,
+            },
+        )]);
+        let identities = crate::ir::value_number::ValueIdentities::default();
+
+        assert_eq!(
+            declared_int_type_with_identities("var99", Some(&tm), Some(&identities)),
+            Some((true, 8))
         );
     }
 
