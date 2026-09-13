@@ -10,6 +10,14 @@ Review basis: `README.md` and `01` through `06` in this directory
 
 Scope: local Glaurung implementation, tests, measurements, and documentation
 
+2026-09-13 regression update: commit `db0c7321` restores all 11 TypeMatch
+perfect-score losses identified between `d8665dd` and `15d8b51c`, and restores
+`libacl` O0 `user_name` to exact GED 0. The other apparent GED loss,
+`socket_open2`, was an old false-positive isomorphism caused by fabricated
+stack-canary control flow; that incorrect branch is not restored. See
+`results/wp8-type-and-ged-regression-closure.md` for the targeted evaluator
+evidence, safety controls, and remaining two-node structural deficit.
+
 Current-state snapshot: reconciled 2026-09-08 through the condition-hoist
 identity migration at `003e4fc1`, following homogeneous-float
 behavioral commits `db750dbc`, `197e6383`, and `64181d02`, baseline commit
