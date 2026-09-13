@@ -3009,6 +3009,16 @@ provenance through lowering.
   first at 11%. Next finish classifying the remaining optional-identity APIs
   and split shared compatibility implementations where the raw phase remains
   necessary. See `results/wp3-typed-input-facts-require-identities.md`.
+  Commit `79496134` closes the production tail-call recovery surface. Resolved
+  indirect, resolved direct, and proven vtable tail-call routes now require an
+  actual identity snapshot; their raw functions and top-level re-exports are
+  test-only. This prevents shipped callers from recovering argument forwarding
+  or fat-pointer dispatch from numbered register spelling alone. All 16 owning
+  tests and the non-test library check pass; the native build is fresh, and the
+  required fail-fast Python gate reaches the unchanged ARM Thumb leaf-frame
+  failure first at 11%. Next continue the residual public/raw API inventory and
+  isolate the shared test compatibility engines before closing WP3 identity
+  authority. See `results/wp3-tail-call-apis-require-identities.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
