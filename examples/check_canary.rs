@@ -37,7 +37,13 @@ fn main() {
     let sp = strings_fold::collect_string_pool(&data);
     strings_fold::fold_string_literals(&mut f, &sp);
     canary::recognise_canary(&mut f);
-    stack_locals::promote_stack_locals(&mut f);
+    stack_locals::promote_stack_locals_with_facts_and_identities(
+        &mut f,
+        Some(cc),
+        None,
+        &[],
+        &identities,
+    );
 
     // Before canary::collapse_canary_save — print positions around reload.
     println!("=== Before collapse_canary_save ===");

@@ -516,6 +516,7 @@ fn rebased_hint_coordinate(hint: &StackObjectHint, ctx: StackContext) -> Option<
 }
 
 /// Rewrite stack-relative memory accesses to named locals.
+#[cfg(test)]
 pub fn promote_stack_locals(f: &mut Function) {
     let _ = promote_stack_locals_typed(f, None);
 }
@@ -526,6 +527,7 @@ pub fn promote_stack_locals(f: &mut Function) {
 /// type recovery so a 4-byte spill slot renders as `int` rather than the
 /// blanket `long`. When a name is defined at more than one width the widest is
 /// kept (the safest committed size).
+#[cfg(test)]
 pub fn promote_stack_locals_typed(f: &mut Function, cc: Option<CallConv>) -> HashMap<String, u8> {
     promote_stack_locals_typed_with_parameter_count(f, cc, None)
 }
@@ -536,6 +538,7 @@ pub fn promote_stack_locals_typed(f: &mut Function, cc: Option<CallConv>) -> Has
 /// the same machine shape as a genuine stack-passed argument. DWARF or another
 /// locked prototype disambiguates the two without weakening stripped-binary
 /// inference.
+#[cfg(test)]
 pub fn promote_stack_locals_typed_with_parameter_count(
     f: &mut Function,
     cc: Option<CallConv>,
@@ -545,6 +548,7 @@ pub fn promote_stack_locals_typed_with_parameter_count(
 }
 
 /// Promote stack storage with optional debug-proven aggregate boundaries.
+#[cfg(test)]
 pub fn promote_stack_locals_typed_with_parameter_count_and_objects(
     f: &mut Function,
     cc: Option<CallConv>,
@@ -556,6 +560,7 @@ pub fn promote_stack_locals_typed_with_parameter_count_and_objects(
 
 /// Promote stack storage and retain authoritative source types alongside the
 /// traditional machine-size map.
+#[cfg(test)]
 pub fn promote_stack_locals_with_facts(
     f: &mut Function,
     cc: Option<CallConv>,
