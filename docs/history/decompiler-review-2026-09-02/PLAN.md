@@ -2963,6 +2963,18 @@ provenance through lowering.
   optional-identity compatibility branches from the typed x86 implementation
   while continuing the wider production identity/parser audit. See
   `results/wp3-x86-frame-apis-require-identities.md`.
+  Commit `1379efdc` applies the same authority boundary to dead-store cleanup.
+  The composed decompile and dataflow benchmarks plus the canary diagnostic now
+  carry their existing identity snapshots into dead-store elimination and
+  callee-save pruning. Bare top-level elimination and top-level/nested
+  callee-save entry points remain test-only, preventing shipped callers from
+  selecting `ret`, promoted-local spellings, or parsed SSA suffixes as cleanup
+  authority. All 51 owning tests, both affected benchmarks, and the diagnostic
+  example pass their focused checks; the native build is fresh, and the
+  required fail-fast Python gate reaches the unchanged ARM Thumb leaf-frame
+  failure first at 11%. Next isolate the optional-identity internals behind
+  explicit test adapters and continue the remaining production parser audit.
+  See `results/wp3-dead-store-apis-require-identities.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
