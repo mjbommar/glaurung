@@ -3077,6 +3077,18 @@ provenance through lowering.
   failure at 11%, whose output contains an undefined `var5`. Diagnose that
   newly exposed WP3/WP9 identity loss next. See
   `results/wp3-thumb-leaf-frame-recovery.md`.
+  Commit `67b6a8a0` closes that newly exposed hard-float argument defect.
+  Recovered-layout folding now preserves an impure frame-load setup at its
+  original program point and makes the call read the setup's exact SSA
+  destination instead of falling back to a stale architectural spelling. The
+  real Cortex-M call is now `arm_hf_three(value, -limit, limit)` with no
+  undefined `var5`; all 132 call-argument tests and the exact compiled fixture
+  pass against a fresh native build. The required fail-fast Python gate passes
+  both former 11% blockers and reaches 17%, where it stops on an independent
+  committed-baseline inconsistency; neither baseline was regenerated from the
+  shared dirty checkout. Continue the remaining semantic-reader audit before
+  WP3 invalidation closure. See
+  `results/wp3-hard-float-frame-argument-identity.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
