@@ -192,6 +192,7 @@ def run(
     start: int = 0,
     details_path: Path | None = None,
     progress_every: int = 0,
+    capture_graphs: bool = False,
 ) -> dict[str, Any]:
     """Walk the oracle and score `provider` against every stored cell."""
     # `decbench.metrics.vj_ged` is the same cost model on scipy's
@@ -210,6 +211,27 @@ def run(
         from cfgutils.similarity import vj_ged
     from decbench.metrics.ged import GED_MAX_NODES, _is_isomorphic
     from decbench.publish.cfg_export import rebuild_cfg
+
+    def graph_record(cfg: Any) -> dict[str, Any]:
+        """Losslessly serialize the metric-visible graph for later A/B review.
+
+        Node labels and statements do not enter DecBench's GED. Roles and
+        directed edges do, including through the isomorphism fast path. Keeping
+        both is therefore the smallest artifact from which every metric-visible
+        disagreement can be replayed without starting another JVM.
+        """
+        nodes = list(cfg.nodes())
+        ids = {node: index for index, node in enumerate(nodes)}
+        return {
+            "roles": [
+                [
+                    bool(getattr(node, "is_entrypoint", False)),
+                    bool(getattr(node, "is_exitpoint", False)),
+                ]
+                for node in nodes
+            ],
+            "edges": sorted([ids[src], ids[dst]] for src, dst in cfg.edges()),
+        }
 
     def scored(source: Any, decompiled: Any) -> float:
         """The value `GEDMetric` would record, not bare `vj_ged`.
@@ -327,24 +349,25 @@ def run(
                                 "got": got,
                                 "delta": delta,
                             }
+                        if capture_graphs:
+                            detail["provider_graph"] = graph_record(ours)
                 if detail_handle is not None:
                     detail_handle.write(json.dumps(detail, sort_keys=True) + "\n")
 
             if detail_handle is not None:
                 for name in gained_names:
+                    gained_detail = {
+                        "ordinal": ordinal,
+                        "opt": evaluated.parts[-4],
+                        "project": evaluated.parts[-3],
+                        "binary": evaluated.stem,
+                        "function": name,
+                        "status": "gained",
+                    }
+                    if capture_graphs:
+                        gained_detail["provider_graph"] = graph_record(produced[name])
                     detail_handle.write(
-                        json.dumps(
-                            {
-                                "ordinal": ordinal,
-                                "opt": evaluated.parts[-4],
-                                "project": evaluated.parts[-3],
-                                "binary": evaluated.stem,
-                                "function": name,
-                                "status": "gained",
-                            },
-                            sort_keys=True,
-                        )
-                        + "\n"
+                        json.dumps(gained_detail, sort_keys=True) + "\n"
                     )
                 detail_handle.flush()
             if progress_every and binaries % progress_every == 0:
@@ -367,6 +390,7 @@ def run(
         "tree": str(tree),
         "column": column,
         "provider": provider.name,
+        "graphs_captured": capture_graphs,
         "start": start,
         "ged_max_nodes": GED_MAX_NODES,
         "binaries": binaries,
@@ -479,6 +503,11 @@ def main() -> int:
         default=0,
         help="write progress to stderr every N processed binaries",
     )
+    parser.add_argument(
+        "--capture-graphs",
+        action="store_true",
+        help="store GED-visible roles and edges in each JSONL detail record",
+    )
     parser.add_argument("--json", action="store_true", help="emit JSON")
     parser.add_argument("--verbose", action="store_true", help="report provider errors")
     parser.add_argument(
@@ -513,6 +542,7 @@ def main() -> int:
             start=args.start,
             details_path=args.details_jsonl,
             progress_every=args.progress_every,
+            capture_graphs=args.capture_graphs,
         )
     except ImportError as exc:
         print(
