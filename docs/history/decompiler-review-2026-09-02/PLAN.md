@@ -2932,6 +2932,15 @@ provenance through lowering.
   This closes identity omission at the shipped LLIR-to-AST boundary, not WP3's
   remaining origin/invalidation work. See
   `results/wp3-identity-free-lowering-test-only.md`.
+  Commit `f7065f89` removes the next residual SSA-spelling parser from raw
+  frame-base type recovery. The raw path now accepts only exact architectural
+  frame names; numbered, opaque, and coalesced values require the identity
+  sidecar's unambiguous physical base and candidate set. The former permissive
+  contract was inverted and observed red first. Five focused frame-authority
+  checks, three real spill-pointer controls, and the non-test library check
+  pass. Raw pre-numbering type recovery remains supported rather than being
+  conflated with numbered compatibility. See
+  `results/wp3-raw-frame-base-names.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
