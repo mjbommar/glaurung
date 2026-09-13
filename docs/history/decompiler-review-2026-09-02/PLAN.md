@@ -2778,7 +2778,14 @@ provenance through lowering.
   coalescing. The pass now refuses an owned parameter scratch through its typed
   slot and fails closed on missing identity evidence. All 17 owning tests and
   the 12-lane release-built `@loops` fixture set pass with no scoped
-  regressions. See `results/wp3-loop-update-required-identities.md`. Commit `3e302824`
+  regressions. See `results/wp3-loop-update-required-identities.md`. Commit
+  `aa342508` removes the same display-name authority from parameter-home
+  coalescing. Named promoted homes, frame homes, parameter sources, aliases,
+  and store conversion now require explicit sidecar facts; generic no-sidecar
+  preparation declines this optimization. Eight owning tests, 20 preparation
+  tests, two adjacent exact controls, and three release-built parameter-spill
+  binaries pass. See `results/wp3-parameter-spill-required-identities.md`.
+  Commit `3e302824`
   removes an `argN` spelling decision from
   DWARF aggregate-field recovery: only roles seeded from the authoritative
   prototype are exempt from definition validation, so stale or fabricated
