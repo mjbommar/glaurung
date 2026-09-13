@@ -28,7 +28,9 @@ rerunning the whole corpus raised agreement to 81,274/85,645 (94.8964%), a net
 gain of 790 exact cells with no coverage regression. A second general fix
 removed infeasible false exits from provably constant-true loops while keeping
 their cycles and reachable `break`s. The next complete rerun reached
-81,501/85,645 (95.1614%), for a cumulative gain of 1,017 exact cells.
+81,501/85,645 (95.1614%). A third measured Joern granularity fix for bare
+literal `if` tests reached 81,515/85,645 (95.1778%), for a cumulative gain of
+1,031 exact cells, with no regression in that increment.
 
 The apparent coverage gain also needs qualification. Joern reports 76,312
 additional names that Glaurung does not, but every graph is one entry-and-exit
@@ -47,7 +49,8 @@ positive-indegree node in 1,441. Glaurung now matches the published source graph
 isomorphically in 313 cases where Java does not. Of 2,334 graph-size
 differences, 2,289 are explained constant-loop edge-policy differences. Of the
 45 unaffected cases, nine are now traced to duplicated branching for a
-value-only ternary nested in a loop condition; 36 remain unclassified.
+value-only ternary nested in a loop condition. A literal-`if` correction makes
+14 more exact; 22 unaffected cells remain unclassified.
 
 The complete commands, provenance, limitations, hashes, and follow-up are in
 the adjacent `README.md`. Lossless per-function graph ledgers and the

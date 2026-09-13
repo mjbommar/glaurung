@@ -10,13 +10,13 @@ After parallel-edge normalization and constant-true-loop correction:
 
 | Result | Cells |
 |---|---:|
-| Equal stored GED | 81,501 |
-| Different stored GED | 4,144 |
+| Equal stored GED | 81,515 |
+| Different stored GED | 4,130 |
 | Glaurung uncovered | 0 |
 | Glaurung source-isomorphic, Java not | 313 |
 | Java source-isomorphic, Glaurung not | 40 |
 | Same graph size, role difference | 1,457 |
-| Different graph size | 2,334 |
+| Different graph size | 2,320 |
 
 ## The 40 apparent Java wins
 
@@ -99,14 +99,29 @@ them into Glaurung's general CFG would weaken the meaning of "function entry".
 They may be emulated only in an explicitly Joern-compatible scoring view if a
 stable rule is recovered; they are not general correctness defects.
 
+## Literal `if` granularity correction
+
+A second fresh differential established that Joern gives a bare literal
+`if (0)` or `if (1)` no node of its own. It preserves both CFG arms and moves
+the fork to the predecessor; nested literal tests may then collapse because
+the NetworkX `DiGraph` deduplicates equal targets. Glaurung now applies exactly
+that representation rule in the Joern-compatible projection. It does not
+constant-fold to a feasible arm, and it does not change the general CFG.
+
+The focused 23-test node-rewrite module passed. Across all 85,645 cells, 15
+graphs changed: 14 mismatches became exact, no exact cell regressed, and one
+remaining mismatch moved closer. The fixed cells include all repeated
+`dmaGetChannelSpecBy*`, `commanderCrtpCB`, `updateQueuedMeasurements`, and
+`ws2812Init` cases, plus `days_to_secs` and `format_checkpoint_string`.
+
 ## Remaining graph-size queue
 
 Of 2,334 graph-size differences, 2,289 were touched by the constant-loop
 correction. Most now have equal node counts and fewer Glaurung edges because
 the infeasible false exits are absent. Only **45** graph-size differences were
-unaffected. Those 45 are the next bounded root-cause queue; repeated functions
-across optimization levels and identical firmware images reduce it to fewer
-unique source patterns.
+unaffected. Fourteen of those are now exact after the literal-`if` granularity
+correction. Repeated functions across optimization levels and identical
+firmware images reduce the remaining cells to fewer unique source patterns.
 
 ### 9: value-only ternary nested in a loop condition
 
@@ -130,5 +145,6 @@ parity-CFG defect, not a Java flag artefact. A first attempted local deletion
 removed the value-only node but left both branch nodes; focused tests rejected
 it and the experiment was discarded. The proper repair must retarget entry and
 loop-back edges to the real expression entry and preserve one final branch,
-including side-effecting ternary arms. **36 unaffected graph-size cells remain
-unclassified after accounting for this class.**
+including side-effecting ternary arms. After the literal-`if` correction,
+**22 unaffected graph-size cells remain unclassified in addition to these nine
+traced ternary-loop cells.**

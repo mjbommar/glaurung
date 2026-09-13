@@ -210,6 +210,8 @@ pub struct GranularityStats {
     pub jumps_elided: u32,
     /// Impossible false exits removed from syntactically constant-true loops.
     pub constant_loop_exits_elided: u32,
+    /// Bare literal `if` tests elided while preserving their fork.
+    pub literal_if_tests_elided: u32,
 }
 
 /// Rewrite one function's S2 graph to Joern's expression granularity.
@@ -238,10 +240,15 @@ pub fn expression_granular(
     let mut stats = GranularityStats::default();
     let regions = collect(tree, token_spans, body, cfg, &mut stats);
     let constant_true_headers = constant_true_loop_headers(tree, text, token_spans, body, cfg);
+    let literal_if_tests = literal_if_test_nodes(tree, token_spans, body, cfg);
     let jumps = cfg.nodes().iter().any(|node| is_jump_node(node.kind()));
     // Staying free where neither half applies is deliberate: `Cfg`'s `PartialEq`
     // is over the edge *vector*, and rebuilding one through `Work` reorders it.
-    if regions.is_empty() && constant_true_headers.is_empty() && !jumps {
+    if regions.is_empty()
+        && constant_true_headers.is_empty()
+        && literal_if_tests.is_empty()
+        && !jumps
+    {
         return (cfg.clone(), stats);
     }
     let mut work = Work::from_cfg(cfg);
@@ -255,6 +262,11 @@ pub fn expression_granular(
     for header in constant_true_headers {
         if work.remove_false_edges(header) {
             stats.constant_loop_exits_elided = stats.constant_loop_exits_elided.saturating_add(1);
+        }
+    }
+    for test in literal_if_tests {
+        if work.bypass(test) {
+            stats.literal_if_tests_elided = stats.literal_if_tests_elided.saturating_add(1);
         }
     }
     elide_jumps(&mut work, &mut stats);
@@ -413,6 +425,63 @@ fn constant_true_loop_headers(
         })
         .map(|(index, _)| NodeId::new(index as u32))
         .collect()
+}
+
+/// Bare literal `if` tests, which Joern represents only as a fork.
+///
+/// A fresh differential over `if (0)`, `if (1)`, and nested literal tests
+/// confirms that Joern emits no literal node. Its CFG still carries both arms:
+/// the fork moves to the predecessor, and NetworkX deduplicates arms that then
+/// name the same successor. This is a parity-view granularity rule, not
+/// constant folding, so it deliberately does not choose a feasible arm.
+fn literal_if_test_nodes(
+    tree: &Tree,
+    token_spans: &[Span],
+    body: NodeId,
+    cfg: &Cfg,
+) -> Vec<NodeId> {
+    let mut spans = BTreeSet::new();
+    for node in tree.arena().preorder(body) {
+        if tag_of(tree, node) != Some(NodeTag::IfStmt) {
+            continue;
+        }
+        let Some(condition) = tree
+            .arena()
+            .children_iter(node)
+            .find(|child| tag_of(tree, *child).is_some_and(NodeTag::is_expression))
+        else {
+            continue;
+        };
+        if is_bare_literal(tree, condition) {
+            if let Some(span) = tree.arena().span(condition, token_spans) {
+                spans.insert((span.lo, span.hi));
+            }
+        }
+    }
+    cfg.nodes()
+        .iter()
+        .enumerate()
+        .filter(|(_, node)| {
+            node.kind() == NodeKind::Cond && spans.contains(&(node.span().lo, node.span().hi))
+        })
+        .map(|(index, _)| NodeId::new(index as u32))
+        .collect()
+}
+
+fn is_bare_literal(tree: &Tree, mut node: NodeId) -> bool {
+    for _ in 0..=tree.arena().len() {
+        match tag_of(tree, node) {
+            Some(NodeTag::ParenExpr) if tree.arena().child_count(node) == 1 => {
+                let Some(inner) = tree.arena().child(node, 0) else {
+                    return false;
+                };
+                node = inner;
+            }
+            Some(NodeTag::Literal) => return true,
+            _ => return false,
+        }
+    }
+    false
 }
 
 /// Recognise a nonzero C integer literal through transparent parentheses.
@@ -1616,6 +1685,26 @@ mod tests {
             .iter()
             .any(|edge| edge.dst == header));
         assert_eq!(stats.constant_loop_exits_elided, 1);
+    }
+
+    #[test]
+    fn nested_literal_if_tests_cost_no_nodes_but_keep_their_forks() {
+        let text = "void f(void) { if (1) { if (0) g(); } h(); }";
+        let (_, after, stats) = rewrite(text, "f");
+        assert_eq!(stats.literal_if_tests_elided, 2);
+        assert_eq!(
+            projected(&after),
+            published(3, &[(0, 2), (1, 0), (1, 2)]),
+            "fresh Joern differential: entry forks to g() or h(), then g() reaches h()"
+        );
+    }
+
+    #[test]
+    fn a_variable_if_test_still_materializes() {
+        let text = "void f(int x) { if (x) g(); h(); }";
+        let (before, after, stats) = rewrite(text, "f");
+        assert_eq!(stats.literal_if_tests_elided, 0);
+        assert_eq!(before, after);
     }
 
     /// A function with no short-circuit at all must come back as the very same

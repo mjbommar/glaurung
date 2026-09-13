@@ -30,6 +30,7 @@ to review and share.
 | Baseline native extension SHA-256 | `12b095751310d866d4531e192df6e51699c39d73d7bf753fac76f48c0c666d28` |
 | Parallel-edge correction extension SHA-256 | `baef2831611af06d23490bbfd44c96138873fb96c507b4d1dd9012259e048b35` |
 | Constant-loop correction extension SHA-256 | `103b6f7522d67c985858ada6992b294eeeac7cf9554ed623f68dd4e118a6fe91` |
+| Literal-`if` correction extension SHA-256 | `e6221986ab9306b16a1010422b5eed7997b916330e247cc38db7ed9c155fac8d` |
 | DecBench | `f76dae075d4d82004fb21132b3f15e43b680e179` |
 | DecBench dataset | `e5eb576d66ee36793b800a4dd45e291e0add4472` (`full`) |
 | Stored decompiler column | `glaurung-229fbb1-clean` |
@@ -202,7 +203,23 @@ The detailed [difference review](DIFFERENCE-REVIEW.md) classifies all 40
 apparent Java-source-isomorphic wins, all 1,457 role-only differences, and
 reduces the initially unexplained graph-size queue to 45 unaffected cases. Nine
 of those are now traced to duplicated branching for a value-only ternary nested
-in a loop condition, leaving 36 unclassified cells.
+in a loop condition. The literal-`if` correction below makes 14 more exact,
+leaving 22 unclassified cells in addition to the nine traced ternary cells.
+
+### Third broad correction: literal `if` tests
+
+Joern represents a bare literal `if (0)` or `if (1)` as a fork on its
+predecessor, with no literal node. Glaurung now applies that measured
+granularity rule only in the compatibility projection; it neither chooses a
+feasible arm nor changes the general CFG. The 23 focused node-rewrite tests
+passed. The complete rerun took 66.09 seconds at 336,340 KiB RSS:
+
+| Measure | Before | After | Change |
+|---|---:|---:|---:|
+| Exact agreement | 81,501 (95.1614%) | 81,515 (95.1778%) | **+14** |
+| Different GED | 4,144 | 4,130 | **-14** |
+| Exact regressions | - | 0 | **0** |
+| Uncovered | 0 | 0 | 0 |
 
 ## Artifact integrity
 
@@ -219,15 +236,18 @@ The lossless artifacts are stored outside Git under
 | `glaurung-constant-loop-details.jsonl` | `65fa1f96dd56c85d9286fcbf25a1edd88297e8cb223ab987fa740a072f9b2e98` |
 | `aggregate-constant-loop.json` | `d15efc30e4eee44f1ebca97835be09b25a30b2cc849d6d363dc301087f71682e` |
 | `aggregate-constant-loop.md` | `e1e68e7e4174dc440e8e5a15f19cc9261d3619f0f92761df41f36f3f848daef2` |
+| `glaurung-literal-if-report.json` | `703f776de4353ff707d8b6b8e8a70ad2b1ccb0875886b0d6fcf754b40d4ee584` |
+| `glaurung-literal-if-details.jsonl` | `412a0eb94148a65273e9b571dfc951d6d0b5021cbb36b17e3724fcd7c6b9a366` |
+| `aggregate-literal-if.json` | `732bd3cd1652411914d66e5667c82e0915bab48efb928b951d31fc193561580b` |
+| `aggregate-literal-if.md` | `5f078360156c96c7bb36b204427461789e31e42c24140986baef9744cb8ebbc6` |
 
 ## Required follow-up
 
 - Repair the nine duplicated-branch ternary-loop cells by retargeting entry and
   back edges to the real expression entry; do not land the rejected partial
   node-deletion approach recorded in the difference review.
-- Root-cause the remaining 36 graph-size differences untouched by
-  constant-loop correction, deduplicating repeated functions across builds
-  first.
+- Root-cause the remaining 22 unaffected graph-size differences, deduplicating
+  repeated functions across builds first.
 - Review all large deltas and a deterministic sample of small deltas against
   source text and graph invariants.
 - Decide whether an explicitly compatibility-only entry-flag emulator is worth
