@@ -62,10 +62,16 @@ impl FlowState {
     }
 }
 
+enum IdentityAuthority<'a> {
+    Exact(&'a mut ValueIdentities),
+    #[cfg(test)]
+    LegacySpelling,
+}
+
 struct Splitter<'a> {
     cc: CallConv,
     next_result: usize,
-    identities: Option<&'a mut ValueIdentities>,
+    authority: IdentityAuthority<'a>,
 }
 
 /// Version each consumed ABI call result and its proven reaching uses.
@@ -74,7 +80,7 @@ pub fn split_call_result_lifetimes(function: &mut Function, cc: CallConv) {
     let mut splitter = Splitter {
         cc,
         next_result: 0,
-        identities: None,
+        authority: IdentityAuthority::LegacySpelling,
     };
     splitter.walk_body(&mut function.body, &mut FlowState::entry());
 }
@@ -88,30 +94,41 @@ pub fn split_call_result_lifetimes_with_identities(
     let mut splitter = Splitter {
         cc,
         next_result: 0,
-        identities: Some(identities),
+        authority: IdentityAuthority::Exact(identities),
     };
     splitter.walk_body(&mut function.body, &mut FlowState::entry());
 }
 
 impl Splitter<'_> {
+    fn exact_identities_mut(&mut self) -> Option<&mut ValueIdentities> {
+        match &mut self.authority {
+            IdentityAuthority::Exact(identities) => Some(identities),
+            #[cfg(test)]
+            IdentityAuthority::LegacySpelling => None,
+        }
+    }
+
     /// Resolve physical storage without interpreting presentation spelling in
     /// the production path. The compatibility entry point retains the legacy
     /// parser for isolated callers that have no identity sidecar.
     fn physical_base(&self, register: &VReg) -> Option<String> {
-        if let Some(identities) = self.identities.as_deref() {
-            return identities
+        match &self.authority {
+            IdentityAuthority::Exact(identities) => identities
                 .unambiguous_physical_base(register)
-                .map(str::to_string);
+                .map(str::to_string),
+            #[cfg(test)]
+            IdentityAuthority::LegacySpelling => {
+                let VReg::Phys(name) = register else {
+                    return None;
+                };
+                Some(crate::ir::abi::ssa_base(name).to_string())
+            }
         }
-        let VReg::Phys(name) = register else {
-            return None;
-        };
-        Some(crate::ir::abi::ssa_base(name).to_string())
     }
 
     /// Publish a storage fact owned by this pass, then return the value.
     fn attach_physical(&mut self, value: VReg, base: &str) -> VReg {
-        if let Some(identities) = self.identities.as_deref_mut() {
+        if let Some(identities) = self.exact_identities_mut() {
             identities.attach_physical_base(value.clone(), base);
         }
         value
@@ -222,7 +239,7 @@ impl Splitter<'_> {
             .unwrap_or_else(|| "ret".to_string());
         let result = VReg::phys(format!("{base}#call_lifetime_{}", self.next_result));
         self.next_result += 1;
-        if let Some(identities) = self.identities.as_deref_mut() {
+        if let Some(identities) = self.exact_identities_mut() {
             identities.inherit_value_facts(original, result.clone());
             identities.attach_physical_base(result.clone(), base);
         }
@@ -1602,7 +1619,7 @@ mod tests {
             let splitter = Splitter {
                 cc,
                 next_result: 0,
-                identities: None,
+                authority: IdentityAuthority::LegacySpelling,
             };
             let storage = |name: &str| splitter.result_storage(&reg(name));
             assert_eq!(storage("rax"), Some("rax".to_string()), "{cc:?}");
@@ -1616,7 +1633,7 @@ mod tests {
         let splitter = Splitter {
             cc: CallConv::Cdecl32,
             next_result: 0,
-            identities: None,
+            authority: IdentityAuthority::LegacySpelling,
         };
         assert_eq!(
             splitter.result_storage(&reg("st0")),
