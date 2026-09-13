@@ -2833,6 +2833,16 @@ provenance through lowering.
   Hello cells pass. This closes another renderer-facing semantic reader but not
   the remaining WP3 audit or `tag_phys` removal. See
   `results/wp3-declaration-plan-required-identities.md`.
+  Commit `99843238` deletes the spelling-only entry points for redundant
+  declared-view folding and matching comparison-extension folding. Both typed
+  traversals now require `ValueIdentities`; their legacy unit contracts build
+  explicit parameter/promoted-object facts and therefore exercise the same
+  entry points as production. All 82 constant-fold, 25 adjacent widening, and
+  86 renderer-focused tests pass, as do all four release-built `@widths` lanes.
+  Untyped early algebraic folding remains a separate pre-type pass. Continue
+  through the remaining typed simplification, widening, and copy-propagation
+  compatibility surfaces before removing `tag_phys`. See
+  `results/wp3-typed-constant-fold-required-identities.md`.
   Commit `3e302824`
   removes an `argN` spelling decision from
   DWARF aggregate-field recovery: only roles seeded from the authoritative
