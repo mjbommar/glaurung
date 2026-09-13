@@ -2998,6 +2998,17 @@ provenance through lowering.
   Next continue the remaining optional-identity API audit, then isolate the
   shared legacy internals before closing WP3 identity authority. See
   `results/wp3-aggregate-return-apis-require-identities.md`.
+  Commit `d7e6411d` tightens the connected DWARF/input/parameter fact boundary.
+  Typed DWARF field annotation, proven-call-input classification, and LLIR
+  parameter-slot discovery now require an actual `ValueIdentities` snapshot;
+  none accepts `None`. Legitimate pre-numbering consumers keep separate raw
+  entry points, and internal walkers dispatch explicitly between raw and typed
+  semantics. All 13 DWARF-field, 16 use/def, and 65 value-numbering tests pass
+  with a non-test library check; the native build is fresh, and the required
+  fail-fast Python gate reaches the unchanged ARM Thumb leaf-frame failure
+  first at 11%. Next finish classifying the remaining optional-identity APIs
+  and split shared compatibility implementations where the raw phase remains
+  necessary. See `results/wp3-typed-input-facts-require-identities.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
