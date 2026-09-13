@@ -29,8 +29,13 @@ gain of 790 exact cells with no coverage regression. A second general fix
 removed infeasible false exits from provably constant-true loops while keeping
 their cycles and reachable `break`s. The next complete rerun reached
 81,501/85,645 (95.1614%). A third measured Joern granularity fix for bare
-literal `if` tests reached 81,515/85,645 (95.1778%), for a cumulative gain of
-1,031 exact cells, with no regression in that increment.
+literal `if` tests reached 81,515/85,645 (95.1778%). Finally, a structurally
+guarded correction for ternaries nested in loop conditions reached
+81,524/85,645 (95.1883%), for a cumulative gain of 1,040 exact cells. That last
+full rerun changed exactly nine graphs, all mismatch to exact, with no
+regression. A broader candidate was rejected after it regressed 162 exact
+cells; the accepted rule requires the ternary to be lexically inside the loop
+condition rather than merely first in the body.
 
 The apparent coverage gain also needs qualification. Joern reports 76,312
 additional names that Glaurung does not, but every graph is one entry-and-exit
@@ -40,17 +45,17 @@ prototypes, not executable definitions. There are zero nontrivial Joern-only
 graphs. Glaurung reports 24 definition-marked one-node non-returning functions
 that Joern omits (`__idle_thread` once and `blocking_handler` 23 times).
 
-After both corrections, 4,144 GED differences remain. The detailed review has
+After the four corrections, 4,121 GED differences remain. The detailed review has
 classified all 40 apparent Java-source-isomorphic wins: 35 are Joern erasing
 `while (1)` cycles, three are merge-order entry flags, and two retain infeasible
 Java loop-exit edges. All 1,457 role-only differences have the same unlabelled
 degree multiset; Java gives every one multiple entries and flags an internal
 positive-indegree node in 1,441. Glaurung now matches the published source graph
-isomorphically in 313 cases where Java does not. Of 2,334 graph-size
-differences, 2,289 are explained constant-loop edge-policy differences. Of the
-45 unaffected cases, nine are now traced to duplicated branching for a
-value-only ternary nested in a loop condition. A literal-`if` correction makes
-14 more exact; 22 unaffected cells remain unclassified.
+isomorphically in 313 cases where Java does not. Of the original 2,334
+graph-size differences, 2,289 are explained constant-loop edge-policy
+differences. The literal-`if` correction resolved 14 of the 45 unaffected cases
+and the ternary-loop correction resolved nine more; 22 unaffected cells remain
+for root-cause review.
 
 The complete commands, provenance, limitations, hashes, and follow-up are in
 the adjacent `README.md`. Lossless per-function graph ledgers and the

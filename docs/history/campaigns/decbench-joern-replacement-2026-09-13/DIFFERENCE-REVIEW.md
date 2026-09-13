@@ -6,17 +6,18 @@ agreement is evidence of reproducibility, not independent ground truth.
 
 ## Current complete rerun
 
-After parallel-edge normalization and constant-true-loop correction:
+After parallel-edge normalization, constant-true-loop, literal-`if`, and
+ternary-loop-condition corrections:
 
 | Result | Cells |
 |---|---:|
-| Equal stored GED | 81,515 |
-| Different stored GED | 4,130 |
+| Equal stored GED | 81,524 |
+| Different stored GED | 4,121 |
 | Glaurung uncovered | 0 |
 | Glaurung source-isomorphic, Java not | 313 |
 | Java source-isomorphic, Glaurung not | 40 |
 | Same graph size, role difference | 1,457 |
-| Different graph size | 2,320 |
+| Different graph size | 2,311 |
 
 ## The 40 apparent Java wins
 
@@ -123,12 +124,12 @@ unaffected. Fourteen of those are now exact after the literal-`if` granularity
 correction. Repeated functions across optimization levels and identical
 firmware images reduce the remaining cells to fewer unique source patterns.
 
-### 9: value-only ternary nested in a loop condition
+### Resolved 9: ternary nested in a loop condition
 
 `flySkySetRcDataFromPayload`, `forwardAuxChannelsToServos`, and
 `sumdFrameStatus`, each repeated at O0, O2, and O2-noinline, account for nine of
-the 45. Each has a loop condition containing a value-only ternary such as
-`i < (x ? 14 : 8)`. Glaurung emits one extra node and two extra edges.
+the 45. Each has a loop condition containing a ternary such as
+`i < (x ? 14 : 8)`. Glaurung emitted one extra node and two extra edges.
 
 A fresh minimal differential reproduces the class:
 
@@ -138,13 +139,21 @@ int f(int x, int i) { while (i < (x ? 14 : 8)) i++; return i; }
   glaurung  5 nodes, 6 edges
 ```
 
-The trace shows two consecutive branch nodes over the same full-condition
+The trace showed two consecutive branch nodes over the same full-condition
 span. The synthetic loop header branches before the nested conditional has
-been evaluated, then the conditional branches again. This is a real Glaurung
+been evaluated, then the conditional branches again. This was a real Glaurung
 parity-CFG defect, not a Java flag artefact. A first attempted local deletion
 removed the value-only node but left both branch nodes; focused tests rejected
-it and the experiment was discarded. The proper repair must retarget entry and
-loop-back edges to the real expression entry and preserve one final branch,
-including side-effecting ternary arms. After the literal-`if` correction,
-**22 unaffected graph-size cells remain unclassified in addition to these nine
-traced ternary-loop cells.**
+it and the experiment was discarded.
+
+The accepted repair retargets entry and loop-back edges to the real expression
+entry and preserves the final branch and every materializing expression,
+including a call-bearing ternary arm. Fresh Java differentials for bare, cast,
+comparison, load, and call variants are all isomorphic at GED 0.0.
+
+A broader first rule was rejected by the corpus gate because it confused a
+ternary at the start of a loop body with one lexically inside the loop test: it
+changed 208 graphs, fixed 11 mismatches, and regressed 162 exact cells. Requiring
+the ternary span to be contained by the loop-condition span changed exactly the
+nine cells above. All nine became exact; no other cell changed. **The remaining
+unaffected graph-size queue is 22 cells.**

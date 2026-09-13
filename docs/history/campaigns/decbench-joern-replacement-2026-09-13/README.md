@@ -31,6 +31,7 @@ to review and share.
 | Parallel-edge correction extension SHA-256 | `baef2831611af06d23490bbfd44c96138873fb96c507b4d1dd9012259e048b35` |
 | Constant-loop correction extension SHA-256 | `103b6f7522d67c985858ada6992b294eeeac7cf9554ed623f68dd4e118a6fe91` |
 | Literal-`if` correction extension SHA-256 | `e6221986ab9306b16a1010422b5eed7997b916330e247cc38db7ed9c155fac8d` |
+| Ternary-loop correction extension SHA-256 | `1dc2682a9f80520e7d72213f2b2700c592cd67ae38a45cc4c6f00b063879615e` |
 | DecBench | `f76dae075d4d82004fb21132b3f15e43b680e179` |
 | DecBench dataset | `e5eb576d66ee36793b800a4dd45e291e0add4472` (`full`) |
 | Stored decompiler column | `glaurung-229fbb1-clean` |
@@ -202,9 +203,10 @@ Twenty-one focused node-rewrite tests passed. The complete corpus rerun took
 The detailed [difference review](DIFFERENCE-REVIEW.md) classifies all 40
 apparent Java-source-isomorphic wins, all 1,457 role-only differences, and
 reduces the initially unexplained graph-size queue to 45 unaffected cases. Nine
-of those are now traced to duplicated branching for a value-only ternary nested
-in a loop condition. The literal-`if` correction below makes 14 more exact,
-leaving 22 unclassified cells in addition to the nine traced ternary cells.
+of those were traced to duplicated branching for a ternary nested in a loop
+condition. At that checkpoint, the literal-`if` correction below made 14 more
+exact, leaving 22 unclassified cells in addition to the nine traced ternary
+cells later resolved by the fourth correction.
 
 ### Third broad correction: literal `if` tests
 
@@ -220,6 +222,37 @@ passed. The complete rerun took 66.09 seconds at 336,340 KiB RSS:
 | Different GED | 4,144 | 4,130 | **-14** |
 | Exact regressions | - | 0 | **0** |
 | Uncovered | 0 | 0 | 0 |
+
+### Fourth correction: ternaries nested in loop conditions
+
+S2 correctly expands `?:` as control flow, but when the ternary was nested in
+a loop test it also left the synthetic loop header branching before the
+ternary had been evaluated. Fresh Java differentials covered bare operands,
+casts, comparisons, loads, and a call-bearing arm. The Joern-compatible shape
+sends entry and the back edge to the expression's real first node, retains all
+materializing expressions, and has only the final loop-test branch.
+
+The first generalized rewrite was deliberately rejected after the full corpus
+gate: it also matched ternaries that were merely the first statement in a loop
+body, changing 208 graphs and regressing 162 exact cells while fixing only 11.
+The accepted rule additionally proves that the ternary's source span is inside
+the loop-condition span. Twenty-seven focused tests, including the loop-body
+negative control, passed. A fresh five-function Java differential was
+isomorphic at GED 0.0 for every variant.
+
+The complete rerun took 59.74 seconds at 339,952 KiB RSS:
+
+| Measure | Before | After | Change |
+|---|---:|---:|---:|
+| Exact agreement | 81,515 (95.1778%) | 81,524 (95.1883%) | **+9** |
+| Different GED | 4,130 | 4,121 | **-9** |
+| Exact regressions | - | 0 | **0** |
+| Changed graphs | - | 9 | all mismatch to exact |
+| Uncovered / provider failures | 0 / 0 | 0 / 0 | 0 / 0 |
+
+The nine fixed cells are exactly `flySkySetRcDataFromPayload`,
+`forwardAuxChannelsToServos`, and `sumdFrameStatus` at O0, O2, and
+O2-noinline. No other cell changed.
 
 ## Artifact integrity
 
@@ -240,12 +273,13 @@ The lossless artifacts are stored outside Git under
 | `glaurung-literal-if-details.jsonl` | `412a0eb94148a65273e9b571dfc951d6d0b5021cbb36b17e3724fcd7c6b9a366` |
 | `aggregate-literal-if.json` | `732bd3cd1652411914d66e5667c82e0915bab48efb928b951d31fc193561580b` |
 | `aggregate-literal-if.md` | `5f078360156c96c7bb36b204427461789e31e42c24140986baef9744cb8ebbc6` |
+| `glaurung-ternary-loop-report.json` | `71cadc70ca556bc532a411b47618415ef6e4533dbf9533bb5553f9d1cd14a1a2` |
+| `glaurung-ternary-loop-details.jsonl` | `86831de11abb572335f6078edb8c9ca50582ec9b80e2692684ec20dfdd2ebe53` |
+| `aggregate-ternary-loop.json` | `9e551540143ae282b0d383a86d410e0a5705d6bc57bf811fcc7e4f7810480654` |
+| `aggregate-ternary-loop.md` | `0ca6315c0b8c5c9174ed999037fbe067cdc6a7f373f17a28aa47aff14523e837` |
 
 ## Required follow-up
 
-- Repair the nine duplicated-branch ternary-loop cells by retargeting entry and
-  back edges to the real expression entry; do not land the rejected partial
-  node-deletion approach recorded in the difference review.
 - Root-cause the remaining 22 unaffected graph-size differences, deduplicating
   repeated functions across builds first.
 - Review all large deltas and a deterministic sample of small deltas against

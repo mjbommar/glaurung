@@ -212,6 +212,8 @@ pub struct GranularityStats {
     pub constant_loop_exits_elided: u32,
     /// Bare literal `if` tests elided while preserving their fork.
     pub literal_if_tests_elided: u32,
+    /// Duplicate loop branches collapsed around ternaries in loop tests.
+    pub ternary_loop_branches_collapsed: u32,
 }
 
 /// Rewrite one function's S2 graph to Joern's expression granularity.
@@ -318,6 +320,8 @@ enum Shape {
 #[derive(Debug, Clone)]
 struct Region {
     shape: Shape,
+    /// Exact extent of this operator expression.
+    span: Span,
     /// The AST operand nodes, in source order.
     operands: Vec<NodeId>,
     /// The CFG node each operand's evaluation ends at, parallel to `operands`.
@@ -601,6 +605,7 @@ fn resolve(
 
     Some(Region {
         shape,
+        span: tree.arena().span(node, token_spans)?,
         operands,
         ends,
         terminal,
@@ -648,6 +653,11 @@ fn nest(work: &mut Work, region: &Region, stats: &mut GranularityStats) {
 /// edge, because both of its predecessor's edges then name the operator node
 /// and [`Work::add_edge`] keeps one (bash `evalstring`).
 fn elide(tree: &Tree, work: &mut Work, region: &Region, stats: &mut GranularityStats) {
+    // Detect this before operand elision: bypassing a trivial ternary condition
+    // moves the header's predecessor relation onto the surviving arm/join and
+    // would make the original loop boundary ambiguous.
+    let ternary_loop_collapsed = region.shape == Shape::Conditional
+        && work.collapse_ternary_loop_header(region.ends[0], region.terminal, region.span);
     for (operand, end) in region.operands.iter().zip(region.ends.iter()) {
         if materializes(tree, *operand) {
             continue;
@@ -655,6 +665,24 @@ fn elide(tree: &Tree, work: &mut Work, region: &Region, stats: &mut GranularityS
         if work.bypass(*end) {
             stats.elided = stats.elided.saturating_add(1);
         }
+    }
+    // In `while (i < (x ? 14 : 8))`, S2's generic expression lowering leaves
+    // a synthetic LoopHeader branching before the nested conditional has been
+    // evaluated. Joern's CFG (and the semantic block shape) instead sends both
+    // entry and the loop-back edge to the expression's real first node. This
+    // holds for materializing casts, loads and calls too; those expressions
+    // must remain, while an entirely trivial ternary has no Joern operator
+    // node and its terminal is bypassed as well.
+    if ternary_loop_collapsed {
+        if region
+            .operands
+            .iter()
+            .all(|operand| !materializes(tree, *operand))
+        {
+            let _ = work.bypass(region.terminal);
+        }
+        stats.ternary_loop_branches_collapsed =
+            stats.ternary_loop_branches_collapsed.saturating_add(1);
     }
 }
 
@@ -933,6 +961,51 @@ impl Work {
             self.pred[dst.index()].retain(|node| *node != src);
         }
         true
+    }
+
+    /// Collapse the redundant header around a ternary nested in a loop test.
+    fn collapse_ternary_loop_header(
+        &mut self,
+        condition: NodeId,
+        terminal: NodeId,
+        span: Span,
+    ) -> bool {
+        if self.alive.get(condition.index()) != Some(&true)
+            || self.alive.get(terminal.index()) != Some(&true)
+            || self.kinds.get(terminal.index()) != Some(&NodeKind::Stmt)
+            || !self
+                .spans
+                .get(terminal.index())
+                .is_some_and(|spans| spans.as_slice() == [span])
+        {
+            return false;
+        }
+        let predecessors: Vec<NodeId> = self.pred[condition.index()]
+            .iter()
+            .copied()
+            .filter(|node| *node != terminal && self.alive[node.index()])
+            .collect();
+        if predecessors.len() != 1 {
+            return false;
+        }
+        let header = predecessors[0];
+        let header_span = self
+            .spans
+            .get(header.index())
+            .and_then(|spans| spans.first().copied());
+        if self.kinds.get(header.index()) != Some(&NodeKind::LoopHeader)
+            || !header_span.is_some_and(|outer| outer.lo <= span.lo && span.hi <= outer.hi)
+            || !self.succ[header.index()]
+                .iter()
+                .any(|out| out.dst == condition)
+            || !self.succ[header.index()]
+                .iter()
+                .any(|out| out.kind == EdgeKind::False)
+        {
+            return false;
+        }
+        self.remove_false_edges(header);
+        self.bypass(header)
     }
 
     /// Point `src`'s edge to `from` at `to` instead, keeping its kind.
@@ -1705,6 +1778,77 @@ mod tests {
         let (before, after, stats) = rewrite(text, "f");
         assert_eq!(stats.literal_if_tests_elided, 0);
         assert_eq!(before, after);
+    }
+
+    #[test]
+    fn value_only_ternary_in_a_loop_condition_has_one_final_branch() {
+        let text = "int f(int x, int i) { while (i < (x ? 14 : 8)) i++; return i; }";
+        let (_, after, stats) = rewrite(text, "f");
+        assert_eq!(stats.ternary_loop_branches_collapsed, 1);
+        assert_eq!(
+            projected(&after),
+            published(4, &[(0, 2), (2, 0), (2, 1), (3, 2)]),
+            "fresh Joern differential: entry and back edge reach one branch"
+        );
+    }
+
+    #[test]
+    fn a_side_effecting_ternary_arm_keeps_the_expression_but_not_the_duplicate_header() {
+        let text = "int f(int x, int i) { while (i < (x ? g() : 8)) i++; return i; }";
+        let (before, after, stats) = rewrite(text, "f");
+        assert_eq!(stats.ternary_loop_branches_collapsed, 1);
+        assert!(after.node_count() < before.node_count());
+        assert!(after
+            .nodes()
+            .iter()
+            .all(|node| node.kind() != NodeKind::LoopHeader));
+        assert!(
+            after
+                .nodes()
+                .iter()
+                .any(|node| node.kind() == NodeKind::Stmt),
+            "the call-bearing expression remains"
+        );
+    }
+
+    #[test]
+    fn ternary_loop_cast_compare_and_load_variants_keep_their_expression_nodes() {
+        for text in [
+            "int f(int x, int i, unsigned char b) { while (i < (x ? (unsigned int)b : 14)) i++; return i; }",
+            "int f(int i, unsigned char b) { while (i < ((b < 14) ? (unsigned int)b : 14)) i++; return i; }",
+            "int f(int i, unsigned char *p) { while (i < ((*p < 14) ? (unsigned int)*p : 14)) i++; return i; }",
+        ] {
+            let (before, after, stats) = rewrite(text, "f");
+            assert_eq!(stats.ternary_loop_branches_collapsed, 1, "{text}");
+            assert!(after.node_count() < before.node_count(), "{text}");
+            assert!(
+                after.nodes().iter().all(|node| node.kind() != NodeKind::LoopHeader),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_ternary_at_the_start_of_a_loop_body_is_not_a_loop_test() {
+        let text = "int f(int x, int i) { while (i < 10) { x ? g() : h(); i++; } return i; }";
+        let (before, after, stats) = rewrite(text, "f");
+        assert_eq!(stats.ternary_loop_branches_collapsed, 0);
+        assert_eq!(
+            before
+                .nodes()
+                .iter()
+                .filter(|n| n.kind() == NodeKind::LoopHeader)
+                .count(),
+            1
+        );
+        assert_eq!(
+            after
+                .nodes()
+                .iter()
+                .filter(|n| n.kind() == NodeKind::LoopHeader)
+                .count(),
+            1
+        );
     }
 
     /// A function with no short-circuit at all must come back as the very same
