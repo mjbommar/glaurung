@@ -2927,8 +2927,10 @@ provenance through lowering.
   number their LLIR and retain the resulting sidecar. A complete source search
   leaves only four internal unit-test diagnostic calls. The non-test library,
   example, all four real canary tests, and both lowering compatibility tests
-  pass. This closes identity omission at the shipped LLIR-to-AST boundary, not
-  WP3's remaining origin/invalidation work. See
+  pass. Its native rebuild is fresh, and the required fail-fast whole-Python
+  gate again reaches the known ARM Thumb frame-save failure first at 11%.
+  This closes identity omission at the shipped LLIR-to-AST boundary, not WP3's
+  remaining origin/invalidation work. See
   `results/wp3-identity-free-lowering-test-only.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the

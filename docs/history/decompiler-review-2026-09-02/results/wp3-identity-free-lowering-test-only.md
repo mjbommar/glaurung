@@ -40,8 +40,18 @@ and one CFG unit test. All are in internal test configurations.
 
 This is an API and authority-boundary change. It intentionally does not alter
 the Python decompile pipeline, so no output, GED, or timing movement is claimed.
-No fixture matrix, DecBench, or Joern run was performed. The required
-post-source-commit native rebuild and fail-fast Python gate are recorded after
-they run. WP3 still requires the wider origin/invalidation completion audit,
-but shipped LLIR-to-AST lowering can no longer omit value identity authority.
+No fixture matrix, DecBench, or Joern run was performed. The native rebuild is
+fresh. The required post-source-commit Python gate again reached 11% before its
+first ordinary failure:
 
+```text
+uv run pytest python/tests/ -q -x
+stopped at 11%: 1 failed
+```
+
+It reproduces the established ARM Thumb frame-save defect and its unchanged
+`*(int *)((&local_18[0] + 20)) = var0;` output. No ordinary failure appears
+earlier, but the whole Python gate remains red and incomplete.
+
+WP3 still requires the wider origin/invalidation completion audit, but shipped
+LLIR-to-AST lowering can no longer omit value identity authority.
