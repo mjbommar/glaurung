@@ -24,6 +24,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use crate::ir::ssa::{SsaInfo, SsaValue, ValueId};
 use crate::ir::types::{BinOp, LlirFunction, Op, VReg, Value};
 use crate::ir::use_def::{def_uses, use_is_proven_input, InstrAddr};
+use crate::ir::value_number::ValueIdentities;
 
 mod constraints;
 mod copies;
@@ -44,17 +45,31 @@ use result_hint::{
     output_trial_is_dedicated, qualified_result_hint, ResultHintClass,
 };
 use tagging::{
-    classify_int_default, float_return_reg_names, merge_type_hint,
-    propagate_pointer_arithmetic_with_optional_identities,
-    propagate_spill_slot_pointers_with_optional_identities, return_reg_names, tag_value_regs,
+    classify_int_default, float_return_reg_names, merge_type_hint, propagate_pointer_arithmetic,
+    propagate_spill_slot_pointers, return_reg_names, tag_value_regs,
 };
 // `is_frame_base` has no caller outside `tagging` itself except `mod tests`
 // below, which reaches it through `use super::*`. Re-exporting it
 // unconditionally would be an unused import in the shipped lib build.
 #[cfg(test)]
+pub use tagging::recover_types_for;
+#[cfg(test)]
 use tagging::{is_frame_base, is_frame_base_with_identities};
-pub use tagging::{recover_types_for, recover_types_for_with_identities};
+pub use tagging::{recover_raw_types_for, recover_types_for_with_identities};
 pub use valued::recover_types_valued;
+
+/// Explicit source of register identity for raw and value-numbered type recovery.
+///
+/// Keeping these modes closed prevents an exact production analysis from
+/// silently falling back to parsing a rendered `name#version` spelling when an
+/// identity lookup is missing or ambiguous.
+#[derive(Clone, Copy)]
+pub(super) enum TypeRecoveryAuthority<'a> {
+    /// Pre-value-numbering LLIR whose physical register names are machine facts.
+    RawMachineRegisters,
+    /// Value-numbered LLIR whose semantic storage comes only from the SSA sidecar.
+    Exact(&'a ValueIdentities),
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TypeHint {
@@ -1520,7 +1535,7 @@ pub fn recover_prototype_with_arm_vfp_args(
     param_slots: &HashSet<usize>,
     arm_vfp_args: bool,
 ) -> RecoveredPrototype {
-    let raw = recover_types_for(lf, cc);
+    let raw = recover_raw_types_for(lf, cc);
     let valued = recover_types_valued(lf, ssa);
     let observable_parameter_widths =
         crate::ir::prototype_width::ObservableParameterWidths::analyze(lf, ssa, cc);
@@ -1936,7 +1951,7 @@ fn reg_width_bytes(v: &VReg) -> u8 {
     if let VReg::Phys(n) = v {
         // This is the raw, pre-numbering path. A `#version` suffix is rendered
         // text rather than storage authority; numbered callers must use
-        // `reg_width_bytes_with_optional_identities` with their sidecar.
+        // `reg_width_bytes_for_authority` with their sidecar.
         if let Some(w) = crate::ir::types::phys_reg_width(n) {
             return (w.bits() / 8).max(1) as u8;
         }
@@ -1948,17 +1963,14 @@ fn reg_width_bytes(v: &VReg) -> u8 {
 /// value-numbering sidecar is installed. Missing or ambiguous identity declines
 /// to the machine-word default instead of decoding a `base#version` display
 /// spelling.
-fn reg_width_bytes_with_optional_identities(
-    v: &VReg,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) -> u8 {
-    let Some(identities) = identities else {
-        return reg_width_bytes(v);
-    };
-    identities
-        .unambiguous_physical_base(v)
-        .and_then(crate::ir::types::phys_reg_width)
-        .map_or(8, |width| (width.bits() / 8).max(1) as u8)
+fn reg_width_bytes_for_authority(v: &VReg, authority: TypeRecoveryAuthority<'_>) -> u8 {
+    match authority {
+        TypeRecoveryAuthority::RawMachineRegisters => reg_width_bytes(v),
+        TypeRecoveryAuthority::Exact(identities) => identities
+            .unambiguous_physical_base(v)
+            .and_then(crate::ir::types::phys_reg_width)
+            .map_or(8, |width| (width.bits() / 8).max(1) as u8),
+    }
 }
 
 /// A signed integer hint whose width comes from the register's sub-name. This
@@ -1966,22 +1978,25 @@ fn reg_width_bytes_with_optional_identities(
 /// spilled through the 32-bit view (`edi`/`w0`) while a `long`/pointer uses the
 /// 64-bit view (`rdi`/`x0`).
 fn int_for_reg(v: &VReg) -> TypeHint {
-    int_for_reg_with_optional_identities(v, None)
+    int_for_reg_for_authority(v, TypeRecoveryAuthority::RawMachineRegisters)
 }
 
-fn int_for_reg_with_optional_identities(
-    v: &VReg,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) -> TypeHint {
+fn int_for_reg_for_authority(v: &VReg, authority: TypeRecoveryAuthority<'_>) -> TypeHint {
     TypeHint::Int {
         signed: true,
-        width: reg_width_bytes_with_optional_identities(v, identities),
+        width: reg_width_bytes_for_authority(v, authority),
     }
 }
 
-/// Produce a [`TypeMap`] for all register VRegs touched by `lf`.
+/// Produce a [`TypeMap`] for raw, pre-value-numbering machine registers.
+pub fn recover_raw_types(lf: &LlirFunction) -> TypeMap {
+    recover_types_with_authority(lf, TypeRecoveryAuthority::RawMachineRegisters)
+}
+
+/// Test-only compatibility spelling for fixtures that exercise raw LLIR.
+#[cfg(test)]
 pub fn recover_types(lf: &LlirFunction) -> TypeMap {
-    recover_types_with_optional_identities(lf, None)
+    recover_raw_types(lf)
 }
 
 /// Recover types using exact SSA identity for semantic register roles.
@@ -1989,12 +2004,12 @@ pub fn recover_types_with_identities(
     lf: &LlirFunction,
     identities: &crate::ir::value_number::ValueIdentities,
 ) -> TypeMap {
-    recover_types_with_optional_identities(lf, Some(identities))
+    recover_types_with_authority(lf, TypeRecoveryAuthority::Exact(identities))
 }
 
-fn recover_types_with_optional_identities(
+fn recover_types_with_authority(
     lf: &LlirFunction,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: TypeRecoveryAuthority<'_>,
 ) -> TypeMap {
     let mut tm = TypeMap::default();
 
@@ -2020,7 +2035,7 @@ fn recover_types_with_optional_identities(
         for ins in &block.instrs {
             // Width-from-register-name for every value register (specific
             // classifications below still win via `upsert`).
-            tag_value_regs(&ins.op, &mut tm, identities);
+            tag_value_regs(&ins.op, &mut tm, authority);
             match &ins.op {
                 // Any register used as the base of a memory op is a pointer.
                 Op::Load { addr, .. }
@@ -2041,7 +2056,7 @@ fn recover_types_with_optional_identities(
                             i.clone(),
                             TypeHint::Int {
                                 signed: false,
-                                width: reg_width_bytes_with_optional_identities(i, identities),
+                                width: reg_width_bytes_for_authority(i, authority),
                             },
                         );
                     }
@@ -2062,7 +2077,7 @@ fn recover_types_with_optional_identities(
                             dst.clone(),
                             TypeHint::Int {
                                 signed: false,
-                                width: reg_width_bytes_with_optional_identities(dst, identities),
+                                width: reg_width_bytes_for_authority(dst, authority),
                             },
                         );
                     }
@@ -2071,7 +2086,7 @@ fn recover_types_with_optional_identities(
                             r.clone(),
                             TypeHint::Int {
                                 signed: false,
-                                width: reg_width_bytes_with_optional_identities(r, identities),
+                                width: reg_width_bytes_for_authority(r, authority),
                             },
                         );
                     }
@@ -2080,7 +2095,7 @@ fn recover_types_with_optional_identities(
                             r.clone(),
                             TypeHint::Int {
                                 signed: false,
-                                width: reg_width_bytes_with_optional_identities(r, identities),
+                                width: reg_width_bytes_for_authority(r, authority),
                             },
                         );
                     }
@@ -2096,7 +2111,7 @@ fn recover_types_with_optional_identities(
                             r.clone(),
                             TypeHint::Int {
                                 signed: false,
-                                width: reg_width_bytes_with_optional_identities(r, identities),
+                                width: reg_width_bytes_for_authority(r, authority),
                             },
                         );
                     }
@@ -2135,8 +2150,8 @@ fn recover_types_with_optional_identities(
     // `*(param + i*scale)` resolves through the reload to the parameter. Iterated
     // together so either order of discovery converges.
     for _ in 0..4 {
-        propagate_pointer_arithmetic_with_optional_identities(lf, &mut tm, identities);
-        propagate_spill_slot_pointers_with_optional_identities(lf, &mut tm, identities);
+        propagate_pointer_arithmetic(lf, &mut tm, authority);
+        propagate_spill_slot_pointers(lf, &mut tm, authority);
     }
 
     // Demote pointer / code-pointer classifications for regs that get a
@@ -2151,7 +2166,7 @@ fn recover_types_with_optional_identities(
         .map(|(k, _)| k.clone())
         .collect();
     for k in to_demote {
-        let hint = int_for_reg_with_optional_identities(&k, identities);
+        let hint = int_for_reg_for_authority(&k, authority);
         tm.inner.insert(k, hint);
     }
 

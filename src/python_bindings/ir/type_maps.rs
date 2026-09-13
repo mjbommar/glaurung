@@ -580,8 +580,8 @@ pub(super) fn decbench_type_maps(
     crate::ir::types_recover::TypeMap,
     std::collections::HashMap<String, u8>,
 ) {
-    use crate::ir::types_recover::recover_types_for;
-    let raw = recover_types_for(lf_raw, cc);
+    use crate::ir::types_recover::recover_raw_types_for;
+    let raw = recover_raw_types_for(lf_raw, cc);
     let numbered_types = recover_numbered_types(lf_numbered, cc, value_identities, valued_types);
     let numbered = remap_type_map_impl(
         &numbered_types,

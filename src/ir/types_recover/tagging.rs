@@ -7,7 +7,7 @@
 //! physical register a width-appropriate default, and
 //! [`propagate_spill_slot_pointers`] / [`propagate_pointer_arithmetic`] are the
 //! two fixpoints that push pointer-ness across frame slots and address
-//! arithmetic. [`recover_types_for`] is the production entry point that runs
+//! arithmetic. [`recover_raw_types_for`] is the explicitly pre-numbering entry point that runs
 //! the parent's [`recover_types`](super::recover_types) and then applies the
 //! calling-convention-aware return refinement; it keeps its old
 //! `crate::ir::types_recover::` path via the `pub use` re-export in the parent.
@@ -21,9 +21,9 @@ use std::collections::{BTreeSet, HashMap};
 use crate::ir::types::{BinOp, LlirFunction, Op, VReg, Value};
 
 use super::{
-    int_for_reg_with_optional_identities, recover_types, recover_types_with_identities,
-    reg_width_bytes_with_optional_identities, scalar_float_intrinsic_width, scalar_vfp_register,
-    TypeHint, TypeMap,
+    int_for_reg_for_authority, recover_raw_types, recover_types_with_identities,
+    reg_width_bytes_for_authority, scalar_float_intrinsic_width, scalar_vfp_register, TypeHint,
+    TypeMap, TypeRecoveryAuthority,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -95,16 +95,14 @@ pub(super) fn classify_int_default() -> TypeHint {
     }
 }
 
-fn value_hint_for_reg(
-    v: &VReg,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) -> TypeHint {
-    let storage_name = identities
-        .and_then(|identities| identities.unambiguous_physical_base(v))
-        .or_else(|| match (identities, v) {
-            (None, VReg::Phys(name)) => Some(name.as_str()),
+fn value_hint_for_reg(v: &VReg, authority: TypeRecoveryAuthority<'_>) -> TypeHint {
+    let storage_name = match authority {
+        TypeRecoveryAuthority::RawMachineRegisters => match v {
+            VReg::Phys(name) => Some(name.as_str()),
             _ => None,
-        });
+        },
+        TypeRecoveryAuthority::Exact(identities) => identities.unambiguous_physical_base(v),
+    };
     match storage_name {
         Some(name)
             if name
@@ -120,7 +118,7 @@ fn value_hint_for_reg(
         {
             TypeHint::Float { width: 8 }
         }
-        _ => int_for_reg_with_optional_identities(v, identities),
+        _ => int_for_reg_for_authority(v, authority),
     }
 }
 
@@ -128,14 +126,10 @@ fn value_hint_for_reg(
 /// width-appropriate signed-int hint. The `upsert` policy keeps a more-specific
 /// classification (pointer / bool / code-pointer / narrower width), so this only
 /// fills in the width for registers nothing else has typed.
-pub(super) fn tag_value_regs(
-    op: &Op,
-    tm: &mut TypeMap,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) {
+pub(super) fn tag_value_regs(op: &Op, tm: &mut TypeMap, authority: TypeRecoveryAuthority<'_>) {
     let tag = |val: &Value, tm: &mut TypeMap| {
         if let Value::Reg(r @ VReg::Phys(_)) = val {
-            tm.upsert(r.clone(), value_hint_for_reg(r, identities));
+            tm.upsert(r.clone(), value_hint_for_reg(r, authority));
         }
     };
     let bytes = |width: crate::ir::types::Width| width.bytes().min(u8::MAX as u16) as u8;
@@ -145,26 +139,26 @@ pub(super) fn tag_value_regs(
         Op::IndirectJump { .. } => {}
         Op::Assign { dst, src } => {
             if let VReg::Phys(_) = dst {
-                tm.upsert(dst.clone(), value_hint_for_reg(dst, identities));
+                tm.upsert(dst.clone(), value_hint_for_reg(dst, authority));
             }
             tag(src, tm);
         }
         Op::Store { src, .. } => tag(src, tm),
         Op::Load { dst, .. } | Op::CondLoad { dst, .. } => {
             if let VReg::Phys(_) = dst {
-                tm.upsert(dst.clone(), value_hint_for_reg(dst, identities));
+                tm.upsert(dst.clone(), value_hint_for_reg(dst, authority));
             }
         }
         Op::Bin { dst, lhs, rhs, .. } => {
             if let VReg::Phys(_) = dst {
-                tm.upsert(dst.clone(), value_hint_for_reg(dst, identities));
+                tm.upsert(dst.clone(), value_hint_for_reg(dst, authority));
             }
             tag(lhs, tm);
             tag(rhs, tm);
         }
         Op::Un { dst, src, .. } => {
             if let VReg::Phys(_) = dst {
-                tm.upsert(dst.clone(), value_hint_for_reg(dst, identities));
+                tm.upsert(dst.clone(), value_hint_for_reg(dst, authority));
             }
             tag(src, tm);
         }
@@ -261,7 +255,7 @@ pub(super) fn tag_value_regs(
 /// `x29`/`sp`/`w29` on AArch64) — the anchors `-O0` code spills locals against.
 #[cfg(test)]
 pub(super) fn is_frame_base(v: &VReg) -> bool {
-    frame_base_identity(v, None).is_some()
+    frame_base_identity(v, TypeRecoveryAuthority::RawMachineRegisters).is_some()
 }
 
 #[cfg(test)]
@@ -269,23 +263,27 @@ pub(super) fn is_frame_base_with_identities(
     v: &VReg,
     identities: &crate::ir::value_number::ValueIdentities,
 ) -> bool {
-    frame_base_identity(v, Some(identities)).is_some()
+    frame_base_identity(v, TypeRecoveryAuthority::Exact(identities)).is_some()
 }
 
 fn frame_base_identity(
     v: &VReg,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: TypeRecoveryAuthority<'_>,
 ) -> Option<FrameBaseIdentity> {
-    if let Some(identities) = identities {
-        let base = identities.unambiguous_physical_base(v)?;
-        let candidates = identities.candidates(v)?;
-        return (is_frame_base_name(base) && !candidates.is_empty())
-            .then(|| FrameBaseIdentity::Attributed(candidates.clone()));
+    match authority {
+        TypeRecoveryAuthority::Exact(identities) => {
+            let base = identities.unambiguous_physical_base(v)?;
+            let candidates = identities.candidates(v)?;
+            (is_frame_base_name(base) && !candidates.is_empty())
+                .then(|| FrameBaseIdentity::Attributed(candidates.clone()))
+        }
+        TypeRecoveryAuthority::RawMachineRegisters => {
+            let VReg::Phys(name) = v else {
+                return None;
+            };
+            is_frame_base_name(name).then(|| FrameBaseIdentity::CompatibilitySpelling(name.clone()))
+        }
     }
-    let VReg::Phys(name) = v else {
-        return None;
-    };
-    is_frame_base_name(name).then(|| FrameBaseIdentity::CompatibilitySpelling(name.clone()))
 }
 
 fn is_frame_base_name(base: &str) -> bool {
@@ -299,10 +297,10 @@ fn is_frame_base_name(base: &str) -> bool {
 ///   1. record `slot -> register` for each spill store `[frame+disp] = reg`;
 ///   2. for each reload `reg = [frame+disp]` whose destination is already a
 ///      pointer in `tm`, propagate that pointer back to the spilled register.
-pub(super) fn propagate_spill_slot_pointers_with_optional_identities(
+pub(super) fn propagate_spill_slot_pointers(
     lf: &LlirFunction,
     tm: &mut TypeMap,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: TypeRecoveryAuthority<'_>,
 ) {
     // slot (frame-base name, disp) -> the register most recently spilled there.
     let mut spilled_from: HashMap<(FrameBaseIdentity, i64), VReg> = HashMap::new();
@@ -316,7 +314,7 @@ pub(super) fn propagate_spill_slot_pointers_with_optional_identities(
                 if let Some(frame) = addr
                     .base
                     .as_ref()
-                    .and_then(|base| frame_base_identity(base, identities))
+                    .and_then(|base| frame_base_identity(base, authority))
                     .filter(|_| addr.index.is_none())
                 {
                     spilled_from.insert((frame, addr.disp), r.clone());
@@ -333,7 +331,7 @@ pub(super) fn propagate_spill_slot_pointers_with_optional_identities(
                 if let Some(frame) = addr
                     .base
                     .as_ref()
-                    .and_then(|base| frame_base_identity(base, identities))
+                    .and_then(|base| frame_base_identity(base, authority))
                     .filter(|_| addr.index.is_none())
                 {
                     if let (Some(src_reg), Some(TypeHint::Pointer { pointee_width })) =
@@ -387,18 +385,20 @@ fn refine_return_type(
     lf: &LlirFunction,
     tm: &mut TypeMap,
     cc: crate::ir::call_args::CallConv,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: TypeRecoveryAuthority<'_>,
 ) {
     let ret_names = return_reg_names(cc);
     let mut last_dst: Option<VReg> = None;
     for block in &lf.blocks {
         for ins in &block.instrs {
             if let Some(dst) = op_dst_reg(&ins.op) {
-                let is_result = match identities {
-                    Some(identities) => identities
+                let is_result = match authority {
+                    TypeRecoveryAuthority::Exact(identities) => identities
                         .unambiguous_physical_base(dst)
                         .is_some_and(|base| ret_names.contains(&base)),
-                    None => matches!(dst, VReg::Phys(name) if ret_names.contains(&name.as_str())),
+                    TypeRecoveryAuthority::RawMachineRegisters => {
+                        matches!(dst, VReg::Phys(name) if ret_names.contains(&name.as_str()))
+                    }
                 };
                 if is_result {
                     last_dst = Some(dst.clone());
@@ -409,9 +409,14 @@ fn refine_return_type(
     let Some(dst) = last_dst else {
         return;
     };
-    let w = identities
-        .and_then(|identities| identities.unambiguous_definition_width(&dst))
-        .unwrap_or_else(|| reg_width_bytes_with_optional_identities(&dst, identities));
+    let w = match authority {
+        TypeRecoveryAuthority::Exact(identities) => identities
+            .unambiguous_definition_width(&dst)
+            .unwrap_or_else(|| reg_width_bytes_for_authority(&dst, authority)),
+        TypeRecoveryAuthority::RawMachineRegisters => {
+            reg_width_bytes_for_authority(&dst, authority)
+        }
+    };
     if w == 0 || w >= 8 {
         // Full-width (or unknown) last definition: could legitimately be a
         // pointer or a `long`; leave the recovered classification alone.
@@ -422,11 +427,11 @@ fn refine_return_type(
         _ => true,
     };
     let hint = TypeHint::Int { signed, width: w };
-    match identities {
-        Some(_) => {
+    match authority {
+        TypeRecoveryAuthority::Exact(_) => {
             tm.inner.insert(dst, hint);
         }
-        None => {
+        TypeRecoveryAuthority::RawMachineRegisters => {
             for n in ret_names {
                 let key = VReg::phys(*n);
                 if tm.inner.contains_key(&key) {
@@ -440,10 +445,16 @@ fn refine_return_type(
 /// Production entry point: [`recover_types`] plus the calling-convention-aware
 /// return-type correction. Callers that know the ABI (the Python bindings)
 /// should prefer this over the bare [`recover_types`].
-pub fn recover_types_for(lf: &LlirFunction, cc: crate::ir::call_args::CallConv) -> TypeMap {
-    let mut tm = recover_types(lf);
-    refine_return_type(lf, &mut tm, cc, None);
+pub fn recover_raw_types_for(lf: &LlirFunction, cc: crate::ir::call_args::CallConv) -> TypeMap {
+    let mut tm = recover_raw_types(lf);
+    refine_return_type(lf, &mut tm, cc, TypeRecoveryAuthority::RawMachineRegisters);
     tm
+}
+
+/// Test-only compatibility spelling for the historical raw-register API.
+#[cfg(test)]
+pub fn recover_types_for(lf: &LlirFunction, cc: crate::ir::call_args::CallConv) -> TypeMap {
+    recover_raw_types_for(lf, cc)
 }
 
 /// Production type recovery with exact semantic register identity.
@@ -485,7 +496,7 @@ pub fn recover_types_for_with_identities(
         };
         tm.upsert(value.clone(), TypeHint::Int { signed, width });
     }
-    refine_return_type(lf, &mut tm, cc, Some(identities));
+    refine_return_type(lf, &mut tm, cc, TypeRecoveryAuthority::Exact(identities));
     tm
 }
 
@@ -534,14 +545,14 @@ fn offset_registers(lf: &LlirFunction) -> std::collections::HashSet<VReg> {
 /// the pointer type back to the incoming argument register.
 fn frame_slot_reloads(
     lf: &LlirFunction,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: TypeRecoveryAuthority<'_>,
 ) -> std::collections::HashSet<VReg> {
     let mut reloads = std::collections::HashSet::new();
     for block in &lf.blocks {
         for ins in &block.instrs {
             if let Op::Load { dst, addr } = &ins.op {
                 if let Some(base) = &addr.base {
-                    if frame_base_identity(base, identities).is_some() && addr.index.is_none() {
+                    if frame_base_identity(base, authority).is_some() && addr.index.is_none() {
                         reloads.insert(dst.clone());
                     }
                 }
@@ -565,13 +576,13 @@ fn frame_slot_reloads(
 ///    ([`offset_registers`]) — so the other operand is the base; and
 ///  * the *base* operand is a frame-slot reload ([`frame_slot_reloads`]) — the
 ///    reloaded spilled pointer — so the other operand is the index.
-pub(super) fn propagate_pointer_arithmetic_with_optional_identities(
+pub(super) fn propagate_pointer_arithmetic(
     lf: &LlirFunction,
     tm: &mut TypeMap,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: TypeRecoveryAuthority<'_>,
 ) {
     let offsets = offset_registers(lf);
-    let reloads = frame_slot_reloads(lf, identities);
+    let reloads = frame_slot_reloads(lf, authority);
     let is_offset = |v: &Value| match v {
         Value::Const(_) => true,
         Value::Reg(r) => offsets.contains(r),
