@@ -26,11 +26,18 @@
 use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 use crate::ir::types::{BinOp, VReg};
 
+#[derive(Clone, Copy)]
+enum IdentityAuthority<'a> {
+    Exact(&'a crate::ir::value_number::ValueIdentities),
+    #[cfg(test)]
+    LegacySpelling,
+}
+
 /// Run the pass over `f`'s body. Nested arms are currently left alone —
 /// prologue stmts always sit at the top-level entry to a function.
 #[cfg(test)]
 pub fn recognise_arm64_prologue(f: &mut Function) {
-    recognise_arm64_prologue_impl(f, None);
+    recognise_arm64_prologue_impl(f, IdentityAuthority::LegacySpelling);
 }
 
 /// Identity-aware production form of [`recognise_arm64_prologue`].
@@ -38,21 +45,15 @@ pub fn recognise_arm64_prologue_with_identities(
     f: &mut Function,
     identities: &crate::ir::value_number::ValueIdentities,
 ) {
-    recognise_arm64_prologue_impl(f, Some(identities));
+    recognise_arm64_prologue_impl(f, IdentityAuthority::Exact(identities));
 }
 
-fn recognise_arm64_prologue_impl(
-    f: &mut Function,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) {
-    collapse_prologue(&mut f.body, identities);
-    collapse_epilogue(&mut f.body, identities);
+fn recognise_arm64_prologue_impl(f: &mut Function, authority: IdentityAuthority<'_>) {
+    collapse_prologue(&mut f.body, authority);
+    collapse_epilogue(&mut f.body, authority);
 }
 
-fn collapse_prologue(
-    body: &mut Vec<Stmt>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) {
+fn collapse_prologue(body: &mut Vec<Stmt>, authority: IdentityAuthority<'_>) {
     // Stack-object recovery can fold the pre-indexed STP and its writeback
     // before this pass runs.  The same frame record then has this stronger,
     // address-explicit spelling:
@@ -98,7 +99,7 @@ fn collapse_prologue(
         match s.semantic() {
             Stmt::Store { addr, src, .. }
                 if matches!(addr.semantic(), Expr::Reg(slot @ VReg::Phys(_))
-                    if is_promoted_stack_object(slot, identities))
+                    if is_promoted_stack_object(slot, authority))
                     && matches!(src.semantic(), Expr::Reg(VReg::Phys(_))) =>
             {
                 let Expr::Reg(VReg::Phys(reg)) = src.semantic() else {
@@ -195,10 +196,7 @@ fn collapse_prologue(
     }
 }
 
-fn collapse_epilogue(
-    body: &mut Vec<Stmt>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) {
+fn collapse_epilogue(body: &mut Vec<Stmt>, authority: IdentityAuthority<'_>) {
     // Find every Return and, for each, drop the immediately preceding
     // ABI bookkeeping: a `sp += K` adjust and/or a run of `%fp = %stack_*`
     // / `%lr = %stack_*` / `%varN = %stack_*` restore assigns. Back-to-
@@ -229,7 +227,7 @@ fn collapse_epilogue(
         }
         // 2. Walk back over a contiguous run of stack-restore assigns.
         let mut run_start = ret_idx;
-        while run_start > 0 && is_stack_restore(&body[run_start - 1], identities) {
+        while run_start > 0 && is_stack_restore(&body[run_start - 1], authority) {
             run_start -= 1;
         }
         let run = &body[run_start..ret_idx];
@@ -295,10 +293,7 @@ fn frame_record_store<'a>(statement: &'a Stmt, register: &str, offset: i64) -> O
     }
 }
 
-fn is_stack_restore(
-    statement: &Stmt,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) -> bool {
+fn is_stack_restore(statement: &Stmt, authority: IdentityAuthority<'_>) -> bool {
     let Stmt::Assign {
         dst: VReg::Phys(_),
         src,
@@ -307,7 +302,7 @@ fn is_stack_restore(
         return false;
     };
     match src.semantic() {
-        Expr::Reg(source) => is_promoted_stack_object(source, identities),
+        Expr::Reg(source) => is_promoted_stack_object(source, authority),
         Expr::Deref { addr, size: 8 } => {
             stack_object_at(addr, 0).is_some() || stack_object_at(addr, 8).is_some()
         }
@@ -315,14 +310,14 @@ fn is_stack_restore(
     }
 }
 
-fn is_promoted_stack_object(
-    value: &VReg,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) -> bool {
-    identities.map_or_else(
-        || matches!(value, VReg::Phys(name) if name.starts_with("stack_")),
-        |identities| identities.is_promoted_stack_object(value),
-    )
+fn is_promoted_stack_object(value: &VReg, authority: IdentityAuthority<'_>) -> bool {
+    match authority {
+        IdentityAuthority::Exact(identities) => identities.is_promoted_stack_object(value),
+        #[cfg(test)]
+        IdentityAuthority::LegacySpelling => {
+            matches!(value, VReg::Phys(name) if name.starts_with("stack_"))
+        }
+    }
 }
 
 fn origins_in_range(body: &[Stmt], start: usize, end: usize) -> OriginSet {
