@@ -6105,6 +6105,18 @@ relevant ratchet's accepted-regression record.
    omissions in `call_result_split.rs`. Commit `c6a42332` next closes the
    final-source verifier and authoritative pointer reader surfaces. Continue
    with canonical local naming and architecture-specific prologue readers.
+   Follow-on commit `646f6cf3` closes the verifier's remaining production
+   authority path as one transaction with health reporting. The exact identity
+   snapshot now reaches final verification, pass-health events, and returned
+   `AstHealth` summaries in both rendering pipelines; missing identities and
+   spelling-compatible health helpers are test-only. All 49 verifier tests and
+   12 health tests pass, as does the non-test Python-extension build. A fresh
+   native build passes its guard, and the required whole-Python fail-fast gate
+   again reaches the independent committed-baseline disagreement at 17% with
+   no earlier failure. This closes an authority seam shared by WP3 and WP10;
+   it is not an output or timing claim. Continue the residual semantic-reader
+   audit before WP3 invalidation closure. See
+   `results/wp3-verifier-stack-identities.md`.
    Commit `fbb7f596` removes the next presentation-spelling dependency from
    production dead-store elimination: calls clobber canonical `ret` only when
    the identity sidecar owns the result role. Both exact regressions and all 42

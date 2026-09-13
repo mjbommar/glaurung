@@ -29,3 +29,47 @@ around the string literal. amd64 O2 additionally renders `main` as
 `unsigned long`. These are explicit WP6/WP7 output-quality regressions; the
 canonical tests were not weakened. No broad Rust suite, Python suite, fixture
 matrix, DecBench, or Joern lane ran.
+
+## Production verifier and health authority closure
+
+Follow-on commit `646f6cf3` closes the remaining production path around this
+verifier. `VerificationAuthority` is now a closed exact bundle containing the
+value identities, renderer-owned checked names, and result-role fact; its
+spelling-compatible variant is test-only. Production pass-health tracing and
+returned `AstHealth` summaries now receive the same identity snapshot from the
+ordinary and DecBench-style rendering pipelines. Raw verifier and health
+helpers compile only for legacy unit tests.
+
+Focused evidence:
+
+```text
+cargo test --features python-ext ir::verify_defs::tests:: --lib -- --test-threads=1
+49 passed; 0 failed; 4797 filtered out
+
+cargo test --features python-ext ir::health_tests:: --lib -- --test-threads=1
+12 passed; 0 failed; 4834 filtered out
+
+cargo check --features python-ext
+exit 0
+
+uv run maturin develop
+exit 0
+
+uv run python tools/build_guard.py
+fresh
+```
+
+The required post-commit Python gate ran once with fail-fast. It passed the
+former ARM Thumb and hard-float blockers and stopped at the independently known
+committed-baseline disagreement at 17%:
+
+```text
+uv run pytest -q python/tests/ -x
+FAILED test_decompiler_arch_roundtrip.py::test_the_committed_baseline_is_valid_and_has_a_clean_control_lane
+```
+
+That disagreement remains the recorded x86-64 control verdict mismatch for
+fixtures 157, 172, and 81. Neither baseline was regenerated from the shared
+dirty checkout. No fixture sweep, DecBench, Joern, corpus, output, or timing
+claim accompanies this authority closure. Wider WP3 invalidation and origin
+work remains, while WP10 now receives identity-authoritative health evidence.
