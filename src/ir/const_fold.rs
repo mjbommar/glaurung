@@ -69,7 +69,7 @@ fn rewrite(slot: &mut Expr, value: Expr, changed: &mut bool) {
 /// Rewrite `f`'s body in place, folding the patterns above.
 ///
 /// Returns whether anything was rewritten — see [`rewrite`].
-pub fn fold_constants(f: &mut Function) -> bool {
+pub(crate) fn fold_constants(f: &mut Function) -> bool {
     fold_constants_with_parameter_authority(f, ParameterAuthority::LegacySpelling)
 }
 

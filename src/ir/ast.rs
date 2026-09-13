@@ -95,9 +95,12 @@ pub(crate) use prepare::prepare_for_decbench_with_output_and_protected_locals;
 pub(crate) use prepare::{
     drop_machine_frame_comments, prepare_for_decbench_with_output_and_protected_locals_and_report,
 };
+#[cfg(test)]
 pub use prepare::{
-    prepare_for_decbench, prepare_for_decbench_with_identities, prepare_for_decbench_with_output,
-    settle_copies_and_constants, settle_copies_and_constants_with_identities,
+    prepare_for_decbench, prepare_for_decbench_with_output, settle_copies_and_constants,
+};
+pub use prepare::{
+    prepare_for_decbench_with_identities, settle_copies_and_constants_with_identities,
 };
 pub use return_folds::{fold_exhaustive_if_returns, fold_exhaustive_switch_returns};
 pub(crate) use return_folds::{

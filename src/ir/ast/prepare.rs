@@ -182,6 +182,7 @@ pub(crate) fn drop_machine_frame_comments(body: &mut Vec<super::Stmt>) {
 ///
 /// `benches/ir_dataflow.rs` calls this function rather than restating the loop,
 /// so the bench cannot drift from the schedule it claims to measure.
+#[cfg(test)]
 pub fn settle_copies_and_constants(owned: &mut Function) -> FixpointReport {
     settle_copies_and_constants_with_optional_identities(owned, None)
 }
@@ -287,6 +288,7 @@ fn settle_copies_and_constants_with_optional_identities(
 /// functions and had to be reverted. Running them here, as a named pass whose
 /// output is the thing rendered, makes the emitted C verifiable — see
 /// [`crate::ir::verify_defs`].
+#[cfg(test)]
 pub fn prepare_for_decbench(f: &Function) -> Function {
     prepare_for_decbench_with_output(f, crate::ir::types_recover::RecoveredOutputKind::Unknown)
 }
@@ -314,6 +316,7 @@ pub fn prepare_for_decbench_with_identities(
 /// Unknown/direct outputs retain the compatibility behavior; proven void
 /// outputs erase incidental return-register residue before any source-level
 /// folding runs.
+#[cfg(test)]
 pub fn prepare_for_decbench_with_output(
     f: &Function,
     output_kind: crate::ir::types_recover::RecoveredOutputKind,
@@ -332,6 +335,7 @@ pub fn prepare_for_decbench_with_output(
 /// parameter's home storage. The protected set is deliberately internal-slot
 /// names: semantic passes retain those names until the final presentation
 /// boundary, where authoritative source spellings are applied.
+#[cfg(test)]
 pub(crate) fn prepare_for_decbench_with_output_and_protected_locals(
     f: &Function,
     output_kind: crate::ir::types_recover::RecoveredOutputKind,
