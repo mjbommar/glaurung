@@ -699,12 +699,21 @@ pub(super) fn fold_one_call(
                     matches!(target.semantic(), Expr::Named { .. })
                         && args.is_empty()
                         && (dst.is_some()
-                            || super::return_attribution::return_value_is_read_with_identities(
-                                body,
-                                call_idx,
-                                return_reg(arch),
-                                identities,
-                            ))
+                            || match identities {
+                                Some(identities) => {
+                                    super::return_attribution::return_value_is_read_with_identities(
+                                        body,
+                                        call_idx,
+                                        return_reg(arch),
+                                        identities,
+                                    )
+                                }
+                                None => super::return_attribution::return_value_is_read_plain(
+                                    body,
+                                    call_idx,
+                                    return_reg(arch),
+                                ),
+                            })
                 }
                 _ => false,
             };
