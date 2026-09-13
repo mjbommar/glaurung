@@ -1,5 +1,7 @@
 # DecBench source-CFG replacement: human handoff
 
+> **Kind:** record · **Date:** 2026-09-13
+
 This is a draft for a human to edit and share. An agent must not post it or
 create any DecBench issue, comment, or pull request.
 

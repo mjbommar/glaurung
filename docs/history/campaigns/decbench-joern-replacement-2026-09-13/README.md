@@ -1,6 +1,23 @@
 # DecBench Joern-replacement differential, 2026-09-13
 
-> **Kind:** measurement record · **Status:** full A/B complete; differences classified · **Upstream:** local evidence only
+> **Kind:** record · **Date:** 2026-09-13
+
+This directory is the complete internal record of the full-corpus comparison.
+Choose the shortest document that answers the question at hand:
+
+- [Executive summary](EXECUTIVE-SUMMARY.md): conclusions and headline numbers;
+- [coverage and scoring](COVERAGE-AND-SCORING.md): denominators, completeness,
+  and exact GED comparison;
+- [performance](PERFORMANCE.md): wall time, memory, and interpretation;
+- [methodology and reproduction](METHODOLOGY.md): pinned inputs, commands,
+  controls, and artifact integrity;
+- [difference review](DIFFERENCE-REVIEW.md): exhaustive classification of the
+  4,121 remaining GED differences;
+- [human handoff draft](DISCORD-HANDOFF.md): concise text a human may edit and
+  share. Agents must not post it.
+
+The remainder of this file is the chronological campaign ledger. The focused
+writeups above summarize it without changing its evidence or denominators.
 
 ## Question
 
