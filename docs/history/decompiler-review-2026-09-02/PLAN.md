@@ -2951,6 +2951,18 @@ provenance through lowering.
   dataflow benchmark check pass. Its native rebuild is fresh, and the required
   fail-fast whole-Python gate again reaches the known ARM Thumb frame-save
   failure first at 11%. See `results/wp3-raw-register-width-names.md`.
+  Commit `d99633ae` removes the next identity-free x86 frame surface from
+  shipped builds. Production already retained exact identities through x86-64
+  prologue and cdecl32 alignment recovery; the composed decompile benchmark now
+  does too. The two bare compatibility entry points remain test-only for old
+  hand-written AST fixtures, so new production and benchmark callers cannot
+  accidentally promote numbered or role-like display spellings into storage
+  facts. All 45 owning tests and the focused benchmark check pass, the native
+  build is fresh, and the required fail-fast Python gate reaches the unchanged
+  ARM Thumb leaf-frame failure first at 11%. Next split the remaining internal
+  optional-identity compatibility branches from the typed x86 implementation
+  while continuing the wider production identity/parser audit. See
+  `results/wp3-x86-frame-apis-require-identities.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
