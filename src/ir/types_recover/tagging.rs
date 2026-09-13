@@ -285,8 +285,7 @@ fn frame_base_identity(
     let VReg::Phys(name) = v else {
         return None;
     };
-    let base = name.split_once('#').map_or(name.as_str(), |(base, _)| base);
-    is_frame_base_name(base).then(|| FrameBaseIdentity::CompatibilitySpelling(name.clone()))
+    is_frame_base_name(name).then(|| FrameBaseIdentity::CompatibilitySpelling(name.clone()))
 }
 
 fn is_frame_base_name(base: &str) -> bool {

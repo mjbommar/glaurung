@@ -2169,7 +2169,7 @@ mod tests {
     };
 
     #[test]
-    fn frame_bases_cover_arm32_and_ignore_the_ssa_suffix() {
+    fn raw_frame_bases_require_exact_architectural_names() {
         for name in [
             "rbp", "rsp", "ebp", "esp", "x29", "w29", "sp", "r7", "r11", "fp",
         ] {
@@ -2178,8 +2178,8 @@ mod tests {
                 "{name} should be a frame base"
             );
             assert!(
-                is_frame_base(&VReg::phys(format!("{name}#1"))),
-                "{name}#1 should be a frame base"
+                !is_frame_base(&VReg::phys(format!("{name}#1"))),
+                "a numbered spelling must not impersonate the raw {name} frame base"
             );
         }
         for name in ["r0", "r1", "r3", "rax", "rdi", "x0"] {
