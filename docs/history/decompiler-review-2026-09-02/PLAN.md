@@ -2940,7 +2940,9 @@ provenance through lowering.
   checks, three real spill-pointer controls, and the non-test library check
   pass. Raw pre-numbering type recovery remains supported rather than being
   conflated with numbered compatibility. See
-  `results/wp3-raw-frame-base-names.md`.
+  `results/wp3-raw-frame-base-names.md`. Its native rebuild is fresh, and the
+  required fail-fast whole-Python gate again reaches the known ARM Thumb
+  frame-save failure first at 11%.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,

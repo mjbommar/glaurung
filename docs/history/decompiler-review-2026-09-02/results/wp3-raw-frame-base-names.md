@@ -50,7 +50,16 @@ lone_spilled_pointer_fact_is_not_yet_a_rendered_parameter_refinement
 
 This is a fail-closed authority change. Exact raw production inputs are
 intended to remain unchanged, and no output or timing movement is claimed. No
-fixture matrix, DecBench, Joern, or corpus sweep was run. The required native
-rebuild and post-source-commit fail-fast Python gate are recorded after they
-run. WP3's remaining display-name and origin/invalidation audit stays open.
+fixture matrix, DecBench, Joern, or corpus sweep was run. The native rebuild is
+fresh. The required post-source-commit Python gate again reached 11% before its
+first ordinary failure:
 
+```text
+uv run pytest python/tests/ -q -x
+stopped at 11%: 1 failed
+```
+
+It reproduces the established ARM Thumb frame-save defect with the unchanged
+`*(int *)((&local_18[0] + 20)) = var0;` output. No ordinary failure appears
+earlier, but the whole gate remains red and incomplete. WP3's remaining
+display-name and origin/invalidation audit stays open.
