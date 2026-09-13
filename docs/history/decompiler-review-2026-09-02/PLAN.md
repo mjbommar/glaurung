@@ -3019,6 +3019,17 @@ provenance through lowering.
   failure first at 11%. Next continue the residual public/raw API inventory and
   isolate the shared test compatibility engines before closing WP3 identity
   authority. See `results/wp3-tail-call-apis-require-identities.md`.
+  Commit `c3780881` closes the adjacent benchmark and diagnostic stack-frame
+  boundary. The composed decompile benchmark, dataflow benchmark, and AArch64
+  prologue diagnostic now retain the authoritative identity snapshot through
+  stack promotion and ARM frame recovery; identity-free ARM32 and ARM64 entry
+  points are test-only. All 16 ARM64 and 13 ARM32 owning tests pass, as do both
+  benchmark checks and the diagnostic example. Its native build is fresh, and
+  the required fail-fast Python gate reaches the unchanged ARM Thumb leaf-frame
+  failure first at 11%. This is an authority/API increment, not an output or
+  timing claim. Next classify the remaining raw stack-promotion surface and
+  isolate the shared optional-identity test engines before closing WP3 identity
+  authority. See `results/wp3-stack-frame-apis-require-identities.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
