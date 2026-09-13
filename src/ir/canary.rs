@@ -71,6 +71,7 @@ pub fn recognise_canary(f: &mut Function) {
 /// `%reg = __stack_chk_guard; store %stack_N = %reg;` into a single
 /// `// stack canary: save guard to %stack_N` comment and, when the
 /// matching exit-check shape is present, collapse that too.
+#[cfg(test)]
 pub fn collapse_canary_save(f: &mut Function) {
     collapse_canary_save_impl(f, None);
 }

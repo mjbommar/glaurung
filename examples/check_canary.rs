@@ -66,7 +66,7 @@ fn main() {
         }
     }
 
-    canary::collapse_canary_save(&mut f);
+    canary::collapse_canary_save_with_identities(&mut f, &identities);
     println!("\n=== After collapse_canary_save ===");
     for (i, s) in f.body.iter().enumerate() {
         let text = format!("{:?}", s);

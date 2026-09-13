@@ -671,7 +671,7 @@ pub(super) fn run_ast_passes(
         crate::ir::aapcs64_indirect_result::indirect_result_buffer_hints_with_identities(
             f,
             cc,
-            Some(value_identities),
+            value_identities,
         );
     let stack_object_hints = if indirect_result_hints.is_empty() {
         stack_object_hints.to_vec()
@@ -714,7 +714,7 @@ pub(super) fn run_ast_passes(
         crate::ir::aapcs64_indirect_result::bind_indirect_result_buffers_with_identities(
             f,
             cc,
-            Some(value_identities),
+            value_identities,
         )
     );
     // Frame-relative storage is source-level state; the push/mov/sub sequence

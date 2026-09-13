@@ -197,11 +197,20 @@ fn nested_bodies(statement: &mut Stmt) -> Vec<&mut Vec<Stmt>> {
 /// The tracked map is per statement LIST and is cleared at every call and at
 /// every compound statement. Fail-closed on purpose: a coordinate that survived
 /// a call would be this reader inventing a buffer, and `x8` is caller-saved.
+#[cfg(test)]
 pub fn indirect_result_buffer_hints(f: &Function, cc: CallConv) -> Vec<StackObjectHint> {
-    indirect_result_buffer_hints_with_identities(f, cc, None)
+    indirect_result_buffer_hints_impl(f, cc, None)
 }
 
 pub fn indirect_result_buffer_hints_with_identities(
+    f: &Function,
+    cc: CallConv,
+    identities: &ValueIdentities,
+) -> Vec<StackObjectHint> {
+    indirect_result_buffer_hints_impl(f, cc, Some(identities))
+}
+
+fn indirect_result_buffer_hints_impl(
     f: &Function,
     cc: CallConv,
     identities: Option<&ValueIdentities>,
@@ -412,11 +421,20 @@ fn collect_hints(
 /// destination is read off the `x8` expression rather than off the coordinate.
 ///
 /// Returns how many calls were bound, so the pass is observable.
+#[cfg(test)]
 pub fn bind_indirect_result_buffers(f: &mut Function, cc: CallConv) -> usize {
-    bind_indirect_result_buffers_with_identities(f, cc, None)
+    bind_indirect_result_buffers_impl(f, cc, None)
 }
 
 pub fn bind_indirect_result_buffers_with_identities(
+    f: &mut Function,
+    cc: CallConv,
+    identities: &ValueIdentities,
+) -> usize {
+    bind_indirect_result_buffers_impl(f, cc, Some(identities))
+}
+
+fn bind_indirect_result_buffers_impl(
     f: &mut Function,
     cc: CallConv,
     identities: Option<&ValueIdentities>,
@@ -644,20 +662,20 @@ mod tests {
         let exact = indirect_result_buffer_hints_with_identities(
             &hinted("opaque_x8"),
             CallConv::Aarch64,
-            Some(&identities),
+            &identities,
         );
         assert_eq!(exact.len(), 1);
         assert_eq!((exact[0].base.as_str(), exact[0].disp), ("sp", 0));
         assert!(indirect_result_buffer_hints_with_identities(
             &hinted("x8#looks_like_result_storage"),
             CallConv::Aarch64,
-            Some(&identities),
+            &identities,
         )
         .is_empty());
         assert!(indirect_result_buffer_hints_with_identities(
             &hinted("malformed_identity_base"),
             CallConv::Aarch64,
-            Some(&identities),
+            &identities,
         )
         .is_empty());
 
@@ -680,7 +698,7 @@ mod tests {
             bind_indirect_result_buffers_with_identities(
                 &mut exact,
                 CallConv::Aarch64,
-                Some(&identities),
+                &identities,
             ),
             1
         );
@@ -689,7 +707,7 @@ mod tests {
             bind_indirect_result_buffers_with_identities(
                 &mut misleading,
                 CallConv::Aarch64,
-                Some(&identities),
+                &identities,
             ),
             0
         );
@@ -698,7 +716,7 @@ mod tests {
             bind_indirect_result_buffers_with_identities(
                 &mut malformed,
                 CallConv::Aarch64,
-                Some(&identities),
+                &identities,
             ),
             0
         );
