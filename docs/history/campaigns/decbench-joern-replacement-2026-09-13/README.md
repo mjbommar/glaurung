@@ -1,6 +1,6 @@
 # DecBench Joern-replacement differential, 2026-09-13
 
-> **Kind:** measurement record · **Status:** full A/B complete; differences under review · **Upstream:** local evidence only
+> **Kind:** measurement record · **Status:** full A/B complete; differences classified · **Upstream:** local evidence only
 
 ## Question
 
@@ -280,9 +280,5 @@ The lossless artifacts are stored outside Git under
 
 ## Required follow-up
 
-- Review all large deltas and a deterministic sample of small deltas against
-  source text and graph invariants.
-- Decide whether an explicitly compatibility-only entry-flag emulator is worth
-  implementing; do not feed Joern's merge-order artefacts into the general CFG.
 - Prepare a concise Discord handoff for human review. Do not post it
   autonomously.

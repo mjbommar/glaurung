@@ -207,3 +207,37 @@ favours Glaurung. Adding Java's redundant node would make the benchmark result
 worse and the compatibility graph less source-like, so these are retained and
 explained rather than forced to match. There is now no unclassified cell in
 the 22-case queue.
+
+## Large-delta and deterministic-sample audit
+
+All **103** cells whose absolute Java/Glaurung GED difference is greater than
+20 were checked against the lossless ledgers and stored C:
+
+- 59 are `different_entry_exit_roles`; they satisfy the exhaustive role-only
+  invariant above: equal node count, edge count, and unlabelled degree multiset,
+  with Java's additional internal entry flag as the only metric-visible cause;
+- 42 are `different_graph_size`, were changed by the constant-loop correction,
+  and every stored function contains a literal `while (1)` or `for (;;)`;
+- the final two are the identical `controllerBrescianini` firmware cells from
+  the ten-case expression-granularity class above. Java/Glaurung GED is 83/60.
+
+Thus no large delta remains outside a classified cause.
+
+The small-delta audit used a reproducible selection rather than hand-picking:
+within each category among cells with absolute delta at most 5, sort by
+`SHA256("<ordinal>:<function>")` and inspect the first five, or all cells when
+the category has fewer than five. The selected identities were:
+
+| Category | SHA-256 prefixes and functions | Result |
+|---|---|---|
+| role-only | `002a47f904b0` `_rl_internal_char_cleanup`; `00aefad8cc25` `blake2b_update`; `00b6ab1253c0` `sshpkt_fatal`; `0167817022bf` `EVP_CIPHER_CTX_set_iv`; `01683300374e` `bash_add_history` | all satisfy the exhaustive role-only invariant |
+| graph-size | `0026c995933d` `xfrm_algotype_getbyname`; `0082200c9238` `efi_var_mem_compare`; `00a3300fff95` `xsplit`; `00aa706c7826` `sshbuf_put_bignum2_bytes`; `00b7ab4e70a5` `usage` | all contain a proven constant-true loop and were touched by that correction |
+| Glaurung source-isomorphic | `013537313f6e` `skip_chars`; `0154ad12f7c8` `skip_white`; `0174259becb1` `job_signal_status`; `030feafdbde5` `srxlFrameText`; `0323ea354fe9` `idname_tree_RB_REMOVE` | Glaurung GED 0 in every cell |
+| Java source-isomorphic | `62fbfd203e4f` `record_line_starts` (the category has one small-delta cell) | the classified constant-true loop with reachable `break` |
+
+The sample found no new cause and no coverage or provider failure. Together
+with the exhaustive category invariants, the 40-case Java-win review, and the
+22-case residual review, every one of the 4,121 remaining differences now has
+a documented classification. This is not a claim that the two CFGs are
+identical; it is a complete accounting of why the remaining metric-visible
+differences were not copied into Glaurung.

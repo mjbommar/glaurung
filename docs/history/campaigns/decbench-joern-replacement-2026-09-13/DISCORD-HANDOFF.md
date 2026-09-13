@@ -60,6 +60,12 @@ equivalent nested-ternary granularity differences where Glaurung retains the
 branch edges and has a lower source GED in every cell. The adjacent review
 contains the per-pattern graph shapes and scores.
 
+We also audited all 103 cells with an absolute Java/Glaurung GED difference
+above 20 and a deterministic SHA-256 sample of small deltas from every category.
+Every large cell and every sampled cell fell into the documented role,
+constant-loop, source-isomorphic, or expression-granularity classes; no new
+provider failure, coverage loss, or unexplained defect appeared.
+
 The complete commands, provenance, limitations, hashes, and follow-up are in
 the adjacent `README.md`. Lossless per-function graph ledgers and the
 fail-closed joined aggregate are retained locally for review.
