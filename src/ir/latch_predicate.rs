@@ -66,7 +66,7 @@ pub(crate) fn coalesce_source_loop_updates(
     protected: &std::collections::HashSet<String>,
     types: &crate::ir::types_recover::TypeMap,
     exact_value_widths: Option<&std::collections::HashMap<String, u8>>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) -> std::collections::HashMap<VReg, VReg> {
     let mut renames = std::collections::HashMap::new();
     let mut index = 0;
@@ -123,7 +123,7 @@ fn source_loop_update_candidate(
     protected: &std::collections::HashSet<String>,
     types: &crate::ir::types_recover::TypeMap,
     exact_value_widths: Option<&std::collections::HashMap<String, u8>>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) -> Option<(usize, VReg, VReg)> {
     let (body, condition) = match statement.semantic() {
         Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
@@ -159,12 +159,7 @@ fn source_loop_update_candidate(
                     .copied()
                     == Some(carrier_width)
         );
-    let scratch_is_parameter = match identities {
-        Some(identities) => identities.parameter_slot(&scratch).is_some(),
-        None => {
-            matches!(&scratch, VReg::Phys(name) if crate::ir::ast::parse_arg_index(name).is_some())
-        }
-    };
+    let scratch_is_parameter = identities.parameter_slot(&scratch).is_some();
     if !protected_register(&carrier, protected)
         || protected_register(&scratch, protected)
         || scratch_is_parameter

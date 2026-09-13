@@ -710,7 +710,7 @@ fn coalesces_a_typed_loop_update_scratch_into_its_source_carrier() {
         &protected,
         &types,
         Some(&exact_widths),
-        Some(&parameter_identities),
+        &parameter_identities,
     );
     assert_eq!(parameter_scratch, function);
     assert!(refused.is_empty());
@@ -720,7 +720,7 @@ fn coalesces_a_typed_loop_update_scratch_into_its_source_carrier() {
         &protected,
         &types,
         Some(&exact_widths),
-        Some(&identities),
+        &identities,
     );
     identities.apply_renames(&renames);
 
@@ -786,7 +786,13 @@ fn keeps_a_loop_update_scratch_when_the_old_carrier_is_still_needed() {
     }
     let protected = std::collections::HashSet::from(["source".to_string()]);
 
-    coalesce_source_loop_updates(&mut function, &protected, &types, None, None);
+    coalesce_source_loop_updates(
+        &mut function,
+        &protected,
+        &types,
+        None,
+        &crate::ir::value_number::ValueIdentities::default(),
+    );
 
     assert_eq!(function, before);
 }
@@ -832,7 +838,13 @@ fn keeps_a_loop_update_scratch_with_a_different_semantic_width() {
     );
     let protected = std::collections::HashSet::from(["source".to_string()]);
 
-    coalesce_source_loop_updates(&mut function, &protected, &types, None, None);
+    coalesce_source_loop_updates(
+        &mut function,
+        &protected,
+        &types,
+        None,
+        &crate::ir::value_number::ValueIdentities::default(),
+    );
 
     assert_eq!(function, before);
 }
