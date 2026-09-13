@@ -1934,12 +1934,10 @@ pub fn recover_prototype_with_arm_vfp_args(
 /// `w0`->4, `x0`->8, `di`->2, `dil`->1). Falls back to 8 for unknown names.
 fn reg_width_bytes(v: &VReg) -> u8 {
     if let VReg::Phys(n) = v {
-        // Value numbering appends `#version` to the architectural spelling.
-        // Width belongs to the storage view, not to the SSA identity:
-        // `xmm0_d0#3` is still one 32-bit lane. Passing the tagged spelling to
-        // `phys_reg_width` misses and falls back to eight bytes, silently
-        // widening every numbered SIMD lane to `long`.
-        if let Some(w) = crate::ir::types::phys_reg_width(crate::ir::abi::ssa_base(n)) {
+        // This is the raw, pre-numbering path. A `#version` suffix is rendered
+        // text rather than storage authority; numbered callers must use
+        // `reg_width_bytes_with_optional_identities` with their sidecar.
+        if let Some(w) = crate::ir::types::phys_reg_width(n) {
             return (w.bits() / 8).max(1) as u8;
         }
     }
@@ -2703,8 +2701,8 @@ mod tests {
     }
 
     #[test]
-    fn value_number_tags_do_not_change_register_view_width() {
-        assert_eq!(reg_width_bytes(&VReg::phys("xmm0_d0#3")), 4);
+    fn raw_register_width_does_not_parse_value_number_tags() {
+        assert_eq!(reg_width_bytes(&VReg::phys("xmm0_d0#3")), 8);
         assert_eq!(reg_width_bytes(&VReg::phys("rax#7")), 8);
     }
 
