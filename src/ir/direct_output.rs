@@ -21,6 +21,23 @@ use crate::ir::call_args::CallConv;
 use crate::ir::types::VReg;
 use crate::ir::types_recover::{RecoveredOutputKind, RecoveredPrototype};
 
+#[derive(Clone, Copy)]
+enum PrototypeOutputAuthority<'a> {
+    Exact(&'a crate::ir::value_number::ValueIdentities),
+    #[cfg(test)]
+    LegacySpelling,
+}
+
+impl<'a> PrototypeOutputAuthority<'a> {
+    fn exact(self) -> Option<&'a crate::ir::value_number::ValueIdentities> {
+        match self {
+            Self::Exact(identities) => Some(identities),
+            #[cfg(test)]
+            Self::LegacySpelling => None,
+        }
+    }
+}
+
 /// Project a body-written return register onto every remaining bare return.
 #[cfg(test)]
 pub(crate) fn materialize_direct_output(function: &mut Function) {
@@ -70,7 +87,35 @@ pub(crate) fn materialize_prototype_output(
     function: &mut Function,
     cc: CallConv,
     prototype: Option<&RecoveredPrototype>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    materialize_prototype_output_impl(
+        function,
+        cc,
+        prototype,
+        PrototypeOutputAuthority::Exact(identities),
+    );
+}
+
+#[cfg(test)]
+fn materialize_prototype_output_legacy(
+    function: &mut Function,
+    cc: CallConv,
+    prototype: Option<&RecoveredPrototype>,
+) {
+    materialize_prototype_output_impl(
+        function,
+        cc,
+        prototype,
+        PrototypeOutputAuthority::LegacySpelling,
+    );
+}
+
+fn materialize_prototype_output_impl(
+    function: &mut Function,
+    cc: CallConv,
+    prototype: Option<&RecoveredPrototype>,
+    authority: PrototypeOutputAuthority<'_>,
 ) {
     let live_in_result = prototype.and_then(|prototype| {
         if prototype.output_kind() != RecoveredOutputKind::Direct
@@ -95,12 +140,15 @@ pub(crate) fn materialize_prototype_output(
     // live-in fallback is stale; it does not prove which version reaches each
     // return. Preserve the established fail-closed compatibility behavior.
     // Production supplies identities and can use the path-sensitive walk.
-    let live_in_result = live_in_result
-        .filter(|_| identities.is_some() || !body_writes_abi_return_storage(&function.body, cc));
+    let live_in_result = live_in_result.filter(|_| {
+        authority.exact().is_some() || !body_writes_abi_return_storage(&function.body, cc)
+    });
     // This pass runs before role naming. A literal `ret` here may be a source
     // or debug spelling and is not evidence of machine result storage.
     materialize_direct_output_with_live_in(function, live_in_result, &|value| {
-        identities.is_some_and(|identities| identity_is_result_storage(identities, value))
+        authority
+            .exact()
+            .is_some_and(|identities| identity_is_result_storage(identities, value))
     });
 }
 
@@ -1025,7 +1073,7 @@ mod tests {
         prototype.apply_locked_output(RecoveredOutputKind::Direct, Some(int32()));
         let mut function = bare_return_function();
 
-        materialize_prototype_output(&mut function, CallConv::Aarch64, Some(&prototype), None);
+        materialize_prototype_output_legacy(&mut function, CallConv::Aarch64, Some(&prototype));
 
         assert_eq!(
             function.body,
@@ -1077,7 +1125,7 @@ mod tests {
             &mut function,
             CallConv::Aarch64,
             Some(&prototype),
-            Some(&identities),
+            &identities,
         );
 
         let Stmt::If { then_body, .. } = &function.body[0] else {
@@ -1187,7 +1235,7 @@ mod tests {
         let mut prototype = RecoveredPrototype::default();
         prototype.apply_locked_parameters(CallConv::SysVAmd64, &[Some(int32())]);
         prototype.apply_locked_output(RecoveredOutputKind::Direct, Some(int32()));
-        materialize_prototype_output(&mut function, CallConv::SysVAmd64, Some(&prototype), None);
+        materialize_prototype_output_legacy(&mut function, CallConv::SysVAmd64, Some(&prototype));
         assert_eq!(
             function,
             bare_return_function(),
@@ -1208,11 +1256,10 @@ mod tests {
                 Stmt::Return { value: None },
             ],
         };
-        materialize_prototype_output(
+        materialize_prototype_output_legacy(
             &mut written_version,
             CallConv::Aarch64,
             Some(&aarch64),
-            None,
         );
         assert_eq!(
             written_version.body.last(),
@@ -1238,7 +1285,7 @@ mod tests {
             ],
         };
 
-        materialize_prototype_output(&mut function, CallConv::Aarch64, Some(&prototype), None);
+        materialize_prototype_output_legacy(&mut function, CallConv::Aarch64, Some(&prototype));
 
         assert_eq!(
             function.body.last(),
@@ -1420,7 +1467,7 @@ mod tests {
             &mut function,
             CallConv::SysVAmd64,
             Some(&prototype),
-            Some(&identities),
+            &identities,
         );
 
         assert_eq!(

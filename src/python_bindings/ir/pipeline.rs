@@ -749,7 +749,7 @@ pub(super) fn run_ast_passes(
                 f,
                 cc,
                 prototype,
-                Some(value_identities),
+                value_identities,
             );
             // The result register now carries the LOW eightbyte of a proven
             // two-register aggregate result. State the whole contract here,
