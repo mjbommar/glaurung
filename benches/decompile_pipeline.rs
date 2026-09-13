@@ -263,7 +263,13 @@ fn run_context_free_ast_passes(
     glaurung::ir::call_contracts::apply_known_call_contracts(f);
     glaurung::ir::call_result_split::split_call_result_lifetimes(f, cc);
     glaurung::ir::canary::recognise_canary(f);
-    glaurung::ir::stack_locals::promote_stack_locals_with_facts(f, Some(cc), None, &[]);
+    glaurung::ir::stack_locals::promote_stack_locals_with_facts_and_identities(
+        f,
+        Some(cc),
+        None,
+        &[],
+        value_identities,
+    );
     glaurung::ir::aapcs64_indirect_result::bind_indirect_result_buffers_with_identities(
         f,
         cc,

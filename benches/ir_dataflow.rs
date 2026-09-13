@@ -282,9 +282,18 @@ fn ast_passes() -> Vec<AstPass> {
         ("copy_prop::propagate_copies", |f, _, _, identities| {
             let _ = copy_prop::propagate_copies_with_identities(f, identities);
         }),
-        ("stack_locals::promote_stack_locals_typed", |f, cc, _, _| {
-            let _ = stack_locals::promote_stack_locals_typed(f, Some(cc));
-        }),
+        (
+            "stack_locals::promote_stack_locals_typed",
+            |f, cc, _, identities| {
+                let _ = stack_locals::promote_stack_locals_with_facts_and_identities(
+                    f,
+                    Some(cc),
+                    None,
+                    &[],
+                    identities,
+                );
+            },
+        ),
         (
             "dead_stores::eliminate_dead_stores",
             |f, cc, _, identities| {

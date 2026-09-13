@@ -566,7 +566,7 @@ pub fn promote_stack_locals_with_facts(
 }
 
 /// Promote stack storage while retaining exact SSA ownership of machine saves.
-pub(crate) fn promote_stack_locals_with_facts_and_identities(
+pub fn promote_stack_locals_with_facts_and_identities(
     f: &mut Function,
     cc: Option<CallConv>,
     parameter_count: Option<usize>,

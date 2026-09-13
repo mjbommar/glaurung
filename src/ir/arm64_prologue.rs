@@ -28,6 +28,7 @@ use crate::ir::types::{BinOp, VReg};
 
 /// Run the pass over `f`'s body. Nested arms are currently left alone —
 /// prologue stmts always sit at the top-level entry to a function.
+#[cfg(test)]
 pub fn recognise_arm64_prologue(f: &mut Function) {
     recognise_arm64_prologue_impl(f, None);
 }

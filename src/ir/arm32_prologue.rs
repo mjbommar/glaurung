@@ -54,6 +54,7 @@ impl Arm32Frame {
 }
 
 /// Collapse a proven-balanced AAPCS machine frame in `f`.
+#[cfg(test)]
 pub fn recognise_arm32_frame(f: &mut Function) {
     recognise_arm32_frame_with_optional_identities(f, None);
 }
