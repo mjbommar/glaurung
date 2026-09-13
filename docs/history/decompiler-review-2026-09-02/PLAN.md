@@ -3133,6 +3133,16 @@ provenance through lowering.
   failure. This is an authority/API closure, not an output or timing claim.
   Continue the residual semantic-reader audit before WP3 invalidation closure.
   See `results/wp3-vector-copy-internal-authority.md`.
+  Commit `2fd6a7df` closes the role-naming internal optional identity engine.
+  The shipped presentation-map path now carries an exact `ValueIdentities`
+  authority into direct-return storage classification; display-spelling
+  classification exists only in test builds for hand-written AST fixtures.
+  All 23 owning tests and the non-test library check pass. A fresh native build
+  passes its guard, and the required whole-Python fail-fast gate again reaches
+  the same independent committed-baseline inconsistency at 17% with no earlier
+  failure. This is an authority/API closure, not an output or timing claim.
+  Continue the remaining semantic-reader audit before WP3 invalidation
+  closure. See `results/wp3-naming-internal-authority.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
