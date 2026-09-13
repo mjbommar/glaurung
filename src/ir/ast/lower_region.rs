@@ -1413,6 +1413,7 @@ mod lowering_stack_tests {
 /// region tree in `lower_region`, then the resulting statement tree in
 /// `collect_goto_targets` and `deduplicate_labels` — so the whole body needs the
 /// headroom, not just the first pass.
+#[cfg(test)]
 pub fn lower(lf: &LlirFunction, region: &Region, name: impl Into<String>) -> Function {
     lower_on_reserved_stack(lf, region, name.into(), None)
 }

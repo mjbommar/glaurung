@@ -106,7 +106,14 @@ fn render_function(object: &Path, name: &str) -> Option<String> {
     );
     let ssa = glaurung::ir::ssa::compute_ssa(&lifted);
     let region = glaurung::ir::structure::recover_verified(&lifted, &ssa);
-    let ast = glaurung::ir::ast::lower(&lifted, &region, name);
+    let (numbered, _, _, identities) =
+        glaurung::ir::value_number::value_number_with_parameter_slots_lifetimes_and_identities(
+            &lifted,
+            &ssa,
+            glaurung::ir::call_args::CallConv::SysVAmd64,
+            &[],
+        );
+    let ast = glaurung::ir::ast::lower_with_identities(&numbered, &region, name, &identities);
     Some(glaurung::ir::ast::render(&ast))
 }
 

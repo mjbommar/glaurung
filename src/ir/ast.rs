@@ -84,7 +84,9 @@ pub use decbench_render::{
 };
 pub(crate) use dwarf_render_types::dwarf_prototype_type_is_renderable;
 pub(crate) use lower_conds::negate_cmp_expr;
-pub use lower_region::{lower, lower_with_identities};
+#[cfg(test)]
+pub use lower_region::lower;
+pub use lower_region::lower_with_identities;
 pub use origin::OriginSet;
 
 pub(crate) fn take_decbench_line_mappings() -> Vec<(usize, OriginSet)> {
@@ -102,7 +104,6 @@ pub use prepare::{
 pub use prepare::{
     prepare_for_decbench_with_identities, settle_copies_and_constants_with_identities,
 };
-#[cfg(test)]
 #[cfg(test)]
 pub(crate) use return_folds::remove_redundant_return_constant_assignments;
 pub use return_folds::{fold_exhaustive_if_returns, fold_exhaustive_switch_returns};

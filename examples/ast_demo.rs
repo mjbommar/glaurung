@@ -6,6 +6,8 @@
 
 use glaurung::analysis::cfg::{analyze_functions_bytes, Budgets};
 use glaurung::core::binary::Arch;
+use glaurung::ir::call_args::CallConv;
+use glaurung::ir::value_number::value_number_with_parameter_slots_lifetimes_and_identities;
 use glaurung::ir::{ast, lift_function::lift_function_from_bytes, ssa, structure};
 
 fn main() {
@@ -18,7 +20,14 @@ fn main() {
         if let Ok(lf) = lift_function_from_bytes(&data, f, Arch::X86_64) {
             let sinfo = ssa::compute_ssa(&lf);
             let r = structure::recover(&lf, &sinfo);
-            let astf = ast::lower(&lf, &r, f.name.clone());
+            let (numbered, _, _, identities) =
+                value_number_with_parameter_slots_lifetimes_and_identities(
+                    &lf,
+                    &sinfo,
+                    CallConv::SysVAmd64,
+                    &[],
+                );
+            let astf = ast::lower_with_identities(&numbered, &r, f.name.clone(), &identities);
             println!("{}", ast::render(&astf));
         }
     }
