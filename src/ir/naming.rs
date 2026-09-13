@@ -31,6 +31,13 @@ const STACK_KEEPERS: &[&str] = &[
     "rsp", "esp", "sp", "rbp", "ebp", "bp", "x29", "w29", "fp", "x30", "w30", "lr",
 ];
 
+#[derive(Clone, Copy)]
+enum IdentityAuthority<'a> {
+    Exact(&'a crate::ir::value_number::ValueIdentities),
+    #[cfg(test)]
+    LegacySpelling,
+}
+
 /// The register spellings that may carry this convention's result.
 ///
 /// Delegated rather than restated: this was a verbatim second copy of
@@ -109,7 +116,14 @@ pub fn apply_role_names_with_parameter_roles(
     param_slots: &std::collections::HashSet<usize>,
     parameter_roles: &HashMap<String, usize>,
 ) -> HashMap<String, String> {
-    apply_role_names_impl(f, cc, param_slots, parameter_roles, None, None)
+    apply_role_names_impl(
+        f,
+        cc,
+        param_slots,
+        parameter_roles,
+        None,
+        IdentityAuthority::LegacySpelling,
+    )
 }
 
 /// Apply role names while trusting only stack-parameter identities published
@@ -128,7 +142,7 @@ pub(crate) fn apply_role_names_with_parameter_roles_and_stack_parameters(
         param_slots,
         parameter_roles,
         Some(stack_parameter_roles),
-        None,
+        IdentityAuthority::LegacySpelling,
     )
 }
 
@@ -139,7 +153,7 @@ fn apply_role_names_impl(
     param_slots: &std::collections::HashSet<usize>,
     parameter_roles: &HashMap<String, usize>,
     stack_parameter_roles: Option<&HashMap<String, usize>>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: IdentityAuthority<'_>,
 ) -> HashMap<String, String> {
     let role = role_names_impl(
         f,
@@ -147,7 +161,7 @@ fn apply_role_names_impl(
         param_slots,
         parameter_roles,
         stack_parameter_roles,
-        identities,
+        authority,
     );
     apply_role_name_mapping(f, &role);
     role
@@ -172,7 +186,7 @@ pub fn role_names_with_identities(
         param_slots,
         parameter_roles,
         Some(stack_parameter_roles),
-        Some(identities),
+        IdentityAuthority::Exact(identities),
     )
 }
 
@@ -194,7 +208,7 @@ fn role_names_impl(
     param_slots: &std::collections::HashSet<usize>,
     parameter_roles: &HashMap<String, usize>,
     stack_parameter_roles: Option<&HashMap<String, usize>>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: IdentityAuthority<'_>,
 ) -> HashMap<String, String> {
     // Build the role map: raw name → friendly name. We build it up-front so
     // that every substitution is consistent across the function.
@@ -228,14 +242,13 @@ fn role_names_impl(
     let mut direct_return_carriers = Vec::new();
     collect_direct_return_carriers(&f.body, &mut direct_return_carriers);
     for name in direct_return_carriers {
-        let is_return_storage = identities.map_or_else(
-            || crate::ir::abi::is_return_register(cc, &name),
-            |identities| {
-                identities
-                    .unambiguous_physical_base(&VReg::phys(&name))
-                    .is_some_and(|base| crate::ir::abi::is_return_register(cc, base))
-            },
-        );
+        let is_return_storage = match authority {
+            IdentityAuthority::Exact(identities) => identities
+                .unambiguous_physical_base(&VReg::phys(&name))
+                .is_some_and(|base| crate::ir::abi::is_return_register(cc, base)),
+            #[cfg(test)]
+            IdentityAuthority::LegacySpelling => crate::ir::abi::is_return_register(cc, &name),
+        };
         if is_return_storage {
             role.entry(name).or_insert_with(|| "ret".to_string());
         }
