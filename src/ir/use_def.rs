@@ -20,6 +20,12 @@ use std::collections::HashMap;
 
 use crate::ir::types::{CallTarget, LlirFunction, MemOp, Op, VReg, Value};
 
+#[derive(Clone, Copy)]
+enum ProvenInputAuthority<'a> {
+    Exact(&'a crate::ir::value_number::ValueIdentities),
+    PlainLlir,
+}
+
 fn same_machine_register(left: &VReg, right: &VReg) -> bool {
     match (left, right) {
         (VReg::Phys(left), VReg::Phys(right)) => {
@@ -35,10 +41,11 @@ fn same_machine_register(left: &VReg, right: &VReg) -> bool {
 fn same_machine_register_with_identities(
     left: &VReg,
     right: &VReg,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: ProvenInputAuthority<'_>,
 ) -> bool {
-    let Some(identities) = identities else {
-        return same_machine_register(left, right);
+    let identities = match authority {
+        ProvenInputAuthority::Exact(identities) => identities,
+        ProvenInputAuthority::PlainLlir => return same_machine_register(left, right),
     };
     let Some(left) = identities.unambiguous_physical_base(left) else {
         return false;
@@ -59,7 +66,7 @@ fn same_machine_register_with_identities(
 /// every listed argument.  Indirect call targets and all non-call operands are
 /// genuine reads.
 pub fn use_is_proven_input(op: &Op, use_index: usize) -> bool {
-    use_is_proven_input_impl(op, use_index, None)
+    use_is_proven_input_impl(op, use_index, ProvenInputAuthority::PlainLlir)
 }
 
 /// Identity-aware form of [`use_is_proven_input`].
@@ -68,13 +75,13 @@ pub fn use_is_proven_input_with_identities(
     use_index: usize,
     identities: &crate::ir::value_number::ValueIdentities,
 ) -> bool {
-    use_is_proven_input_impl(op, use_index, Some(identities))
+    use_is_proven_input_impl(op, use_index, ProvenInputAuthority::Exact(identities))
 }
 
 fn use_is_proven_input_impl(
     op: &Op,
     use_index: usize,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: ProvenInputAuthority<'_>,
 ) -> bool {
     let Op::Call { target, effects } = op else {
         return true;
@@ -93,7 +100,7 @@ fn use_is_proven_input_impl(
         || effects
             .proven_args
             .iter()
-            .any(|proven| same_machine_register_with_identities(proven, argument, identities))
+            .any(|proven| same_machine_register_with_identities(proven, argument, authority))
 }
 
 /// Address of an op within a function.
