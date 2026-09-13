@@ -8,6 +8,23 @@
 use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 use crate::ir::types::{BinOp, VReg};
 
+#[derive(Clone, Copy)]
+enum IdentityAuthority<'a> {
+    Exact(&'a crate::ir::value_number::ValueIdentities),
+    #[cfg(test)]
+    LegacySpelling,
+}
+
+impl<'a> IdentityAuthority<'a> {
+    fn exact(self) -> Option<&'a crate::ir::value_number::ValueIdentities> {
+        match self {
+            Self::Exact(identities) => Some(identities),
+            #[cfg(test)]
+            Self::LegacySpelling => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct SavedRegister {
     name: String,
@@ -56,7 +73,7 @@ impl Arm32Frame {
 /// Collapse a proven-balanced AAPCS machine frame in `f`.
 #[cfg(test)]
 pub fn recognise_arm32_frame(f: &mut Function) {
-    recognise_arm32_frame_with_optional_identities(f, None);
+    recognise_arm32_frame_impl(f, IdentityAuthority::LegacySpelling);
 }
 
 /// Collapse a proven-balanced AAPCS frame using exact SSA value authority.
@@ -64,21 +81,18 @@ pub fn recognise_arm32_frame_with_identities(
     f: &mut Function,
     identities: &crate::ir::value_number::ValueIdentities,
 ) {
-    recognise_arm32_frame_with_optional_identities(f, Some(identities));
+    recognise_arm32_frame_impl(f, IdentityAuthority::Exact(identities));
 }
 
-fn recognise_arm32_frame_with_optional_identities(
-    f: &mut Function,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) {
-    let Some(frame) = parse_prologue(&f.body, identities) else {
+fn recognise_arm32_frame_impl(f: &mut Function, authority: IdentityAuthority<'_>) {
+    let Some(frame) = parse_prologue(&f.body, authority) else {
         return;
     };
 
     // Work on a clone so one malformed return path cannot leave a partially
     // rewritten function behind.
     let mut candidate = f.body.clone();
-    let Some(return_count) = collapse_epilogues(&mut candidate, &frame, identities) else {
+    let Some(return_count) = collapse_epilogues(&mut candidate, &frame, authority) else {
         return;
     };
     if return_count == 0 {
@@ -102,17 +116,14 @@ fn recognise_arm32_frame_with_optional_identities(
     // changing its meaning.
     if candidate
         .iter()
-        .any(|statement| stmt_mentions_sp(statement, identities))
+        .any(|statement| stmt_mentions_sp(statement, authority))
     {
         return;
     }
     f.body = candidate;
 }
 
-fn parse_prologue(
-    body: &[Stmt],
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) -> Option<Arm32Frame> {
+fn parse_prologue(body: &[Stmt], identities: IdentityAuthority<'_>) -> Option<Arm32Frame> {
     let mut start = 0;
     while body
         .get(start)
@@ -238,7 +249,7 @@ fn parse_prologue(
 
 fn saved_register_store(
     statement: &Stmt,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
 ) -> Option<(StackLocation, String, u8)> {
     let Stmt::Store { addr, src, size } = statement.semantic() else {
         return None;
@@ -254,7 +265,7 @@ fn saved_register_store(
 
 fn aliased_frame_pointer_store(
     statement: &Stmt,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
 ) -> Option<(StackLocation, StackLocation)> {
     let Stmt::Store { addr, src, size: 4 } = statement.semantic() else {
         return None;
@@ -268,7 +279,7 @@ fn aliased_frame_pointer_store(
 fn collapse_epilogues(
     body: &mut Vec<Stmt>,
     frame: &Arm32Frame,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
 ) -> Option<usize> {
     let mut return_count = 0;
     for statement in body.iter_mut() {
@@ -325,7 +336,7 @@ fn match_epilogue(
     body: &[Stmt],
     return_index: usize,
     frame: &Arm32Frame,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
 ) -> Option<usize> {
     // Locate the contiguous machine-only suffix, then validate its exact order
     // below. Large GCC frames restore SP from the frame pointer rather than by
@@ -421,7 +432,7 @@ fn first_saved_slot(frame: &Arm32Frame) -> Option<&StackLocation> {
 fn frame_deallocation_piece(
     statement: &Stmt,
     frame: &Arm32Frame,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
 ) -> bool {
     match statement.semantic() {
         Stmt::Assign { dst, src } if is_sp(dst, identities) => {
@@ -445,7 +456,7 @@ fn match_frame_deallocation(
     body: &[Stmt],
     cursor: usize,
     frame: &Arm32Frame,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
 ) -> Option<usize> {
     if sp_adjust(body.get(cursor)?, BinOp::Add, identities) == Some(frame.local_width) {
         return Some(cursor + 1);
@@ -524,7 +535,7 @@ fn stack_location_from_linear_definitions(
     body: &[Stmt],
     before: usize,
     expression: &Expr,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
     depth: usize,
 ) -> Option<StackLocation> {
     if depth > 16 {
@@ -535,8 +546,8 @@ fn stack_location_from_linear_definitions(
     }
     match expression.semantic() {
         Expr::Reg(register) => {
-            let identities = identities?;
-            identities.exact(register)?;
+            let exact_identities = identities.exact()?;
+            exact_identities.exact(register)?;
             for (index, statement) in body[..before].iter().enumerate().rev() {
                 match statement.semantic() {
                     Stmt::Assign { dst, src } if dst == register => {
@@ -544,7 +555,7 @@ fn stack_location_from_linear_definitions(
                             body,
                             index,
                             src,
-                            Some(identities),
+                            identities,
                             depth + 1,
                         );
                     }
@@ -574,7 +585,7 @@ fn constant_from_linear_definitions(
     body: &[Stmt],
     before: usize,
     expression: &Expr,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
     depth: usize,
 ) -> Option<i64> {
     if depth > 16 {
@@ -583,8 +594,8 @@ fn constant_from_linear_definitions(
     match expression.semantic() {
         Expr::Const(value) => Some(*value),
         Expr::Reg(register) => {
-            let identities = identities?;
-            identities.exact(register)?;
+            let exact_identities = identities.exact()?;
+            exact_identities.exact(register)?;
             for (index, statement) in body[..before].iter().enumerate().rev() {
                 match statement.semantic() {
                     Stmt::Assign { dst, src } if dst == register => {
@@ -592,7 +603,7 @@ fn constant_from_linear_definitions(
                             body,
                             index,
                             src,
-                            Some(identities),
+                            identities,
                             depth + 1,
                         );
                     }
@@ -608,7 +619,7 @@ fn constant_from_linear_definitions(
 
 fn restored_register(
     statement: &Stmt,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
 ) -> Option<(String, StackLocation)> {
     let Stmt::Assign { dst, src } = statement.semantic() else {
         return None;
@@ -624,10 +635,7 @@ fn restored_register(
     canonical_saved_register(dst, identities).map(|name| (name, slot))
 }
 
-fn stack_location(
-    expression: &Expr,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) -> Option<StackLocation> {
+fn stack_location(expression: &Expr, identities: IdentityAuthority<'_>) -> Option<StackLocation> {
     match expression.semantic() {
         Expr::Reg(slot) if is_promoted_stack_slot(slot, identities) => Some(StackLocation {
             object: slot.clone(),
@@ -655,7 +663,7 @@ fn stack_location(
 
 fn frame_pointer_setup(
     statement: &Stmt,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
 ) -> Option<StackLocation> {
     let Stmt::Assign { dst, src } = statement.semantic() else {
         return None;
@@ -669,7 +677,7 @@ fn frame_pointer_setup(
 fn sp_adjust(
     statement: &Stmt,
     expected_op: BinOp,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: IdentityAuthority<'_>,
 ) -> Option<i64> {
     let Stmt::Assign { dst, src } = statement.semantic() else {
         return None;
@@ -702,28 +710,23 @@ fn comment_with_origins(text: String, statements: &[Stmt]) -> Stmt {
     }
 }
 
-fn register_base<'a>(
-    register: &'a VReg,
-    identities: Option<&'a crate::ir::value_number::ValueIdentities>,
-) -> Option<&'a str> {
+fn register_base<'a>(register: &'a VReg, identities: IdentityAuthority<'a>) -> Option<&'a str> {
     match identities {
         // Structural registers intentionally retain one spelling across
         // several SSA versions. Their exact value is therefore ambiguous, but
         // the sidecar still proves one architectural storage base. Frame
         // recognition asks which register this is, not which transient value
         // it holds, so consume that explicit storage fact.
-        Some(identities) => identities.unambiguous_physical_base(register),
-        None => match register {
+        IdentityAuthority::Exact(identities) => identities.unambiguous_physical_base(register),
+        #[cfg(test)]
+        IdentityAuthority::LegacySpelling => match register {
             VReg::Phys(name) => Some(base_name(name)),
             _ => None,
         },
     }
 }
 
-fn canonical_saved_register(
-    register: &VReg,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) -> Option<String> {
+fn canonical_saved_register(register: &VReg, identities: IdentityAuthority<'_>) -> Option<String> {
     let name = register_base(register, identities)?;
     if name == "lr" || name == "r14" {
         return Some("lr".to_string());
@@ -742,28 +745,26 @@ fn canonical_saved_register(
     (core || vfp).then(|| name.to_string())
 }
 
-fn is_promoted_stack_slot(
-    register: &VReg,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) -> bool {
-    identities.map_or_else(
-        || matches!(register, VReg::Phys(name) if name == "stack_top" || name.starts_with("stack_")),
-        |identities| identities.is_promoted_stack_object(register),
-    )
+fn is_promoted_stack_slot(register: &VReg, identities: IdentityAuthority<'_>) -> bool {
+    match identities {
+        IdentityAuthority::Exact(identities) => identities.is_promoted_stack_object(register),
+        #[cfg(test)]
+        IdentityAuthority::LegacySpelling => {
+            matches!(register, VReg::Phys(name) if name == "stack_top" || name.starts_with("stack_"))
+        }
+    }
 }
 
-fn is_sp(register: &VReg, identities: Option<&crate::ir::value_number::ValueIdentities>) -> bool {
+fn is_sp(register: &VReg, identities: IdentityAuthority<'_>) -> bool {
     register_base(register, identities) == Some("sp")
 }
 
+#[cfg(test)]
 fn base_name(name: &str) -> &str {
     name.split_once('#').map_or(name, |(base, _)| base)
 }
 
-fn expr_mentions_sp(
-    expression: &Expr,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) -> bool {
+fn expr_mentions_sp(expression: &Expr, identities: IdentityAuthority<'_>) -> bool {
     match expression {
         Expr::Origin { expr, .. } => expr_mentions_sp(expr, identities),
         Expr::Reg(register) => is_sp(register, identities),
@@ -809,10 +810,7 @@ fn expr_mentions_sp(
     }
 }
 
-fn stmt_mentions_sp(
-    statement: &Stmt,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) -> bool {
+fn stmt_mentions_sp(statement: &Stmt, identities: IdentityAuthority<'_>) -> bool {
     match statement {
         Stmt::Origin { stmt, .. } => stmt_mentions_sp(stmt, identities),
         Stmt::Assign { dst, src } => is_sp(dst, identities) || expr_mentions_sp(src, identities),
@@ -938,14 +936,18 @@ mod tests {
             },
         );
 
-        assert!(is_sp(&reg("opaque_sp"), Some(&identities)));
+        assert!(is_sp(
+            &reg("opaque_sp"),
+            IdentityAuthority::Exact(&identities)
+        ));
         assert_eq!(
-            canonical_saved_register(&reg("opaque_lr"), Some(&identities)).as_deref(),
+            canonical_saved_register(&reg("opaque_lr"), IdentityAuthority::Exact(&identities),)
+                .as_deref(),
             Some("lr")
         );
-        assert!(!is_sp(&reg("sp#0"), Some(&identities)));
+        assert!(!is_sp(&reg("sp#0"), IdentityAuthority::Exact(&identities)));
         assert_eq!(
-            canonical_saved_register(&reg("lr#0"), Some(&identities)),
+            canonical_saved_register(&reg("lr#0"), IdentityAuthority::Exact(&identities)),
             None
         );
     }
