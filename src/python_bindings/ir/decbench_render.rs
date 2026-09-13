@@ -470,7 +470,7 @@ fn decbench_text_with_installed_environment(
             declared_prototype,
             dwarf_types,
             calling_convention_pointer_width(cc),
-            Some(&value_identities),
+            &value_identities,
         )
     );
     for (internal_name, source_name) in &dwarf_local_names {

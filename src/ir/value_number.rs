@@ -716,7 +716,7 @@ pub fn value_number_with_parameter_slots_lifetimes_and_identities(
         &definition_widths_by_value,
         &mut identities,
     );
-    let parameter_slots = live_in_arg_slots_llir_with_identities(&out, cc, Some(&identities));
+    let parameter_slots = live_in_arg_slots_llir_with_identities(&out, cc, &identities);
     let renames = coalesce_phi_copies_with_definition_sites(
         &mut out,
         &phi_copies.pairs,
@@ -3620,8 +3620,7 @@ mod tests {
             },
         );
 
-        let params =
-            live_in_arg_slots_llir_with_identities(&lf, CallConv::SysVAmd64, Some(&identities));
+        let params = live_in_arg_slots_llir_with_identities(&lf, CallConv::SysVAmd64, &identities);
         assert!(params.contains(&1), "opaque version-zero rsi is arg1");
         assert!(
             !params.contains(&0),
@@ -3999,8 +3998,7 @@ mod tests {
             );
         }
 
-        let params =
-            live_in_arg_slots_llir_with_identities(&lf, CallConv::Aarch64, Some(&identities));
+        let params = live_in_arg_slots_llir_with_identities(&lf, CallConv::Aarch64, &identities);
         assert!(
             !params.contains(&3),
             "opaque SSA phi plumbing is not an architectural read: {params:?}"

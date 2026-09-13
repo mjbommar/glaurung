@@ -59,11 +59,19 @@ fn same_machine_register_with_identities(
 /// every listed argument.  Indirect call targets and all non-call operands are
 /// genuine reads.
 pub fn use_is_proven_input(op: &Op, use_index: usize) -> bool {
-    use_is_proven_input_with_identities(op, use_index, None)
+    use_is_proven_input_impl(op, use_index, None)
 }
 
 /// Identity-aware form of [`use_is_proven_input`].
 pub fn use_is_proven_input_with_identities(
+    op: &Op,
+    use_index: usize,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> bool {
+    use_is_proven_input_impl(op, use_index, Some(identities))
+}
+
+fn use_is_proven_input_impl(
     op: &Op,
     use_index: usize,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
@@ -851,11 +859,7 @@ mod tests {
             },
         );
 
-        assert!(!use_is_proven_input_with_identities(
-            &op,
-            0,
-            Some(&identities),
-        ));
+        assert!(!use_is_proven_input_with_identities(&op, 0, &identities,));
     }
 
     #[test]

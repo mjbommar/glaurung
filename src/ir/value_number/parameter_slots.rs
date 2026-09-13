@@ -7,7 +7,9 @@
 
 use crate::ir::call_args::CallConv;
 use crate::ir::types::{LlirFunction, Op, VReg, Value};
-use crate::ir::use_def::{def_ref, for_each_use, use_is_proven_input_with_identities, InstrAddr};
+use crate::ir::use_def::{
+    def_ref, for_each_use, use_is_proven_input, use_is_proven_input_with_identities, InstrAddr,
+};
 
 use super::architectural_reads::{architecturally_read_names, phi_copy_operands};
 
@@ -33,10 +35,18 @@ fn arg_slot_names(cc: CallConv) -> &'static [&'static [&'static str]] {
 /// while a sibling arm reads the incoming value first. The join is existential
 /// (OR): one reachable read-before-definition path is enough to prove the slot.
 pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collections::HashSet<usize> {
-    live_in_arg_slots_llir_with_identities(lf, cc, None)
+    live_in_arg_slots_llir_impl(lf, cc, None)
 }
 
 pub fn live_in_arg_slots_llir_with_identities(
+    lf: &LlirFunction,
+    cc: CallConv,
+    identities: &super::ValueIdentities,
+) -> std::collections::HashSet<usize> {
+    live_in_arg_slots_llir_impl(lf, cc, Some(identities))
+}
+
+fn live_in_arg_slots_llir_impl(
     lf: &LlirFunction,
     cc: CallConv,
     identities: Option<&super::ValueIdentities>,
@@ -180,7 +190,13 @@ pub fn live_in_arg_slots_llir_with_identities(
                     }
                     let index = use_index;
                     use_index += 1;
-                    if !use_is_proven_input_with_identities(&ins.op, index, identities) {
+                    let proven = identities.map_or_else(
+                        || use_is_proven_input(&ins.op, index),
+                        |identities| {
+                            use_is_proven_input_with_identities(&ins.op, index, identities)
+                        },
+                    );
+                    if !proven {
                         return;
                     }
                     if alignment_padding.excludes_use(

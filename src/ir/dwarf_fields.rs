@@ -25,17 +25,28 @@ fn is_promoted_stack_object(
 }
 
 /// Attach exact DWARF field identities to memory accesses in `function`.
+#[cfg(test)]
 pub fn annotate_function_fields(
     function: &mut Function,
     prototype: Option<&CallPrototype>,
     types: &[DwarfType],
     pointer_width: u8,
 ) -> HashMap<VReg, String> {
-    annotate_function_fields_with_identities(function, prototype, types, pointer_width, None)
+    annotate_function_fields_impl(function, prototype, types, pointer_width, None)
 }
 
 /// Attach DWARF fields using promoted-object identity when available.
 pub fn annotate_function_fields_with_identities(
+    function: &mut Function,
+    prototype: Option<&CallPrototype>,
+    types: &[DwarfType],
+    pointer_width: u8,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> HashMap<VReg, String> {
+    annotate_function_fields_impl(function, prototype, types, pointer_width, Some(identities))
+}
+
+fn annotate_function_fields_impl(
     function: &mut Function,
     prototype: Option<&CallPrototype>,
     types: &[DwarfType],
@@ -1347,7 +1358,7 @@ mod tests {
             Some(&node_prototype()),
             &[node_layout()],
             8,
-            Some(&identities),
+            &identities,
         );
 
         assert_eq!(pointer_types.get(&local).map(String::as_str), Some("node"));
@@ -1379,7 +1390,7 @@ mod tests {
             Some(&node_prototype()),
             &[node_layout()],
             8,
-            Some(&identities),
+            &identities,
         );
 
         assert!(!pointer_types.contains_key(&local));
