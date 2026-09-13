@@ -3199,6 +3199,16 @@ provenance through lowering.
   authority/API closure, not an output or timing claim. Continue the remaining
   semantic-reader audit before WP3 invalidation closure. See
   `results/wp3-prototype-output-identity-authority.md`.
+  Commit `f33427d4` fixes a demonstrated identity loss inside copy-propagation
+  dead-copy cleanup. Recursive cleanup of a recovered `catch` body previously
+  replaced the production identity sidecar with `None`, allowing an opaque
+  promoted stack object to be reclassified as scratch and deleted. The owning
+  regression failed before the repair and passes after it; all 39 core copy-
+  propagation tests and the non-test library check pass. A fresh native build
+  passes its guard, and the required whole-Python fail-fast gate again reaches
+  the same independent committed-baseline inconsistency at 17% with no earlier
+  failure. Continue by closing the copy-propagation family's remaining optional
+  internal authority paths. See `results/wp3-copy-prop-catch-identity.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
