@@ -2887,6 +2887,17 @@ provenance through lowering.
   explicit diagnostic/test no-sidecar preparation surface remains to classify
   before the final `tag_phys` boundary. See
   `results/wp3-dataflow-benchmark-required-identities.md`.
+  A repository-wide follow-up found two benchmark callers omitted from that
+  bounded claim. Commit `113fb494` closes them: the composed decompile bench's
+  remaining constant fold receives its sidecar, while `ir_structure` retains
+  identities through full preparation and supplies an explicit target pointer
+  width. Both focused checks and release `--no-run` builds pass, and a complete
+  search of `benches/*.rs` now finds zero bare preparation, vector, copy, or
+  constant-fold calls. The earlier record's broad boundary is therefore true
+  only from this follow-up commit. Remaining no-sidecar preparation is explicit
+  public-library/test/diagnostic compatibility, not shipped or measured
+  decompilation. Continue with the final semantic-reader and `tag_phys` design
+  audit. See `results/wp3-all-benchmarks-required-identities.md`.
   Commit `3e302824`
   removes an `argN` spelling decision from
   DWARF aggregate-field recovery: only roles seeded from the authoritative
