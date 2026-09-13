@@ -3089,6 +3089,18 @@ provenance through lowering.
   shared dirty checkout. Continue the remaining semantic-reader audit before
   WP3 invalidation closure. See
   `results/wp3-hard-float-frame-argument-identity.md`.
+  Commit `618d3917` then closes the internal optional-identity engines behind
+  indirect aggregate-result recovery and direct-caller stack-arity evidence.
+  Both shipped APIs and the caller-environment consumer now require a concrete
+  `ValueIdentities` snapshot; the missing-identity authority exists only in
+  test builds for legacy hand-written AST fixtures. All six indirect-result
+  tests, all four caller-arity tests, and the non-test library check pass. A
+  fresh native build passes its guard, and the required fail-fast Python gate
+  again reaches the independent committed-baseline inconsistency at 17% with
+  no earlier failure. This is an authority/API increment, not an output claim.
+  Continue closing the remaining optional internal engines before WP3
+  invalidation closure. See
+  `results/wp3-indirect-result-caller-arity-authority.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
