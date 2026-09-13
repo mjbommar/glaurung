@@ -1,6 +1,6 @@
 # DecBench Joern-replacement differential, 2026-09-13
 
-> **Kind:** measurement record · **Status:** running · **Upstream:** local evidence only
+> **Kind:** measurement record · **Status:** full A/B complete; differences under review · **Upstream:** local evidence only
 
 ## Question
 
@@ -27,7 +27,8 @@ to review and share.
 |---|---|
 | Glaurung code under test | `0892552157be6bd9267007231419ff6606a2dd38` |
 | Differential runner | `f67ef4d853cc0ff4a891a4dd605ad44e71a70814` |
-| Native extension SHA-256 | `12b095751310d866d4531e192df6e51699c39d73d7bf753fac76f48c0c666d28` |
+| Baseline native extension SHA-256 | `12b095751310d866d4531e192df6e51699c39d73d7bf753fac76f48c0c666d28` |
+| Parallel-edge correction extension SHA-256 | `baef2831611af06d23490bbfd44c96138873fb96c507b4d1dd9012259e048b35` |
 | DecBench | `f76dae075d4d82004fb21132b3f15e43b680e179` |
 | DecBench dataset | `e5eb576d66ee36793b800a4dd45e291e0add4472` (`full`) |
 | Stored decompiler column | `glaurung-229fbb1-clean` |
@@ -95,7 +96,7 @@ input under `$TMPDIR`, but Joern still left `joern-predef*.sc` under `/tmp`.
 That run was stopped, its scalar-only shards were rejected as final evidence,
 and the graph-preserving run restarted with Java's temporary directory fixed.
 
-## Results so far
+## Results
 
 ### Glaurung replacement: complete
 
@@ -108,34 +109,96 @@ and the graph-preserving run restarted with Java's temporary directory fixed.
 | Mismatched | 5,161 |
 | Uncovered | **0** |
 | Additional functions found | 4,333 |
-| Wall time | 64.06 seconds |
-| Peak RSS | 338,092 KiB |
+| Wall time | 60.90 seconds |
+| Peak RSS | 336,048 KiB |
 
-The replacement never voided a file or lost a Joern-covered function. The
-5,161 differences are not yet classified as defects or justified divergences.
-The 4,333 additional function names are candidates, not automatically wins;
-they require false-positive review.
+The replacement never voided a file or lost a stored function. The 4,333
+additional function names are candidates, not automatically wins; the joined
+audit below separates declarations from executable definitions.
 
-### Java Joern/pyjoern: smoke passed, full run active
+### Java Joern/pyjoern: complete
 
-The first three complete triples reproduced 2,525/2,525 stored values exactly,
-with zero uncovered cells. They took 131.92 seconds and peaked at 5,507,272 KiB
-RSS. This validates the stored-value oracle on that slice while also showing why
-the full Java pass needs checkpoints.
+| Measure | Result |
+|---|---:|
+| Shards | 79/79 |
+| Binaries | 785/785 |
+| Stored GED cells | 85,645 |
+| Exact reproduction | 85,645 |
+| Mismatched / uncovered / provider failures | **0 / 0 / 0** |
+| Summed shard wall time | 11,716.9 seconds |
+| Peak shard RSS | 9,255,808 KiB |
+
+The fail-closed aggregate verified ordinals 0 through 784 exactly once, all
+85,645 stored identities exactly once, and agreement between every shard report
+and its JSONL ledger. Thus the stored Java values are fully reproduced for the
+published 785-binary comparison universe.
+
+### Joined audit and declaration noise
+
+The initial joined result was 80,484 equal and 5,161 different GED cells. Gain
+sets require a more careful denominator:
+
+- 4,309 names were reported by both providers beyond DecBench's function list;
+- all 76,312 names reported only by Joern have the same one-node, zero-edge,
+  entry-and-exit graph and lack DecBench's `// Function:` definition marker;
+- there are **zero** nontrivial Joern-only graphs;
+- Glaurung alone reports 24 one-node non-returning definitions: one
+  `__idle_thread` and 23 `blocking_handler` instances. All have definition
+  markers in the stored text.
+
+The 76,312 Joern-only names are declaration/import prototypes, not executable
+definition coverage. They are useful parser facts but would radically inflate
+a naive coverage count. On executable definitions, Glaurung loses no unique
+nontrivial Joern result and identifies 24 definitions omitted by Joern.
+
+### First broad correction
+
+Source review of the cases where Joern was source-isomorphic exposed a general
+reference-semantics defect around empty branches. S2 correctly preserves
+parallel true and false edges to the same continuation, while Joern places its
+CFG in a NetworkX `DiGraph` and deduplicates those edges before chain
+contraction. Glaurung's parity layer deduplicated only afterwards, stranding a
+spurious condition block for any empty `if` or empty `if`/`else`.
+
+`parity_chains` now computes contraction degree from unique successors without
+changing the general CFG. A focused two-case regression passed. The complete
+85,645-cell Glaurung rerun then finished in 59.97 seconds at 336,940 KiB RSS:
+
+| Measure | Before | After | Change |
+|---|---:|---:|---:|
+| Exact agreement | 80,484 (93.9740%) | 81,274 (94.8964%) | **+790** |
+| Different GED | 5,161 | 4,371 | **-790** |
+| Uncovered | 0 | 0 | 0 |
+| Joern-source-isomorphic differences | 77 | 40 | **-37** |
+| Glaurung-source-isomorphic differences | 91 | 92 | +1 |
+| Different graph size | 3,608 | 2,783 | **-825** |
+
+The runner intentionally returned status 1 because 4,371 mismatches remain;
+that is the benchmark's fail-closed result, not a provider crash. The joined
+aggregate passed every completeness and identity check.
+
+## Artifact integrity
+
+The lossless artifacts are stored outside Git under
+`$HOME/.cache/glaurung/decbench-full/joern-replacement-2026-09-13/`.
+
+| Artifact | SHA-256 |
+|---|---|
+| `glaurung-dedup-report.json` | `267f2ca0eb81f52b5f707a77a66c3009b862f8ff8fd59fe59afddefbd746518f` |
+| `glaurung-dedup-details.jsonl` | `65d672598a5cff89b4a8f9ded8a1c04608bcdd265a8591370a82b7ae59cd6936` |
+| `aggregate-dedup.json` | `b96be68a2bccf019a63bddf3d7728aa8515fab681049663d21a609a68a5b1b39` |
+| `aggregate-dedup.md` | `2544a02c7de583206cc58dd1961a46e378d53a6a3dc76a57a5ab04d19216fbc0` |
 
 ## Required follow-up
 
-- Aggregate all Java shards and prove that their ordinals cover 0..784 exactly
-  once.
-- Compare total cells with 85,645; reject overlaps, holes, malformed JSONL, and
-  inconsistent repeated identities.
-- Inventory every Joern provider exception and every uncovered function.
-- Join Java and Glaurung per-function ledgers.
-- Cluster the 5,161 Glaurung differences by graph delta and source construct.
+- Cluster the remaining 4,371 Glaurung differences by graph delta and source
+  construct.
 - Review all large deltas and a deterministic sample of small deltas against
   source text and graph invariants.
-- Review Glaurung-only functions for declarations, parser-recovery artifacts,
-  duplicate names, and synthetic/decompiler helper names before calling them
-  useful coverage.
-- Produce a concise, human-written Discord handoff with exact commands,
-  qualifications, and artifact hashes.
+- Explain or correct the 1,456 entry/exit-role differences; Joern often marks
+  internal nodes with predecessors as additional entries, so these must not be
+  copied into the general CFG without source-backed justification.
+- Investigate the remaining 40 cases where Joern, but not Glaurung, is
+  source-isomorphic before optimizing lower-confidence graph-size clusters.
+- Prepare a concise Discord handoff for human review. Do not post it
+  autonomously.

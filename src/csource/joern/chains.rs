@@ -78,6 +78,28 @@ use crate::syntax::ids::NodeId;
 /// container is involved at any point.
 pub fn parity_chains(cfg: &Cfg) -> Vec<Vec<NodeId>> {
     let count = cfg.node_count();
+    // pyjoern constructs an nx.DiGraph before `to_supergraph`, so parallel
+    // edges are already one edge when the contraction predicate reads degree.
+    // S2 intentionally retains edge kinds and may therefore have two edges to
+    // the same destination (an empty `if` has true and false edges to the same
+    // continuation).  Normalize to the reference's edge set *before* reading
+    // degree; deduplicating only after contraction strands an otherwise
+    // contractible condition block.
+    let mut successors: Vec<Vec<NodeId>> = vec![Vec::new(); count];
+    let mut indegree = vec![0u32; count];
+    for edge in cfg.edges() {
+        if edge.src.index() >= count || edge.dst.index() >= count {
+            continue;
+        }
+        successors[edge.src.index()].push(edge.dst);
+    }
+    for outgoing in &mut successors {
+        outgoing.sort_unstable();
+        outgoing.dedup();
+        for dst in outgoing.iter().copied() {
+            indegree[dst.index()] = indegree[dst.index()].saturating_add(1);
+        }
+    }
     // `next[i]` is the one node `i` can be contracted into, if any. At most one
     // exists: `outdeg == 1` gives each node a single candidate edge out and
     // `indeg == 1` a single one in, so these edges form a functional graph ---
@@ -86,15 +108,15 @@ pub fn parity_chains(cfg: &Cfg) -> Vec<Vec<NodeId>> {
     let mut has_predecessor_in_chain = vec![false; count];
     for index in 0..count {
         let id = NodeId::new(index as u32);
-        let out = cfg.successor_edges(id);
+        let out = &successors[index];
         if out.len() != 1 {
             continue;
         }
-        let dst = out[0].dst;
+        let dst = out[0];
         // A self-edge would make the "chain" a one-node cycle and, contracted,
         // would lose the loop that `vj_ged` reads as an out-edge; 3,914
         // published functions have one.
-        if dst == id || cfg.in_degree(dst) != 1 {
+        if dst == id || indegree[dst.index()] != 1 {
             continue;
         }
         // Where `Cfg::chain_partition` also rejects `src_kind.is_anchor() ||
@@ -331,6 +353,26 @@ mod tests {
         // Under the general partition the same function is three blocks with
         // the anchors stranded at each end.
         assert_eq!(cfg.chain_partition().chains().len(), 3);
+    }
+
+    #[test]
+    fn parallel_empty_branch_edges_are_deduplicated_before_coalescing() {
+        // S2 retains the true/false edge kinds, so an empty arm gives the
+        // condition two parallel edges to the return. pyjoern has already put
+        // those edges in an nx.DiGraph before `to_supergraph` and therefore
+        // sees one successor: the entire function contracts to one block.
+        for text in [
+            "int f(int x){ if (x) {} return x; }",
+            "int f(int x){ if (x) {} else {} return x; }",
+        ] {
+            let cfg = s2(text, "f");
+            let chains = parity_chains(&cfg);
+            let blocks = parity_blocks(&cfg, &chains).renumbered();
+            assert_eq!(blocks.kept, vec![0], "{text}: {blocks:?}");
+            assert!(blocks.edges.is_empty(), "{text}: {blocks:?}");
+            assert_eq!(blocks.entry, vec![0], "{text}: {blocks:?}");
+            assert_eq!(blocks.exit, vec![0], "{text}: {blocks:?}");
+        }
     }
 
     #[test]

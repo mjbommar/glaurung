@@ -109,6 +109,23 @@ def graph_shape(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def is_declaration_like_joern_graph(record: dict[str, Any]) -> bool:
+    """Whether Joern emitted its characteristic prototype-only CFG.
+
+    Eclipse CDT/Joern exposes declarations as a one-node graph whose sole node
+    is both entry and exit.  They are useful parser facts, but they are not
+    executable function definitions and must not be reported as coverage gains
+    over a provider whose contract is definition CFGs.  Keep this deliberately
+    structural: the full-run documentation separately checks DecBench's
+    ``// Function:`` markers in the stored text before drawing the stronger
+    declaration-versus-definition conclusion.
+    """
+    graph = record.get("provider_graph")
+    return isinstance(graph, dict) and graph.get("roles") == [[True, True]] and not graph.get(
+        "edges"
+    )
+
+
 def load_joern_shards(directory: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     reports = sorted(directory.glob("report-*.json"))
     if not reports:
@@ -272,6 +289,15 @@ def main() -> int:
         shared_gains = set(joern_gained) & set(ours_gained)
         only_joern_gains = set(joern_gained) - set(ours_gained)
         only_ours_gains = set(ours_gained) - set(joern_gained)
+        shared_declaration_like = {
+            key for key in shared_gains if is_declaration_like_joern_graph(joern_gained[key])
+        }
+        only_joern_declaration_like = {
+            key
+            for key in only_joern_gains
+            if is_declaration_like_joern_graph(joern_gained[key])
+        }
+        only_joern_nontrivial = only_joern_gains - only_joern_declaration_like
 
         delta_values = [
             row["absolute_delta"]
@@ -290,7 +316,12 @@ def main() -> int:
                 "delta_median": statistics.median(delta_values) if delta_values else 0.0,
                 "delta_max": max(delta_values, default=0.0),
                 "gains_shared": len(shared_gains),
+                "gains_shared_declaration_like_joern": len(shared_declaration_like),
+                "gains_shared_nontrivial_joern": len(shared_gains)
+                - len(shared_declaration_like),
                 "gains_only_joern": len(only_joern_gains),
+                "gains_only_joern_declaration_like": len(only_joern_declaration_like),
+                "gains_only_joern_nontrivial": len(only_joern_nontrivial),
                 "gains_only_glaurung": len(only_ours_gains),
             },
             "differences": differences,
@@ -309,8 +340,15 @@ def main() -> int:
             f"- Joern provider failures: **{len(joern_summary['provider_failures']):,}**",
             f"- Glaurung uncovered cells: **{glaurung_report['uncovered']:,}**",
             f"- Shared additional functions: **{comparison['gains_shared']:,}**",
-            f"- Additional only in Joern: **{comparison['gains_only_joern']:,}**",
+            f"- Shared nontrivial Joern graphs: **{comparison['gains_shared_nontrivial_joern']:,}**",
+            f"- Joern-only declaration-like graphs: **{comparison['gains_only_joern_declaration_like']:,}**",
+            f"- Joern-only nontrivial graphs: **{comparison['gains_only_joern_nontrivial']:,}**",
             f"- Additional only in Glaurung: **{comparison['gains_only_glaurung']:,}**",
+            "",
+            "A declaration-like Joern graph is one entry-and-exit node with no edge.",
+            "It is not counted as executable definition coverage. The stored-text",
+            "marker audit belongs in the campaign record because graph shape alone",
+            "cannot prove whether a syntactically tiny function has a body.",
             "",
             "## Difference categories",
             "",
