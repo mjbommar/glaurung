@@ -3101,6 +3101,17 @@ provenance through lowering.
   Continue closing the remaining optional internal engines before WP3
   invalidation closure. See
   `results/wp3-indirect-result-caller-arity-authority.md`.
+  Commit `3b19b747` closes the same internal seam for the complete callee
+  aggregate-return family. Integer-pair composition, stack-backed banked
+  returns, INTEGER+SSE materialisation, and `xmm0:xmm1` materialisation now
+  have an exact identity authority in every non-test build; their legacy
+  spelling authority is test-only. All 23 bank-return and ten integer-pair
+  tests plus the non-test library check pass. A fresh native build passes its
+  guard, and the required fail-fast Python gate again reaches the independent
+  committed-baseline inconsistency at 17% with no earlier failure. This is an
+  authority/API closure rather than an output claim. Continue the residual
+  optional-engine audit before WP3 invalidation closure. See
+  `results/wp3-aggregate-return-internal-authority.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
