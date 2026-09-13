@@ -3061,6 +3061,15 @@ provenance through lowering.
   compatibility chain is complete; continue the residual semantic-reader and
   invalidation audit. See
   `results/wp3-typed-input-facts-require-identities.md`.
+  Commit `796c2acb` closes the proven-input predicate beneath that chain. Raw
+  type recovery and exact identity-aware consumers now select a closed
+  authority explicitly; absent identity state cannot silently enable display
+  spelling inside register equivalence. All 16 direct use/def tests and all 65
+  dependent value-numbering tests pass, as does the production build check;
+  the extension is fresh. The required Python fail-fast gate reaches the same
+  established ledger disagreement first at 17%. This completes the typed
+  input/signature evidence authority family. See
+  `results/wp3-typed-input-facts-require-identities.md`.
   Commit `79496134` closes the production tail-call recovery surface. Resolved
   indirect, resolved direct, and proven vtable tail-call routes now require an
   actual identity snapshot; their raw functions and top-level re-exports are

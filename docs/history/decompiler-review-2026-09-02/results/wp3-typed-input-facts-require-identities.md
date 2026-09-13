@@ -119,3 +119,33 @@ closure, not an output-quality or timing claim.
 The typed input and parameter-evidence compatibility chain is now closed. WP3
 remains open for the remaining production semantic-reader audit, conservative
 invalidation, and universal origin preservation.
+
+Commit `796c2acb` closes the final proven-input predicate underneath that chain.
+Its shared implementation now accepts a closed `ProvenInputAuthority`, with
+raw type recovery selecting `PlainLlir` and identity-aware parameter and
+architectural-read analysis selecting `Exact`. Register equivalence cannot
+fall through from an absent snapshot to display spelling.
+
+Focused evidence:
+
+```text
+cargo test --features python-ext ir::use_def::tests:: --lib -- --test-threads=1
+16 passed; 0 failed; 4830 filtered out
+
+cargo test --features python-ext ir::value_number::tests:: --lib -- --test-threads=1
+65 passed; 0 failed; 4781 filtered out
+
+cargo check --features python-ext
+exit 0
+
+uv run maturin develop
+exit 0
+
+uv run python tools/build_guard.py
+fresh
+```
+
+The required Python fail-fast gate reached 17% without an earlier failure and
+again stopped at the established baseline-ledger disagreement. No fixture
+matrix, DecBench, Joern, or corpus sweep ran. This completes the typed
+input/signature evidence authority family; it is not an output or timing claim.
