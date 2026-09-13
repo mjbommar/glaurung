@@ -2866,6 +2866,16 @@ provenance through lowering.
   handoff pass. Continue by classifying the remaining early no-sidecar
   copy/constant preparation entry points before removing `tag_phys`. See
   `results/wp3-structure-v2-tree-only-observation.md`.
+  Commit `29380a5b` removes the identity-free wide-vector-copy API from
+  non-test builds and migrates the composed decompile benchmark to retain the
+  authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
+  prepared-phase, and timed dataflow paths now exercise the same typed vector
+  recovery entry point as production. The deliberate missing-API benchmark
+  build failed before migration; all 11 vector tests, the focused benchmark
+  check, and its release `--no-run` build pass. No timing claim is made. The
+  general copy/constant fixpoint's isolated benchmark and explicit diagnostic
+  compatibility paths remain next. See
+  `results/wp3-vector-benchmark-required-identities.md`.
   Commit `3e302824`
   removes an `argN` spelling decision from
   DWARF aggregate-field recovery: only roles seeded from the authoritative
