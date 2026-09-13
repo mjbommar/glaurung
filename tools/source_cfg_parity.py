@@ -42,6 +42,7 @@ import json
 import os
 import re
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Any, Callable, Iterator, Protocol
@@ -182,7 +183,15 @@ def _bucket(delta: float) -> str:
 
 
 def run(
-    tree: Path, column: str, provider: Provider, limit: int | None, verbose: bool
+    tree: Path,
+    column: str,
+    provider: Provider,
+    limit: int | None,
+    verbose: bool,
+    *,
+    start: int = 0,
+    details_path: Path | None = None,
+    progress_every: int = 0,
 ) -> dict[str, Any]:
     """Walk the oracle and score `provider` against every stored cell."""
     # `decbench.metrics.vj_ged` is the same cost model on scipy's
@@ -230,44 +239,127 @@ def run(
     exact = mismatched = uncovered = no_source_cfg = 0
     cells = binaries = 0
     gained = 0
+    provider_failures: list[dict[str, str]] = []
     delta_hist: Counter[str] = Counter()
     worst: list[tuple[float, str, float, float]] = []
+    detail_handle = details_path.open("w") if details_path is not None else None
+    started_at = time.monotonic()
 
-    for evaluated, source_path, decompiled_path in triples(tree, column):
-        if limit is not None and binaries >= limit:
-            break
-        binaries += 1
-        expected = stored_cells(evaluated, column)
-        if not expected:
-            continue
-        published = json.loads(source_path.read_text())["functions"]
-        try:
-            produced = provider.cfgs(decompiled_path.read_text(errors="replace"))
-        except Exception as exc:  # noqa: BLE001 - a provider crash is a result
-            if verbose:
-                print(f"  provider failed on {decompiled_path.name}: {exc}")
-            produced = {}
-
-        gained += len(set(produced) - set(expected))
-
-        for name, want in expected.items():
-            cells += 1
-            serialized = published.get(name)
-            if serialized is None:
-                no_source_cfg += 1
+    try:
+        for ordinal, (evaluated, source_path, decompiled_path) in enumerate(
+            triples(tree, column)
+        ):
+            if ordinal < start:
                 continue
-            ours = produced.get(name)
-            if ours is None:
-                uncovered += 1
+            if limit is not None and binaries >= limit:
+                break
+            binaries += 1
+            expected = stored_cells(evaluated, column)
+            if not expected:
                 continue
-            got = scored(rebuild_cfg(serialized), ours)
-            if got == want:
-                exact += 1
-            else:
-                mismatched += 1
-                delta = abs(got - want)
-                delta_hist[_bucket(delta)] += 1
-                worst.append((delta, f"{evaluated.stem}:{name}", want, got))
+            published = json.loads(source_path.read_text())["functions"]
+            provider_error = None
+            try:
+                produced = provider.cfgs(decompiled_path.read_text(errors="replace"))
+            except Exception as exc:  # noqa: BLE001 - a provider crash is a result
+                provider_error = f"{type(exc).__name__}: {exc}"
+                provider_failures.append(
+                    {
+                        "artifact": str(decompiled_path),
+                        "error": provider_error,
+                    }
+                )
+                if verbose:
+                    print(
+                        f"  provider failed on {decompiled_path.name}: {provider_error}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                produced = {}
+
+            gained_names = sorted(set(produced) - set(expected))
+            gained += len(gained_names)
+
+            for name, want in expected.items():
+                cells += 1
+                identity = {
+                    "ordinal": ordinal,
+                    "opt": evaluated.parts[-4],
+                    "project": evaluated.parts[-3],
+                    "binary": evaluated.stem,
+                    "function": name,
+                }
+                serialized = published.get(name)
+                if serialized is None:
+                    no_source_cfg += 1
+                    detail = {**identity, "status": "no_source_cfg", "expected": want}
+                else:
+                    ours = produced.get(name)
+                    if ours is None:
+                        uncovered += 1
+                        detail = {
+                            **identity,
+                            "status": "uncovered",
+                            "expected": want,
+                            "provider_error": provider_error,
+                        }
+                    else:
+                        got = scored(rebuild_cfg(serialized), ours)
+                        if got == want:
+                            exact += 1
+                            detail = {
+                                **identity,
+                                "status": "exact",
+                                "expected": want,
+                                "got": got,
+                            }
+                        else:
+                            mismatched += 1
+                            delta = abs(got - want)
+                            delta_hist[_bucket(delta)] += 1
+                            worst.append(
+                                (delta, f"{evaluated.stem}:{name}", want, got)
+                            )
+                            detail = {
+                                **identity,
+                                "status": "mismatched",
+                                "expected": want,
+                                "got": got,
+                                "delta": delta,
+                            }
+                if detail_handle is not None:
+                    detail_handle.write(json.dumps(detail, sort_keys=True) + "\n")
+
+            if detail_handle is not None:
+                for name in gained_names:
+                    detail_handle.write(
+                        json.dumps(
+                            {
+                                "ordinal": ordinal,
+                                "opt": evaluated.parts[-4],
+                                "project": evaluated.parts[-3],
+                                "binary": evaluated.stem,
+                                "function": name,
+                                "status": "gained",
+                            },
+                            sort_keys=True,
+                        )
+                        + "\n"
+                    )
+                detail_handle.flush()
+            if progress_every and binaries % progress_every == 0:
+                elapsed = time.monotonic() - started_at
+                print(
+                    f"progress provider={provider.name} start={start} "
+                    f"binaries={binaries} cells={cells} exact={exact} "
+                    f"mismatched={mismatched} uncovered={uncovered} "
+                    f"elapsed_seconds={elapsed:.1f}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+    finally:
+        if detail_handle is not None:
+            detail_handle.close()
 
     worst.sort(key=lambda row: -row[0])
     attempted = exact + mismatched
@@ -275,6 +367,7 @@ def run(
         "tree": str(tree),
         "column": column,
         "provider": provider.name,
+        "start": start,
         "ged_max_nodes": GED_MAX_NODES,
         "binaries": binaries,
         "cells": cells,
@@ -284,6 +377,7 @@ def run(
         "uncovered": uncovered,
         "no_source_cfg": no_source_cfg,
         "gained": gained,
+        "provider_failures": provider_failures,
         "exact_rate": round(exact / attempted, 6) if attempted else 0.0,
         "delta_histogram": dict(sorted(delta_hist.items())),
         "worst": [
@@ -370,6 +464,21 @@ def main() -> int:
     )
     parser.add_argument("--column", default=None, help="decompiler column to score")
     parser.add_argument("--limit", type=int, default=None, help="stop after N binaries")
+    parser.add_argument(
+        "--start", type=int, default=0, help="skip this many complete triples first"
+    )
+    parser.add_argument(
+        "--details-jsonl",
+        type=Path,
+        default=None,
+        help="write every per-function verdict for audit and resumable shards",
+    )
+    parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=0,
+        help="write progress to stderr every N processed binaries",
+    )
     parser.add_argument("--json", action="store_true", help="emit JSON")
     parser.add_argument("--verbose", action="store_true", help="report provider errors")
     parser.add_argument(
@@ -396,7 +505,14 @@ def main() -> int:
 
     try:
         report = run(
-            args.tree, column, PROVIDERS[args.provider](), args.limit, args.verbose
+            args.tree,
+            column,
+            PROVIDERS[args.provider](),
+            args.limit,
+            args.verbose,
+            start=args.start,
+            details_path=args.details_jsonl,
+            progress_every=args.progress_every,
         )
     except ImportError as exc:
         print(
