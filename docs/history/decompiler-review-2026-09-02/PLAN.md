@@ -3965,6 +3965,20 @@ stronger sidecar. This removes one production dependency on `tag_phys`
 spelling, but does not complete WP3 or permit compatibility-tag deletion. See
 `results/wp3-value-keyed-use-types.md`.
 
+Commit `fda323fb` closes type recovery's internal optional identity authority.
+Every width, float-bank, frame-base, spill/reload, pointer-arithmetic, and
+return-refinement decision now receives one closed mode: raw machine registers
+before numbering, or exact `ValueIdentities` afterward. The numbered mode
+cannot silently fall back to parsing a displayed `name#version`; ambiguous or
+missing identity remains conservative. Raw entry points are named
+`recover_raw_*`, while the historical ambiguous names compile only for unit
+tests. All 100 owning type-recovery tests and the non-test Python-extension
+check pass, and the 16-lane `@smoke` round trip across i386, ARMv7, AArch64,
+and x86-64 reports no scoped regression. This is an authority/API closure, not
+an output-quality claim; continue the remaining semantic-reader audit and SSA
+invalidation/origin work. See
+`results/wp3-type-recovery-internal-authority.md`.
+
 ### Tests
 
 - [~] Unit tests for SSA invalidation and reconstruction. The first three tests
