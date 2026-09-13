@@ -291,6 +291,25 @@ pub fn prepare_for_decbench(f: &Function) -> Function {
     prepare_for_decbench_with_output(f, crate::ir::types_recover::RecoveredOutputKind::Unknown)
 }
 
+/// Prepare an already value-numbered AST with authoritative identity facts.
+///
+/// `pointer_width` is explicit because this library boundary has no target or
+/// calling-convention context of its own.
+pub fn prepare_for_decbench_with_identities(
+    f: &Function,
+    pointer_width: u8,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> Function {
+    prepare_for_decbench_with_output_and_protected_locals_and_report(
+        f,
+        crate::ir::types_recover::RecoveredOutputKind::Unknown,
+        &std::collections::HashSet::new(),
+        pointer_width,
+        Some(identities),
+    )
+    .0
+}
+
 /// Prepare DecBench output with the recovered source-level output contract.
 /// Unknown/direct outputs retain the compatibility behavior; proven void
 /// outputs erase incidental return-register residue before any source-level

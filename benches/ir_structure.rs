@@ -322,6 +322,8 @@ struct Stages {
     ssa: SsaInfo,
     /// Value-numbered LLIR — what `ast::lower` reads alongside the region.
     numbered: LlirFunction,
+    value_identities: value_number::ValueIdentities,
+    pointer_width: u8,
     /// The recovered region tree — the input to `ast::lower`.
     region: Region,
     /// The freshly lowered AST — the input to loop recovery and to `prepare`.
@@ -369,10 +371,20 @@ impl Stages {
 
         let ssa = ssa::compute_ssa_for_target(&llir, *image.target());
         let region = structure::recover(&llir, &ssa);
-        let (numbered, _definition_widths, _parameter_slots) =
-            value_number::value_number_with_parameter_slots(&llir, &ssa, cc);
+        let (numbered, _definition_widths, _parameter_slots, value_identities) =
+            value_number::value_number_with_parameter_slots_lifetimes_and_identities(
+                &llir,
+                &ssa,
+                cc,
+                &[],
+            );
         let ast = ast::lower(&numbered, &region, function.name.clone());
-        let prepared = ast::prepare_for_decbench(&ast);
+        let pointer_width = match cc {
+            CallConv::Cdecl32 | CallConv::Arm | CallConv::ArmHardFloat => 4,
+            CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Aarch64 => 8,
+        };
+        let prepared =
+            ast::prepare_for_decbench_with_identities(&ast, pointer_width, &value_identities);
         let c_bytes = ast::render_c(&prepared).len() as u64;
         let blocks = llir.blocks.len() as u64;
 
@@ -380,6 +392,8 @@ impl Stages {
             llir,
             ssa,
             numbered,
+            value_identities,
+            pointer_width,
             region,
             ast,
             prepared,
@@ -481,7 +495,13 @@ fn bench_micro(c: &mut Criterion) {
     // The whole AST structuring schedule: loop recovery + switch ladders +
     // label/goto pruning + return folding.
     group.bench_function(format!("prepare-ast-structuring/{id}"), |b| {
-        b.iter(|| black_box(ast::prepare_for_decbench(&stages.ast)))
+        b.iter(|| {
+            black_box(ast::prepare_for_decbench_with_identities(
+                &stages.ast,
+                stages.pointer_width,
+                &stages.value_identities,
+            ))
+        })
     });
 
     // AST -> C text. Rendering only; the AST it prints is already structured.
@@ -549,7 +569,13 @@ fn bench_shape_sweep(c: &mut Criterion) {
     let mut group = c.benchmark_group("ir-structure/prepare-ast-structuring");
     for (id, stages) in &built {
         group.bench_function(id, |b| {
-            b.iter(|| black_box(ast::prepare_for_decbench(&stages.ast)))
+            b.iter(|| {
+                black_box(ast::prepare_for_decbench_with_identities(
+                    &stages.ast,
+                    stages.pointer_width,
+                    &stages.value_identities,
+                ))
+            })
         });
     }
     group.finish();

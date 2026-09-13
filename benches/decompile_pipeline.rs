@@ -249,7 +249,7 @@ fn run_context_free_ast_passes(
 
     glaurung::ir::vector_copy::recover_wide_copies_with_identities(f, value_identities);
     glaurung::ir::expr_reconstruct::reconstruct(f);
-    glaurung::ir::const_fold::fold_constants(f);
+    glaurung::ir::const_fold::fold_constants_with_identities(f, value_identities);
     glaurung::ir::select_fold::fold_boolean_masks(f);
     glaurung::ir::dce::prune_overwritten_flags(f);
     glaurung::ir::dce::prune_dead_flags(f);
