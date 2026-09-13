@@ -2975,6 +2975,17 @@ provenance through lowering.
   failure first at 11%. Next isolate the optional-identity internals behind
   explicit test adapters and continue the remaining production parser audit.
   See `results/wp3-dead-store-apis-require-identities.md`.
+  Follow-on commit `fb05d414` completes that internal isolation for the
+  dead-store family. Every non-test recursive helper now carries a closed exact
+  identity authority through adjacent promoted-store pruning, callee-save
+  cleanup, promoted-object cleanup, and entry-value classification; the
+  spelling-compatible authority is test-only. All 51 owning tests and the
+  non-test library check pass. A fresh native build passes its guard, and the
+  required whole-Python fail-fast gate passes the former ARM blockers before
+  reaching the independently known committed-baseline disagreement at 17%.
+  This is an authority/API closure, not an output or timing claim. Continue the
+  residual semantic-reader audit before WP3 invalidation closure. See
+  `results/wp3-dead-store-apis-require-identities.md`.
   Commit `0f657984` makes two more shipped contracts identity-required rather
   than identity-optional. Indirect aggregate-result hinting and binding now
   accept `&ValueIdentities`, and bare canary-save collapse is test-only. The
