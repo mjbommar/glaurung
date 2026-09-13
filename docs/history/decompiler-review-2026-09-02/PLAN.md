@@ -2813,6 +2813,17 @@ provenance through lowering.
   contract, all 93 type-recovery tests, and all four release-built `@widths`
   fixture lanes pass. This narrows but does not close the final `tag_phys`
   boundary. See `results/wp3-recovered-register-width-identities.md`.
+  Commit `b16ba838` removes the adjacent `varN` authority from the shared
+  declared-integer-type query whenever the identity sidecar is installed. An
+  unowned value that merely looks like a generated temporary can no longer
+  inject a narrow or unsigned declaration into constant folding, typed
+  simplification, widening, or high-variable analysis. The unused no-sidecar
+  declaration wrapper is deleted, making compatibility selection explicit at
+  every remaining call site. The observed-red contract, 161 focused direct-
+  consumer tests, and the exact release-built signed-bound fixture pass. This
+  closes another semantic display-name reader but not the remaining WP3 audit
+  or `tag_phys` removal. See
+  `results/wp3-temporary-declaration-required-identities.md`.
   Commit `3e302824`
   removes an `argN` spelling decision from
   DWARF aggregate-field recovery: only roles seeded from the authoritative
