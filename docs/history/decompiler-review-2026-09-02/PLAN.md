@@ -2921,6 +2921,15 @@ provenance through lowering.
   compatibility entry point remains a separate audited boundary with example,
   integration-test, and diagnostic callers. See
   `results/wp3-spelling-output-helpers-test-only.md`.
+  Commit `658452b8` closes that public compatibility boundary. Bare AST
+  lowering and its re-export are now test-only; `lower_with_identities` is the
+  sole shipped entry point. The AST example and external Rust canary now value-
+  number their LLIR and retain the resulting sidecar. A complete source search
+  leaves only four internal unit-test diagnostic calls. The non-test library,
+  example, all four real canary tests, and both lowering compatibility tests
+  pass. This closes identity omission at the shipped LLIR-to-AST boundary, not
+  WP3's remaining origin/invalidation work. See
+  `results/wp3-identity-free-lowering-test-only.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
