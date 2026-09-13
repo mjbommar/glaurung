@@ -23,6 +23,23 @@ use crate::ir::value_number::ValueIdentities;
 
 use super::{arg_slots, mark_slot_write_with_identities, return_reg, CallConv};
 
+#[derive(Clone, Copy)]
+enum TailCallAuthority<'a> {
+    Exact(&'a ValueIdentities),
+    #[cfg(test)]
+    LegacySpelling,
+}
+
+impl<'a> TailCallAuthority<'a> {
+    fn exact_identities(self) -> Option<&'a ValueIdentities> {
+        match self {
+            Self::Exact(identities) => Some(identities),
+            #[cfg(test)]
+            Self::LegacySpelling => None,
+        }
+    }
+}
+
 /// Recover a terminal jump through a resolved import slot as the source-level
 /// tail call it implements.
 ///
@@ -39,7 +56,7 @@ use super::{arg_slots, mark_slot_write_with_identities, return_reg, CallConv};
 /// guessing a source prototype or a callee arity.
 #[cfg(test)]
 pub fn recover_resolved_tail_calls(f: &mut Function, arch: CallConv) {
-    recover_resolved_tail_calls_impl(f, arch, None);
+    recover_resolved_tail_calls_impl(f, arch, TailCallAuthority::LegacySpelling);
 }
 
 pub(crate) fn recover_resolved_tail_calls_with_identities(
@@ -47,15 +64,15 @@ pub(crate) fn recover_resolved_tail_calls_with_identities(
     arch: CallConv,
     identities: &ValueIdentities,
 ) {
-    recover_resolved_tail_calls_impl(f, arch, Some(identities));
+    recover_resolved_tail_calls_impl(f, arch, TailCallAuthority::Exact(identities));
 }
 
 fn recover_resolved_tail_calls_impl(
     f: &mut Function,
     arch: CallConv,
-    identities: Option<&ValueIdentities>,
+    authority: TailCallAuthority<'_>,
 ) {
-    recover_tail_calls_in_body(&mut f.body, arch, identities);
+    recover_tail_calls_in_body(&mut f.body, arch, authority);
 }
 
 /// Recover a Rust trait-object terminal dispatch backed by a proven fat-pointer
@@ -66,7 +83,7 @@ pub fn recover_proven_vtable_tail_calls(
     arch: CallConv,
     prototypes: &std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>,
 ) {
-    recover_proven_vtable_tail_calls_impl(f, arch, prototypes, None);
+    recover_proven_vtable_tail_calls_impl(f, arch, prototypes, TailCallAuthority::LegacySpelling);
 }
 
 pub(crate) fn recover_proven_vtable_tail_calls_with_identities(
@@ -75,16 +92,21 @@ pub(crate) fn recover_proven_vtable_tail_calls_with_identities(
     prototypes: &std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>,
     identities: &ValueIdentities,
 ) {
-    recover_proven_vtable_tail_calls_impl(f, arch, prototypes, Some(identities));
+    recover_proven_vtable_tail_calls_impl(
+        f,
+        arch,
+        prototypes,
+        TailCallAuthority::Exact(identities),
+    );
 }
 
 fn recover_proven_vtable_tail_calls_impl(
     f: &mut Function,
     arch: CallConv,
     prototypes: &std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>,
-    identities: Option<&ValueIdentities>,
+    authority: TailCallAuthority<'_>,
 ) {
-    recover_vtable_tail_calls_in_body(&mut f.body, arch, prototypes, identities);
+    recover_vtable_tail_calls_in_body(&mut f.body, arch, prototypes, authority);
 }
 
 /// Recover a direct jump whose target is a named entry outside the current AST
@@ -102,7 +124,7 @@ pub fn recover_resolved_direct_tail_calls(
     arch: CallConv,
     names: &std::collections::HashMap<u64, String>,
 ) {
-    recover_resolved_direct_tail_calls_impl(f, arch, names, None);
+    recover_resolved_direct_tail_calls_impl(f, arch, names, TailCallAuthority::LegacySpelling);
 }
 
 pub(crate) fn recover_resolved_direct_tail_calls_with_identities(
@@ -111,18 +133,18 @@ pub(crate) fn recover_resolved_direct_tail_calls_with_identities(
     names: &std::collections::HashMap<u64, String>,
     identities: &ValueIdentities,
 ) {
-    recover_resolved_direct_tail_calls_impl(f, arch, names, Some(identities));
+    recover_resolved_direct_tail_calls_impl(f, arch, names, TailCallAuthority::Exact(identities));
 }
 
 fn recover_resolved_direct_tail_calls_impl(
     f: &mut Function,
     arch: CallConv,
     names: &std::collections::HashMap<u64, String>,
-    identities: Option<&ValueIdentities>,
+    authority: TailCallAuthority<'_>,
 ) {
     let mut local_labels = std::collections::HashSet::new();
     collect_labels(&f.body, &mut local_labels);
-    recover_direct_tail_calls_in_body(&mut f.body, arch, names, &local_labels, identities);
+    recover_direct_tail_calls_in_body(&mut f.body, arch, names, &local_labels, authority);
 }
 
 fn collect_labels(body: &[Stmt], labels: &mut std::collections::HashSet<u64>) {
@@ -182,7 +204,7 @@ fn recover_direct_tail_calls_in_body(
     arch: CallConv,
     names: &std::collections::HashMap<u64, String>,
     local_labels: &std::collections::HashSet<u64>,
-    identities: Option<&ValueIdentities>,
+    authority: TailCallAuthority<'_>,
 ) {
     for statement in body.iter_mut() {
         match statement.semantic_mut() {
@@ -192,26 +214,26 @@ fn recover_direct_tail_calls_in_body(
                 else_body,
                 ..
             } => {
-                recover_direct_tail_calls_in_body(then_body, arch, names, local_labels, identities);
+                recover_direct_tail_calls_in_body(then_body, arch, names, local_labels, authority);
                 if let Some(else_body) = else_body {
                     recover_direct_tail_calls_in_body(
                         else_body,
                         arch,
                         names,
                         local_labels,
-                        identities,
+                        authority,
                     );
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                recover_direct_tail_calls_in_body(body, arch, names, local_labels, identities)
+                recover_direct_tail_calls_in_body(body, arch, names, local_labels, authority)
             }
             Stmt::For { body, .. } => {
-                recover_direct_tail_calls_in_body(body, arch, names, local_labels, identities)
+                recover_direct_tail_calls_in_body(body, arch, names, local_labels, authority)
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, case) in cases {
-                    recover_direct_tail_calls_in_body(case, arch, names, local_labels, identities);
+                    recover_direct_tail_calls_in_body(case, arch, names, local_labels, authority);
                 }
                 if let Some(default) = default {
                     recover_direct_tail_calls_in_body(
@@ -219,19 +241,19 @@ fn recover_direct_tail_calls_in_body(
                         arch,
                         names,
                         local_labels,
-                        identities,
+                        authority,
                     );
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                recover_direct_tail_calls_in_body(try_body, arch, names, local_labels, identities);
+                recover_direct_tail_calls_in_body(try_body, arch, names, local_labels, authority);
                 for catch in catches {
                     recover_direct_tail_calls_in_body(
                         &mut catch.body,
                         arch,
                         names,
                         local_labels,
-                        identities,
+                        authority,
                     );
                 }
             }
@@ -271,7 +293,7 @@ fn recover_direct_tail_calls_in_body(
 
         let has_local_setup = body[..index]
             .iter()
-            .any(|statement| statement_writes_argument_slot(statement, arch, identities));
+            .any(|statement| statement_writes_argument_slot(statement, arch, authority));
         let args = if has_local_setup {
             Vec::new()
         } else {
@@ -301,7 +323,7 @@ fn recover_direct_tail_calls_in_body(
 fn recover_tail_calls_in_body(
     body: &mut Vec<Stmt>,
     arch: CallConv,
-    identities: Option<&ValueIdentities>,
+    authority: TailCallAuthority<'_>,
 ) {
     for stmt in body.iter_mut() {
         match stmt.semantic_mut() {
@@ -311,27 +333,27 @@ fn recover_tail_calls_in_body(
                 else_body,
                 ..
             } => {
-                recover_tail_calls_in_body(then_body, arch, identities);
+                recover_tail_calls_in_body(then_body, arch, authority);
                 if let Some(else_body) = else_body {
-                    recover_tail_calls_in_body(else_body, arch, identities);
+                    recover_tail_calls_in_body(else_body, arch, authority);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                recover_tail_calls_in_body(body, arch, identities)
+                recover_tail_calls_in_body(body, arch, authority)
             }
-            Stmt::For { body, .. } => recover_tail_calls_in_body(body, arch, identities),
+            Stmt::For { body, .. } => recover_tail_calls_in_body(body, arch, authority),
             Stmt::Switch { cases, default, .. } => {
                 for (_, case) in cases {
-                    recover_tail_calls_in_body(case, arch, identities);
+                    recover_tail_calls_in_body(case, arch, authority);
                 }
                 if let Some(default) = default {
-                    recover_tail_calls_in_body(default, arch, identities);
+                    recover_tail_calls_in_body(default, arch, authority);
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                recover_tail_calls_in_body(try_body, arch, identities);
+                recover_tail_calls_in_body(try_body, arch, authority);
                 for catch in catches {
-                    recover_tail_calls_in_body(&mut catch.body, arch, identities);
+                    recover_tail_calls_in_body(&mut catch.body, arch, authority);
                 }
             }
             Stmt::Assign { .. }
@@ -375,7 +397,7 @@ fn recover_tail_calls_in_body(
 
         let has_local_setup = body[..index]
             .iter()
-            .any(|stmt| statement_writes_argument_slot(stmt, arch, identities));
+            .any(|stmt| statement_writes_argument_slot(stmt, arch, authority));
         let args = if has_local_setup {
             Vec::new()
         } else {
@@ -406,7 +428,7 @@ fn recover_vtable_tail_calls_in_body(
     body: &mut Vec<Stmt>,
     arch: CallConv,
     prototypes: &std::collections::HashMap<u64, crate::ir::call_contracts::CallPrototype>,
-    identities: Option<&ValueIdentities>,
+    authority: TailCallAuthority<'_>,
 ) {
     for statement in body.iter_mut() {
         match statement.semantic_mut() {
@@ -416,31 +438,26 @@ fn recover_vtable_tail_calls_in_body(
                 else_body,
                 ..
             } => {
-                recover_vtable_tail_calls_in_body(then_body, arch, prototypes, identities);
+                recover_vtable_tail_calls_in_body(then_body, arch, prototypes, authority);
                 if let Some(else_body) = else_body {
-                    recover_vtable_tail_calls_in_body(else_body, arch, prototypes, identities);
+                    recover_vtable_tail_calls_in_body(else_body, arch, prototypes, authority);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                recover_vtable_tail_calls_in_body(body, arch, prototypes, identities)
+                recover_vtable_tail_calls_in_body(body, arch, prototypes, authority)
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, case) in cases {
-                    recover_vtable_tail_calls_in_body(case, arch, prototypes, identities);
+                    recover_vtable_tail_calls_in_body(case, arch, prototypes, authority);
                 }
                 if let Some(default) = default {
-                    recover_vtable_tail_calls_in_body(default, arch, prototypes, identities);
+                    recover_vtable_tail_calls_in_body(default, arch, prototypes, authority);
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                recover_vtable_tail_calls_in_body(try_body, arch, prototypes, identities);
+                recover_vtable_tail_calls_in_body(try_body, arch, prototypes, authority);
                 for catch in catches {
-                    recover_vtable_tail_calls_in_body(
-                        &mut catch.body,
-                        arch,
-                        prototypes,
-                        identities,
-                    );
+                    recover_vtable_tail_calls_in_body(&mut catch.body, arch, prototypes, authority);
                 }
             }
             Stmt::Assign { .. }
@@ -474,7 +491,7 @@ fn recover_vtable_tail_calls_in_body(
         .rev()
         .find_map(|(index, statement)| match statement.semantic() {
             Stmt::Assign { dst, src }
-                if registers_are_same_value(dst, &target_register, identities) =>
+                if registers_are_same_value(dst, &target_register, authority) =>
             {
                 Some((index, src.clone()))
             }
@@ -483,7 +500,7 @@ fn recover_vtable_tail_calls_in_body(
     else {
         return;
     };
-    if !is_rust_vtable_slot_load(&target, arch, identities) {
+    if !is_rust_vtable_slot_load(&target, arch, authority) {
         return;
     }
     let Some((call_index, callee_va)) =
@@ -509,7 +526,7 @@ fn recover_vtable_tail_calls_in_body(
         != Some(crate::ir::abi::wide_integer_return_width(arch))
         || body[call_index + 1..definition_index]
             .iter()
-            .any(|statement| statement_writes_high_result(statement, arch, identities))
+            .any(|statement| statement_writes_high_result(statement, arch, authority))
     {
         return;
     }
@@ -531,17 +548,14 @@ fn recover_vtable_tail_calls_in_body(
     );
 }
 
-fn registers_are_same_value(
-    left: &VReg,
-    right: &VReg,
-    identities: Option<&ValueIdentities>,
-) -> bool {
-    match identities {
-        Some(identities) => identities
+fn registers_are_same_value(left: &VReg, right: &VReg, authority: TailCallAuthority<'_>) -> bool {
+    match authority {
+        TailCallAuthority::Exact(identities) => identities
             .value_ids(left)
             .zip(identities.value_ids(right))
             .is_some_and(|(left, right)| !left.is_empty() && left == right),
-        None => left == right,
+        #[cfg(test)]
+        TailCallAuthority::LegacySpelling => left == right,
     }
 }
 
@@ -549,18 +563,21 @@ fn register_is_wide_result_part(
     register: &VReg,
     arch: CallConv,
     part: usize,
-    identities: Option<&ValueIdentities>,
+    authority: TailCallAuthority<'_>,
 ) -> bool {
-    match identities {
-        Some(identities) => identities.candidates(register).is_some_and(|candidates| {
-            !candidates.is_empty()
-                && candidates.iter().all(|identity| {
-                    identity.canonical_physical_base().is_some_and(|name| {
-                        crate::ir::abi::wide_integer_return_part(arch, name) == Some(part)
+    match authority {
+        TailCallAuthority::Exact(identities) => {
+            identities.candidates(register).is_some_and(|candidates| {
+                !candidates.is_empty()
+                    && candidates.iter().all(|identity| {
+                        identity.canonical_physical_base().is_some_and(|name| {
+                            crate::ir::abi::wide_integer_return_part(arch, name) == Some(part)
+                        })
                     })
-                })
-        }),
-        None => matches!(
+            })
+        }
+        #[cfg(test)]
+        TailCallAuthority::LegacySpelling => matches!(
             register,
             VReg::Phys(name)
                 if crate::ir::abi::wide_integer_return_part(arch, name) == Some(part)
@@ -571,11 +588,11 @@ fn register_is_wide_result_part(
 fn statement_writes_high_result(
     statement: &Stmt,
     arch: CallConv,
-    identities: Option<&ValueIdentities>,
+    authority: TailCallAuthority<'_>,
 ) -> bool {
     match statement.semantic() {
         Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => {
-            register_is_wide_result_part(dst, arch, 1, identities)
+            register_is_wide_result_part(dst, arch, 1, authority)
         }
         _ => false,
     }
@@ -591,7 +608,7 @@ fn statement_writes_high_result(
 fn is_rust_vtable_slot_load(
     target: &Expr,
     arch: CallConv,
-    identities: Option<&ValueIdentities>,
+    authority: TailCallAuthority<'_>,
 ) -> bool {
     let word = crate::ir::abi::machine_word_bytes(arch);
     let Expr::Deref { addr, size } = target.semantic() else {
@@ -607,7 +624,7 @@ fn is_rust_vtable_slot_load(
             disp,
             ..
         } => (
-            register_is_wide_result_part(base, arch, 1, identities),
+            register_is_wide_result_part(base, arch, 1, authority),
             *disp,
         ),
         Expr::Bin {
@@ -674,12 +691,12 @@ fn contains_high_word_extract(expr: &Expr, word_bits: u32) -> bool {
 fn statement_writes_argument_slot(
     stmt: &Stmt,
     arch: CallConv,
-    identities: Option<&ValueIdentities>,
+    authority: TailCallAuthority<'_>,
 ) -> bool {
     match stmt.semantic() {
         Stmt::Assign { dst, .. } | Stmt::Pop { target: dst } => {
             let mut written = vec![false; arg_slots(arch).len()];
-            mark_slot_write_with_identities(dst, arch, &mut written, identities);
+            mark_slot_write_with_identities(dst, arch, &mut written, authority.exact_identities());
             written.into_iter().any(|slot| slot)
         }
         Stmt::If {
@@ -689,33 +706,33 @@ fn statement_writes_argument_slot(
         } => {
             then_body
                 .iter()
-                .any(|stmt| statement_writes_argument_slot(stmt, arch, identities))
+                .any(|stmt| statement_writes_argument_slot(stmt, arch, authority))
                 || else_body.as_ref().is_some_and(|body| {
                     body.iter()
-                        .any(|stmt| statement_writes_argument_slot(stmt, arch, identities))
+                        .any(|stmt| statement_writes_argument_slot(stmt, arch, authority))
                 })
         }
         Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => body
             .iter()
-            .any(|stmt| statement_writes_argument_slot(stmt, arch, identities)),
+            .any(|stmt| statement_writes_argument_slot(stmt, arch, authority)),
         Stmt::Switch { cases, default, .. } => {
             cases.iter().any(|(_, body)| {
                 body.iter()
-                    .any(|stmt| statement_writes_argument_slot(stmt, arch, identities))
+                    .any(|stmt| statement_writes_argument_slot(stmt, arch, authority))
             }) || default.as_ref().is_some_and(|body| {
                 body.iter()
-                    .any(|stmt| statement_writes_argument_slot(stmt, arch, identities))
+                    .any(|stmt| statement_writes_argument_slot(stmt, arch, authority))
             })
         }
         Stmt::TryCatch { try_body, catches } => {
             try_body
                 .iter()
-                .any(|stmt| statement_writes_argument_slot(stmt, arch, identities))
+                .any(|stmt| statement_writes_argument_slot(stmt, arch, authority))
                 || catches.iter().any(|catch| {
                     catch
                         .body
                         .iter()
-                        .any(|stmt| statement_writes_argument_slot(stmt, arch, identities))
+                        .any(|stmt| statement_writes_argument_slot(stmt, arch, authority))
                 })
         }
         Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
@@ -1217,16 +1234,20 @@ mod tests {
             },
         );
 
-        assert!(registers_are_same_value(&left, &right, Some(&identities)));
+        assert!(registers_are_same_value(
+            &left,
+            &right,
+            TailCallAuthority::Exact(&identities)
+        ));
         assert!(!registers_are_same_value(
             &left,
             &different,
-            Some(&identities)
+            TailCallAuthority::Exact(&identities)
         ));
         assert!(!registers_are_same_value(
             &missing,
             &missing,
-            Some(&identities)
+            TailCallAuthority::Exact(&identities)
         ));
     }
 
