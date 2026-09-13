@@ -28,12 +28,38 @@ use crate::ir::ast::{Expr, Function, Stmt};
 use crate::ir::call_args::CallConv;
 use crate::ir::types::{BinOp, VReg};
 
+#[derive(Clone, Copy)]
+enum DeadStoreAuthority<'a> {
+    Exact(&'a crate::ir::value_number::ValueIdentities),
+    #[cfg(test)]
+    LegacySpelling,
+}
+
+impl<'a> DeadStoreAuthority<'a> {
+    fn exact_identities(self) -> Option<&'a crate::ir::value_number::ValueIdentities> {
+        match self {
+            Self::Exact(identities) => Some(identities),
+            #[cfg(test)]
+            Self::LegacySpelling => None,
+        }
+    }
+
+    fn promoted_stack_object(self, value: &VReg) -> bool {
+        match self {
+            Self::Exact(identities) => identities.is_promoted_stack_object(value),
+            #[cfg(test)]
+            Self::LegacySpelling => matches!(value, VReg::Phys(name)
+                if name.starts_with("local_") || name.starts_with("stack_")),
+        }
+    }
+}
+
 /// Run dead-store elimination for the given calling convention.
 #[cfg(test)]
 pub fn eliminate_dead_stores(f: &mut Function, cc: CallConv) {
     let ret_regs = return_reg_aliases(cc);
     eliminate_body(&mut f.body, &ret_regs);
-    prune_adjacent_overwritten_promoted_stores(f, None);
+    prune_adjacent_overwritten_promoted_stores(f, DeadStoreAuthority::LegacySpelling);
 }
 
 /// Run dead-store elimination with pipeline-owned result-role authority.
@@ -47,7 +73,7 @@ pub fn eliminate_dead_stores_with_identities(
         ret_regs.retain(|name| *name != "ret");
     }
     eliminate_body(&mut f.body, &ret_regs);
-    prune_adjacent_overwritten_promoted_stores(f, Some(identities));
+    prune_adjacent_overwritten_promoted_stores(f, DeadStoreAuthority::Exact(identities));
 }
 
 /// Remove a pure promoted-stack write immediately shadowed by an equal-width write.
@@ -61,7 +87,7 @@ pub fn eliminate_dead_stores_with_identities(
 /// decline the deletion.
 fn prune_adjacent_overwritten_promoted_stores(
     function: &mut Function,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: DeadStoreAuthority<'_>,
 ) {
     fn discardable_source(expression: &Expr) -> bool {
         match expression {
@@ -90,7 +116,7 @@ fn prune_adjacent_overwritten_promoted_stores(
 
     fn promoted_store<'a>(
         statement: &'a Stmt,
-        identities: Option<&crate::ir::value_number::ValueIdentities>,
+        authority: DeadStoreAuthority<'_>,
     ) -> Option<(&'a VReg, &'a Expr, u8)> {
         let Stmt::Store {
             addr: Expr::Reg(slot),
@@ -100,18 +126,12 @@ fn prune_adjacent_overwritten_promoted_stores(
         else {
             return None;
         };
-        identities
-            .map_or_else(
-                || {
-                    matches!(slot, VReg::Phys(name)
-                        if name.starts_with("local_") || name.starts_with("stack_"))
-                },
-                |identities| identities.is_promoted_stack_object(slot),
-            )
+        authority
+            .promoted_stack_object(slot)
             .then_some((slot, src, *size))
     }
 
-    fn prune(body: &mut Vec<Stmt>, identities: Option<&crate::ir::value_number::ValueIdentities>) {
+    fn prune(body: &mut Vec<Stmt>, authority: DeadStoreAuthority<'_>) {
         for statement in body.iter_mut() {
             match statement.semantic_mut() {
                 Stmt::Origin { .. } => {
@@ -122,26 +142,26 @@ fn prune_adjacent_overwritten_promoted_stores(
                     else_body,
                     ..
                 } => {
-                    prune(then_body, identities);
+                    prune(then_body, authority);
                     if let Some(else_body) = else_body {
-                        prune(else_body, identities);
+                        prune(else_body, authority);
                     }
                 }
                 Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                    prune(body, identities);
+                    prune(body, authority);
                 }
                 Stmt::Switch { cases, default, .. } => {
                     for (_, case) in cases {
-                        prune(case, identities);
+                        prune(case, authority);
                     }
                     if let Some(default) = default {
-                        prune(default, identities);
+                        prune(default, authority);
                     }
                 }
                 Stmt::TryCatch { try_body, catches } => {
-                    prune(try_body, identities);
+                    prune(try_body, authority);
                     for catch in catches {
-                        prune(&mut catch.body, identities);
+                        prune(&mut catch.body, authority);
                     }
                 }
                 _ => {}
@@ -151,7 +171,7 @@ fn prune_adjacent_overwritten_promoted_stores(
         loop {
             let mut removed = None;
             for first in 0..body.len().saturating_sub(1) {
-                let Some((slot, source, width)) = promoted_store(&body[first], identities) else {
+                let Some((slot, source, width)) = promoted_store(&body[first], authority) else {
                     continue;
                 };
                 if !discardable_source(source) {
@@ -163,7 +183,7 @@ fn prune_adjacent_overwritten_promoted_stores(
                     continue;
                 };
                 let Some((next_slot, next_source, next_width)) =
-                    promoted_store(&body[second], identities)
+                    promoted_store(&body[second], authority)
                 else {
                     continue;
                 };
@@ -179,7 +199,7 @@ fn prune_adjacent_overwritten_promoted_stores(
         }
     }
 
-    prune(&mut function.body, identities);
+    prune(&mut function.body, authority);
 }
 
 /// Discard the destination identity of an effectful call when the function
@@ -496,7 +516,7 @@ fn drop_unread_abi_zeros(body: &mut Vec<Stmt>) {
 /// stores sit above all of a function's control flow.
 #[cfg(test)]
 pub fn prune_callee_saved_spills(f: &mut Function, cc: CallConv) {
-    prune_callee_saved_spills_with_scope(f, cc, false, None);
+    prune_callee_saved_spills_with_scope(f, cc, false, DeadStoreAuthority::LegacySpelling);
 }
 
 /// Remove top-level callee saves using exact SSA entry-value authority.
@@ -505,7 +525,7 @@ pub fn prune_callee_saved_spills_with_identities(
     cc: CallConv,
     identities: &crate::ir::value_number::ValueIdentities,
 ) {
-    prune_callee_saved_spills_with_scope(f, cc, false, Some(identities));
+    prune_callee_saved_spills_with_scope(f, cc, false, DeadStoreAuthority::Exact(identities));
 }
 
 /// Remove otherwise-dead callee saves nested by structured control recovery.
@@ -516,7 +536,7 @@ pub fn prune_callee_saved_spills_with_identities(
 /// global provenance.
 #[cfg(test)]
 pub fn prune_callee_saved_spills_nested(f: &mut Function, cc: CallConv) {
-    prune_callee_saved_spills_with_scope(f, cc, true, None);
+    prune_callee_saved_spills_with_scope(f, cc, true, DeadStoreAuthority::LegacySpelling);
 }
 
 /// Remove nested callee saves using exact SSA entry-value authority.
@@ -525,14 +545,14 @@ pub fn prune_callee_saved_spills_nested_with_identities(
     cc: CallConv,
     identities: &crate::ir::value_number::ValueIdentities,
 ) {
-    prune_callee_saved_spills_with_scope(f, cc, true, Some(identities));
+    prune_callee_saved_spills_with_scope(f, cc, true, DeadStoreAuthority::Exact(identities));
 }
 
 fn prune_callee_saved_spills_with_scope(
     f: &mut Function,
     cc: CallConv,
     recursive: bool,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: DeadStoreAuthority<'_>,
 ) {
     fn visit_statements(body: &[Stmt], recursive: bool, visit: &mut impl FnMut(&Stmt)) {
         for statement in body {
@@ -597,9 +617,9 @@ fn prune_callee_saved_spills_with_scope(
             Stmt::Assign {
                 dst,
                 src: Expr::Reg(source),
-            } if is_saved_frame_slot(dst, source, cc, identities)
-                || is_arm_saved_register_local(dst, source, cc, identities)
-                || is_x86_saved_register_local(dst, source, cc, identities) =>
+            } if is_saved_frame_slot(dst, source, cc, authority)
+                || is_arm_saved_register_local(dst, source, cc, authority)
+                || is_x86_saved_register_local(dst, source, cc, authority) =>
             {
                 Some(dst.clone())
             }
@@ -607,9 +627,9 @@ fn prune_callee_saved_spills_with_scope(
                 addr: Expr::Reg(slot),
                 src: Expr::Reg(source),
                 ..
-            } if is_saved_frame_slot(slot, source, cc, identities)
-                || is_arm_saved_register_local(slot, source, cc, identities)
-                || is_x86_saved_register_local(slot, source, cc, identities) =>
+            } if is_saved_frame_slot(slot, source, cc, authority)
+                || is_arm_saved_register_local(slot, source, cc, authority)
+                || is_x86_saved_register_local(slot, source, cc, authority) =>
             {
                 Some(slot.clone())
             }
@@ -798,8 +818,9 @@ fn prune_callee_saved_spills_with_scope(
 /// removed the matching epilogue, those field writes are ordinary dead local
 /// stores. The proof here is storage-based: every remaining mention of the
 /// object must be the destination address of one such store.
+#[cfg(test)]
 pub fn prune_unobserved_promoted_object_stores(f: &mut Function) {
-    prune_unobserved_promoted_object_stores_impl(f, None);
+    prune_unobserved_promoted_object_stores_impl(f, DeadStoreAuthority::LegacySpelling);
 }
 
 /// Production form of [`prune_unobserved_promoted_object_stores`] with exact
@@ -808,16 +829,16 @@ pub fn prune_unobserved_promoted_object_stores_with_identities(
     f: &mut Function,
     identities: &crate::ir::value_number::ValueIdentities,
 ) {
-    prune_unobserved_promoted_object_stores_impl(f, Some(identities));
+    prune_unobserved_promoted_object_stores_impl(f, DeadStoreAuthority::Exact(identities));
 }
 
 fn prune_unobserved_promoted_object_stores_impl(
     f: &mut Function,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: DeadStoreAuthority<'_>,
 ) {
     fn field_store_base<'a>(
         statement: &'a Stmt,
-        identities: Option<&crate::ir::value_number::ValueIdentities>,
+        authority: DeadStoreAuthority<'_>,
     ) -> Option<&'a VReg> {
         let Stmt::Store { addr, src, .. } = statement else {
             return None;
@@ -835,10 +856,7 @@ fn prune_unobserved_promoted_object_stores_impl(
             | (Expr::Const(_), Expr::StackAddr { object, .. }) => object,
             _ => return None,
         };
-        let promoted = identities.map_or_else(
-            || matches!(object, VReg::Phys(name) if name.starts_with("local_") || name.starts_with("stack_")),
-            |identities| identities.is_promoted_stack_object(object),
-        );
+        let promoted = authority.promoted_stack_object(object);
         if !promoted || expr_reads(src, object) {
             return None;
         }
@@ -848,14 +866,14 @@ fn prune_unobserved_promoted_object_stores_impl(
     let candidates = f
         .body
         .iter()
-        .filter_map(|statement| field_store_base(statement, identities))
+        .filter_map(|statement| field_store_base(statement, authority))
         .cloned()
         .collect::<HashSet<_>>();
     let doomed = candidates
         .into_iter()
         .filter(|object| {
             !f.body.iter().any(|statement| {
-                field_store_base(statement, identities) != Some(object)
+                field_store_base(statement, authority) != Some(object)
                     && stmt_reads(statement, object)
             })
         })
@@ -864,7 +882,7 @@ fn prune_unobserved_promoted_object_stores_impl(
         return;
     }
     f.body.retain(|statement| {
-        !field_store_base(statement, identities).is_some_and(|object| doomed.contains(object))
+        !field_store_base(statement, authority).is_some_and(|object| doomed.contains(object))
     });
 }
 
@@ -938,15 +956,18 @@ fn is_saved_frame_slot(
     value: &VReg,
     source: &VReg,
     cc: CallConv,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: DeadStoreAuthority<'_>,
 ) -> bool {
-    identities.map_or_else(
-        || matches!(value, VReg::Phys(name) if name.starts_with("stack_") && name != "stack_top"),
-        |identities| {
+    match authority {
+        DeadStoreAuthority::Exact(identities) => {
             identities.is_machine_saved_slot(value)
                 && is_entry_callee_saved_value(source, cc, identities)
-        },
-    )
+        }
+        #[cfg(test)]
+        DeadStoreAuthority::LegacySpelling => {
+            matches!(value, VReg::Phys(name) if name.starts_with("stack_") && name != "stack_top")
+        }
+    }
 }
 
 /// Reads owned by this statement node, excluding reads in nested bodies.
@@ -998,12 +1019,12 @@ fn is_arm_saved_register_local(
     slot: &VReg,
     source: &VReg,
     cc: CallConv,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: DeadStoreAuthority<'_>,
 ) -> bool {
     if !matches!(cc, CallConv::Arm | CallConv::ArmHardFloat) {
         return false;
     }
-    if let Some(identities) = identities {
+    if let Some(identities) = authority.exact_identities() {
         return identities.is_machine_saved_slot(slot)
             && is_entry_callee_saved_value(source, cc, identities);
     }
@@ -1013,7 +1034,7 @@ fn is_arm_saved_register_local(
     if !slot_name.starts_with("local_") {
         return false;
     }
-    let Some(base) = entry_value_base(source, identities) else {
+    let Some(base) = entry_value_base(source, authority) else {
         return false;
     };
     if matches!(base, "fp" | "lr" | "r14") {
@@ -1036,7 +1057,7 @@ fn is_x86_saved_register_local(
     slot: &VReg,
     source: &VReg,
     cc: CallConv,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: DeadStoreAuthority<'_>,
 ) -> bool {
     if !matches!(
         cc,
@@ -1044,7 +1065,7 @@ fn is_x86_saved_register_local(
     ) {
         return false;
     }
-    if let Some(identities) = identities {
+    if let Some(identities) = authority.exact_identities() {
         return identities.is_machine_saved_slot(slot)
             && is_entry_callee_saved_value(source, cc, identities);
     }
@@ -1054,16 +1075,13 @@ fn is_x86_saved_register_local(
     if !slot_name.starts_with("local_") {
         return false;
     }
-    entry_value_base(source, identities)
+    entry_value_base(source, authority)
         .is_some_and(|base| matches!(base, "rbx" | "rbp" | "r12" | "r13" | "r14" | "r15"))
 }
 
-fn entry_value_base<'a>(
-    source: &'a VReg,
-    identities: Option<&'a crate::ir::value_number::ValueIdentities>,
-) -> Option<&'a str> {
-    match identities {
-        Some(identities) => {
+fn entry_value_base<'a>(source: &'a VReg, authority: DeadStoreAuthority<'a>) -> Option<&'a str> {
+    match authority {
+        DeadStoreAuthority::Exact(identities) => {
             let candidates = identities.candidates(source)?;
             let mut candidates = candidates.iter();
             let first = candidates.next()?;
@@ -1079,7 +1097,8 @@ fn entry_value_base<'a>(
             }
             has_entry.then_some(base.as_str())
         }
-        None => {
+        #[cfg(test)]
+        DeadStoreAuthority::LegacySpelling => {
             let VReg::Phys(name) = source else {
                 return None;
             };
@@ -1099,7 +1118,7 @@ pub(crate) fn is_entry_callee_saved_value(
     cc: CallConv,
     identities: &crate::ir::value_number::ValueIdentities,
 ) -> bool {
-    let Some(base) = entry_value_base(source, Some(identities)) else {
+    let Some(base) = entry_value_base(source, DeadStoreAuthority::Exact(identities)) else {
         return false;
     };
     match cc {
@@ -2763,7 +2782,10 @@ mod tests {
             ],
         };
 
-        prune_adjacent_overwritten_promoted_stores(&mut function, None);
+        prune_adjacent_overwritten_promoted_stores(
+            &mut function,
+            DeadStoreAuthority::LegacySpelling,
+        );
 
         assert_eq!(function.body.len(), 3);
         assert!(matches!(
@@ -2871,7 +2893,10 @@ mod tests {
                 ],
             };
 
-            prune_adjacent_overwritten_promoted_stores(&mut function, None);
+            prune_adjacent_overwritten_promoted_stores(
+                &mut function,
+                DeadStoreAuthority::LegacySpelling,
+            );
 
             assert_eq!(function.body.len(), 2);
         }
@@ -2897,7 +2922,10 @@ mod tests {
             ],
         };
 
-        prune_adjacent_overwritten_promoted_stores(&mut function, None);
+        prune_adjacent_overwritten_promoted_stores(
+            &mut function,
+            DeadStoreAuthority::LegacySpelling,
+        );
 
         assert_eq!(function.body.len(), 2);
     }
