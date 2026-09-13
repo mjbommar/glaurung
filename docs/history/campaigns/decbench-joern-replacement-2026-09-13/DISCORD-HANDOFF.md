@@ -45,8 +45,9 @@ Java loop-exit edges. All 1,457 role-only differences have the same unlabelled
 degree multiset; Java gives every one multiple entries and flags an internal
 positive-indegree node in 1,441. Glaurung now matches the published source graph
 isomorphically in 313 cases where Java does not. Of 2,334 graph-size
-differences, 2,289 are explained constant-loop edge-policy differences; 45
-unaffected cases remain the bounded root-cause queue.
+differences, 2,289 are explained constant-loop edge-policy differences. Of the
+45 unaffected cases, nine are now traced to duplicated branching for a
+value-only ternary nested in a loop condition; 36 remain unclassified.
 
 The complete commands, provenance, limitations, hashes, and follow-up are in
 the adjacent `README.md`. Lossless per-function graph ledgers and the

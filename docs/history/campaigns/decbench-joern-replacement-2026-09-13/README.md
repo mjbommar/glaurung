@@ -200,7 +200,9 @@ Twenty-one focused node-rewrite tests passed. The complete corpus rerun took
 
 The detailed [difference review](DIFFERENCE-REVIEW.md) classifies all 40
 apparent Java-source-isomorphic wins, all 1,457 role-only differences, and
-reduces the unexplained graph-size queue to 45 unaffected cases.
+reduces the initially unexplained graph-size queue to 45 unaffected cases. Nine
+of those are now traced to duplicated branching for a value-only ternary nested
+in a loop condition, leaving 36 unclassified cells.
 
 ## Artifact integrity
 
@@ -220,8 +222,12 @@ The lossless artifacts are stored outside Git under
 
 ## Required follow-up
 
-- Root-cause the 45 graph-size differences untouched by constant-loop
-  correction, deduplicating repeated functions across builds first.
+- Repair the nine duplicated-branch ternary-loop cells by retargeting entry and
+  back edges to the real expression entry; do not land the rejected partial
+  node-deletion approach recorded in the difference review.
+- Root-cause the remaining 36 graph-size differences untouched by
+  constant-loop correction, deduplicating repeated functions across builds
+  first.
 - Review all large deltas and a deterministic sample of small deltas against
   source text and graph invariants.
 - Decide whether an explicitly compatibility-only entry-flag emulator is worth

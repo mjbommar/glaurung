@@ -108,3 +108,27 @@ unaffected. Those 45 are the next bounded root-cause queue; repeated functions
 across optimization levels and identical firmware images reduce it to fewer
 unique source patterns.
 
+### 9: value-only ternary nested in a loop condition
+
+`flySkySetRcDataFromPayload`, `forwardAuxChannelsToServos`, and
+`sumdFrameStatus`, each repeated at O0, O2, and O2-noinline, account for nine of
+the 45. Each has a loop condition containing a value-only ternary such as
+`i < (x ? 14 : 8)`. Glaurung emits one extra node and two extra edges.
+
+A fresh minimal differential reproduces the class:
+
+```text
+int f(int x, int i) { while (i < (x ? 14 : 8)) i++; return i; }
+  joern     4 nodes, 4 edges
+  glaurung  5 nodes, 6 edges
+```
+
+The trace shows two consecutive branch nodes over the same full-condition
+span. The synthetic loop header branches before the nested conditional has
+been evaluated, then the conditional branches again. This is a real Glaurung
+parity-CFG defect, not a Java flag artefact. A first attempted local deletion
+removed the value-only node but left both branch nodes; focused tests rejected
+it and the experiment was discarded. The proper repair must retarget entry and
+loop-back edges to the real expression entry and preserve one final branch,
+including side-effecting ternary arms. **36 unaffected graph-size cells remain
+unclassified after accounting for this class.**
