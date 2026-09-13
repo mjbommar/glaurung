@@ -42,6 +42,23 @@ use crate::ir::types::{BinOp, VReg};
 use crate::ir::value_number::ValueIdentities;
 use std::collections::HashMap;
 
+#[derive(Clone, Copy)]
+enum IdentityAuthority<'a> {
+    Exact(&'a ValueIdentities),
+    #[cfg(test)]
+    LegacySpelling,
+}
+
+impl<'a> IdentityAuthority<'a> {
+    fn identities(self) -> Option<&'a ValueIdentities> {
+        match self {
+            Self::Exact(identities) => Some(identities),
+            #[cfg(test)]
+            Self::LegacySpelling => None,
+        }
+    }
+}
+
 /// The declared buffer size of a call that returns through `x8`, or `None`.
 fn indirect_result_bytes(
     call_spec: Option<&crate::ir::call_contracts::CallSiteSpec>,
@@ -66,7 +83,7 @@ fn sysv_hidden_result_bytes(
 /// Only the two the ABI defines: the stack pointer and the frame pointer. A
 /// coordinate against anything else is not one `stack_locals` keys a slot with,
 /// so following it would produce a hint for storage nothing promotes.
-fn frame_base(register: &VReg, identities: Option<&ValueIdentities>) -> Option<&'static str> {
+fn frame_base(register: &VReg, authority: IdentityAuthority<'_>) -> Option<&'static str> {
     [
         ("sp", "sp"),
         ("fp", "x29"),
@@ -76,13 +93,13 @@ fn frame_base(register: &VReg, identities: Option<&ValueIdentities>) -> Option<&
     ]
     .into_iter()
     .find_map(|(storage, coordinate)| {
-        register_is_storage(register, storage, identities).then_some(coordinate)
+        register_is_storage(register, storage, authority.identities()).then_some(coordinate)
     })
 }
 
-fn storage_key(register: &VReg, identities: Option<&ValueIdentities>) -> Option<String> {
-    match identities {
-        Some(identities) => {
+fn storage_key(register: &VReg, authority: IdentityAuthority<'_>) -> Option<String> {
+    match authority {
+        IdentityAuthority::Exact(identities) => {
             let candidates = identities.candidates(register)?;
             let mut bases = candidates
                 .iter()
@@ -92,7 +109,8 @@ fn storage_key(register: &VReg, identities: Option<&ValueIdentities>) -> Option<
                 .all(|base| base == Some(first.as_str()))
                 .then_some(first)
         }
-        None => match register {
+        #[cfg(test)]
+        IdentityAuthority::LegacySpelling => match register {
             VReg::Phys(name) => Some(crate::ir::abi::ssa_base(name).to_string()),
             _ => None,
         },
@@ -103,24 +121,24 @@ fn storage_key(register: &VReg, identities: Option<&ValueIdentities>) -> Option<
 fn frame_address(
     expr: &Expr,
     known: &HashMap<String, (String, i64)>,
-    identities: Option<&ValueIdentities>,
+    authority: IdentityAuthority<'_>,
 ) -> Option<(String, i64)> {
     match expr.semantic() {
-        Expr::Reg(register) => frame_base(register, identities)
+        Expr::Reg(register) => frame_base(register, authority)
             .map(|base| (base.to_string(), 0))
-            .or_else(|| storage_key(register, identities).and_then(|key| known.get(&key).cloned())),
+            .or_else(|| storage_key(register, authority).and_then(|key| known.get(&key).cloned())),
         Expr::Lea {
             base: Some(register),
             index: None,
             disp,
             segment: None,
             ..
-        } => frame_base(register, identities).map(|base| (base.to_string(), *disp)),
+        } => frame_base(register, authority).map(|base| (base.to_string(), *disp)),
         Expr::Bin {
             op: BinOp::Add,
             lhs,
             rhs,
-        } => match (frame_address(lhs, known, identities), rhs.semantic()) {
+        } => match (frame_address(lhs, known, authority), rhs.semantic()) {
             (Some((base, offset)), Expr::Const(delta)) => {
                 Some((base, offset.saturating_add(*delta)))
             }
@@ -134,12 +152,12 @@ fn frame_address(
 fn promoted_object(
     expr: &Expr,
     known: &HashMap<String, VReg>,
-    identities: Option<&ValueIdentities>,
+    authority: IdentityAuthority<'_>,
 ) -> Option<VReg> {
     match expr.semantic() {
         Expr::StackAddr { object, .. } => Some(object.clone()),
         Expr::Reg(register) => {
-            storage_key(register, identities).and_then(|key| known.get(&key).cloned())
+            storage_key(register, authority).and_then(|key| known.get(&key).cloned())
         }
         _ => None,
     }
@@ -199,7 +217,7 @@ fn nested_bodies(statement: &mut Stmt) -> Vec<&mut Vec<Stmt>> {
 /// a call would be this reader inventing a buffer, and `x8` is caller-saved.
 #[cfg(test)]
 pub fn indirect_result_buffer_hints(f: &Function, cc: CallConv) -> Vec<StackObjectHint> {
-    indirect_result_buffer_hints_impl(f, cc, None)
+    indirect_result_buffer_hints_impl(f, cc, IdentityAuthority::LegacySpelling)
 }
 
 pub fn indirect_result_buffer_hints_with_identities(
@@ -207,18 +225,18 @@ pub fn indirect_result_buffer_hints_with_identities(
     cc: CallConv,
     identities: &ValueIdentities,
 ) -> Vec<StackObjectHint> {
-    indirect_result_buffer_hints_impl(f, cc, Some(identities))
+    indirect_result_buffer_hints_impl(f, cc, IdentityAuthority::Exact(identities))
 }
 
 fn indirect_result_buffer_hints_impl(
     f: &Function,
     cc: CallConv,
-    identities: Option<&ValueIdentities>,
+    authority: IdentityAuthority<'_>,
 ) -> Vec<StackObjectHint> {
     let mut hints = Vec::new();
     match cc {
-        CallConv::Aarch64 => collect_hints(&f.body, &mut hints, identities),
-        CallConv::SysVAmd64 => collect_sysv_hints(&f.body, 0, &mut hints, identities),
+        CallConv::Aarch64 => collect_hints(&f.body, &mut hints, authority),
+        CallConv::SysVAmd64 => collect_sysv_hints(&f.body, 0, &mut hints, authority),
         _ => {}
     }
     hints
@@ -230,10 +248,10 @@ fn indirect_result_buffer_hints_impl(
 fn sysv_entry_frame_address(
     expr: &Expr,
     stack_delta: i64,
-    identities: Option<&ValueIdentities>,
+    authority: IdentityAuthority<'_>,
 ) -> Option<(String, i64)> {
     match expr.semantic() {
-        Expr::Reg(register) if register_is_storage(register, "rsp", identities) => {
+        Expr::Reg(register) if register_is_storage(register, "rsp", authority.identities()) => {
             Some(("entry_rsp".to_string(), stack_delta))
         }
         Expr::Lea {
@@ -242,14 +260,14 @@ fn sysv_entry_frame_address(
             disp,
             segment: None,
             ..
-        } if register_is_storage(base, "rsp", identities) => {
+        } if register_is_storage(base, "rsp", authority.identities()) => {
             Some(("entry_rsp".to_string(), stack_delta.saturating_add(*disp)))
         }
         _ => None,
     }
 }
 
-fn sysv_stack_adjustment(statement: &Stmt, identities: Option<&ValueIdentities>) -> Option<i64> {
+fn sysv_stack_adjustment(statement: &Stmt, authority: IdentityAuthority<'_>) -> Option<i64> {
     let Stmt::Assign {
         dst: VReg::Phys(dst),
         src,
@@ -260,8 +278,8 @@ fn sysv_stack_adjustment(statement: &Stmt, identities: Option<&ValueIdentities>)
     let Expr::Bin { op, lhs, rhs } = src.semantic() else {
         return None;
     };
-    if !register_is_storage(&VReg::Phys(dst.clone()), "rsp", identities)
-        || !matches!(lhs.semantic(), Expr::Reg(src) if register_is_storage(src, "rsp", identities))
+    if !register_is_storage(&VReg::Phys(dst.clone()), "rsp", authority.identities())
+        || !matches!(lhs.semantic(), Expr::Reg(src) if register_is_storage(src, "rsp", authority.identities()))
     {
         return None;
     }
@@ -279,10 +297,10 @@ fn collect_sysv_hints(
     body: &[Stmt],
     mut stack_delta: i64,
     hints: &mut Vec<StackObjectHint>,
-    identities: Option<&ValueIdentities>,
+    authority: IdentityAuthority<'_>,
 ) {
     for statement in body {
-        if let Some(adjustment) = sysv_stack_adjustment(statement, identities) {
+        if let Some(adjustment) = sysv_stack_adjustment(statement, authority) {
             stack_delta = stack_delta.saturating_add(adjustment);
         }
         if let Stmt::Call {
@@ -292,7 +310,7 @@ fn collect_sysv_hints(
             if let (Some(bytes), Some((base, disp))) = (
                 sysv_hidden_result_bytes(call_spec.as_ref()),
                 args.first().and_then(|argument| {
-                    sysv_entry_frame_address(argument, stack_delta, identities)
+                    sysv_entry_frame_address(argument, stack_delta, authority)
                 }),
             ) {
                 hints.push(StackObjectHint {
@@ -313,26 +331,26 @@ fn collect_sysv_hints(
                 else_body,
                 ..
             } => {
-                collect_sysv_hints(then_body, stack_delta, hints, identities);
+                collect_sysv_hints(then_body, stack_delta, hints, authority);
                 if let Some(else_body) = else_body {
-                    collect_sysv_hints(else_body, stack_delta, hints, identities);
+                    collect_sysv_hints(else_body, stack_delta, hints, authority);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                collect_sysv_hints(body, stack_delta, hints, identities);
+                collect_sysv_hints(body, stack_delta, hints, authority);
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, body) in cases {
-                    collect_sysv_hints(body, stack_delta, hints, identities);
+                    collect_sysv_hints(body, stack_delta, hints, authority);
                 }
                 if let Some(default) = default {
-                    collect_sysv_hints(default, stack_delta, hints, identities);
+                    collect_sysv_hints(default, stack_delta, hints, authority);
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                collect_sysv_hints(try_body, stack_delta, hints, identities);
+                collect_sysv_hints(try_body, stack_delta, hints, authority);
                 for catch in catches {
-                    collect_sysv_hints(&catch.body, stack_delta, hints, identities);
+                    collect_sysv_hints(&catch.body, stack_delta, hints, authority);
                 }
             }
             _ => {}
@@ -343,15 +361,15 @@ fn collect_sysv_hints(
 fn collect_hints(
     body: &[Stmt],
     hints: &mut Vec<StackObjectHint>,
-    identities: Option<&ValueIdentities>,
+    authority: IdentityAuthority<'_>,
 ) {
     let mut known: HashMap<String, (String, i64)> = HashMap::new();
     for statement in body {
         match statement.semantic() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
-                let resolved = frame_address(src, &known, identities);
-                if let Some(base) = storage_key(dst, identities) {
+                let resolved = frame_address(src, &known, authority);
+                if let Some(base) = storage_key(dst, authority) {
                     // SSA versions are stripped: the map answers "what does
                     // THIS REGISTER hold", and `x8#1` is a version of `x8`.
                     match resolved {
@@ -382,29 +400,29 @@ fn collect_hints(
                 else_body,
                 ..
             } => {
-                collect_hints(then_body, hints, identities);
+                collect_hints(then_body, hints, authority);
                 if let Some(else_body) = else_body {
-                    collect_hints(else_body, hints, identities);
+                    collect_hints(else_body, hints, authority);
                 }
                 known.clear();
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                collect_hints(body, hints, identities);
+                collect_hints(body, hints, authority);
                 known.clear();
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, body) in cases {
-                    collect_hints(body, hints, identities);
+                    collect_hints(body, hints, authority);
                 }
                 if let Some(default) = default {
-                    collect_hints(default, hints, identities);
+                    collect_hints(default, hints, authority);
                 }
                 known.clear();
             }
             Stmt::TryCatch { try_body, catches } => {
-                collect_hints(try_body, hints, identities);
+                collect_hints(try_body, hints, authority);
                 for catch in catches {
-                    collect_hints(&catch.body, hints, identities);
+                    collect_hints(&catch.body, hints, authority);
                 }
                 known.clear();
             }
@@ -423,7 +441,7 @@ fn collect_hints(
 /// Returns how many calls were bound, so the pass is observable.
 #[cfg(test)]
 pub fn bind_indirect_result_buffers(f: &mut Function, cc: CallConv) -> usize {
-    bind_indirect_result_buffers_impl(f, cc, None)
+    bind_indirect_result_buffers_impl(f, cc, IdentityAuthority::LegacySpelling)
 }
 
 pub fn bind_indirect_result_buffers_with_identities(
@@ -431,29 +449,29 @@ pub fn bind_indirect_result_buffers_with_identities(
     cc: CallConv,
     identities: &ValueIdentities,
 ) -> usize {
-    bind_indirect_result_buffers_impl(f, cc, Some(identities))
+    bind_indirect_result_buffers_impl(f, cc, IdentityAuthority::Exact(identities))
 }
 
 fn bind_indirect_result_buffers_impl(
     f: &mut Function,
     cc: CallConv,
-    identities: Option<&ValueIdentities>,
+    authority: IdentityAuthority<'_>,
 ) -> usize {
     let mut bound = 0;
     if matches!(cc, CallConv::Aarch64) {
-        bind_bodies(&mut f.body, &mut bound, identities);
+        bind_bodies(&mut f.body, &mut bound, authority);
     }
     bound
 }
 
-fn bind_bodies(body: &mut Vec<Stmt>, bound: &mut usize, identities: Option<&ValueIdentities>) {
+fn bind_bodies(body: &mut Vec<Stmt>, bound: &mut usize, authority: IdentityAuthority<'_>) {
     let mut known: HashMap<String, VReg> = HashMap::new();
     for statement in body.iter_mut() {
         match statement.semantic_mut() {
             Stmt::Origin { .. } => unreachable!("semantic statement cannot be an origin wrapper"),
             Stmt::Assign { dst, src } => {
-                let resolved = promoted_object(src, &known, identities);
-                if let Some(base) = storage_key(dst, identities) {
+                let resolved = promoted_object(src, &known, authority);
+                if let Some(base) = storage_key(dst, authority) {
                     match resolved {
                         Some(object) => known.insert(base.clone(), object),
                         None => known.remove(&base),
@@ -471,7 +489,7 @@ fn bind_bodies(body: &mut Vec<Stmt>, bound: &mut usize, identities: Option<&Valu
             }
             _ => {
                 for nested in nested_bodies(statement) {
-                    bind_bodies(nested, bound, identities);
+                    bind_bodies(nested, bound, authority);
                 }
                 known.clear();
             }

@@ -10,6 +10,23 @@ use crate::ir::call_args::{
 use crate::ir::types::VReg;
 use crate::ir::value_number::ValueIdentities;
 
+#[derive(Clone, Copy)]
+enum IdentityAuthority<'a> {
+    Exact(&'a ValueIdentities),
+    #[cfg(test)]
+    LegacySpelling,
+}
+
+impl<'a> IdentityAuthority<'a> {
+    fn identities(self) -> Option<&'a ValueIdentities> {
+        match self {
+            Self::Exact(identities) => Some(identities),
+            #[cfg(test)]
+            Self::LegacySpelling => None,
+        }
+    }
+}
+
 /// Direct calls whose balanced outgoing stack area bounds a fixed arity candidate.
 ///
 /// Register liveness alone cannot distinguish arguments from caller-local
@@ -24,21 +41,40 @@ pub(crate) fn stack_proven_direct_call_arities(
     cc: CallConv,
     requested_targets: &HashSet<u64>,
 ) -> Vec<(u64, usize)> {
-    stack_proven_direct_call_arities_with_identities(function, cc, requested_targets, None)
+    stack_proven_direct_call_arities_impl(
+        function,
+        cc,
+        requested_targets,
+        IdentityAuthority::LegacySpelling,
+    )
 }
 
 pub(crate) fn stack_proven_direct_call_arities_with_identities(
     function: &Function,
     cc: CallConv,
     requested_targets: &HashSet<u64>,
-    identities: Option<&ValueIdentities>,
+    identities: &ValueIdentities,
+) -> Vec<(u64, usize)> {
+    stack_proven_direct_call_arities_impl(
+        function,
+        cc,
+        requested_targets,
+        IdentityAuthority::Exact(identities),
+    )
+}
+
+fn stack_proven_direct_call_arities_impl(
+    function: &Function,
+    cc: CallConv,
+    requested_targets: &HashSet<u64>,
+    authority: IdentityAuthority<'_>,
 ) -> Vec<(u64, usize)> {
     fn visit(
         body: &[Stmt],
         cc: CallConv,
         requested_targets: &HashSet<u64>,
         found: &mut Vec<(u64, usize)>,
-        identities: Option<&ValueIdentities>,
+        authority: IdentityAuthority<'_>,
     ) {
         for (call_index, statement) in body.iter().enumerate() {
             let Stmt::Call { target, .. } = statement.semantic() else {
@@ -51,28 +87,28 @@ pub(crate) fn stack_proven_direct_call_arities_with_identities(
                         else_body,
                         ..
                     } => {
-                        visit(then_body, cc, requested_targets, found, identities);
+                        visit(then_body, cc, requested_targets, found, authority);
                         if let Some(else_body) = else_body {
-                            visit(else_body, cc, requested_targets, found, identities);
+                            visit(else_body, cc, requested_targets, found, authority);
                         }
                     }
                     Stmt::While { body, .. }
                     | Stmt::DoWhile { body, .. }
                     | Stmt::For { body, .. } => {
-                        visit(body, cc, requested_targets, found, identities)
+                        visit(body, cc, requested_targets, found, authority)
                     }
                     Stmt::Switch { cases, default, .. } => {
                         for (_, case) in cases {
-                            visit(case, cc, requested_targets, found, identities);
+                            visit(case, cc, requested_targets, found, authority);
                         }
                         if let Some(default) = default {
-                            visit(default, cc, requested_targets, found, identities);
+                            visit(default, cc, requested_targets, found, authority);
                         }
                     }
                     Stmt::TryCatch { try_body, catches } => {
-                        visit(try_body, cc, requested_targets, found, identities);
+                        visit(try_body, cc, requested_targets, found, authority);
                         for catch in catches {
-                            visit(&catch.body, cc, requested_targets, found, identities);
+                            visit(&catch.body, cc, requested_targets, found, authority);
                         }
                     }
                     _ => {}
@@ -87,9 +123,7 @@ pub(crate) fn stack_proven_direct_call_arities_with_identities(
                 }
                 _ => continue,
             };
-            let Some(arity) =
-                stack_proven_fixed_arity_with_identities(body, call_index, cc, identities)
-            else {
+            let Some(arity) = stack_proven_fixed_arity_impl(body, call_index, cc, authority) else {
                 continue;
             };
             found.push((target, arity));
@@ -97,26 +131,20 @@ pub(crate) fn stack_proven_direct_call_arities_with_identities(
     }
 
     let mut found = Vec::new();
-    visit(
-        &function.body,
-        cc,
-        requested_targets,
-        &mut found,
-        identities,
-    );
+    visit(&function.body, cc, requested_targets, &mut found, authority);
     found
 }
 
 #[cfg(test)]
 fn stack_proven_fixed_arity(body: &[Stmt], call_index: usize, cc: CallConv) -> Option<usize> {
-    stack_proven_fixed_arity_with_identities(body, call_index, cc, None)
+    stack_proven_fixed_arity_impl(body, call_index, cc, IdentityAuthority::LegacySpelling)
 }
 
-fn stack_proven_fixed_arity_with_identities(
+fn stack_proven_fixed_arity_impl(
     body: &[Stmt],
     call_index: usize,
     cc: CallConv,
-    identities: Option<&ValueIdentities>,
+    authority: IdentityAuthority<'_>,
 ) -> Option<usize> {
     if cc != CallConv::SysVAmd64 {
         return None;
@@ -127,7 +155,8 @@ fn stack_proven_fixed_arity_with_identities(
     let mut padding_bytes = 0i64;
     while cursor > 0 {
         let index = cursor - 1;
-        if let Some((_, width)) = outgoing_sysv_stack_push_with_identities(body, index, identities)
+        if let Some((_, width)) =
+            outgoing_sysv_stack_push_with_identities(body, index, authority.identities())
         {
             stack_arguments = stack_arguments.checked_add(1)?;
             argument_bytes = argument_bytes.checked_add(width)?;
@@ -136,7 +165,8 @@ fn stack_proven_fixed_arity_with_identities(
         }
         if stack_arguments > 0
             && padding_bytes == 0
-            && stack_pointer_sub_width_with_identities(&body[index], identities) == Some(8)
+            && stack_pointer_sub_width_with_identities(&body[index], authority.identities())
+                == Some(8)
         {
             padding_bytes = 8;
             cursor = index;
@@ -147,7 +177,7 @@ fn stack_proven_fixed_arity_with_identities(
             Stmt::Assign {
                 dst: VReg::Phys(name),
                 ..
-            } if !register_is_storage(&VReg::Phys(name.clone()), "rsp", identities)
+            } if !register_is_storage(&VReg::Phys(name.clone()), "rsp", authority.identities())
         ) || matches!(
             body[index].semantic(),
             Stmt::Assign {
@@ -168,7 +198,7 @@ fn stack_proven_fixed_arity_with_identities(
         body,
         call_index,
         argument_bytes.checked_add(padding_bytes)?,
-        identities,
+        authority.identities(),
     )?;
     crate::ir::abi::argument_slots(cc)
         .len()
@@ -317,11 +347,11 @@ mod tests {
         );
 
         assert_eq!(
-            stack_proven_fixed_arity_with_identities(
+            stack_proven_fixed_arity_impl(
                 &body,
                 3,
                 CallConv::SysVAmd64,
-                Some(&identities),
+                IdentityAuthority::Exact(&identities),
             ),
             Some(7)
         );

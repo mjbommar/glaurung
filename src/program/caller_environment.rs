@@ -160,7 +160,7 @@ pub(super) fn recover_direct_caller_arities(
                 &ast,
                 cc,
                 requested_vas,
-                Some(&identities),
+                &identities,
             );
         let owner_targets = expected_sites
             .iter()
