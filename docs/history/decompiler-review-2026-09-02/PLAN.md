@@ -3188,6 +3188,17 @@ provenance through lowering.
   authority/API closure, not an output or timing claim. Continue the remaining
   semantic-reader audit before WP3 invalidation closure. See
   `results/wp3-arm32-frame-internal-authority.md`.
+  Commit `800c7304` closes the prototype-driven direct-output projection's
+  optional identity API. Its sole shipped pipeline caller now passes exact
+  `ValueIdentities` directly, and the path-sensitive return walk uses that
+  authority when selecting the SSA result value reaching each bare return.
+  The no-identity compatibility path is test-only. All 24 owning tests and the
+  non-test library check pass. A fresh native build passes its guard, and the
+  required whole-Python fail-fast gate again reaches the same independent
+  committed-baseline inconsistency at 17% with no earlier failure. This is an
+  authority/API closure, not an output or timing claim. Continue the remaining
+  semantic-reader audit before WP3 invalidation closure. See
+  `results/wp3-prototype-output-identity-authority.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
