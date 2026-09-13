@@ -39,26 +39,19 @@ type Want = Option<u8>;
 /// Semantics-preserving with respect to the *machine*, not to the C we emitted
 /// before: that is the point. Definitions, uses, control flow and value identities
 /// are unchanged, so `verify_defs` and the structural lane see the same function.
-pub fn insert_widening_casts(f: &mut Function, tm: &TypeMap) {
-    insert_widening_casts_for_machine_width(f, tm, 8);
-}
-
 /// Rewrite implicit widening using the target's machine-register width.
 ///
-/// The compatibility wrapper above retains the 64-bit default for direct AST
-/// callers.  Decompilation entry points know the calling convention and must
-/// pass four for ARM32/i386 so their recovered C is not widened merely because
-/// the differential runner rebuilds it on an LP64 host.
-pub fn insert_widening_casts_for_machine_width(f: &mut Function, tm: &TypeMap, machine_width: u8) {
-    insert_widening_casts_for_machine_width_with_identities(f, tm, machine_width, None);
-}
-
-/// Rewrite implicit widening using exact opaque SSA identities when available.
+/// Decompilation entry points know the calling convention and must pass four
+/// for ARM32/i386 so their recovered C is not widened merely because the
+/// differential runner rebuilds it on an LP64 host. Exact identities are
+/// required because recovered declaration width belongs to a value, not its
+/// display spelling.
+/// Rewrite implicit widening using exact opaque SSA identities.
 pub fn insert_widening_casts_for_machine_width_with_identities(
     f: &mut Function,
     tm: &TypeMap,
     machine_width: u8,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) {
     // A return value may span more than one architectural register.  ARM32 and
     // i386 return a uint64_t in a register pair, so clamping the return context
@@ -73,7 +66,7 @@ fn rewrite_body(
     ret_width: u8,
     tm: &TypeMap,
     machine_width: u8,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) {
     for s in body.iter_mut() {
         rewrite_stmt(s, ret_width, tm, machine_width, identities);
@@ -85,7 +78,7 @@ fn rewrite_stmt(
     ret_width: u8,
     tm: &TypeMap,
     machine_width: u8,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) {
     match s.semantic_mut() {
         Stmt::Assign { dst, src } => {
@@ -166,7 +159,7 @@ fn rewrite_expr(
     e: &mut Expr,
     want: Want,
     tm: &TypeMap,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) {
     match e {
         Expr::Origin { expr, .. } => rewrite_expr(expr, want, tm, identities),
@@ -239,7 +232,7 @@ fn rewrite_expr(
 fn make_unsigned(
     e: &mut Expr,
     tm: &TypeMap,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) {
     if let Expr::Origin { expr, .. } = e {
         make_unsigned(expr, tm, identities);
@@ -288,7 +281,7 @@ fn reg_name(v: &VReg) -> Option<&str> {
 fn declared_int_destination(
     v: &VReg,
     tm: &TypeMap,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) -> Option<(bool, u8)> {
     if let Some(name) = reg_name(v) {
         return declared_int(Some(name), tm, identities);
@@ -306,9 +299,9 @@ fn declared_int_destination(
 fn declared_int(
     name: Option<&str>,
     tm: &TypeMap,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) -> Option<(bool, u8)> {
-    crate::ir::ast::declared_int_type_with_identities(name?, Some(tm), identities)
+    crate::ir::ast::declared_int_type_with_identities(name?, Some(tm), Some(identities))
 }
 
 #[cfg(test)]
@@ -329,6 +322,38 @@ mod tests {
             );
         }
         m
+    }
+
+    fn typed_identities(types: &TypeMap) -> crate::ir::value_number::ValueIdentities {
+        let mut slots = std::collections::HashSet::new();
+        let mut promoted = Vec::new();
+        for (value, _) in types.iter() {
+            let VReg::Phys(name) = value else { continue };
+            if let Some(slot) = crate::ir::ast::parse_arg_index(name) {
+                slots.insert(slot);
+            }
+            if name.starts_with("local_") || name.starts_with("stack_") {
+                promoted.push(name.clone());
+            }
+        }
+        let mut identities = crate::ir::value_number::ValueIdentities::default()
+            .with_role_aliases_and_parameter_slots(&std::collections::HashMap::new(), &slots);
+        identities.attach_promoted_stack_objects(&promoted);
+        for (index, (value, _)) in types.iter().enumerate() {
+            let VReg::Phys(name) = value else { continue };
+            if name.strip_prefix("var").is_some_and(|suffix| {
+                !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+            }) {
+                identities.record(
+                    value.clone(),
+                    crate::ir::ssa::SsaValue {
+                        base: VReg::phys(format!("test_value_{index}")),
+                        version: 1,
+                    },
+                );
+            }
+        }
+        identities
     }
 
     fn func(body: Vec<Stmt>) -> Function {
@@ -360,7 +385,8 @@ mod tests {
             dst: VReg::phys("local_8"),
             src: bin(BinOp::Mul, reg("arg0"), reg("arg1")),
         }]);
-        insert_widening_casts(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        insert_widening_casts_for_machine_width_with_identities(&mut f, &tm, 8, &identities);
         let out = render_decbench_typed(&f, Some(&tm), Some(&tm));
         assert!(
             out.contains(
@@ -387,12 +413,7 @@ mod tests {
             src: Expr::Reg(value.clone()),
         }]);
 
-        insert_widening_casts_for_machine_width_with_identities(
-            &mut function,
-            &tm,
-            8,
-            Some(&identities),
-        );
+        insert_widening_casts_for_machine_width_with_identities(&mut function, &tm, 8, &identities);
 
         assert!(matches!(
             &function.body[0],
@@ -427,12 +448,7 @@ mod tests {
         }]);
         let before = function.clone();
 
-        insert_widening_casts_for_machine_width_with_identities(
-            &mut function,
-            &tm,
-            8,
-            Some(&identities),
-        );
+        insert_widening_casts_for_machine_width_with_identities(&mut function, &tm, 8, &identities);
 
         assert_eq!(function, before);
     }
@@ -459,12 +475,7 @@ mod tests {
         }]);
         let before = function.clone();
 
-        insert_widening_casts_for_machine_width_with_identities(
-            &mut function,
-            &tm,
-            8,
-            Some(&identities),
-        );
+        insert_widening_casts_for_machine_width_with_identities(&mut function, &tm, 8, &identities);
 
         assert_eq!(function, before);
     }
@@ -477,7 +488,8 @@ mod tests {
             src: bin(BinOp::Add, reg("arg0"), Expr::Const(3)),
         }]);
 
-        insert_widening_casts(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        insert_widening_casts_for_machine_width_with_identities(&mut f, &tm, 8, &identities);
 
         let out = render_decbench_typed(&f, Some(&tm), Some(&tm));
         assert!(out.contains("unsigned int var0;"), "{out}");
@@ -494,7 +506,8 @@ mod tests {
             dst: VReg::phys("local_8"),
             src: bin(BinOp::Shl, reg("arg0"), Expr::Const(32)),
         }]);
-        insert_widening_casts(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        insert_widening_casts_for_machine_width_with_identities(&mut f, &tm, 8, &identities);
         let out = render_decbench_typed(&f, Some(&tm), Some(&tm));
         assert!(
             out.contains("(unsigned long)"),
@@ -510,7 +523,8 @@ mod tests {
             dst: VReg::phys("local_8"),
             src: bin(BinOp::Shr, reg("arg0"), reg("arg1")),
         }]);
-        insert_widening_casts(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        insert_widening_casts_for_machine_width_with_identities(&mut f, &tm, 8, &identities);
         let Stmt::Assign { src, .. } = &f.body[0] else {
             panic!("expected an assignment");
         };
@@ -530,7 +544,8 @@ mod tests {
             dst: VReg::phys("local_8"),
             src: reg("arg0"),
         }]);
-        insert_widening_casts(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        insert_widening_casts_for_machine_width_with_identities(&mut f, &tm, 8, &identities);
         let Stmt::Assign { src, .. } = &f.body[0] else {
             panic!("expected an assignment");
         };
@@ -556,7 +571,8 @@ mod tests {
             dst: VReg::phys("local_8"),
             src: reg("arg0"),
         }]);
-        insert_widening_casts(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        insert_widening_casts_for_machine_width_with_identities(&mut f, &tm, 8, &identities);
         let Stmt::Assign { src, .. } = &f.body[0] else {
             panic!("expected an assignment");
         };
@@ -580,7 +596,8 @@ mod tests {
             src: bin(BinOp::Add, reg("arg0"), reg("arg1")),
         }]);
         let before = f.clone();
-        insert_widening_casts(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        insert_widening_casts_for_machine_width_with_identities(&mut f, &tm, 8, &identities);
         assert_eq!(f, before);
     }
 
@@ -599,7 +616,8 @@ mod tests {
             else_body: None,
         }]);
         let before = f.clone();
-        insert_widening_casts(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        insert_widening_casts_for_machine_width_with_identities(&mut f, &tm, 8, &identities);
         assert_eq!(f, before);
     }
 
@@ -616,7 +634,8 @@ mod tests {
                 expr: Box::new(reg("arg0")),
             },
         }]);
-        insert_widening_casts(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        insert_widening_casts_for_machine_width_with_identities(&mut f, &tm, 8, &identities);
         let Stmt::Assign { src, .. } = &f.body[0] else {
             panic!("expected an assignment");
         };
@@ -656,7 +675,8 @@ mod tests {
                 &std::collections::HashSet::from([0]),
             );
         crate::ir::const_fold::fold_typed_declared_views_with_identities(&mut f, &tm, &identities);
-        insert_widening_casts(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        insert_widening_casts_for_machine_width_with_identities(&mut f, &tm, 8, &identities);
 
         let Stmt::Assign { src, .. } = &f.body[0] else {
             panic!("expected an assignment");
@@ -673,7 +693,8 @@ mod tests {
             src: reg("var3"),
         }]);
         let before = f.clone();
-        insert_widening_casts(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        insert_widening_casts_for_machine_width_with_identities(&mut f, &tm, 8, &identities);
         assert_eq!(f, before);
     }
 
@@ -689,7 +710,8 @@ mod tests {
             src: reg("ret"),
         }]);
         let before = f.clone();
-        insert_widening_casts(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        insert_widening_casts_for_machine_width_with_identities(&mut f, &tm, 8, &identities);
         assert_eq!(f, before, "`ret` is declared `long`; casting it truncates");
     }
 
@@ -702,7 +724,8 @@ mod tests {
             dst: VReg::phys("local_4"),
             src: bin(BinOp::Shr, reg("arg0"), reg("t6")),
         }]);
-        insert_widening_casts(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        insert_widening_casts_for_machine_width_with_identities(&mut f, &tm, 8, &identities);
         let Stmt::Assign { src, .. } = &f.body[0] else {
             panic!("expected an assignment");
         };
@@ -734,7 +757,8 @@ mod tests {
             size: 8,
         }]);
 
-        insert_widening_casts_for_machine_width(&mut f, &tm, 4);
+        let identities = typed_identities(&tm);
+        insert_widening_casts_for_machine_width_with_identities(&mut f, &tm, 4, &identities);
 
         let out = render_decbench_typed(&f, Some(&tm), Some(&tm));
         assert!(out.contains("(unsigned int)(arg0) >> 8"), "{out}");
@@ -750,7 +774,8 @@ mod tests {
             src: bin(BinOp::Sar, reg("arg0"), Expr::Const(3)),
         }]);
         let before = f.clone();
-        insert_widening_casts(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        insert_widening_casts_for_machine_width_with_identities(&mut f, &tm, 8, &identities);
         assert_eq!(f, before);
     }
 
@@ -764,7 +789,8 @@ mod tests {
             value: Some(bin(BinOp::Sar, reg("arg0"), Expr::Const(4))),
         }]);
         let before = f.clone();
-        insert_widening_casts(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        insert_widening_casts_for_machine_width_with_identities(&mut f, &tm, 8, &identities);
         assert_eq!(f, before, "an arithmetic shift must stay signed and narrow");
     }
 
@@ -782,7 +808,8 @@ mod tests {
             value: Some(bin(BinOp::Sub, reg("arg0"), reg("arg1"))),
         }]);
         let before = f.clone();
-        insert_widening_casts(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        insert_widening_casts_for_machine_width_with_identities(&mut f, &tm, 8, &identities);
         assert_eq!(f, before, "an `int`-returning subtract must stay 32-bit");
     }
 
@@ -801,7 +828,8 @@ mod tests {
                 value: Some(reg("ret")),
             },
         ]);
-        insert_widening_casts(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        insert_widening_casts_for_machine_width_with_identities(&mut f, &tm, 8, &identities);
         let Stmt::Assign { src, .. } = &f.body[0] else {
             panic!("expected an assignment");
         };
@@ -833,7 +861,8 @@ mod tests {
             ("ret", false, 8),
         ]);
 
-        insert_widening_casts_for_machine_width(&mut f, &tm, 4);
+        let identities = typed_identities(&tm);
+        insert_widening_casts_for_machine_width_with_identities(&mut f, &tm, 4, &identities);
         let out = render_decbench_typed(&f, Some(&tm), Some(&tm));
 
         assert!(
@@ -852,7 +881,8 @@ mod tests {
         }
         .with_origins(owner.clone())]);
 
-        insert_widening_casts(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        insert_widening_casts_for_machine_width_with_identities(&mut f, &tm, 8, &identities);
 
         assert!(matches!(
             f.body[0].semantic(),
@@ -873,7 +903,8 @@ mod tests {
             src: reg("arg0").with_origins(owner.clone()),
         }]);
 
-        insert_widening_casts(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        insert_widening_casts_for_machine_width_with_identities(&mut f, &tm, 8, &identities);
 
         let Stmt::Assign { src, .. } = f.body[0].semantic() else {
             panic!("expected an assignment: {:#?}", f.body);
@@ -905,7 +936,8 @@ mod tests {
             ),
         }]);
 
-        insert_widening_casts(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        insert_widening_casts_for_machine_width_with_identities(&mut f, &tm, 8, &identities);
 
         let Stmt::Assign { src, .. } = f.body[0].semantic() else {
             panic!("expected an assignment: {:#?}", f.body);

@@ -356,7 +356,7 @@ fn decbench_text_with_installed_environment(
             crate::ir::typed_simplify::fold_consumed_extensions_with_identities(
                 &mut prepared,
                 tm,
-                Some(&value_identities),
+                &value_identities,
             )
         );
         pass!(
@@ -438,7 +438,7 @@ fn decbench_text_with_installed_environment(
                 &mut prepared,
                 tm,
                 machine_word_bytes(cc),
-                Some(&value_identities),
+                &value_identities,
             )
         );
         // The subtract-and-unsigned-compare range idiom is deliberately

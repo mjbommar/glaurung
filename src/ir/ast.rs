@@ -6388,7 +6388,17 @@ function f @ 0x1000 {
         }
 
         refine_decbench_abi_widths(&f, &mut tm);
-        crate::ir::widen::insert_widening_casts(&mut f, &tm);
+        let identities = crate::ir::value_number::ValueIdentities::default()
+            .with_role_aliases_and_parameter_slots(
+                &std::collections::HashMap::new(),
+                &std::collections::HashSet::from([0, 1]),
+            );
+        crate::ir::widen::insert_widening_casts_for_machine_width_with_identities(
+            &mut f,
+            &tm,
+            8,
+            &identities,
+        );
         let text = render_decbench_typed(&f, Some(&tm), Some(&tm));
 
         assert!(
@@ -8445,7 +8455,12 @@ function f @ 0x1000 {
                 width: 4,
             })
         );
-        crate::ir::widen::insert_widening_casts(&mut f, &tm);
+        crate::ir::widen::insert_widening_casts_for_machine_width_with_identities(
+            &mut f,
+            &tm,
+            8,
+            &crate::ir::value_number::ValueIdentities::default(),
+        );
         let text = render_decbench_typed(&f, Some(&tm), Some(&tm));
         assert!(text.contains("int state_result("), "got:\n{text}");
     }

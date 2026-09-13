@@ -6,7 +6,7 @@
 //! proofs so the generic algebraic folder remains type-independent.
 
 use crate::ir::ast::{Expr, Function, Stmt};
-use crate::ir::types::{is_promoted_local_reg, BinOp, VReg};
+use crate::ir::types::{BinOp, VReg};
 use crate::ir::types_recover::TypeMap;
 
 /// Remove machine-parent zero extensions that a recovered narrow destination
@@ -18,15 +18,11 @@ use crate::ir::types_recover::TypeMap;
 /// operands. Replacing `zextW(zextN(x))` with the inner *unsigned* N-bit view is
 /// therefore exact and keeps C arithmetic defined modulo 2^N. Lone extensions,
 /// signed inner views, division, and shifts remain untouched.
-pub fn fold_consumed_extensions(function: &mut Function, types: &TypeMap) {
-    fold_consumed_extensions_with_identities(function, types, None);
-}
-
-/// Remove consumed extensions using exact opaque SSA identities when available.
+/// Remove consumed extensions using exact opaque SSA identities.
 pub fn fold_consumed_extensions_with_identities(
     function: &mut Function,
     types: &TypeMap,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) {
     fold_body(&mut function.body, types, identities);
 }
@@ -86,19 +82,19 @@ fn fold_modular_expression(expression: &mut Expr, observed_width: u8) {
 fn destination_width(
     register: &VReg,
     types: &TypeMap,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) -> Option<u8> {
     let VReg::Phys(name) = register else {
         return None;
     };
-    crate::ir::ast::declared_int_type_with_identities(name, Some(types), identities)
+    crate::ir::ast::declared_int_type_with_identities(name, Some(types), Some(identities))
         .map(|(_, width)| width)
 }
 
 fn fold_body(
     statements: &mut [Stmt],
     types: &TypeMap,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) {
     for statement in statements {
         match statement.semantic_mut() {
@@ -112,10 +108,7 @@ fn fold_body(
                 let Expr::Reg(destination) = addr.semantic() else {
                     continue;
                 };
-                let promoted = identities.map_or_else(
-                    || is_promoted_local_reg(destination),
-                    |identities| identities.is_promoted_stack_object(destination),
-                );
+                let promoted = identities.is_promoted_stack_object(destination);
                 if promoted {
                     if let Some(width) = destination_width(destination, types, identities) {
                         fold_modular_expression(src, width);
@@ -252,7 +245,7 @@ mod tests {
         let mut identities = crate::ir::value_number::ValueIdentities::default();
         identities.attach_promoted_stack_objects([&object_name]);
 
-        fold_consumed_extensions_with_identities(&mut function, &types, Some(&identities));
+        fold_consumed_extensions_with_identities(&mut function, &types, &identities);
 
         assert!(matches!(
             &function.body[0],
@@ -277,7 +270,7 @@ mod tests {
         let mut identities = crate::ir::value_number::ValueIdentities::default();
         identities.attach_promoted_stack_objects([&object_name]);
 
-        fold_consumed_extensions_with_identities(&mut function, &types, Some(&identities));
+        fold_consumed_extensions_with_identities(&mut function, &types, &identities);
 
         let Stmt::Store { addr, src, .. } = &function.body[0] else {
             panic!("expected promoted store: {function:#?}")
@@ -305,7 +298,7 @@ mod tests {
             },
         );
 
-        fold_consumed_extensions_with_identities(&mut function, &types, Some(&identities));
+        fold_consumed_extensions_with_identities(&mut function, &types, &identities);
 
         assert_eq!(function, before);
     }
@@ -331,7 +324,7 @@ mod tests {
             },
         );
 
-        fold_consumed_extensions_with_identities(&mut function, &types, Some(&identities));
+        fold_consumed_extensions_with_identities(&mut function, &types, &identities);
 
         assert!(matches!(
             &function.body[0],
@@ -366,7 +359,7 @@ mod tests {
             );
         }
 
-        fold_consumed_extensions_with_identities(&mut function, &types, Some(&identities));
+        fold_consumed_extensions_with_identities(&mut function, &types, &identities);
 
         assert_eq!(function, before);
     }
@@ -409,7 +402,10 @@ mod tests {
             },
         );
 
-        fold_consumed_extensions(&mut function, &types);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        let promoted = "local_c".to_string();
+        identities.attach_promoted_stack_objects([&promoted]);
+        fold_consumed_extensions_with_identities(&mut function, &types, &identities);
 
         assert!(
             matches!(
@@ -456,7 +452,10 @@ mod tests {
         let mut types = TypeMap::default();
         int32_type(&mut types, destination);
 
-        fold_consumed_extensions(&mut function, &types);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        let promoted = "local_c".to_string();
+        identities.attach_promoted_stack_objects([&promoted]);
+        fold_consumed_extensions_with_identities(&mut function, &types, &identities);
 
         let Stmt::Assign { src, .. } = &function.body[0] else {
             panic!("expected attributed modular assignment: {function:#?}");
