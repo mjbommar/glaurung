@@ -156,7 +156,9 @@ fn refine_exact_unsigned_constants(
             continue;
         }
         let mut uses = 0usize;
-        if body_uses_preserve_positive_value(body, &name, width, types, &mut uses) && uses != 0 {
+        if body_uses_preserve_positive_value(body, &name, width, types, identities, &mut uses)
+            && uses != 0
+        {
             types.force_int_signedness(VReg::phys(&name), false);
         }
     }
@@ -743,29 +745,41 @@ fn body_uses_preserve_positive_value(
     name: &str,
     width: u8,
     types: &TypeMap,
+    identities: &crate::ir::value_number::ValueIdentities,
     uses: &mut usize,
 ) -> bool {
     body.iter().all(|statement| match statement.semantic() {
         Stmt::Assign { src, .. } | Stmt::Return { value: Some(src) } => {
-            expr_uses_preserve_positive_value(src, name, width, types, false, uses)
+            expr_uses_preserve_positive_value(src, name, width, types, identities, false, uses)
         }
         Stmt::Store { addr, src, .. } => {
-            expr_uses_preserve_positive_value(addr, name, width, types, false, uses)
-                && expr_uses_preserve_positive_value(src, name, width, types, false, uses)
+            expr_uses_preserve_positive_value(addr, name, width, types, identities, false, uses)
+                && expr_uses_preserve_positive_value(
+                    src, name, width, types, identities, false, uses,
+                )
         }
         Stmt::Call { target, args, .. } => {
-            expr_uses_preserve_positive_value(target, name, width, types, false, uses)
+            expr_uses_preserve_positive_value(target, name, width, types, identities, false, uses)
                 && args.iter().all(|argument| {
-                    expr_uses_preserve_positive_value(argument, name, width, types, false, uses)
+                    expr_uses_preserve_positive_value(
+                        argument, name, width, types, identities, false, uses,
+                    )
                 })
         }
         Stmt::Throw { value } | Stmt::Push { value } => {
-            expr_uses_preserve_positive_value(value, name, width, types, false, uses)
+            expr_uses_preserve_positive_value(value, name, width, types, identities, false, uses)
         }
         Stmt::TryCatch { try_body, catches } => {
-            body_uses_preserve_positive_value(try_body, name, width, types, uses)
+            body_uses_preserve_positive_value(try_body, name, width, types, identities, uses)
                 && catches.iter().all(|catch| {
-                    body_uses_preserve_positive_value(&catch.body, name, width, types, uses)
+                    body_uses_preserve_positive_value(
+                        &catch.body,
+                        name,
+                        width,
+                        types,
+                        identities,
+                        uses,
+                    )
                 })
         }
         Stmt::If {
@@ -773,15 +787,19 @@ fn body_uses_preserve_positive_value(
             then_body,
             else_body,
         } => {
-            expr_uses_preserve_positive_value(cond, name, width, types, false, uses)
-                && body_uses_preserve_positive_value(then_body, name, width, types, uses)
+            expr_uses_preserve_positive_value(cond, name, width, types, identities, false, uses)
+                && body_uses_preserve_positive_value(
+                    then_body, name, width, types, identities, uses,
+                )
                 && else_body.as_ref().is_none_or(|else_body| {
-                    body_uses_preserve_positive_value(else_body, name, width, types, uses)
+                    body_uses_preserve_positive_value(
+                        else_body, name, width, types, identities, uses,
+                    )
                 })
         }
         Stmt::While { cond, body } | Stmt::DoWhile { body, cond } => {
-            expr_uses_preserve_positive_value(cond, name, width, types, false, uses)
-                && body_uses_preserve_positive_value(body, name, width, types, uses)
+            expr_uses_preserve_positive_value(cond, name, width, types, identities, false, uses)
+                && body_uses_preserve_positive_value(body, name, width, types, identities, uses)
         }
         Stmt::For {
             init,
@@ -794,14 +812,17 @@ fn body_uses_preserve_positive_value(
                 name,
                 width,
                 types,
+                identities,
                 uses,
-            ) && expr_uses_preserve_positive_value(cond, name, width, types, false, uses)
-                && body_uses_preserve_positive_value(body, name, width, types, uses)
+            ) && expr_uses_preserve_positive_value(
+                cond, name, width, types, identities, false, uses,
+            ) && body_uses_preserve_positive_value(body, name, width, types, identities, uses)
                 && body_uses_preserve_positive_value(
                     std::slice::from_ref(step.as_ref()),
                     name,
                     width,
                     types,
+                    identities,
                     uses,
                 )
         }
@@ -810,16 +831,22 @@ fn body_uses_preserve_positive_value(
             cases,
             default,
         } => {
-            expr_uses_preserve_positive_value(discriminant, name, width, types, false, uses)
-                && cases.iter().all(|(_, case)| {
-                    body_uses_preserve_positive_value(case, name, width, types, uses)
-                })
-                && default.as_ref().is_none_or(|default| {
-                    body_uses_preserve_positive_value(default, name, width, types, uses)
-                })
+            expr_uses_preserve_positive_value(
+                discriminant,
+                name,
+                width,
+                types,
+                identities,
+                false,
+                uses,
+            ) && cases.iter().all(|(_, case)| {
+                body_uses_preserve_positive_value(case, name, width, types, identities, uses)
+            }) && default.as_ref().is_none_or(|default| {
+                body_uses_preserve_positive_value(default, name, width, types, identities, uses)
+            })
         }
         Stmt::IndirectGoto { target } => {
-            expr_uses_preserve_positive_value(target, name, width, types, false, uses)
+            expr_uses_preserve_positive_value(target, name, width, types, identities, false, uses)
         }
         Stmt::Return { value: None }
         | Stmt::Label(_)
@@ -839,13 +866,20 @@ fn expr_uses_preserve_positive_value(
     name: &str,
     width: u8,
     types: &TypeMap,
+    identities: &crate::ir::value_number::ValueIdentities,
     unsigned_context: bool,
     uses: &mut usize,
 ) -> bool {
     match expression {
-        Expr::Origin { expr, .. } => {
-            expr_uses_preserve_positive_value(expr, name, width, types, unsigned_context, uses)
-        }
+        Expr::Origin { expr, .. } => expr_uses_preserve_positive_value(
+            expr,
+            name,
+            width,
+            types,
+            identities,
+            unsigned_context,
+            uses,
+        ),
         Expr::Reg(VReg::Phys(found)) if found == name => {
             *uses += 1;
             unsigned_context
@@ -867,30 +901,61 @@ fn expr_uses_preserve_positive_value(
             name,
             width,
             types,
+            identities,
             !*signed && *cast_width >= width,
             uses,
         ),
         Expr::Bin { lhs, rhs, .. } => {
             let lhs_context = unsigned_widening_cast(rhs, width);
             let rhs_context = unsigned_widening_cast(lhs, width);
-            expr_uses_preserve_positive_value(lhs, name, width, types, lhs_context, uses)
-                && expr_uses_preserve_positive_value(rhs, name, width, types, rhs_context, uses)
+            expr_uses_preserve_positive_value(
+                lhs,
+                name,
+                width,
+                types,
+                identities,
+                lhs_context,
+                uses,
+            ) && expr_uses_preserve_positive_value(
+                rhs,
+                name,
+                width,
+                types,
+                identities,
+                rhs_context,
+                uses,
+            )
         }
         Expr::Cmp { op, lhs, rhs } => {
             let signed_comparison = matches!(
                 op,
                 crate::ir::types::CmpOp::Slt | crate::ir::types::CmpOp::Sle
             );
-            let lhs_context = signed_comparison && wide_signed_integer(rhs, types);
-            let rhs_context = signed_comparison && wide_signed_integer(lhs, types);
-            expr_uses_preserve_positive_value(lhs, name, width, types, lhs_context, uses)
-                && expr_uses_preserve_positive_value(rhs, name, width, types, rhs_context, uses)
+            let lhs_context = signed_comparison && wide_signed_integer(rhs, types, identities);
+            let rhs_context = signed_comparison && wide_signed_integer(lhs, types, identities);
+            expr_uses_preserve_positive_value(
+                lhs,
+                name,
+                width,
+                types,
+                identities,
+                lhs_context,
+                uses,
+            ) && expr_uses_preserve_positive_value(
+                rhs,
+                name,
+                width,
+                types,
+                identities,
+                rhs_context,
+                uses,
+            )
         }
         Expr::Deref { addr, .. }
         | Expr::Un { src: addr, .. }
         | Expr::NumericConvert { expr: addr, .. }
         | Expr::FunctionTableEntry { index: addr, .. } => {
-            expr_uses_preserve_positive_value(addr, name, width, types, false, uses)
+            expr_uses_preserve_positive_value(addr, name, width, types, identities, false, uses)
         }
         Expr::Select {
             cond,
@@ -898,12 +963,13 @@ fn expr_uses_preserve_positive_value(
             if_false,
             ..
         } => {
-            expr_uses_preserve_positive_value(cond, name, width, types, false, uses)
+            expr_uses_preserve_positive_value(cond, name, width, types, identities, false, uses)
                 && expr_uses_preserve_positive_value(
                     if_true,
                     name,
                     width,
                     types,
+                    identities,
                     unsigned_context,
                     uses,
                 )
@@ -912,18 +978,21 @@ fn expr_uses_preserve_positive_value(
                     name,
                     width,
                     types,
+                    identities,
                     unsigned_context,
                     uses,
                 )
         }
         Expr::Call { target, args, .. } => {
-            expr_uses_preserve_positive_value(target, name, width, types, false, uses)
+            expr_uses_preserve_positive_value(target, name, width, types, identities, false, uses)
                 && args.iter().all(|argument| {
-                    expr_uses_preserve_positive_value(argument, name, width, types, false, uses)
+                    expr_uses_preserve_positive_value(
+                        argument, name, width, types, identities, false, uses,
+                    )
                 })
         }
         Expr::WideArithmetic { args, .. } => args.iter().all(|argument| {
-            expr_uses_preserve_positive_value(argument, name, width, types, false, uses)
+            expr_uses_preserve_positive_value(argument, name, width, types, identities, false, uses)
         }),
         Expr::Lea { base, index, .. } | Expr::PdbFieldAddr { base, index, .. } => !base
             .iter()
@@ -932,15 +1001,25 @@ fn expr_uses_preserve_positive_value(
     }
 }
 
-fn wide_signed_integer(expression: &Expr, types: &TypeMap) -> bool {
+fn wide_signed_integer(
+    expression: &Expr,
+    types: &TypeMap,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> bool {
     match expression.semantic() {
         Expr::Cast {
             signed: true,
             width: 8,
             ..
         } => true,
-        Expr::Reg(VReg::Phys(name)) => {
-            crate::ir::ast::declared_int_type(name, Some(types)) == Some((true, 8))
+        Expr::Reg(value @ VReg::Phys(name)) => {
+            (identities.unambiguous_physical_base(value).is_some()
+                || identities.parameter_slot(value).is_some())
+                && crate::ir::ast::declared_int_type_with_identities(
+                    name,
+                    Some(types),
+                    Some(identities),
+                ) == Some((true, 8))
         }
         _ => false,
     }

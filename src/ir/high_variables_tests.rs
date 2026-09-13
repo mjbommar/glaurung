@@ -543,6 +543,66 @@ fn exact_opaque_high_bit_bound_uses_the_rendered_machine_word_domain() {
 }
 
 #[test]
+fn unowned_arg_spelling_does_not_supply_a_wide_signed_comparison_domain() {
+    let value = VReg::phys("opaque_constant");
+    let unowned_bound = VReg::phys("arg99");
+    let function = Function {
+        name: "range_guard".into(),
+        entry_va: 0,
+        body: vec![
+            Stmt::Assign {
+                dst: value.clone(),
+                src: Expr::Const(0x8000_0000),
+            },
+            Stmt::If {
+                cond: Expr::Cmp {
+                    op: CmpOp::Sle,
+                    lhs: Box::new(Expr::Reg(value.clone())),
+                    rhs: Box::new(Expr::Reg(unowned_bound.clone())),
+                },
+                then_body: vec![Stmt::Return {
+                    value: Some(Expr::Const(-2)),
+                }],
+                else_body: None,
+            },
+        ],
+    };
+    let mut types = TypeMap::default();
+    types.upsert_public(
+        value.clone(),
+        TypeHint::Int {
+            signed: true,
+            width: 4,
+        },
+    );
+    types.upsert_public(
+        unowned_bound,
+        TypeHint::Int {
+            signed: true,
+            width: 8,
+        },
+    );
+    let mut identities = crate::ir::value_number::ValueIdentities::default();
+    identities.record(
+        value.clone(),
+        crate::ir::ssa::SsaValue {
+            base: VReg::phys("eax"),
+            version: 1,
+        },
+    );
+
+    refine_pointer_high_variables_with_identities(&function, &mut types, &identities);
+
+    assert_eq!(
+        types.get(&value),
+        Some(TypeHint::Int {
+            signed: true,
+            width: 4,
+        })
+    );
+}
+
+#[test]
 fn known_call_and_literal_flow_through_exact_copy_chain() {
     let function = Function {
         name: "f".into(),
