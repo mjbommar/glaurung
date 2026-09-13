@@ -103,6 +103,7 @@ pub use prepare::{
     prepare_for_decbench_with_identities, settle_copies_and_constants_with_identities,
 };
 #[cfg(test)]
+#[cfg(test)]
 pub(crate) use return_folds::remove_redundant_return_constant_assignments;
 pub use return_folds::{fold_exhaustive_if_returns, fold_exhaustive_switch_returns};
 pub(crate) use return_folds::{

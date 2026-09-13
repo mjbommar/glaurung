@@ -9,9 +9,9 @@
 //! * [`fold_exhaustive_if_returns`] and [`fold_exhaustive_switch_returns`] move
 //!   a *shared* trailing return into every arm of a total branch, so each arm
 //!   ends in its own `return`.
-//! * [`remove_redundant_return_constant_assignments`] is the late cleanup for
-//!   the assignment a fold left behind because the return already carried the
-//!   same constant.
+//! * [`remove_redundant_return_constant_assignments_with_identities`] is the
+//!   late cleanup for the assignment a fold left behind because the return
+//!   already carried the same constant.
 //!
 //! All four are transformations of an already-lowered [`Function`]; none of
 //! them consult LLIR. The result-storage question — whether a given `VReg` is
@@ -131,6 +131,7 @@ fn fold_returns_where(body: &mut Vec<Stmt>, is_result: &impl Fn(&VReg) -> bool) 
 /// constant return. This deliberately runs after structural recovery: the
 /// assignment may still identify a shared switch destination while the CFG is
 /// being reconstructed, but it is redundant in the final source AST.
+#[cfg(test)]
 pub(crate) fn remove_redundant_return_constant_assignments(body: &mut Vec<Stmt>) {
     remove_redundant_return_constant_assignments_where(body, &|dst| {
         crate::ir::direct_output::is_return_reg(dst)

@@ -22,6 +22,7 @@ use crate::ir::types::VReg;
 use crate::ir::types_recover::{RecoveredOutputKind, RecoveredPrototype};
 
 /// Project a body-written return register onto every remaining bare return.
+#[cfg(test)]
 pub(crate) fn materialize_direct_output(function: &mut Function) {
     materialize_direct_output_with_live_in(
         function,
@@ -294,6 +295,7 @@ pub(crate) fn prune_void_fallthrough_return(function: &mut Function) {
 /// local and prevents warning-clean recompilation.  Only pure assignments to
 /// anonymous promoted locals are eligible.  Debug-proven source locals are
 /// protected, and reads through any expression keep the assignment.
+#[cfg(test)]
 pub(crate) fn prune_unread_promoted_locals(
     function: &mut Function,
     protected_locals: &std::collections::HashSet<String>,
@@ -587,6 +589,7 @@ fn prune_unread_promoted_locals_where(
 /// function void, retaining the pair fabricates an uninitialized source local.
 /// Only the exact single-use promoted-slot bridge is removed; ordinary locals
 /// and result-register values used by any other statement are left alone.
+#[cfg(test)]
 pub(crate) fn prune_void_entry_result_restores(function: &mut Function) {
     prune_void_entry_result_restores_where(
         function,
