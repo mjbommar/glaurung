@@ -237,8 +237,9 @@ fn fold_restored_catch_return(body: &mut Vec<Stmt>) {
 }
 
 /// Recover exact Itanium integer throws anywhere in an AST.
+#[cfg(test)]
 pub fn recover_throws(function: &mut Function) {
-    recover_throws_in(&mut function.body, None);
+    recover_throws_in(&mut function.body, ExceptionAuthority::LegacySpelling);
 }
 
 /// Recover integer throws using pipeline-owned promoted-stack identity.
@@ -246,16 +247,17 @@ pub fn recover_throws_with_identities(
     function: &mut Function,
     identities: &crate::ir::value_number::ValueIdentities,
 ) {
-    recover_throws_in(&mut function.body, Some(identities));
+    recover_throws_in(&mut function.body, ExceptionAuthority::Exact(identities));
 }
 
 /// Retain an `_ZTIi` proof while ordinary preparation folds the ABI sequence.
+#[cfg(test)]
 pub fn mark_int_throws(function: &mut Function) {
     mark_int_throws_in(
         &mut function.body,
         None,
         &std::collections::HashMap::new(),
-        None,
+        ExceptionAuthority::LegacySpelling,
     );
 }
 
@@ -266,6 +268,7 @@ pub fn mark_int_throws(function: &mut Function) {
 /// while source-level preparation later deletes the now-dead RTTI load.  Track
 /// only local constant address definitions here and consult the relocation-
 /// backed address map before that proof disappears.
+#[cfg(test)]
 pub fn mark_int_throws_with_address_map(
     function: &mut Function,
     address_names: &std::collections::HashMap<u64, String>,
@@ -274,7 +277,7 @@ pub fn mark_int_throws_with_address_map(
         &mut function.body,
         Some(address_names),
         &std::collections::HashMap::new(),
-        None,
+        ExceptionAuthority::LegacySpelling,
     );
 }
 
@@ -288,17 +291,34 @@ pub fn mark_int_throws_with_address_map_and_identities(
         &mut function.body,
         Some(address_names),
         &std::collections::HashMap::new(),
-        Some(identities),
+        ExceptionAuthority::Exact(identities),
     );
 }
 
 const INT_THROW_MARKER: &str = "__glaurung_throw_int";
 
+#[derive(Clone, Copy)]
+enum ExceptionAuthority<'a> {
+    Exact(&'a crate::ir::value_number::ValueIdentities),
+    #[cfg(test)]
+    LegacySpelling,
+}
+
+impl ExceptionAuthority<'_> {
+    fn is_promoted_stack_object(self, register: &VReg) -> bool {
+        match self {
+            Self::Exact(identities) => identities.is_promoted_stack_object(register),
+            #[cfg(test)]
+            Self::LegacySpelling => crate::ir::types::is_promoted_local_reg(register),
+        }
+    }
+}
+
 fn mark_int_throws_in(
     body: &mut Vec<Stmt>,
     address_names: Option<&std::collections::HashMap<u64, String>>,
     inherited_addresses: &std::collections::HashMap<VReg, u64>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: ExceptionAuthority<'_>,
 ) {
     let mut addresses = inherited_addresses.clone();
     for statement in body.iter_mut() {
@@ -314,7 +334,7 @@ fn mark_int_throws_in(
                 addr: Expr::Reg(dst),
                 src,
                 ..
-            } if promoted_exception_local(dst, identities) => {
+            } if authority.is_promoted_stack_object(dst) => {
                 if let Some(address) = known_exception_address(src, &addresses) {
                     addresses.insert(dst.clone(), address);
                 } else {
@@ -326,29 +346,29 @@ fn mark_int_throws_in(
                 else_body,
                 ..
             } => {
-                mark_int_throws_in(then_body, address_names, &addresses, identities);
+                mark_int_throws_in(then_body, address_names, &addresses, authority);
                 if let Some(else_body) = else_body {
-                    mark_int_throws_in(else_body, address_names, &addresses, identities);
+                    mark_int_throws_in(else_body, address_names, &addresses, authority);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                mark_int_throws_in(body, address_names, &addresses, identities)
+                mark_int_throws_in(body, address_names, &addresses, authority)
             }
             Stmt::For { body, .. } => {
-                mark_int_throws_in(body, address_names, &addresses, identities)
+                mark_int_throws_in(body, address_names, &addresses, authority)
             }
             Stmt::Switch { cases, default, .. } => {
                 for (_, body) in cases {
-                    mark_int_throws_in(body, address_names, &addresses, identities);
+                    mark_int_throws_in(body, address_names, &addresses, authority);
                 }
                 if let Some(body) = default {
-                    mark_int_throws_in(body, address_names, &addresses, identities);
+                    mark_int_throws_in(body, address_names, &addresses, authority);
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                mark_int_throws_in(try_body, address_names, &addresses, identities);
+                mark_int_throws_in(try_body, address_names, &addresses, authority);
                 for catch in catches {
-                    mark_int_throws_in(&mut catch.body, address_names, &addresses, identities);
+                    mark_int_throws_in(&mut catch.body, address_names, &addresses, authority);
                 }
             }
             _ => {}
@@ -375,7 +395,7 @@ fn mark_int_throws_in(
                 inherited_addresses,
                 names,
                 "_ZTIi",
-                identities,
+                authority,
             )
         }))
         && !matches!(body.get(allocate.wrapping_sub(1)), Some(Stmt::Comment(text)) if text == INT_THROW_MARKER)
@@ -437,23 +457,13 @@ fn known_exception_address(
     }
 }
 
-fn promoted_exception_local(
-    register: &VReg,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) -> bool {
-    identities.map_or_else(
-        || crate::ir::types::is_promoted_local_reg(register),
-        |identities| identities.is_promoted_stack_object(register),
-    )
-}
-
 fn statements_reference_named_address(
     statements: &[Stmt],
     proof_start: usize,
     inherited_addresses: &std::collections::HashMap<VReg, u64>,
     address_names: &std::collections::HashMap<u64, String>,
     expected_name: &str,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: ExceptionAuthority<'_>,
 ) -> bool {
     fn expression_references(
         expression: &Expr,
@@ -492,7 +502,7 @@ fn statements_reference_named_address(
                 addr: Expr::Reg(dst),
                 src,
                 ..
-            } if promoted_exception_local(dst, identities) => {
+            } if authority.is_promoted_stack_object(dst) => {
                 if index >= proof_start
                     && expression_references(src, &definitions, address_names, expected_name)
                 {
@@ -533,10 +543,7 @@ fn statements_reference_named_address(
     false
 }
 
-fn recover_throws_in(
-    body: &mut Vec<Stmt>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) {
+fn recover_throws_in(body: &mut Vec<Stmt>, authority: ExceptionAuthority<'_>) {
     for statement in body.iter_mut() {
         match statement.semantic_mut() {
             Stmt::If {
@@ -544,27 +551,27 @@ fn recover_throws_in(
                 else_body,
                 ..
             } => {
-                recover_throws_in(then_body, identities);
+                recover_throws_in(then_body, authority);
                 if let Some(else_body) = else_body {
-                    recover_throws_in(else_body, identities);
+                    recover_throws_in(else_body, authority);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                recover_throws_in(body, identities)
+                recover_throws_in(body, authority)
             }
-            Stmt::For { body, .. } => recover_throws_in(body, identities),
+            Stmt::For { body, .. } => recover_throws_in(body, authority),
             Stmt::Switch { cases, default, .. } => {
                 for (_, body) in cases {
-                    recover_throws_in(body, identities);
+                    recover_throws_in(body, authority);
                 }
                 if let Some(body) = default {
-                    recover_throws_in(body, identities);
+                    recover_throws_in(body, authority);
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                recover_throws_in(try_body, identities);
+                recover_throws_in(try_body, authority);
                 for catch in catches {
-                    recover_throws_in(&mut catch.body, identities);
+                    recover_throws_in(&mut catch.body, authority);
                 }
             }
             _ => {}
@@ -592,7 +599,7 @@ fn recover_throws_in(
     {
         return;
     }
-    let Some(value) = resolved_throw_value(body, allocate, throw, identities) else {
+    let Some(value) = resolved_throw_value(body, allocate, throw, authority) else {
         return;
     };
     let replacement_start = marker.unwrap_or(allocate);
@@ -621,7 +628,7 @@ fn resolved_throw_value(
     body: &[Stmt],
     allocate: usize,
     throw: usize,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: ExceptionAuthority<'_>,
 ) -> Option<Expr> {
     fn resolve(expression: &Expr, definitions: &std::collections::HashMap<VReg, Expr>) -> Expr {
         fn inner(
@@ -667,7 +674,7 @@ fn resolved_throw_value(
                 addr: Expr::Reg(dst),
                 src,
                 ..
-            } if promoted_exception_local(dst, identities) => {
+            } if authority.is_promoted_stack_object(dst) => {
                 definitions.insert(dst.clone(), src.clone());
             }
             Stmt::Store { src, size: 4, .. } if index >= allocate => {
