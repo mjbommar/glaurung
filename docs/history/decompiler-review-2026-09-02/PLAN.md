@@ -2876,6 +2876,17 @@ provenance through lowering.
   general copy/constant fixpoint's isolated benchmark and explicit diagnostic
   compatibility paths remain next. See
   `results/wp3-vector-benchmark-required-identities.md`.
+  Commit `e44ebdc8` migrates that remaining `ir_dataflow` benchmark boundary.
+  Its real fixture-derived subjects now retain value-numbering identities
+  through every AST prefix, the individual constant-fold/copy-propagation
+  lanes, the composed AST lane, and the bounded fixpoint lane. Typed constant
+  folding and the typed schedule fixpoint are explicit public APIs because
+  Criterion targets are separate crates. Four fixpoint, 82 constant-fold, and
+  38 copy-propagation tests pass, as do the focused benchmark check and release
+  `--no-run` build. No benchmark timing or output movement is claimed. Only the
+  explicit diagnostic/test no-sidecar preparation surface remains to classify
+  before the final `tag_phys` boundary. See
+  `results/wp3-dataflow-benchmark-required-identities.md`.
   Commit `3e302824`
   removes an `argN` spelling decision from
   DWARF aggregate-field recovery: only roles seeded from the authoritative
