@@ -102,10 +102,11 @@ pub use prepare::{
 pub use prepare::{
     prepare_for_decbench_with_identities, settle_copies_and_constants_with_identities,
 };
+#[cfg(test)]
+pub(crate) use return_folds::remove_redundant_return_constant_assignments;
 pub use return_folds::{fold_exhaustive_if_returns, fold_exhaustive_switch_returns};
 pub(crate) use return_folds::{
     fold_exhaustive_if_returns_with_identities, fold_exhaustive_switch_returns_with_identities,
-    remove_redundant_return_constant_assignments,
     remove_redundant_return_constant_assignments_with_identities,
 };
 
@@ -3998,7 +3999,7 @@ function f @ 0x1000 {
             output_kind,
             &std::collections::HashSet::new(),
             8,
-            Some(&identities),
+            &identities,
         )
         .0
     }

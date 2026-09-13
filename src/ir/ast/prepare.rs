@@ -15,11 +15,15 @@
 //! recording why a pass has to run before or after another one.
 
 use super::param_spills::{coalesce_named_param_spills, coalesce_param_spills, drop_self_stores};
+#[cfg(test)]
 use super::{
-    fold_exhaustive_if_returns, fold_exhaustive_if_returns_with_identities,
-    fold_exhaustive_switch_returns, fold_exhaustive_switch_returns_with_identities, fold_returns,
-    fold_returns_with_identities, remove_redundant_return_constant_assignments,
-    remove_redundant_return_constant_assignments_with_identities, Function,
+    fold_exhaustive_if_returns, fold_exhaustive_switch_returns, fold_returns,
+    remove_redundant_return_constant_assignments,
+};
+use super::{
+    fold_exhaustive_if_returns_with_identities, fold_exhaustive_switch_returns_with_identities,
+    fold_returns_with_identities, remove_redundant_return_constant_assignments_with_identities,
+    Function,
 };
 
 /// Why a bounded semantic fixpoint stopped.
@@ -52,6 +56,13 @@ impl FixpointTermination {
 pub(crate) struct AstPreparationReport {
     pub copies_and_constants: FixpointReport,
     pub forward_regions_and_loops: FixpointReport,
+}
+
+#[derive(Clone, Copy)]
+enum PreparationAuthority<'a> {
+    Identities(&'a crate::ir::value_number::ValueIdentities),
+    #[cfg(test)]
+    LegacySpelling,
 }
 
 /// Run a semantic cleanup round until it stops firing or reaches its bound.
@@ -184,7 +195,7 @@ pub(crate) fn drop_machine_frame_comments(body: &mut Vec<super::Stmt>) {
 /// so the bench cannot drift from the schedule it claims to measure.
 #[cfg(test)]
 pub fn settle_copies_and_constants(owned: &mut Function) -> FixpointReport {
-    settle_copies_and_constants_with_optional_identities(owned, None)
+    settle_copies_and_constants_with_authority(owned, PreparationAuthority::LegacySpelling)
 }
 
 /// Run the production copy/constant fixpoint with authoritative value identity.
@@ -192,25 +203,27 @@ pub fn settle_copies_and_constants_with_identities(
     owned: &mut Function,
     identities: &crate::ir::value_number::ValueIdentities,
 ) -> FixpointReport {
-    settle_copies_and_constants_with_optional_identities(owned, Some(identities))
+    settle_copies_and_constants_with_authority(owned, PreparationAuthority::Identities(identities))
 }
 
-fn settle_copies_and_constants_with_optional_identities(
+fn settle_copies_and_constants_with_authority(
     owned: &mut Function,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    authority: PreparationAuthority<'_>,
 ) -> FixpointReport {
     run_bounded_fixpoint(4, || {
-        let copies_changed = match identities {
-            Some(identities) => {
+        let copies_changed = match authority {
+            PreparationAuthority::Identities(identities) => {
                 crate::ir::copy_prop::propagate_copies_with_identities(owned, identities)
             }
-            None => crate::ir::copy_prop::propagate_copies(owned),
+            #[cfg(test)]
+            PreparationAuthority::LegacySpelling => crate::ir::copy_prop::propagate_copies(owned),
         };
-        let constants_changed = match identities {
-            Some(identities) => {
+        let constants_changed = match authority {
+            PreparationAuthority::Identities(identities) => {
                 crate::ir::const_fold::fold_constants_with_identities(owned, identities)
             }
-            None => crate::ir::const_fold::fold_constants(owned),
+            #[cfg(test)]
+            PreparationAuthority::LegacySpelling => crate::ir::const_fold::fold_constants(owned),
         };
         copies_changed || constants_changed
     })
@@ -307,7 +320,7 @@ pub fn prepare_for_decbench_with_identities(
         crate::ir::types_recover::RecoveredOutputKind::Unknown,
         &std::collections::HashSet::new(),
         pointer_width,
-        Some(identities),
+        identities,
     )
     .0
 }
@@ -342,12 +355,12 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals(
     protected_locals: &std::collections::HashSet<String>,
     pointer_width: u8,
 ) -> Function {
-    prepare_for_decbench_with_output_and_protected_locals_and_report(
+    prepare_for_decbench_with_authority(
         f,
         output_kind,
         protected_locals,
         pointer_width,
-        None,
+        PreparationAuthority::LegacySpelling,
     )
     .0
 }
@@ -357,44 +370,73 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
     output_kind: crate::ir::types_recover::RecoveredOutputKind,
     protected_locals: &std::collections::HashSet<String>,
     pointer_width: u8,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> (Function, AstPreparationReport) {
+    prepare_for_decbench_with_authority(
+        f,
+        output_kind,
+        protected_locals,
+        pointer_width,
+        PreparationAuthority::Identities(identities),
+    )
+}
+
+fn prepare_for_decbench_with_authority(
+    f: &Function,
+    output_kind: crate::ir::types_recover::RecoveredOutputKind,
+    protected_locals: &std::collections::HashSet<String>,
+    pointer_width: u8,
+    authority: PreparationAuthority<'_>,
 ) -> (Function, AstPreparationReport) {
     let mut owned = f.clone();
     if output_kind == crate::ir::types_recover::RecoveredOutputKind::Void {
         crate::ir::direct_output::clear_return_values(&mut owned);
-        match identities {
-            Some(identities) => {
+        match authority {
+            PreparationAuthority::Identities(identities) => {
                 crate::ir::direct_output::prune_void_entry_result_restores_with_identities(
                     &mut owned, identities,
                 )
             }
-            None => crate::ir::direct_output::prune_void_entry_result_restores(&mut owned),
+            #[cfg(test)]
+            PreparationAuthority::LegacySpelling => {
+                crate::ir::direct_output::prune_void_entry_result_restores(&mut owned)
+            }
         }
     } else {
-        match identities {
-            Some(identities) => {
+        match authority {
+            PreparationAuthority::Identities(identities) => {
                 crate::ir::direct_output::materialize_direct_output_with_identities(
                     &mut owned, identities,
                 )
             }
-            None => crate::ir::direct_output::materialize_direct_output(&mut owned),
+            #[cfg(test)]
+            PreparationAuthority::LegacySpelling => {
+                crate::ir::direct_output::materialize_direct_output(&mut owned)
+            }
         }
     }
-    if let Some(identities) = identities {
-        coalesce_param_spills(&mut owned.body, protected_locals, identities);
+    match authority {
+        PreparationAuthority::Identities(identities) => {
+            coalesce_param_spills(&mut owned.body, protected_locals, identities)
+        }
+        #[cfg(test)]
+        PreparationAuthority::LegacySpelling => {}
     }
     crate::ir::label_prune::prune_unreachable_tails(&mut owned);
     // Copy propagation exposes algebraic flag identities, while folding those
     // identities changes use counts and exposes new one-use copies. Iterate the
     // monotone pair to a small bounded fixpoint — see the function's own docs.
-    let copies_and_constants =
-        settle_copies_and_constants_with_optional_identities(&mut owned, identities);
+    let copies_and_constants = settle_copies_and_constants_with_authority(&mut owned, authority);
     // Folding can prove that an initially composite narrow-register rebuild is
     // exactly its incoming argument (`(arg & ~255) | (arg & 255) == arg`). Run
     // the same guarded home analysis again so byte/halfword parameter spills
     // exposed only at the fixpoint do not survive as fake source locals.
-    if let Some(identities) = identities {
-        coalesce_named_param_spills(&mut owned.body, protected_locals, identities);
+    match authority {
+        PreparationAuthority::Identities(identities) => {
+            coalesce_named_param_spills(&mut owned.body, protected_locals, identities)
+        }
+        #[cfg(test)]
+        PreparationAuthority::LegacySpelling => {}
     }
     // A spill carried through a scratch can become `arg0 = arg0` only after
     // the copy fixpoint. The earlier coalescing cleanup cannot see it yet.
@@ -406,9 +448,12 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
     // above; folding here would recreate one from incidental ABI result-register
     // plumbing such as Clang's `push rax` / `pop rax` stack adjustment.
     if output_kind != crate::ir::types_recover::RecoveredOutputKind::Void {
-        match identities {
-            Some(identities) => fold_returns_with_identities(&mut owned.body, identities),
-            None => fold_returns(&mut owned.body),
+        match authority {
+            PreparationAuthority::Identities(identities) => {
+                fold_returns_with_identities(&mut owned.body, identities)
+            }
+            #[cfg(test)]
+            PreparationAuthority::LegacySpelling => fold_returns(&mut owned.body),
         }
     }
     // Copy propagation and the second constant fold can replace a flag read in
@@ -418,11 +463,16 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
     crate::ir::dce::prune_overwritten_flags(&mut owned);
     crate::ir::dce::prune_dead_flags(&mut owned);
     crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned);
-    match identities {
-        Some(identities) => crate::ir::copy_prop::propagate_adjacent_guard_values_with_identities(
-            &mut owned, identities,
-        ),
-        None => crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned),
+    match authority {
+        PreparationAuthority::Identities(identities) => {
+            crate::ir::copy_prop::propagate_adjacent_guard_values_with_identities(
+                &mut owned, identities,
+            )
+        }
+        #[cfg(test)]
+        PreparationAuthority::LegacySpelling => {
+            crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned)
+        }
     }
     // The run-local propagators above clear their environment at every
     // control-flow boundary, so an ABI copy made in the entry block and read
@@ -454,19 +504,27 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
     // decided `C`. Dominance, not definedness: the arm being dropped may well be
     // a defined value, it simply cannot be selected.
     crate::ir::copy_prop::propagate_adjacent_promoted_values(&mut owned);
-    match identities {
-        Some(identities) => crate::ir::copy_prop::propagate_adjacent_guard_values_with_identities(
-            &mut owned, identities,
-        ),
-        None => crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned),
+    match authority {
+        PreparationAuthority::Identities(identities) => {
+            crate::ir::copy_prop::propagate_adjacent_guard_values_with_identities(
+                &mut owned, identities,
+            )
+        }
+        #[cfg(test)]
+        PreparationAuthority::LegacySpelling => {
+            crate::ir::copy_prop::propagate_adjacent_guard_values(&mut owned)
+        }
     }
-    match identities {
-        Some(identities) => {
+    match authority {
+        PreparationAuthority::Identities(identities) => {
             crate::ir::copy_prop::propagate_adjacent_overwritten_values_with_identities(
                 &mut owned, identities,
             )
         }
-        None => crate::ir::copy_prop::propagate_adjacent_overwritten_values(&mut owned),
+        #[cfg(test)]
+        PreparationAuthority::LegacySpelling => {
+            crate::ir::copy_prop::propagate_adjacent_overwritten_values(&mut owned)
+        }
     }
     crate::ir::terminal_loop::recover_terminal_self_loops(&mut owned);
     // Recover shared return epilogues before general forward joins. Otherwise a
@@ -488,13 +546,16 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
     // consumer. Ordinary copy propagation may duplicate pure expressions, but
     // an Expr::Call must retain exactly one evaluation.
     crate::ir::select_fold::collapse_assignment_diamonds(&mut owned);
-    match identities {
-        Some(identities) => {
+    match authority {
+        PreparationAuthority::Identities(identities) => {
             crate::ir::copy_prop::move_adjacent_effectful_scratch_values_with_identities(
                 &mut owned, identities,
             )
         }
-        None => crate::ir::copy_prop::move_adjacent_effectful_scratch_values(&mut owned),
+        #[cfg(test)]
+        PreparationAuthority::LegacySpelling => {
+            crate::ir::copy_prop::move_adjacent_effectful_scratch_values(&mut owned)
+        }
     }
     // Inlining a shared terminal epilogue can leave its old fallthrough
     // assignment after an explicit return. Remove that newly unreachable tail
@@ -509,37 +570,47 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
     // Before rendering and before widening (which already understands `Switch`):
     // a gcc -O0 comparison ladder is a `switch`, not a nest of `if`s and `goto`s.
     crate::ir::switch_ladder::recover_switches(&mut owned);
-    match identities {
-        Some(identities) => {
+    match authority {
+        PreparationAuthority::Identities(identities) => {
             crate::ir::guarded_switch::collapse_range_guards_with_identities(&mut owned, identities)
         }
-        None => crate::ir::guarded_switch::collapse_range_guards(&mut owned),
+        #[cfg(test)]
+        PreparationAuthority::LegacySpelling => {
+            crate::ir::guarded_switch::collapse_range_guards(&mut owned)
+        }
     }
     // Removing a proven range guard can make a prefix copy dominate the switch
     // directly. Carry only those aliases into the switch arms. A general late
     // copy-propagation rerun is unsound here: loops have already been recovered,
     // and a pre-loop snapshot may depend on a value changed by the loop body.
-    match identities {
-        Some(identities) => crate::ir::copy_prop::propagate_switch_entry_copies_with_identities(
-            &mut owned, identities,
-        ),
-        None => crate::ir::copy_prop::propagate_switch_entry_copies(&mut owned),
+    match authority {
+        PreparationAuthority::Identities(identities) => {
+            crate::ir::copy_prop::propagate_switch_entry_copies_with_identities(
+                &mut owned, identities,
+            )
+        }
+        #[cfg(test)]
+        PreparationAuthority::LegacySpelling => {
+            crate::ir::copy_prop::propagate_switch_entry_copies(&mut owned)
+        }
     }
-    match identities {
-        Some(identities) => {
+    match authority {
+        PreparationAuthority::Identities(identities) => {
             fold_exhaustive_if_returns_with_identities(&mut owned, identities);
             fold_exhaustive_switch_returns_with_identities(&mut owned, identities);
         }
-        None => {
+        #[cfg(test)]
+        PreparationAuthority::LegacySpelling => {
             fold_exhaustive_if_returns(&mut owned);
             fold_exhaustive_switch_returns(&mut owned);
         }
     }
-    match identities {
-        Some(identities) => {
+    match authority {
+        PreparationAuthority::Identities(identities) => {
             crate::ir::loop_form::promote_for_loops_with_identities(&mut owned, identities)
         }
-        None => crate::ir::loop_form::promote_for_loops(&mut owned),
+        #[cfg(test)]
+        PreparationAuthority::LegacySpelling => crate::ir::loop_form::promote_for_loops(&mut owned),
     }
     // Loop promotion can expose sequential terminal guards that were nested in
     // the recovered CFG during the earlier pass. Fuse that final exact shape
@@ -558,12 +629,17 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
     // gotos to that exact lexical successor carry no control information and
     // only make otherwise structured output look unstructured.
     crate::ir::label_prune::prune_structured_fallthrough_gotos(&mut owned);
-    match identities {
-        Some(identities) => remove_redundant_return_constant_assignments_with_identities(
-            &mut owned.body,
-            identities,
-        ),
-        None => remove_redundant_return_constant_assignments(&mut owned.body),
+    match authority {
+        PreparationAuthority::Identities(identities) => {
+            remove_redundant_return_constant_assignments_with_identities(
+                &mut owned.body,
+                identities,
+            )
+        }
+        #[cfg(test)]
+        PreparationAuthority::LegacySpelling => {
+            remove_redundant_return_constant_assignments(&mut owned.body)
+        }
     }
     // Return normalization above is what can finally turn two machine-shaped
     // `result = literal; return result` arms into adjacent identical source
@@ -582,13 +658,16 @@ pub(crate) fn prepare_for_decbench_with_output_and_protected_locals_and_report(
     // Clang -O0's unobserved `main` return slot is machine bookkeeping, not a
     // source local. Drop only pure writes to unread anonymous promoted slots;
     // authoritative debug locals remain protected.
-    match identities {
-        Some(identities) => crate::ir::direct_output::prune_unread_promoted_locals_with_identities(
-            &mut owned,
-            protected_locals,
-            identities,
-        ),
-        None => {
+    match authority {
+        PreparationAuthority::Identities(identities) => {
+            crate::ir::direct_output::prune_unread_promoted_locals_with_identities(
+                &mut owned,
+                protected_locals,
+                identities,
+            )
+        }
+        #[cfg(test)]
+        PreparationAuthority::LegacySpelling => {
             crate::ir::direct_output::prune_unread_promoted_locals(&mut owned, protected_locals)
         }
     }

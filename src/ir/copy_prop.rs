@@ -108,6 +108,7 @@ pub(crate) fn register_read_count(function: &Function, target: &crate::ir::types
 /// Over-reporting is harmless — one more fixpoint round over a body that is
 /// already at its fixed point produces the same body — so none of these tries
 /// to prove that the value it wrote differs from the value it replaced.
+#[cfg(test)]
 pub(crate) fn propagate_copies(f: &mut Function) -> bool {
     propagate_copies_impl(f, None)
 }

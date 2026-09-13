@@ -31,6 +31,7 @@ use crate::ir::types_recover::TypeMap;
 
 #[derive(Clone, Copy)]
 enum ParameterAuthority<'a> {
+    #[cfg(test)]
     LegacySpelling,
     Identities(&'a crate::ir::value_number::ValueIdentities),
 }
@@ -38,6 +39,7 @@ enum ParameterAuthority<'a> {
 impl ParameterAuthority<'_> {
     fn owns(self, name: &str) -> bool {
         match self {
+            #[cfg(test)]
             Self::LegacySpelling => crate::ir::ast::parse_arg_index(name).is_some(),
             Self::Identities(identities) => identities
                 .parameter_slot(&crate::ir::types::VReg::phys(name))
@@ -69,6 +71,7 @@ fn rewrite(slot: &mut Expr, value: Expr, changed: &mut bool) {
 /// Rewrite `f`'s body in place, folding the patterns above.
 ///
 /// Returns whether anything was rewritten — see [`rewrite`].
+#[cfg(test)]
 pub(crate) fn fold_constants(f: &mut Function) -> bool {
     fold_constants_with_parameter_authority(f, ParameterAuthority::LegacySpelling)
 }
