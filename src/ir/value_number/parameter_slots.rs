@@ -13,6 +13,21 @@ use crate::ir::use_def::{
 
 use super::architectural_reads::{architecturally_read_names, phi_copy_operands};
 
+#[derive(Clone, Copy)]
+enum ParameterIdentityAuthority<'a> {
+    Exact(&'a super::ValueIdentities),
+    PlainLlir,
+}
+
+impl<'a> ParameterIdentityAuthority<'a> {
+    fn identities(self) -> Option<&'a super::ValueIdentities> {
+        match self {
+            Self::Exact(identities) => Some(identities),
+            Self::PlainLlir => None,
+        }
+    }
+}
+
 /// Argument-passing registers in positional order (with width sub-names) per `cc`.
 fn arg_slot_names(cc: CallConv) -> &'static [&'static [&'static str]] {
     crate::ir::abi::argument_slots(cc)
@@ -35,7 +50,7 @@ fn arg_slot_names(cc: CallConv) -> &'static [&'static [&'static str]] {
 /// while a sibling arm reads the incoming value first. The join is existential
 /// (OR): one reachable read-before-definition path is enough to prove the slot.
 pub fn live_in_arg_slots_llir(lf: &LlirFunction, cc: CallConv) -> std::collections::HashSet<usize> {
-    live_in_arg_slots_llir_impl(lf, cc, None)
+    live_in_arg_slots_llir_impl(lf, cc, ParameterIdentityAuthority::PlainLlir)
 }
 
 pub fn live_in_arg_slots_llir_with_identities(
@@ -43,13 +58,13 @@ pub fn live_in_arg_slots_llir_with_identities(
     cc: CallConv,
     identities: &super::ValueIdentities,
 ) -> std::collections::HashSet<usize> {
-    live_in_arg_slots_llir_impl(lf, cc, Some(identities))
+    live_in_arg_slots_llir_impl(lf, cc, ParameterIdentityAuthority::Exact(identities))
 }
 
 fn live_in_arg_slots_llir_impl(
     lf: &LlirFunction,
     cc: CallConv,
-    identities: Option<&super::ValueIdentities>,
+    authority: ParameterIdentityAuthority<'_>,
 ) -> std::collections::HashSet<usize> {
     let mut slot_of: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for (i, names) in arg_slot_names(cc).iter().enumerate() {
@@ -61,12 +76,15 @@ fn live_in_arg_slots_llir_impl(
     // phi copy launders the call may-uses this scan already refuses to trust:
     // the copy is an ordinary `Assign`, so the `Op::Call` guard below never sees
     // it, and its source is the bare (version-zero) live-in name.
-    let really_read = architecturally_read_names(lf, identities);
-    let alignment_padding =
-        crate::ir::arm_input_evidence::ArmAlignmentPadding::classify(lf, cc, identities);
+    let really_read = architecturally_read_names(lf, authority.identities());
+    let alignment_padding = crate::ir::arm_input_evidence::ArmAlignmentPadding::classify(
+        lf,
+        cc,
+        authority.identities(),
+    );
     let base_slot = |name: &str| slot_of.get(name.split('#').next().unwrap_or(name)).copied();
-    let register_slot = |register: &VReg, require_entry: bool| match identities {
-        Some(identities) => {
+    let register_slot = |register: &VReg, require_entry: bool| match authority {
+        ParameterIdentityAuthority::Exact(identities) => {
             let candidates = identities.candidates(register)?;
             let mut slots = candidates.iter().map(|identity| {
                 if require_entry && identity.version != 0 {
@@ -79,7 +97,7 @@ fn live_in_arg_slots_llir_impl(
             let first = slots.next()??;
             slots.all(|slot| slot == Some(first)).then_some(first)
         }
-        None => match register {
+        ParameterIdentityAuthority::PlainLlir => match register {
             VReg::Phys(name) => (!require_entry || !name.contains('#'))
                 .then(|| base_slot(name))
                 .flatten(),
@@ -87,8 +105,8 @@ fn live_in_arg_slots_llir_impl(
         },
     };
     // The slot a READ is evidence for. Production consults the opaque identity
-    // and requires version zero; callers without the sidecar retain the legacy
-    // The former value-tag spelling convention as an explicit compatibility path.
+    // and requires version zero; plain-LLIR callers retain the former value-tag
+    // spelling convention as an explicit pipeline mode.
     let read_slot = |register: &VReg| register_slot(register, true);
     let block_by_va: std::collections::HashMap<u64, usize> = lf
         .blocks
@@ -168,7 +186,7 @@ fn live_in_arg_slots_llir_impl(
                 // phi destination is really read; then the copy's SOURCE is what the
                 // function reads, and the destination is not an architectural
                 // definition of the register at all.
-                if let Some((dst, src)) = phi_copy_operands(&ins.op, identities) {
+                if let Some((dst, src)) = phi_copy_operands(&ins.op, authority.identities()) {
                     if really_read.contains(dst) {
                         // `read_slot`, not `base_slot`: the copy in the ENTRY
                         // predecessor of a loop-header phi reads the bare live-in
@@ -190,12 +208,14 @@ fn live_in_arg_slots_llir_impl(
                     }
                     let index = use_index;
                     use_index += 1;
-                    let proven = identities.map_or_else(
-                        || use_is_proven_input(&ins.op, index),
-                        |identities| {
+                    let proven = match authority {
+                        ParameterIdentityAuthority::Exact(identities) => {
                             use_is_proven_input_with_identities(&ins.op, index, identities)
-                        },
-                    );
+                        }
+                        ParameterIdentityAuthority::PlainLlir => {
+                            use_is_proven_input(&ins.op, index)
+                        }
+                    };
                     if !proven {
                         return;
                     }
@@ -205,7 +225,7 @@ fn live_in_arg_slots_llir_impl(
                             instr_idx,
                         },
                         u,
-                        identities,
+                        authority.identities(),
                     ) {
                         return;
                     }
