@@ -103,14 +103,12 @@ fn inline_scalar_declarations(
         let LocalDeclaration::Scalar { c_type } = declaration else {
             continue;
         };
-        // A source spelling alone does not prove scalar representation: DWARF
-        // pointer and aggregate locals also reach `LocalDeclaration::Scalar`
-        // because they are assignable C objects. Require the recovered integer
-        // fact that the real stack-local pipeline supplies for `int sum`/`i`.
-        // Synthetic promoted locals retain their existing untyped fallback.
-        let eligible_source_integer =
-            plan.is_source_local(name) && plan.integer_type(name).is_some();
-        if !crate::ir::types::is_promoted_local_name(name) && !eligible_source_integer {
+        // Authoritative source locals remain explicit declaration facts at
+        // function scope. Besides preserving their DWARF lifetime independently
+        // of a recovered initializer, consumers inventory those declarations
+        // separately from control-flow syntax. Only anonymous promoted machine
+        // locals use the compact declaration-at-first-definition spelling.
+        if !crate::ir::types::is_promoted_local_name(name) {
             continue;
         }
         let target = VReg::phys(name);

@@ -819,6 +819,21 @@ fn standalone_dwarf_type(source_type: &str) -> String {
     if unqualified.starts_with("struct ") || unqualified.starts_with("union ") {
         return normalized;
     }
+    // Do not erase an authoritative nominal pointer before the renderer has
+    // the accompanying DWARF type environment available. The renderer accepts
+    // it only when that environment can emit the typedef/forward declaration;
+    // otherwise its existing fail-closed prototype filter rejects the whole
+    // source declaration and falls back to machine-inferred `void *`.
+    if let Some(pointee) = unqualified.trim_end().strip_suffix('*') {
+        let pointee = pointee.trim_end();
+        if !pointee.is_empty()
+            && pointee.chars().enumerate().all(|(index, ch)| {
+                ch == '_' || ch.is_ascii_alphabetic() || (index > 0 && ch.is_ascii_digit())
+            })
+        {
+            return normalized;
+        }
+    }
     let rust_scalar = match source_type {
         "u8" | "uchar" => Some("unsigned char"),
         "i8" => Some("signed char"),
@@ -869,6 +884,15 @@ pub(super) fn dwarf_render_prototype(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn authoritative_nominal_pointer_reaches_dwarf_render_validation() {
+        assert_eq!(super::standalone_dwarf_type("PidObject *"), "PidObject *");
+        assert_eq!(
+            super::standalone_dwarf_type("const usbd_device *"),
+            "const usbd_device *"
+        );
+    }
+
     #[test]
     fn register_local_merge_uses_parameter_slots_not_arg_spelling() {
         use crate::core::binary::Arch;

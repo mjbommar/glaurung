@@ -119,7 +119,6 @@ pub(super) struct DeclarationPlan {
     stack_objects: BTreeSet<String>,
     aggregate_value_widths: HashMap<String, u8>,
     aggregate_parameters: HashMap<String, (String, u8)>,
-    source_locals: HashSet<String>,
 }
 
 impl Default for DeclarationPlan {
@@ -146,7 +145,6 @@ impl Default for DeclarationPlan {
             stack_objects: BTreeSet::new(),
             aggregate_value_widths: HashMap::new(),
             aggregate_parameters: HashMap::new(),
-            source_locals: HashSet::new(),
         }
     }
 }
@@ -370,7 +368,6 @@ impl DeclarationPlan {
             stack_objects: ids.stack_objects.keys().cloned().collect(),
             aggregate_value_widths: aggregate_value_widths.clone(),
             aggregate_parameters,
-            source_locals: source_locals.clone(),
         }
     }
 
@@ -484,15 +481,6 @@ impl DeclarationPlan {
     /// promoted-local spelling `object = value`.
     pub(super) fn is_stack_object(&self, displayed: &str) -> bool {
         self.stack_objects.contains(displayed)
-    }
-
-    /// Whether `displayed` is an authoritative source-local spelling.
-    ///
-    /// These names have already passed the same type/renderability checks as
-    /// synthetic promoted locals. Presentation decisions such as placing a
-    /// proven first definition may therefore treat both namespaces alike.
-    pub(super) fn is_source_local(&self, displayed: &str) -> bool {
-        self.source_locals.contains(displayed)
     }
 
     /// Body-local declarations, in the order they must be emitted.

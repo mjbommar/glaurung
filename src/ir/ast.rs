@@ -12814,7 +12814,7 @@ function f @ 0x1000 {
     }
 
     #[test]
-    fn dwarf_named_scalars_use_the_same_proven_inline_declarations() {
+    fn dwarf_named_scalars_keep_separate_source_declarations() {
         let sum = VReg::phys("sum");
         let index = VReg::phys("i");
         let function = Function {
@@ -12885,8 +12885,10 @@ function f @ 0x1000 {
                 &dwarf_locals,
             );
 
-        assert!(rendered.contains("    int sum = 0;"), "{rendered}");
-        assert!(rendered.contains("for (int i = 0; i < 3;"), "{rendered}");
+        assert!(rendered.contains("    int sum;"), "{rendered}");
+        assert!(rendered.contains("    int i;"), "{rendered}");
+        assert!(rendered.contains("    sum = 0;"), "{rendered}");
+        assert!(rendered.contains("for (i = 0; i < 3;"), "{rendered}");
         assert_eq!(rendered.matches("int sum").count(), 1, "{rendered}");
         assert_eq!(rendered.matches("int i").count(), 1, "{rendered}");
     }

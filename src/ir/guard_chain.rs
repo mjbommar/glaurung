@@ -371,7 +371,7 @@ fn merge_corresponding_origins(primary: &[Stmt], duplicate: &[Stmt]) -> Vec<Stmt
 }
 
 fn is_safe_exact_eager_boolean(condition: &Expr) -> bool {
-    match condition {
+    match condition.semantic() {
         Expr::Bin { op, lhs, rhs } if matches!(op, BinOp::And | BinOp::Or) => {
             is_safe_exact_eager_boolean(lhs) && is_safe_exact_eager_boolean(rhs)
         }
@@ -2147,7 +2147,8 @@ mod tests {
                             lhs: Box::new(Expr::Reg(reg("length"))),
                             rhs: Box::new(Expr::Const(0)),
                         }),
-                    },
+                    }
+                    .with_origins(OriginSet::one(0x40f7)),
                     then_body: vec![epilogue.clone(), terminal.clone()],
                     else_body: None,
                 },
