@@ -27,6 +27,13 @@ use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
 const CANARY_DISP: i64 = 0x28;
 const CANARY_NAME: &str = "__stack_chk_guard";
 
+#[derive(Clone, Copy)]
+enum IdentityAuthority<'a> {
+    Exact(&'a crate::ir::value_number::ValueIdentities),
+    #[cfg(test)]
+    LegacySpelling,
+}
+
 /// The TLS slots `-fstack-protector` reads the guard from, as
 /// `(segment, displacement)`.
 ///
@@ -73,7 +80,7 @@ pub fn recognise_canary(f: &mut Function) {
 /// matching exit-check shape is present, collapse that too.
 #[cfg(test)]
 pub fn collapse_canary_save(f: &mut Function) {
-    collapse_canary_save_impl(f, None);
+    collapse_canary_save_impl(f, IdentityAuthority::LegacySpelling);
 }
 
 /// Identity-aware production form of [`collapse_canary_save`].
@@ -81,14 +88,11 @@ pub fn collapse_canary_save_with_identities(
     f: &mut Function,
     identities: &crate::ir::value_number::ValueIdentities,
 ) {
-    collapse_canary_save_impl(f, Some(identities));
+    collapse_canary_save_impl(f, IdentityAuthority::Exact(identities));
 }
 
-fn collapse_canary_save_impl(
-    f: &mut Function,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) {
-    collapse_body(&mut f.body, identities);
+fn collapse_canary_save_impl(f: &mut Function, authority: IdentityAuthority<'_>) {
+    collapse_body(&mut f.body, authority);
     // If the prologue save comment is now present, try to collapse the
     // corresponding exit check shape(s).
     if let Some(slot) = find_canary_slot(&f.body) {
@@ -394,15 +398,13 @@ fn expr_mentions_guard(e: &Expr) -> bool {
     }
 }
 
-fn collapse_body(
-    body: &mut Vec<Stmt>,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
-) {
-    let promoted = |value: &crate::ir::types::VReg| {
-        identities.map_or_else(
-            || matches!(value, crate::ir::types::VReg::Phys(name) if name.starts_with("stack_")),
-            |identities| identities.is_promoted_stack_object(value),
-        )
+fn collapse_body(body: &mut Vec<Stmt>, authority: IdentityAuthority<'_>) {
+    let promoted = |value: &crate::ir::types::VReg| match authority {
+        IdentityAuthority::Exact(identities) => identities.is_promoted_stack_object(value),
+        #[cfg(test)]
+        IdentityAuthority::LegacySpelling => {
+            matches!(value, crate::ir::types::VReg::Phys(name) if name.starts_with("stack_"))
+        }
     };
     // Recurse into structured arms so nested prologue shapes collapse too
     // (unlikely in practice, but symmetric with the ARM64 pass).
@@ -414,15 +416,13 @@ fn collapse_body(
                 else_body,
                 ..
             } => {
-                collapse_body(then_body, identities);
+                collapse_body(then_body, authority);
                 if let Some(eb) = else_body {
-                    collapse_body(eb, identities);
+                    collapse_body(eb, authority);
                 }
             }
-            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                collapse_body(body, identities)
-            }
-            Stmt::For { body, .. } => collapse_body(body, identities),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => collapse_body(body, authority),
+            Stmt::For { body, .. } => collapse_body(body, authority),
             _ => {}
         }
     }
