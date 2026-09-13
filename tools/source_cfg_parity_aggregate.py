@@ -183,11 +183,19 @@ def load_joern_shards(directory: Path) -> tuple[list[dict[str, Any]], dict[str, 
 
 
 def classify_difference(joern: dict[str, Any], ours: dict[str, Any]) -> dict[str, Any]:
-    expected = float(joern["got"])
-    got = float(ours["got"])
+    joern_status = str(joern["status"])
+    ours_status = str(ours["status"])
+    expected = float(joern["got"]) if "got" in joern else None
+    got = float(ours["got"]) if "got" in ours else None
     jshape = graph_shape(joern)
     oshape = graph_shape(ours)
-    if not jshape["captured"] or not oshape["captured"]:
+    if joern_status == "uncovered" and ours_status in {"exact", "mismatched"}:
+        category = "joern_uncovered_glaurung_reported"
+    elif ours_status == "uncovered" and joern_status in {"exact", "mismatched"}:
+        category = "glaurung_uncovered_joern_reported"
+    elif joern_status == "no_source_cfg" or ours_status == "no_source_cfg":
+        category = "source_cfg_missing"
+    elif not jshape["captured"] or not oshape["captured"]:
         category = "missing_graph_evidence"
     elif got == 0.0 and expected != 0.0:
         category = "glaurung_matches_source_isomorphically"
@@ -208,9 +216,13 @@ def classify_difference(joern: dict[str, Any], ours: dict[str, Any]) -> dict[str
         "binary": joern["binary"],
         "function": joern["function"],
         "category": category,
+        "joern_status": joern_status,
+        "glaurung_status": ours_status,
         "joern_ged": expected,
         "glaurung_ged": got,
-        "absolute_delta": abs(expected - got),
+        "absolute_delta": abs(expected - got)
+        if expected is not None and got is not None
+        else None,
         "joern_shape": {k: v for k, v in jshape.items() if k != "degree_roles"},
         "glaurung_shape": {k: v for k, v in oshape.items() if k != "degree_roles"},
     }
@@ -243,12 +255,16 @@ def main() -> int:
         if len(ours_expected) != int(glaurung_report["cells"]):
             raise ValueError("Glaurung report and ledger cell counts disagree")
 
-        differences = [
-            classify_difference(joern_expected[key], ours_expected[key])
-            for key in sorted(joern_expected)
-            if float(joern_expected[key].get("got", float("inf")))
-            != float(ours_expected[key].get("got", float("inf")))
-        ]
+        differences = []
+        for key in sorted(joern_expected):
+            java = joern_expected[key]
+            ours = ours_expected[key]
+            both_reported = java["status"] in {"exact", "mismatched"} and ours[
+                "status"
+            ] in {"exact", "mismatched"}
+            same_value = both_reported and float(java["got"]) == float(ours["got"])
+            if not same_value:
+                differences.append(classify_difference(java, ours))
         categories = Counter(row["category"] for row in differences)
 
         joern_gained = unique_rows(joern_rows, {"gained"}, "Joern gain")
@@ -257,7 +273,11 @@ def main() -> int:
         only_joern_gains = set(joern_gained) - set(ours_gained)
         only_ours_gains = set(ours_gained) - set(joern_gained)
 
-        delta_values = [row["absolute_delta"] for row in differences]
+        delta_values = [
+            row["absolute_delta"]
+            for row in differences
+            if row["absolute_delta"] is not None
+        ]
         result = {
             "joern": joern_summary,
             "glaurung": glaurung_report,
