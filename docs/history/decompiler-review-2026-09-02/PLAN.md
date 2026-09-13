@@ -2875,6 +2875,19 @@ provenance through lowering.
   contract, and the real wide-switch production handoff. No output movement is
   claimed because shipped tree selection and lowering are unchanged. See
   `results/wp3-structure-v2-diagnostics-test-only.md`.
+  Commit `a89a6e52` then removes the remaining identity-free preparation,
+  copy-propagation, and constant-folding entry points from the external Rust
+  library surface. Only identity-required preparation and fixpoint functions
+  remain exported in non-test builds; the spelling-based copy/fold functions
+  are crate-private pending removal of the shared internal `Option<identities>`
+  engine. The stale canary and prologue diagnostic examples no longer perform
+  semantic work after mutating role names, and the canary example now carries
+  value identities through numbering, lowering, folding, and its final render
+  projection. The non-test library, all examples, four focused fixpoint tests,
+  two exact legacy controls, the real canary example, and a fresh native build
+  pass. Continue by making the internal preparation engine require identities
+  and leaving any legacy inference strictly inside test helpers. See
+  `results/wp3-public-preparation-requires-identities.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
