@@ -48,3 +48,43 @@ The isolated committed-tree census records 5,184 declared Rust tests, 2,479 in
 IR, and zero outside every gate. This closes DWARF aggregate-field recovery's
 storage-name readers; it does not complete WP3's remaining wildcard audit,
 expression ownership, or universal identity lifecycle.
+
+## Internal authority closure
+
+Follow-on commit `8b9da483` removes the remaining optional-identity engine from
+DWARF aggregate-field recovery. Non-test builds can now construct only
+`DwarfFieldAuthority::Exact(&ValueIdentities)`; the identity-free adapter and
+its promoted-local spelling rule compile only for legacy unit tests. Pointer
+inference, definition compatibility, and final field annotation therefore
+cannot disagree by silently selecting a missing sidecar in shipped code.
+
+Focused evidence:
+
+```text
+cargo test --features python-ext ir::dwarf_fields::tests:: --lib -- --test-threads=1
+13 passed; 0 failed; 4833 filtered out
+
+cargo check --features python-ext
+exit 0; no new dwarf_fields warning
+
+uv run maturin develop
+exit 0
+
+uv run python tools/build_guard.py
+fresh
+```
+
+The required post-commit Python gate ran once with fail-fast. It passed the
+former ARM Thumb and hard-float blockers and stopped at the independently known
+committed-baseline disagreement at 17%:
+
+```text
+uv run pytest -q python/tests/ -x
+FAILED test_decompiler_arch_roundtrip.py::test_the_committed_baseline_is_valid_and_has_a_clean_control_lane
+```
+
+That disagreement is the already-recorded x86-64 control verdict mismatch for
+fixtures 157, 172, and 81. Neither baseline was regenerated from the shared
+dirty checkout. No fixture sweep, DecBench, Joern, output, corpus, or timing
+claim accompanies this authority-only follow-on. DWARF-field identity authority
+is now internally closed; wider WP3 invalidation and origin work remains.

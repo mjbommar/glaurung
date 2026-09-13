@@ -1862,6 +1862,17 @@ provenance through lowering.
   exact contracts, all 13 module tests, and the Clang-O0 linked-list compile
   and runtime round trip pass; see
   `results/wp3-dwarf-field-storage-identities.md`.
+  Follow-on commit `8b9da483` closes the remaining internal optional-identity
+  engine in this family. Every non-test recursive path now carries a closed
+  exact authority through pointer inference, definition compatibility, and
+  final field annotation; the promoted-local spelling authority and untyped
+  adapter are test-only. All 13 owning tests and the non-test library check
+  pass without a new module warning. A fresh native build passes its guard,
+  and the required whole-Python fail-fast gate again reaches the independent
+  committed-baseline disagreement at 17% with no earlier failure. This is an
+  authority/API closure, not a new output or timing claim. Continue the
+  residual semantic-reader audit before WP3 invalidation closure. See
+  `results/wp3-dwarf-field-storage-identities.md`.
   Commit `925bf81f` then carries the same identity authority into the
   prepared-AST memory-object model used by pointer high-variable refinement.
   Opaque promoted cursors retain object origin, stride, and access paths;
