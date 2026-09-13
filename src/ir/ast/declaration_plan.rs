@@ -505,7 +505,7 @@ fn is_identity_value(
     name: &str,
     identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> bool {
-    if is_high_variable(name) {
+    if identities.is_none() && is_high_variable(name) {
         return true;
     }
     identities.is_some_and(|identities| {
@@ -682,6 +682,13 @@ mod identity_tests {
         }
 
         assert!(!is_identity_value("opaque_value", Some(&identities)));
+    }
+
+    #[test]
+    fn generated_temporary_spelling_is_not_identity_when_sidecar_is_installed() {
+        let identities = crate::ir::value_number::ValueIdentities::default();
+
+        assert!(!is_identity_value("var99", Some(&identities)));
     }
 
     #[test]
