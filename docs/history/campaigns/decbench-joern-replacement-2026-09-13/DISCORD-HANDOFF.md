@@ -25,7 +25,10 @@ review found a broad parity-layer bug: parallel true/false edges around empty
 branches were deduplicated after, rather than before, Joern-compatible chain
 contraction. Fixing that general rule—not any fixture-specific case—and
 rerunning the whole corpus raised agreement to 81,274/85,645 (94.8964%), a net
-gain of 790 exact cells with no coverage regression.
+gain of 790 exact cells with no coverage regression. A second general fix
+removed infeasible false exits from provably constant-true loops while keeping
+their cycles and reachable `break`s. The next complete rerun reached
+81,501/85,645 (95.1614%), for a cumulative gain of 1,017 exact cells.
 
 The apparent coverage gain also needs qualification. Joern reports 76,312
 additional names that Glaurung does not, but every graph is one entry-and-exit
@@ -35,13 +38,15 @@ prototypes, not executable definitions. There are zero nontrivial Joern-only
 graphs. Glaurung reports 24 definition-marked one-node non-returning functions
 that Joern omits (`__idle_thread` once and `blocking_handler` 23 times).
 
-After the first correction, 4,371 GED differences remain: 2,783 graph-size
-differences, 1,456 entry/exit-role differences, 92 where Glaurung is
-source-isomorphic and Joern is not, and 40 where Joern is source-isomorphic and
-Glaurung is not. We are treating these as an investigation queue, not claiming
-that every difference is a Glaurung defect. In particular, many Joern
-multi-entry graphs mark internal nodes with predecessors as entries, which may
-be a Joern merge/order artifact rather than source CFG truth.
+After both corrections, 4,144 GED differences remain. The detailed review has
+classified all 40 apparent Java-source-isomorphic wins: 35 are Joern erasing
+`while (1)` cycles, three are merge-order entry flags, and two retain infeasible
+Java loop-exit edges. All 1,457 role-only differences have the same unlabelled
+degree multiset; Java gives every one multiple entries and flags an internal
+positive-indegree node in 1,441. Glaurung now matches the published source graph
+isomorphically in 313 cases where Java does not. Of 2,334 graph-size
+differences, 2,289 are explained constant-loop edge-policy differences; 45
+unaffected cases remain the bounded root-cause queue.
 
 The complete commands, provenance, limitations, hashes, and follow-up are in
 the adjacent `README.md`. Lossless per-function graph ledgers and the

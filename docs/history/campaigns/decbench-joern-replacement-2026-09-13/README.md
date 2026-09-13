@@ -29,6 +29,7 @@ to review and share.
 | Differential runner | `f67ef4d853cc0ff4a891a4dd605ad44e71a70814` |
 | Baseline native extension SHA-256 | `12b095751310d866d4531e192df6e51699c39d73d7bf753fac76f48c0c666d28` |
 | Parallel-edge correction extension SHA-256 | `baef2831611af06d23490bbfd44c96138873fb96c507b4d1dd9012259e048b35` |
+| Constant-loop correction extension SHA-256 | `103b6f7522d67c985858ada6992b294eeeac7cf9554ed623f68dd4e118a6fe91` |
 | DecBench | `f76dae075d4d82004fb21132b3f15e43b680e179` |
 | DecBench dataset | `e5eb576d66ee36793b800a4dd45e291e0add4472` (`full`) |
 | Stored decompiler column | `glaurung-229fbb1-clean` |
@@ -177,6 +178,30 @@ The runner intentionally returned status 1 because 4,371 mismatches remain;
 that is the benchmark's fail-closed result, not a provider crash. The joined
 aggregate passed every completeness and identity check.
 
+### Second broad correction: constant-true loops
+
+The parity graph inherited S2's deliberately conservative false edge from
+every loop header, including `while (1)` and `for (;;)`. The correction proves
+only bare nonzero integer literals and missing `for` conditions, removes only
+their impossible false edge, and retains the loop node, back edge, and every
+reachable `break`. It therefore does not copy Joern's separate bug of reducing
+a truly infinite loop to the same one-node entry/exit graph as an empty
+function.
+
+Twenty-one focused node-rewrite tests passed. The complete corpus rerun took
+60.65 seconds at 335,800 KiB RSS:
+
+| Measure | After parallel-edge fix | After constant-loop fix | Change |
+|---|---:|---:|---:|
+| Exact agreement | 81,274 (94.8964%) | 81,501 (95.1614%) | **+227** |
+| Different GED | 4,371 | 4,144 | **-227** |
+| Uncovered | 0 | 0 | 0 |
+| Glaurung-source-isomorphic differences | 92 | 313 | **+221** |
+
+The detailed [difference review](DIFFERENCE-REVIEW.md) classifies all 40
+apparent Java-source-isomorphic wins, all 1,457 role-only differences, and
+reduces the unexplained graph-size queue to 45 unaffected cases.
+
 ## Artifact integrity
 
 The lossless artifacts are stored outside Git under
@@ -188,17 +213,18 @@ The lossless artifacts are stored outside Git under
 | `glaurung-dedup-details.jsonl` | `65d672598a5cff89b4a8f9ded8a1c04608bcdd265a8591370a82b7ae59cd6936` |
 | `aggregate-dedup.json` | `b96be68a2bccf019a63bddf3d7728aa8515fab681049663d21a609a68a5b1b39` |
 | `aggregate-dedup.md` | `2544a02c7de583206cc58dd1961a46e378d53a6a3dc76a57a5ab04d19216fbc0` |
+| `glaurung-constant-loop-report.json` | `630de103838f68ac75cb5029f6c58270ce13fa9c345156af801e578e315d7185` |
+| `glaurung-constant-loop-details.jsonl` | `65fa1f96dd56c85d9286fcbf25a1edd88297e8cb223ab987fa740a072f9b2e98` |
+| `aggregate-constant-loop.json` | `d15efc30e4eee44f1ebca97835be09b25a30b2cc849d6d363dc301087f71682e` |
+| `aggregate-constant-loop.md` | `e1e68e7e4174dc440e8e5a15f19cc9261d3619f0f92761df41f36f3f848daef2` |
 
 ## Required follow-up
 
-- Cluster the remaining 4,371 Glaurung differences by graph delta and source
-  construct.
+- Root-cause the 45 graph-size differences untouched by constant-loop
+  correction, deduplicating repeated functions across builds first.
 - Review all large deltas and a deterministic sample of small deltas against
   source text and graph invariants.
-- Explain or correct the 1,456 entry/exit-role differences; Joern often marks
-  internal nodes with predecessors as additional entries, so these must not be
-  copied into the general CFG without source-backed justification.
-- Investigate the remaining 40 cases where Joern, but not Glaurung, is
-  source-isomorphic before optimizing lower-confidence graph-size clusters.
+- Decide whether an explicitly compatibility-only entry-flag emulator is worth
+  implementing; do not feed Joern's merge-order artefacts into the general CFG.
 - Prepare a concise Discord handoff for human review. Do not post it
   autonomously.
