@@ -216,6 +216,7 @@ impl DecompileResult {
         pseudocode: String,
         function: &crate::ir::ast::Function,
         cfg_health: crate::ir::health::CfgHealth,
+        value_identities: &crate::ir::value_number::ValueIdentities,
         discovered: &crate::core::function::Function,
         provenance: Vec<&'static str>,
         line_mappings: Vec<(usize, crate::ir::ast::OriginSet)>,
@@ -224,7 +225,11 @@ impl DecompileResult {
         Self {
             pseudocode,
             line_mappings,
-            health: crate::ir::health::measure_with_cfg(function, cfg_health),
+            health: crate::ir::health::measure_with_cfg_and_identities(
+                function,
+                cfg_health,
+                value_identities,
+            ),
             completeness: DecompileCompleteness::from_function(discovered),
             provenance,
             pipeline_fingerprint,
@@ -556,14 +561,19 @@ pub(super) fn run_ast_passes(
         ($n:expr, $operation:expr) => {{
             pass_order.check($n)?;
             let result = profiler.measure($n, || $operation);
-            crate::ir::health::trace_pass($n, f, cfg_health);
+            crate::ir::health::trace_pass_with_identities($n, f, cfg_health, value_identities);
             if dump {
                 eprintln!("\n===== after {} =====\n{}", $n, crate::ir::ast::render(f));
             }
             result
         }};
     }
-    crate::ir::health::trace_pass("ast_pipeline_entry", f, cfg_health);
+    crate::ir::health::trace_pass_with_identities(
+        "ast_pipeline_entry",
+        f,
+        cfg_health,
+        value_identities,
+    );
     // Packed XMM moves use four scalar lane operations so arithmetic remains
     // analyzable.  Rejoin an untouched four-lane load/store pair before copy
     // propagation erases the common 16-byte transport identity.
@@ -1659,7 +1669,12 @@ pub(super) fn lower_and_run_ast_passes(
         cc,
         &value_identities,
     );
-    crate::ir::health::trace_pass("lower", &function, cfg_health);
+    crate::ir::health::trace_pass_with_identities(
+        "lower",
+        &function,
+        cfg_health,
+        &value_identities,
+    );
     if std::env::var("GLAURUNG_DUMP_PASSES").is_ok() {
         eprintln!(
             "\n===== after lower =====\n{}",

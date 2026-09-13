@@ -359,13 +359,28 @@ fn violation_of(violation: &crate::ir::verify_defs::Violation) -> HealthViolatio
 }
 
 /// Measure one function without changing it.
+#[cfg(test)]
 pub fn measure(function: &Function) -> AstHealth {
     measure_with_cfg(function, CfgHealth::default())
 }
 
 /// Measure one function and attach immutable CFG fidelity from region recovery.
+#[cfg(test)]
 pub fn measure_with_cfg(function: &Function, cfg: CfgHealth) -> AstHealth {
     measure_with_undefined_count(function, crate::ir::verify_defs::check(function).len(), cfg)
+}
+
+/// Measure one function using pipeline-owned value identity.
+pub fn measure_with_cfg_and_identities(
+    function: &Function,
+    cfg: CfgHealth,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> AstHealth {
+    measure_with_undefined_count(
+        function,
+        crate::ir::verify_defs::check_with_identities(function, identities).len(),
+        cfg,
+    )
 }
 
 fn measure_with_undefined_count(
@@ -396,13 +411,33 @@ fn measure_with_undefined_count(
 }
 
 /// Construct a pass-health event without emitting it.
+#[cfg(test)]
 pub fn snapshot(pass: &str, function: &Function) -> PassHealthEvent {
     snapshot_with_cfg(pass, function, CfgHealth::default())
 }
 
 /// Construct a pass-health event with structure fidelity from verified recovery.
+#[cfg(test)]
 pub fn snapshot_with_cfg(pass: &str, function: &Function, cfg: CfgHealth) -> PassHealthEvent {
     let violations = crate::ir::verify_defs::check(function);
+    PassHealthEvent {
+        schema: "glaurung-pass-health-v1",
+        pass: pass.to_string(),
+        function: function.name.clone(),
+        entry_va: format!("{:#x}", function.entry_va),
+        health: measure_with_undefined_count(function, violations.len(), cfg),
+        violations: violations.iter().map(violation_of).collect(),
+    }
+}
+
+/// Construct a pass-health event using pipeline-owned value identity.
+pub fn snapshot_with_cfg_and_identities(
+    pass: &str,
+    function: &Function,
+    cfg: CfgHealth,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> PassHealthEvent {
+    let violations = crate::ir::verify_defs::check_with_identities(function, identities);
     PassHealthEvent {
         schema: "glaurung-pass-health-v1",
         pass: pass.to_string(),
@@ -417,11 +452,33 @@ pub fn snapshot_with_cfg(pass: &str, function: &Function, cfg: CfgHealth) -> Pas
 ///
 /// Serialization failure is reported as an explicit diagnostic rather than
 /// panicking in the analyst's decompilation path.
+#[cfg(test)]
 pub fn trace_pass(pass: &str, function: &Function, cfg: CfgHealth) {
     if std::env::var_os("GLAURUNG_PASS_HEALTH").is_none() {
         return;
     }
     match serde_json::to_string(&snapshot_with_cfg(pass, function, cfg)) {
+        Ok(event) => eprintln!("[glaurung-pass-health] {event}"),
+        Err(error) => eprintln!(
+            "[glaurung-pass-health-error] pass={pass} function={} error={error}",
+            function.name
+        ),
+    }
+}
+
+/// Emit one identity-authoritative JSON-line health event when enabled.
+pub fn trace_pass_with_identities(
+    pass: &str,
+    function: &Function,
+    cfg: CfgHealth,
+    identities: &crate::ir::value_number::ValueIdentities,
+) {
+    if std::env::var_os("GLAURUNG_PASS_HEALTH").is_none() {
+        return;
+    }
+    match serde_json::to_string(&snapshot_with_cfg_and_identities(
+        pass, function, cfg, identities,
+    )) {
         Ok(event) => eprintln!("[glaurung-pass-health] {event}"),
         Err(error) => eprintln!(
             "[glaurung-pass-health-error] pass={pass} function={} error={error}",

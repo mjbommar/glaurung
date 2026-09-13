@@ -264,7 +264,12 @@ fn decbench_text_with_installed_environment(
                     crate::ir::ast::render(&prepared)
                 );
             }
-            crate::ir::health::trace_pass($name, &prepared, cfg_health);
+            crate::ir::health::trace_pass_with_identities(
+                $name,
+                &prepared,
+                cfg_health,
+                &value_identities,
+            );
             result
         }};
     }
@@ -280,7 +285,12 @@ fn decbench_text_with_installed_environment(
             crate::ir::ast::render(&prepared)
         );
     }
-    crate::ir::health::trace_pass("prepare_for_decbench", &prepared, cfg_health);
+    crate::ir::health::trace_pass_with_identities(
+        "prepare_for_decbench",
+        &prepared,
+        cfg_health,
+        &value_identities,
+    );
     // Preparation exposes the actual expression dataflow (notably parameter
     // spill coalescing and folded returns), so only now can high-half uses and
     // wide return definitions safely override a misleading narrow sub-register
@@ -641,7 +651,12 @@ fn decbench_text_with_installed_environment(
         "recover_existing_switch_join_breaks",
         crate::ir::switch_ladder::recover_existing_switch_join_breaks(&mut prepared)
     );
-    crate::ir::health::trace_pass("ready_to_render", &prepared, cfg_health);
+    crate::ir::health::trace_pass_with_identities(
+        "ready_to_render",
+        &prepared,
+        cfg_health,
+        &value_identities,
+    );
     // THE pre-render verification boundary. Every semantic transform is behind us
     // and the renderer below is formatting-only, so this AST is exactly what is
     // printed. The verdict is RECORDED, not merely computed: an undefined read

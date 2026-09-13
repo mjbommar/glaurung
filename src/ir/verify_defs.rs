@@ -144,7 +144,7 @@ fn declared_machine_register(v: &VReg) -> Option<String> {
 /// defining, or `None` for parameters, machine registers, and unversioned
 /// architectural flag names (which exist only before SSA value numbering).
 fn checked_name(v: &VReg, authority: VerificationAuthority<'_>) -> Option<String> {
-    if let Some(names) = authority.checked_names {
+    if let Some(names) = authority.checked_names() {
         let name = match v {
             VReg::Phys(name) => crate::ir::ast::sanitize_c_ident(name),
             VReg::Temp(index) => format!("t{index}"),
@@ -176,10 +176,44 @@ fn checked_name(v: &VReg, authority: VerificationAuthority<'_>) -> Option<String
 const RETURN_ROLE: &str = "ret";
 
 #[derive(Clone, Copy)]
-struct VerificationAuthority<'a> {
-    call_defines_return_role: bool,
-    identities: Option<&'a crate::ir::value_number::ValueIdentities>,
-    checked_names: Option<&'a BTreeSet<String>>,
+enum VerificationAuthority<'a> {
+    Exact {
+        call_defines_return_role: bool,
+        identities: &'a crate::ir::value_number::ValueIdentities,
+        checked_names: &'a BTreeSet<String>,
+    },
+    #[cfg(test)]
+    LegacySpelling,
+}
+
+impl<'a> VerificationAuthority<'a> {
+    fn checked_names(self) -> Option<&'a BTreeSet<String>> {
+        match self {
+            Self::Exact { checked_names, .. } => Some(checked_names),
+            #[cfg(test)]
+            Self::LegacySpelling => None,
+        }
+    }
+
+    fn call_defines_return_role(self) -> bool {
+        match self {
+            Self::Exact {
+                call_defines_return_role,
+                ..
+            } => call_defines_return_role,
+            #[cfg(test)]
+            Self::LegacySpelling => true,
+        }
+    }
+
+    fn is_promoted_stack_object(self, value: &VReg) -> bool {
+        match self {
+            Self::Exact { identities, .. } => identities.is_promoted_stack_object(value),
+            #[cfg(test)]
+            Self::LegacySpelling => matches!(value, VReg::Phys(name)
+                if name.starts_with("local_") || name.starts_with("stack_")),
+        }
+    }
 }
 
 /// A store whose address is a bare promoted stack slot (`local_4`, `stack_0`) is a
@@ -191,12 +225,7 @@ struct VerificationAuthority<'a> {
 /// address can be an `argN`, and `*arg0 = x` really is a store through a pointer.
 fn stored_slot(addr: &Expr, authority: VerificationAuthority<'_>) -> Option<String> {
     match addr {
-        Expr::Reg(value @ VReg::Phys(n))
-            if authority.identities.map_or_else(
-                || n.starts_with("local_") || n.starts_with("stack_"),
-                |identities| identities.is_promoted_stack_object(value),
-            ) =>
-        {
+        Expr::Reg(value @ VReg::Phys(n)) if authority.is_promoted_stack_object(value) => {
             Some(n.clone())
         }
         _ => None,
@@ -276,7 +305,7 @@ fn defs_in(body: &[Stmt], out: &mut BTreeSet<String>, authority: VerificationAut
                     dst.as_ref()
                         .and_then(|value| checked_name(value, authority)),
                 );
-                if authority.call_defines_return_role {
+                if authority.call_defines_return_role() {
                     out.insert(RETURN_ROLE.to_string());
                 }
             }
@@ -651,7 +680,7 @@ fn walk(
                     dst.as_ref()
                         .and_then(|value| checked_name(value, authority)),
                 );
-                if authority.call_defines_return_role {
+                if authority.call_defines_return_role() {
                     defined.insert(RETURN_ROLE.to_string());
                 }
             }
@@ -1166,15 +1195,9 @@ impl RenderVerification {
 /// or both — which is why the result is `#[must_use]`.
 #[must_use = "a definition-before-use verdict that is dropped is a failed proof \
               nobody hears about; record it via ir::health::record_render_verification"]
+#[cfg(test)]
 pub fn verify_before_render(f: &Function) -> RenderVerification {
-    verify_before_render_where(
-        f,
-        VerificationAuthority {
-            call_defines_return_role: true,
-            identities: None,
-            checked_names: None,
-        },
-    )
+    verify_before_render_where(f, VerificationAuthority::LegacySpelling)
 }
 
 /// Verify production output using pipeline-owned result-role authority.
@@ -1185,10 +1208,26 @@ pub fn verify_before_render_with_identities(
     let checked_names = crate::ir::ast::verification_local_names(f, identities);
     verify_before_render_where(
         f,
-        VerificationAuthority {
+        VerificationAuthority::Exact {
             call_defines_return_role: identities.is_result_role(&VReg::phys(RETURN_ROLE)),
-            identities: Some(identities),
-            checked_names: Some(&checked_names),
+            identities,
+            checked_names: &checked_names,
+        },
+    )
+}
+
+/// Verify `f` using the pipeline-owned identity and rendered-name authority.
+pub fn check_with_identities(
+    f: &Function,
+    identities: &crate::ir::value_number::ValueIdentities,
+) -> Vec<Violation> {
+    let checked_names = crate::ir::ast::verification_local_names(f, identities);
+    check_where(
+        f,
+        VerificationAuthority::Exact {
+            call_defines_return_role: identities.is_result_role(&VReg::phys(RETURN_ROLE)),
+            identities,
+            checked_names: &checked_names,
         },
     )
 }
@@ -1207,15 +1246,9 @@ fn verify_before_render_where(
 /// Verify `f`, returning every violation found (sorted, deduplicated by name and
 /// kind). An empty result means every invented value the function reads has a
 /// definition that reaches it.
+#[cfg(test)]
 pub fn check(f: &Function) -> Vec<Violation> {
-    check_where(
-        f,
-        VerificationAuthority {
-            call_defines_return_role: true,
-            identities: None,
-            checked_names: None,
-        },
-    )
+    check_where(f, VerificationAuthority::LegacySpelling)
 }
 
 fn check_where(f: &Function, authority: VerificationAuthority<'_>) -> Vec<Violation> {
@@ -1315,11 +1348,7 @@ mod tests {
     }
 
     fn legacy_authority() -> VerificationAuthority<'static> {
-        VerificationAuthority {
-            call_defines_return_role: true,
-            identities: None,
-            checked_names: None,
-        }
+        VerificationAuthority::LegacySpelling
     }
 
     #[test]
