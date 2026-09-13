@@ -3209,6 +3209,19 @@ provenance through lowering.
   the same independent committed-baseline inconsistency at 17% with no earlier
   failure. Continue by closing the copy-propagation family's remaining optional
   internal authority paths. See `results/wp3-copy-prop-catch-identity.md`.
+  Commit `25055e14` completes that internal copy-propagation authority closure.
+  One closed authority now reaches the core walkers, read counting, scratch
+  classification, store-address substitution, dead-copy elimination, scratch
+  liveness, adjacent movers, and switch-entry propagation; spelling entry
+  points are test-only. AST preparation now uses exact ownership for its
+  untyped promoted-value mover, and late single-use call folding uses exact read
+  counting in both shipped render paths. All 83 copy-propagation and 19 lazy-
+  call tests plus the non-test library check pass; the copy-propagation family
+  has no remaining `Option<&ValueIdentities>` signature. A fresh native build
+  passes its guard, and the required whole-Python fail-fast gate again reaches
+  the same independent committed-baseline inconsistency at 17% with no earlier
+  failure. This closes this family, not WP3 as a whole. See
+  `results/wp3-copy-prop-internal-authority.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
