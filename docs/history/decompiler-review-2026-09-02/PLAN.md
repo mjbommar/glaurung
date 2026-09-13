@@ -3039,6 +3039,15 @@ provenance through lowering.
   the shared optional-identity test engines and continue the remaining
   production parser audit. See
   `results/wp3-raw-stack-promotion-test-only.md`.
+  Commit `5d77ddc9` closes the next composed-benchmark downgrade. Call-result
+  lifetime splitting now receives and mutates the benchmark's authoritative
+  identity snapshot exactly as production does, and the identity-free splitter
+  is test-only. Criterion iterations clone the AST and sidecar together. All
+  17 owning tests and the non-test library/benchmark check pass; the native
+  build is fresh, and the required fail-fast Python gate reaches the unchanged
+  ARM Thumb leaf-frame failure first at 11%. Next isolate the remaining
+  optional-identity test adapter and continue the production parser audit. See
+  `results/wp3-call-result-splitting-requires-identities.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
