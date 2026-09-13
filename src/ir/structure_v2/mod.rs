@@ -66,14 +66,49 @@ pub struct ShadowReport {
     pub refusal: Option<Refusal>,
 }
 
-/// Analyze one function beside v1 without influencing its selected region.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TextObservation {
+    Diagnostic,
+    None,
+}
+
+/// Analyze one function beside v1, including legacy diagnostic text.
+///
+/// The text is compatibility output for the shadow report. It is not suitable
+/// for production selection because this graph-only boundary has neither a
+/// calling convention nor pipeline-owned value identities.
 pub fn observe(lf: &LlirFunction, ssa: &SsaInfo) -> ShadowReport {
     let cfg = crate::ir::structure::Cfg::from(lf, ssa);
     observe_cfg(&cfg, lf)
 }
 
-/// Observe the exact typed graph already built for production v1.
+/// Recover only verified structure for a production pipeline consumer.
+///
+/// Production callers lower the selected region after value numbering, where
+/// the normal pipeline can supply the authoritative identity sidecar. Keeping
+/// rendering out of this operation prevents an identity-free preparation pass
+/// from running merely as a side effect of selecting a tree.
+pub(crate) fn observe_tree(lf: &LlirFunction, ssa: &SsaInfo) -> ShadowReport {
+    let cfg = crate::ir::structure::Cfg::from(lf, ssa);
+    observe_cfg_tree(&cfg, lf)
+}
+
+/// Observe the exact typed graph already built for production v1, including
+/// legacy diagnostic text.
 pub(crate) fn observe_cfg(cfg: &crate::ir::structure::Cfg, lf: &LlirFunction) -> ShadowReport {
+    observe_cfg_with_text(cfg, lf, TextObservation::Diagnostic)
+}
+
+/// Observe an existing production CFG without invoking diagnostic rendering.
+pub(crate) fn observe_cfg_tree(cfg: &crate::ir::structure::Cfg, lf: &LlirFunction) -> ShadowReport {
+    observe_cfg_with_text(cfg, lf, TextObservation::None)
+}
+
+fn observe_cfg_with_text(
+    cfg: &crate::ir::structure::Cfg,
+    lf: &LlirFunction,
+    text: TextObservation,
+) -> ShadowReport {
     let block_count = cfg.succs.len();
     let edge_count = cfg.edges.iter().map(Vec::len).sum();
     let loops = LoopForest::from_cfg(cfg);
@@ -112,9 +147,12 @@ pub(crate) fn observe_cfg(cfg: &crate::ir::structure::Cfg, lf: &LlirFunction) ->
                 } else {
                     None
                 };
-                let rendered = tree
-                    .as_ref()
-                    .and_then(|tree| render::render_pseudocode(lf, tree));
+                let rendered = (text == TextObservation::Diagnostic)
+                    .then(|| {
+                        tree.as_ref()
+                            .and_then(|tree| render::render_pseudocode(lf, tree))
+                    })
+                    .flatten();
                 let raw_pseudocode = rendered.as_ref().map(|rendered| rendered.raw.clone());
                 let prepared_pseudocode = rendered.map(|rendered| rendered.prepared);
                 ShadowReport {
@@ -613,6 +651,36 @@ mod tests {
         assert_eq!(report.raw_pseudocode, repeated.raw_pseudocode);
         assert_eq!(report.prepared_pseudocode, repeated.prepared_pseudocode);
         assert_prepared_c(&report);
+    }
+
+    #[test]
+    fn tree_only_observation_preserves_evidence_without_preparing_text() {
+        let function = mixed_short_circuit_cfg();
+        let ssa = compute_ssa(&function);
+        let diagnostic = observe(&function, &ssa);
+        let tree_only = observe_tree(&function, &ssa);
+
+        assert_eq!(tree_only.block_count, diagnostic.block_count);
+        assert_eq!(tree_only.edge_count, diagnostic.edge_count);
+        assert_eq!(tree_only.covered_blocks, diagnostic.covered_blocks);
+        assert_eq!(tree_only.represented_edges, diagnostic.represented_edges);
+        assert_eq!(tree_only.conditions, diagnostic.conditions);
+        assert_eq!(tree_only.loops, diagnostic.loops);
+        assert_eq!(tree_only.candidate, diagnostic.candidate);
+        assert_eq!(tree_only.tree, diagnostic.tree);
+        assert_eq!(tree_only.honest_gotos, diagnostic.honest_gotos);
+        assert_eq!(tree_only.duplicated_tails, diagnostic.duplicated_tails);
+        assert_eq!(
+            tree_only.verification_errors,
+            diagnostic.verification_errors
+        );
+        assert_eq!(
+            tree_only.tree_verification_errors,
+            diagnostic.tree_verification_errors
+        );
+        assert_eq!(tree_only.refusal, diagnostic.refusal);
+        assert!(tree_only.raw_pseudocode.is_none());
+        assert!(tree_only.prepared_pseudocode.is_none());
     }
 
     #[test]

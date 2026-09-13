@@ -1878,7 +1878,7 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
     );
     let shadow_v2_region = prepare_shadow_v2
         .then(|| {
-            let report = crate::ir::structure_v2::observe(tracked.function(), &ssa);
+            let report = crate::ir::structure_v2::observe_tree(tracked.function(), &ssa);
             crate::ir::structure_v2::render::adapt_tree(tracked.function(), report.tree.as_ref()?)
         })
         .flatten();

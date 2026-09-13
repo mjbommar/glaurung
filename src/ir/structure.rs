@@ -149,7 +149,7 @@ pub fn recover_verified_with_health_and_destinations(
     let cfg = Cfg::from(lf, ssa);
     #[cfg(feature = "structure-v2-shadow")]
     {
-        let shadow = crate::ir::structure_v2::observe_cfg(&cfg, lf);
+        let shadow = crate::ir::structure_v2::observe_cfg_tree(&cfg, lf);
         tracing::debug!(
             entry_va = format_args!("{:#x}", lf.entry_va),
             blocks = shadow.block_count,
