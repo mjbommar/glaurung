@@ -2986,6 +2986,18 @@ provenance through lowering.
   delete the internal no-sidecar adapters and continue the production parser
   audit before treating WP3 identity authority as complete. See
   `results/wp3-result-canary-apis-require-identities.md`.
+  Commit `df29aeed` applies the same strict contract to the complete aggregate-
+  return family. Integer pairs, promoted-object bank returns, INTEGER+SSE
+  returns, and SSE-pair returns now require `&ValueIdentities` in non-test
+  builds; their raw adapters are test-only. Both production preparation paths
+  pass their existing snapshots directly, so none of these ABI reconstructions
+  can silently fall back to register, promoted-object, or numbered display
+  names. All 10 pair-return tests, all 23 bank-return tests, and the non-test
+  library check pass; the native build is fresh, and the required fail-fast
+  Python gate reaches the unchanged ARM Thumb leaf-frame failure first at 11%.
+  Next continue the remaining optional-identity API audit, then isolate the
+  shared legacy internals before closing WP3 identity authority. See
+  `results/wp3-aggregate-return-apis-require-identities.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
