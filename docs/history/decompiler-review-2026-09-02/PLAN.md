@@ -3048,6 +3048,15 @@ provenance through lowering.
   ARM Thumb leaf-frame failure first at 11%. Next isolate the remaining
   optional-identity test adapter and continue the production parser audit. See
   `results/wp3-call-result-splitting-requires-identities.md`.
+  Follow-on commit `8b983ea2` completes that internal isolation for call-result
+  splitting. The shipped splitter now has only an exact-identity authority;
+  its legacy-spelling enum variant is compiled solely for tests, so missing
+  identities are unrepresentable in production. All 17 owning tests and the
+  non-test library check pass without a new warning; the native build is fresh,
+  and the required fail-fast Python gate reaches the unchanged ARM Thumb
+  leaf-frame failure first at 11%. Continue the equivalent adapter audit in
+  the remaining post-numbering consumers before starting WP3 invalidation
+  closure. See `results/wp3-call-result-splitting-requires-identities.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,

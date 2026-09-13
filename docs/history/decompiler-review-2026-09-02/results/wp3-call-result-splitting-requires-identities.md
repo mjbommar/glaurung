@@ -9,6 +9,12 @@ test-only. The composed decompile benchmark now uses the typed splitter and
 mutates the same `ValueIdentities` snapshot that follows the AST, matching the
 production pipeline's contract.
 
+Follow-on commit `8b983ea2` removes optional identity state from the shipped
+splitter itself. Its authority is now an explicit enum: non-test builds contain
+only the exact-identity variant, while the legacy-spelling variant exists only
+under `cfg(test)`. Missing identities are therefore unrepresentable inside the
+production engine, not merely hidden behind its API.
+
 Criterion iterations clone the AST and identity sidecar together before the
 measured pass sequence. This preserves isolation between iterations while
 allowing newly versioned ABI result registers to publish their exact physical
@@ -22,6 +28,9 @@ cargo test --features python-ext ir::call_result_split::tests:: --lib -q
 
 cargo check --features python-ext --lib --bench decompile_pipeline
 exit 0
+
+cargo check --features python-ext --lib  # after internal isolation
+exit 0, with no call-result or irrefutable-pattern warning
 
 uv run maturin develop
 exit 0
@@ -46,7 +55,6 @@ or performance claim.
 
 ## Remaining boundary
 
-The splitter retains an optional identity field internally only for legacy
-unit-test adapters. WP3 remains open pending isolation or deletion of that
-adapter, the remaining production parser audit, conservative invalidation, and
-universal origin preservation.
+The call-result splitter's compatibility authority is now isolated to test
+builds. WP3 remains open pending the remaining production parser/adapter audit,
+conservative invalidation, and universal origin preservation.
