@@ -25,8 +25,11 @@ to review and share.
 
 | Input | Revision or identity |
 |---|---|
-| Glaurung code under test | `0892552157be6bd9267007231419ff6606a2dd38` |
-| Differential runner | `f67ef4d853cc0ff4a891a4dd605ad44e71a70814` |
+| Baseline Glaurung code | `0892552157be6bd9267007231419ff6606a2dd38` |
+| Final Joern-compatibility code | `f9a5cbaa22022f4e2db9c775bc696b1c56deeaf8` |
+| Scored parity runner | `3fd97f4608114dd2d5a9f20d74960ab7520b7fe4` |
+| Aggregate runner | `828a41a98c8d45ea458ed589d45a12eda5d1269c` |
+| Full-denominator coverage runner | `a7a7bdcc5c7fc5baf6cc207b38e6c15f34625f11` |
 | Baseline native extension SHA-256 | `12b095751310d866d4531e192df6e51699c39d73d7bf753fac76f48c0c666d28` |
 | Parallel-edge correction extension SHA-256 | `baef2831611af06d23490bbfd44c96138873fb96c507b4d1dd9012259e048b35` |
 | Constant-loop correction extension SHA-256 | `103b6f7522d67c985858ada6992b294eeeac7cf9554ed623f68dd4e118a6fe91` |
@@ -341,7 +344,7 @@ The lossless artifacts are stored outside Git under
 | `unscored-joern-details.jsonl` | `46953b51a8bf396058dba6990c5f00178480ebec090820112e3ad26429bf357e` |
 | `full-corpus-coverage.json` | `81be937bced098dffa87a9ec84854f636c1a8393eaec5fa41ea8ba849f6171da` |
 
-## Required follow-up
+## Human handoff boundary
 
-- Prepare a concise Discord handoff for human review. Do not post it
-  autonomously.
+The concise [Discord handoff](DISCORD-HANDOFF.md) is prepared for a human to
+edit and share. An agent must not post it autonomously.
