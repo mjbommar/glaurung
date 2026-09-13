@@ -41,8 +41,20 @@ cargo test -q --features python-ext --lib ir::ast::prepare::fixpoint_tests::
 
 No fixture, DecBench, Joern, GED, or performance run was used because product
 behavior is intentionally unchanged. The required post-source-commit Python
-gate is recorded after it runs. The identity-free public `lower` compatibility
-entry point is a separate boundary: it still has example, integration-test,
-and internal diagnostic callers that must be migrated or deliberately retained
-before it can become test-only.
+gate ran in fail-fast mode and again reached 11% before its first ordinary
+failure:
 
+```text
+uv run pytest python/tests/ -q -x
+stopped at 11%: 1 failed
+```
+
+The failure is the established
+`test_real_thumb_leaf_frame_save_does_not_become_a_source_local` defect with
+the same `*(int *)((&local_18[0] + 20)) = var0;` output. It is not on a changed
+product path, but the whole gate remains red and incomplete.
+
+The identity-free public `lower` compatibility entry point is a separate
+boundary: it still has example, integration-test, and internal diagnostic
+callers that must be migrated or deliberately retained before it can become
+test-only.

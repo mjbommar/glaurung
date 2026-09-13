@@ -2916,9 +2916,11 @@ provenance through lowering.
   every shipped preparation branch already uses the corresponding
   `ValueIdentities` form. Their 42 direct unit contracts remain green, while a
   non-test library check no longer reports the four helpers as dead shipped
-  code. The identity-free public `lower` compatibility entry point remains a
-  separate audited boundary with example, integration-test, and diagnostic
-  callers. See `results/wp3-spelling-output-helpers-test-only.md`.
+  code. Its required fail-fast whole-Python gate reaches the same known ARM
+  Thumb frame-save failure first at 11%. The identity-free public `lower`
+  compatibility entry point remains a separate audited boundary with example,
+  integration-test, and diagnostic callers. See
+  `results/wp3-spelling-output-helpers-test-only.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
