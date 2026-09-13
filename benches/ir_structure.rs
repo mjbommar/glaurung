@@ -412,12 +412,12 @@ impl Stages {
 ///
 /// These are the only back-end passes that take `&mut Function`, which is why
 /// this stage is the one that needs a per-iteration clone.
-fn recover_loops(function: &mut AstFunction) {
+fn recover_loops(function: &mut AstFunction, identities: &value_number::ValueIdentities) {
     loop_form::recover_linear_latched_do_whiles(function);
     loop_form::recover_head_tested_whiles(function);
     loop_form::recover_guarded_do_whiles(function);
     loop_form::recover_sentinel_search_loops(function);
-    loop_form::promote_for_loops(function);
+    loop_form::promote_for_loops_with_identities(function, identities);
 }
 
 /// Build every lane's stages up front, sharing one loaded image per fixture
@@ -491,7 +491,7 @@ fn bench_micro(c: &mut Criterion) {
         b.iter_batched(
             || stages.ast.clone(),
             |mut function| {
-                recover_loops(&mut function);
+                recover_loops(&mut function, &stages.value_identities);
                 black_box(function)
             },
             BatchSize::SmallInput,
@@ -562,7 +562,7 @@ fn bench_shape_sweep(c: &mut Criterion) {
             b.iter_batched(
                 || stages.ast.clone(),
                 |mut function| {
-                    recover_loops(&mut function);
+                    recover_loops(&mut function, &stages.value_identities);
                     black_box(function)
                 },
                 BatchSize::SmallInput,
