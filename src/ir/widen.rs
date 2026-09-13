@@ -650,7 +650,12 @@ mod tests {
             src: signed_extension.clone(),
         }]);
 
-        crate::ir::const_fold::fold_typed_declared_views(&mut f, &tm);
+        let identities = crate::ir::value_number::ValueIdentities::default()
+            .with_role_aliases_and_parameter_slots(
+                &std::collections::HashMap::new(),
+                &std::collections::HashSet::from([0]),
+            );
+        crate::ir::const_fold::fold_typed_declared_views_with_identities(&mut f, &tm, &identities);
         insert_widening_casts(&mut f, &tm);
 
         let Stmt::Assign { src, .. } = &f.body[0] else {

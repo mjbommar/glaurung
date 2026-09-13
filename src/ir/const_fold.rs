@@ -103,22 +103,18 @@ fn fold_constants_with_parameter_authority(
 /// width and signedness. The untyped algebraic pass cannot make this decision:
 /// a zero-extended 32-bit load may live in a default-`long` scratch, and dropping
 /// its signed cast changes a negative machine value into a positive C value.
-pub fn fold_typed_comparison_extensions(f: &mut Function, tm: &TypeMap) {
-    fold_typed_comparison_extensions_with_identities(f, tm, None);
-}
-
 /// Remove matching comparison extensions using exact opaque SSA identities.
 pub fn fold_typed_comparison_extensions_with_identities(
     f: &mut Function,
     tm: &TypeMap,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) {
     fn declared_source_type(
         expr: &Expr,
         signed: bool,
         width: u8,
         tm: &TypeMap,
-        identities: Option<&crate::ir::value_number::ValueIdentities>,
+        identities: &crate::ir::value_number::ValueIdentities,
     ) -> bool {
         matches!(
             expr.semantic(),
@@ -126,7 +122,7 @@ pub fn fold_typed_comparison_extensions_with_identities(
                 if crate::ir::ast::declared_int_type_with_identities(
                     name,
                     Some(tm),
-                    identities,
+                    Some(identities),
                 ) == Some((signed, width))
         )
     }
@@ -134,7 +130,7 @@ pub fn fold_typed_comparison_extensions_with_identities(
     fn expression(
         expr: &mut Expr,
         tm: &TypeMap,
-        identities: Option<&crate::ir::value_number::ValueIdentities>,
+        identities: &crate::ir::value_number::ValueIdentities,
     ) {
         match expr {
             Expr::Origin { expr, .. } => expression(expr, tm, identities),
@@ -228,7 +224,7 @@ pub fn fold_typed_comparison_extensions_with_identities(
     fn body(
         statements: &mut [Stmt],
         tm: &TypeMap,
-        identities: Option<&crate::ir::value_number::ValueIdentities>,
+        identities: &crate::ir::value_number::ValueIdentities,
     ) {
         for statement in statements {
             match statement {
@@ -325,20 +321,16 @@ pub fn fold_typed_comparison_extensions_with_identities(
 /// erasing `movsxd` would make the widening pass reconstruct the bare signed
 /// declaration as a machine-register zero-extension. Mismatched signedness or
 /// width is left untouched as well.
-pub fn fold_typed_declared_views(f: &mut Function, tm: &TypeMap) {
-    fold_typed_declared_views_with_identities(f, tm, None);
-}
-
 /// Remove redundant declared views using exact opaque SSA identities.
 pub fn fold_typed_declared_views_with_identities(
     f: &mut Function,
     tm: &TypeMap,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) {
     fn expression(
         expr: &mut Expr,
         tm: &TypeMap,
-        identities: Option<&crate::ir::value_number::ValueIdentities>,
+        identities: &crate::ir::value_number::ValueIdentities,
     ) {
         if let Expr::Origin { origins, expr } = expr {
             expression(expr, tm, identities);
@@ -414,7 +406,7 @@ pub fn fold_typed_declared_views_with_identities(
                                 if crate::ir::ast::declared_int_type_with_identities(
                                     name,
                                     Some(tm),
-                                    identities,
+                                    Some(identities),
                                 ) == Some((*inner_signed, *inner_width)) =>
                             {
                                 let origins =
@@ -441,7 +433,7 @@ pub fn fold_typed_declared_views_with_identities(
     fn body(
         statements: &mut [Stmt],
         tm: &TypeMap,
-        identities: Option<&crate::ir::value_number::ValueIdentities>,
+        identities: &crate::ir::value_number::ValueIdentities,
     ) {
         for statement in statements {
             match statement {
@@ -2005,6 +1997,26 @@ mod tests {
         }
     }
 
+    fn typed_identities(
+        types: &crate::ir::types_recover::TypeMap,
+    ) -> crate::ir::value_number::ValueIdentities {
+        let mut slots = std::collections::HashSet::new();
+        let mut promoted = Vec::new();
+        for (value, _) in types.iter() {
+            let VReg::Phys(name) = value else { continue };
+            if let Some(slot) = crate::ir::ast::parse_arg_index(name) {
+                slots.insert(slot);
+            }
+            if name.starts_with("local_") || name.starts_with("stack_") {
+                promoted.push(name.clone());
+            }
+        }
+        let mut identities = crate::ir::value_number::ValueIdentities::default()
+            .with_role_aliases_and_parameter_slots(&std::collections::HashMap::new(), &slots);
+        identities.attach_promoted_stack_objects(&promoted);
+        identities
+    }
+
     #[test]
     fn exception_expressions_share_the_constant_fold_surface() {
         let reducible = || bin(BinOp::Add, Expr::Const(40), Expr::Const(2));
@@ -3464,7 +3476,8 @@ mod tests {
             },
         );
 
-        fold_typed_declared_views(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        fold_typed_declared_views_with_identities(&mut f, &tm, &identities);
 
         assert!(matches!(
             &f.body[0],
@@ -3506,7 +3519,7 @@ mod tests {
             },
         );
 
-        fold_typed_declared_views_with_identities(&mut function, &types, Some(&identities));
+        fold_typed_declared_views_with_identities(&mut function, &types, &identities);
 
         assert!(matches!(
             &function.body[0],
@@ -3548,7 +3561,7 @@ mod tests {
             );
         }
 
-        fold_typed_declared_views_with_identities(&mut function, &types, Some(&identities));
+        fold_typed_declared_views_with_identities(&mut function, &types, &identities);
 
         assert!(matches!(
             &function.body[0],
@@ -3587,7 +3600,8 @@ mod tests {
             },
         );
 
-        fold_typed_declared_views(&mut function, &types);
+        let identities = typed_identities(&types);
+        fold_typed_declared_views_with_identities(&mut function, &types, &identities);
 
         let Stmt::Assign { src, .. } = &function.body[0] else {
             panic!("expected assignment")
@@ -3631,7 +3645,8 @@ mod tests {
             },
         );
 
-        fold_typed_declared_views(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        fold_typed_declared_views_with_identities(&mut f, &tm, &identities);
 
         assert!(
             matches!(
@@ -3668,7 +3683,8 @@ mod tests {
             },
         );
 
-        fold_typed_declared_views(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        fold_typed_declared_views_with_identities(&mut f, &tm, &identities);
 
         assert!(matches!(
             &f.body[0],
@@ -3705,7 +3721,8 @@ mod tests {
             },
         );
 
-        fold_typed_declared_views(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        fold_typed_declared_views_with_identities(&mut f, &tm, &identities);
 
         assert!(matches!(
             &f.body[0],
@@ -3756,7 +3773,8 @@ mod tests {
                 },
             );
         }
-        fold_typed_comparison_extensions(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        fold_typed_comparison_extensions_with_identities(&mut f, &tm, &identities);
 
         assert!(matches!(
             &f.body[0],
@@ -3809,7 +3827,7 @@ mod tests {
             );
         }
 
-        fold_typed_comparison_extensions_with_identities(&mut function, &types, Some(&identities));
+        fold_typed_comparison_extensions_with_identities(&mut function, &types, &identities);
 
         assert!(matches!(
             &function.body[0],
@@ -3867,7 +3885,7 @@ mod tests {
             );
         }
 
-        fold_typed_comparison_extensions_with_identities(&mut function, &types, Some(&identities));
+        fold_typed_comparison_extensions_with_identities(&mut function, &types, &identities);
 
         assert!(matches!(
             &function.body[0],
@@ -3917,7 +3935,8 @@ mod tests {
             );
         }
 
-        fold_typed_comparison_extensions(&mut function, &types);
+        let identities = typed_identities(&types);
+        fold_typed_comparison_extensions_with_identities(&mut function, &types, &identities);
 
         assert!(matches!(
             &function.body[0],
@@ -3965,7 +3984,8 @@ mod tests {
             },
         );
 
-        fold_typed_comparison_extensions(&mut f, &tm);
+        let identities = typed_identities(&tm);
+        fold_typed_comparison_extensions_with_identities(&mut f, &tm, &identities);
 
         assert!(
             matches!(

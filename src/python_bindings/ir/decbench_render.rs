@@ -348,7 +348,7 @@ fn decbench_text_with_installed_environment(
             crate::ir::const_fold::fold_typed_declared_views_with_identities(
                 &mut prepared,
                 tm,
-                Some(&value_identities),
+                &value_identities,
             )
         );
         pass!(
@@ -364,7 +364,7 @@ fn decbench_text_with_installed_environment(
             crate::ir::const_fold::fold_typed_comparison_extensions_with_identities(
                 &mut prepared,
                 tm,
-                Some(&value_identities),
+                &value_identities,
             )
         );
         // After the typed comparison folds, so both halves of a two-comparison
