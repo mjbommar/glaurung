@@ -2773,7 +2773,12 @@ provenance through lowering.
   than `argN`, `varN`, or `local_N` spelling. Five identity contracts, the fast
   66-test `decbench_` AST-render group, four exact adjacent controls, a library
   check, and four directly relevant release-built Python round trips pass. See
-  `results/wp3-abi-refinement-required-identities.md`. Commit `3e302824`
+  `results/wp3-abi-refinement-required-identities.md`. Commit `ccd4b5db` then
+  removes the optional sidecar and final `argN` parser from source-loop update
+  coalescing. The pass now refuses an owned parameter scratch through its typed
+  slot and fails closed on missing identity evidence. All 17 owning tests and
+  the 12-lane release-built `@loops` fixture set pass with no scoped
+  regressions. See `results/wp3-loop-update-required-identities.md`. Commit `3e302824`
   removes an `argN` spelling decision from
   DWARF aggregate-field recovery: only roles seeded from the authoritative
   prototype are exempt from definition validation, so stale or fabricated
