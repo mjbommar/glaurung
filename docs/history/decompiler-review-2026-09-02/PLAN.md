@@ -3064,6 +3064,19 @@ provenance through lowering.
   broad-suite claim is made, and no post-source Python gate applied. Continue
   classifying shipped raw consumers before WP3 invalidation closure. See
   `results/wp3-loop-benchmark-retains-identities.md`.
+  Commit `f1bc085d` closes the ARM Thumb leaf-frame regression that had stopped
+  every required fail-fast Python gate at 11%. ARM32 recovery now accepts a
+  balanced leaf frame that saves only `r7`, follows only exact and strictly
+  backward SSA definitions through GCC's expanded frame-address teardown, and
+  accepts the `stack_top` restore alias only for the proven first saved slot.
+  The real compiled fixture changes from an undefined `var0` store into a clean
+  `int thumb_leaf_frame(int wait)` with no fake frame array or machine save. All
+  14 ARM32 frame tests, six ARM32 stack-local controls, and the real regression
+  pass with a fresh native build. The required fail-fast Python gate now passes
+  that former blocker and reaches the next independent ARM hard-float argument
+  failure at 11%, whose output contains an undefined `var5`. Diagnose that
+  newly exposed WP3/WP9 identity loss next. See
+  `results/wp3-thumb-leaf-frame-recovery.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
