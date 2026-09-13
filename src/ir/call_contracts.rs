@@ -471,26 +471,12 @@ fn fixed_scalar_argument_registers(contract: &CallContract, cc: CallConv) -> Opt
 /// exact parameter value agrees on one type, and only when that type is an
 /// opaque pointer typedef whose representation had otherwise collapsed to
 /// `void *`. A conflicting use retains the recovered machine-level declaration.
-pub fn refine_opaque_parameter_types_from_calls(
-    function: &Function,
-    recovered: &CallPrototype,
-) -> CallPrototype {
-    refine_opaque_parameter_types_from_calls_impl(function, recovered, None)
-}
-
-/// Refine nominal pointer spellings using authoritative AST parameter roles.
+/// Parameter ownership comes exclusively from authoritative AST identities;
+/// rendered names such as `arg0` are not semantic evidence.
 pub(crate) fn refine_opaque_parameter_types_from_calls_with_identities(
     function: &Function,
     recovered: &CallPrototype,
     identities: &crate::ir::value_number::ValueIdentities,
-) -> CallPrototype {
-    refine_opaque_parameter_types_from_calls_impl(function, recovered, Some(identities))
-}
-
-fn refine_opaque_parameter_types_from_calls_impl(
-    function: &Function,
-    recovered: &CallPrototype,
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
 ) -> CallPrototype {
     let mut observations =
         vec![std::collections::BTreeSet::<String>::new(); recovered.parameter_types.len()];
@@ -512,7 +498,7 @@ fn refine_opaque_parameter_types_from_calls_impl(
 fn collect_parameter_contract_observations(
     body: &[Stmt],
     observations: &mut [std::collections::BTreeSet<String>],
-    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    identities: &crate::ir::value_number::ValueIdentities,
 ) {
     for statement in body {
         match statement.semantic() {
@@ -531,10 +517,7 @@ fn collect_parameter_contract_observations(
                         continue;
                     };
                     let value = crate::ir::VReg::phys(name);
-                    let slot = match identities {
-                        Some(identities) => identities.parameter_slot(&value),
-                        None => crate::ir::ast::parse_arg_index(name),
-                    };
+                    let slot = identities.parameter_slot(&value);
                     let Some(slot) = slot else {
                         continue;
                     };
@@ -1140,7 +1123,6 @@ mod tests {
     use super::{
         apply_known_call_contracts, apply_known_llir_call_contracts, call_return_hint,
         libc_prototypes, lookup, opaque_pointer_typedef, recover_call_site_spec,
-        refine_opaque_parameter_types_from_calls,
         refine_opaque_parameter_types_from_calls_with_identities, standalone_c_type, CallPrototype,
         CallPrototypeAuthority,
     };
@@ -1839,7 +1821,16 @@ mod tests {
             authority: CallPrototypeAuthority::Recovered,
         };
 
-        let refined = refine_opaque_parameter_types_from_calls(&function, &recovered);
+        let identities = crate::ir::value_number::ValueIdentities::default()
+            .with_role_aliases_and_parameter_slots(
+                &std::collections::HashMap::new(),
+                &std::collections::HashSet::from([0]),
+            );
+        let refined = refine_opaque_parameter_types_from_calls_with_identities(
+            &function,
+            &recovered,
+            &identities,
+        );
 
         assert_eq!(refined.parameter_types, ["FILE *", "int"]);
         assert_eq!(refined.authority, CallPrototypeAuthority::Recovered);
@@ -1909,7 +1900,16 @@ mod tests {
             authority: CallPrototypeAuthority::Recovered,
         };
 
-        let refined = refine_opaque_parameter_types_from_calls(&function, &recovered);
+        let identities = crate::ir::value_number::ValueIdentities::default()
+            .with_role_aliases_and_parameter_slots(
+                &std::collections::HashMap::new(),
+                &std::collections::HashSet::from([0]),
+            );
+        let refined = refine_opaque_parameter_types_from_calls_with_identities(
+            &function,
+            &recovered,
+            &identities,
+        );
 
         assert_eq!(refined, recovered);
     }
