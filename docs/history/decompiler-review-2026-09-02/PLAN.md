@@ -3122,6 +3122,17 @@ provenance through lowering.
   the independent committed-baseline inconsistency at 17% with no earlier
   failure. This is an authority/API closure supporting WP5, not a new output
   claim. See `results/wp3-guarded-switch-identity-authority.md`.
+  Commit `58e45ccd` closes the packed-vector copy recovery's internal optional
+  identity engine. Every helper in a non-test build now carries the exact
+  `ValueIdentities` authority through lane recognition, scalar-view bridge
+  classification, nested read accounting, exclusivity proof, and wide-copy
+  synthesis; the spelling compatibility authority is test-only. All 11 owning
+  tests and the non-test library check pass. A fresh native build passes its
+  guard, and the required whole-Python fail-fast gate again reaches the same
+  independent committed-baseline inconsistency at 17% with no earlier
+  failure. This is an authority/API closure, not an output or timing claim.
+  Continue the residual semantic-reader audit before WP3 invalidation closure.
+  See `results/wp3-vector-copy-internal-authority.md`.
   Commit `29380a5b` removes the identity-free wide-vector-copy API from
   non-test builds and migrates the composed decompile benchmark to retain the
   authoritative sidecar returned by value numbering. Cold, warm, whole-binary,
