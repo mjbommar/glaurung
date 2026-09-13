@@ -180,12 +180,12 @@ fn parse_prologue(
         cursor = group_cursor;
     }
 
-    if save_groups.is_empty()
-        || !save_groups
-            .iter()
-            .flat_map(|group| group.registers.iter())
-            .any(|register| register.name == "lr")
-    {
+    // Leaf Thumb functions return through the still-live link register and
+    // commonly save only r7 before establishing it as the frame pointer. The
+    // transaction below already proves that every saved register and stack
+    // adjustment is restored on every lexical return path, so requiring an LR
+    // save here rejects a valid balanced leaf frame without adding safety.
+    if save_groups.is_empty() {
         return None;
     }
 
@@ -332,15 +332,35 @@ fn match_epilogue(
     // adding the allocation width, so a numeric-width sum is not sufficient.
     let mut start = return_index;
     while start > 0 {
-        match &body[start - 1] {
-            statement if sp_adjust(statement, BinOp::Add, identities).is_some() => start -= 1,
-            statement if restored_register(statement, identities).is_some() => start -= 1,
-            statement if frame_deallocation_piece(statement, frame, identities) => start -= 1,
-            _ => break,
+        let index = start - 1;
+        let statement = &body[index];
+        if sp_adjust(statement, BinOp::Add, identities).is_some()
+            || restored_register(statement, identities).is_some()
+            || frame_deallocation_piece(statement, frame, identities)
+            || (frame.local_width > 0
+                && match_frame_deallocation(body, index, frame, identities) == Some(index + 1))
+        {
+            start -= 1;
+        } else {
+            break;
         }
     }
 
     let mut cursor = start;
+    let thumb_restores_sp_to_saved_r7 = body.get(cursor).is_some_and(|statement| {
+        matches!(
+            statement.semantic(),
+            Stmt::Assign { dst, src }
+                if is_sp(dst, identities)
+                    && stack_location_from_linear_definitions(
+                        body,
+                        cursor,
+                        src,
+                        identities,
+                        0,
+                    ).as_ref() == first_saved_slot(frame)
+        )
+    });
     let a32_restores_sp_from_fp = body.get(cursor).is_some_and(|statement| {
         matches!(
             statement.semantic(),
@@ -371,8 +391,8 @@ fn match_epilogue(
             let (name, slot) = body
                 .get(cursor)
                 .and_then(|statement| restored_register(statement, identities))?;
-            let promoted_stack_top_alias = a32_restores_sp_from_fp
-                && saved.name == "fp"
+            let promoted_stack_top_alias = (a32_restores_sp_from_fp && saved.name == "fp"
+                || thumb_restores_sp_to_saved_r7 && saved.name == "r7")
                 && first_saved_slot(frame) == Some(&saved.slot)
                 && slot.offset == 0
                 && matches!(&slot.object, VReg::Phys(name) if name == "stack_top");
@@ -431,6 +451,25 @@ fn match_frame_deallocation(
         return Some(cursor + 1);
     }
 
+    // GCC Thumb may leave the frame-address addition expanded through SSA
+    // temporaries because the same add also feeds flag calculations. Follow
+    // only exact, straight-line definitions back to the first saved slot; this
+    // is the semantic equivalent of `mov sp, r7` after stack promotion.
+    if matches!(
+        body.get(cursor).map(Stmt::semantic),
+        Some(Stmt::Assign { dst, src })
+            if is_sp(dst, identities)
+                && stack_location_from_linear_definitions(
+                    body,
+                    cursor,
+                    src,
+                    identities,
+                    0,
+                ).as_ref() == first_saved_slot(frame)
+    ) {
+        return Some(cursor + 1);
+    }
+
     // Clang A32 commonly establishes `fp = sp` after the save and tears local
     // storage down with the exact inverse `sp = fp`.
     if matches!(
@@ -479,6 +518,92 @@ fn match_frame_deallocation(
     }
 
     None
+}
+
+fn stack_location_from_linear_definitions(
+    body: &[Stmt],
+    before: usize,
+    expression: &Expr,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    depth: usize,
+) -> Option<StackLocation> {
+    if depth > 16 {
+        return None;
+    }
+    if let Some(location) = stack_location(expression, identities) {
+        return Some(location);
+    }
+    match expression.semantic() {
+        Expr::Reg(register) => {
+            let identities = identities?;
+            identities.exact(register)?;
+            for (index, statement) in body[..before].iter().enumerate().rev() {
+                match statement.semantic() {
+                    Stmt::Assign { dst, src } if dst == register => {
+                        return stack_location_from_linear_definitions(
+                            body,
+                            index,
+                            src,
+                            Some(identities),
+                            depth + 1,
+                        );
+                    }
+                    Stmt::Assign { .. } | Stmt::Nop | Stmt::Comment(_) | Stmt::Label(_) => {}
+                    _ => break,
+                }
+            }
+            None
+        }
+        Expr::Bin {
+            op: BinOp::Add,
+            lhs,
+            rhs,
+        } => {
+            let mut location =
+                stack_location_from_linear_definitions(body, before, lhs, identities, depth + 1)?;
+            let offset =
+                constant_from_linear_definitions(body, before, rhs, identities, depth + 1)?;
+            location.offset = location.offset.checked_add(offset)?;
+            Some(location)
+        }
+        _ => None,
+    }
+}
+
+fn constant_from_linear_definitions(
+    body: &[Stmt],
+    before: usize,
+    expression: &Expr,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+    depth: usize,
+) -> Option<i64> {
+    if depth > 16 {
+        return None;
+    }
+    match expression.semantic() {
+        Expr::Const(value) => Some(*value),
+        Expr::Reg(register) => {
+            let identities = identities?;
+            identities.exact(register)?;
+            for (index, statement) in body[..before].iter().enumerate().rev() {
+                match statement.semantic() {
+                    Stmt::Assign { dst, src } if dst == register => {
+                        return constant_from_linear_definitions(
+                            body,
+                            index,
+                            src,
+                            Some(identities),
+                            depth + 1,
+                        );
+                    }
+                    Stmt::Assign { .. } | Stmt::Nop | Stmt::Comment(_) | Stmt::Label(_) => {}
+                    _ => break,
+                }
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 fn restored_register(
@@ -1153,6 +1278,92 @@ mod tests {
             f.body.get(2),
             Some(Stmt::Comment(text)) if text == "arm32 epilogue: restore machine frame"
         ));
+    }
+
+    #[test]
+    fn thumb_leaf_r7_frame_with_expanded_teardown_collapses() {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for (value, base, version) in [
+            ("sp", "sp", 0),
+            ("r7", "r7", 0),
+            ("r7#1", "r7", 1),
+            ("r7#2", "r7", 2),
+            ("frame_base", "frame_base", 1),
+            ("frame_width", "frame_width", 1),
+            ("frame_top", "frame_top", 1),
+        ] {
+            identities.record(
+                reg(value),
+                crate::ir::ssa::SsaValue {
+                    base: reg(base),
+                    version,
+                },
+            );
+        }
+        let frame_object = "local_18".to_string();
+        let stack_top = "stack_top".to_string();
+        identities.attach_promoted_stack_objects([&frame_object, &stack_top]);
+        let mut f = function(vec![
+            sp_sub(4),
+            Stmt::Store {
+                addr: object_addr("local_18", 20),
+                src: Expr::Reg(reg("r7")),
+                size: 4,
+            },
+            sp_sub(20),
+            Stmt::Assign {
+                dst: reg("r7#1"),
+                src: object_addr("local_18", 0),
+            },
+            Stmt::Nop,
+            Stmt::Assign {
+                dst: reg("frame_base"),
+                src: object_addr("local_18", 0),
+            },
+            Stmt::Assign {
+                dst: reg("frame_width"),
+                src: Expr::Const(20),
+            },
+            Stmt::Assign {
+                dst: reg("frame_top"),
+                src: Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Reg(reg("frame_base"))),
+                    rhs: Box::new(Expr::Reg(reg("frame_width"))),
+                },
+            },
+            Stmt::Assign {
+                dst: reg("sp"),
+                src: Expr::Reg(reg("frame_top")),
+            },
+            restore("r7#2", "stack_top"),
+            sp_add(4),
+            Stmt::Return {
+                value: Some(Expr::Const(0)),
+            },
+        ]);
+
+        recognise_arm32_frame_with_identities(&mut f, &identities);
+
+        assert!(
+            matches!(
+                f.body.first(),
+                Some(Stmt::Comment(text))
+                    if text == "arm32 prologue: save r7, frame 24 bytes"
+            ),
+            "leaf frame did not collapse: {:#?}",
+            f.body
+        );
+        assert!(
+            f.body.iter().any(|statement| matches!(
+                statement,
+                Stmt::Comment(text) if text == "arm32 epilogue: restore machine frame"
+            )),
+            "unexpected collapsed leaf body: {:#?}",
+            f.body
+        );
+        assert!(!f.body.iter().any(mentions_sp), "{:#?}", f.body);
+        assert!(matches!(f.body.last(), Some(Stmt::Return { .. })));
     }
 
     #[test]
