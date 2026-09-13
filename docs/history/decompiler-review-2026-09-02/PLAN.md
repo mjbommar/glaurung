@@ -2896,8 +2896,13 @@ provenance through lowering.
   constant-fold calls. The earlier record's broad boundary is therefore true
   only from this follow-up commit. Remaining no-sidecar preparation is explicit
   public-library/test/diagnostic compatibility, not shipped or measured
-  decompilation. Continue with the final semantic-reader and `tag_phys` design
-  audit. See `results/wp3-all-benchmarks-required-identities.md`.
+  decompilation. Commit `8f5285b9` then completes the resulting cutover:
+  numbered physical values use snapshot-owned opaque `ValueId` keys and
+  `tag_phys` is deleted. Continue by classifying whether the explicit
+  identity-free compatibility APIs and mutating naming wrappers can now be
+  deleted without breaking supported public use. See
+  `results/wp3-all-benchmarks-required-identities.md` and
+  `results/wp3-remove-tag-phys.md`.
   Commit `3e302824`
   removes an `argN` spelling decision from
   DWARF aggregate-field recovery: only roles seeded from the authoritative
@@ -3472,8 +3477,19 @@ provenance through lowering.
   recovered select. The observed-red contract, all 24 select-fold tests, and
   both exact release-built `arith.c:signs` O0/O2 controls pass. See
   `results/wp3-promoted-diamond-expression-origins.md`.
-- [ ] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
-  typed consumer lands.
+- [x] Remove `tag_phys` from `src/ir/value_number/tagging.rs` after its last
+  typed consumer lands. Commit `8f5285b9` replaces machine-bearing
+  `reg#version` keys with deterministic opaque keys derived from the
+  authoritative snapshot-owned `ValueId`. Definitions now receive their full
+  `SsaValue`, not a reconstructed `(display register, version)` pair, so target
+  aliases remain exact. Version-zero inputs, structural frame registers, and
+  deliberately kept-bare result carriers retain their established spelling;
+  final role naming remains a render projection. The observed-red identity
+  contract, all 68 value-numbering tests, 23 naming tests, 20 production IR
+  binding tests, the four-lane smoke set, and four focused Hello CLI tests pass.
+  Direct release decompilation of x86-64, AArch64, and ARM32 Hello samples leaks
+  neither the opaque internal keys nor the retired `#version` spelling. See
+  `results/wp3-remove-tag-phys.md`.
 - [x] Remove `remap_type_map` callers in `src/python_bindings/ir.rs` and
   `src/python_bindings/ir/type_maps.rs` after value-keyed type maps are live.
   Commit `32698e2e` replaces the final plain-typed-render caller with numbered
