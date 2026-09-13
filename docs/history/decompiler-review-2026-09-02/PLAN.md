@@ -2803,6 +2803,16 @@ provenance through lowering.
   signed-bound fixture cell pass. The standalone no-sidecar declaration helper
   remains for a separately tested compatibility surface. See
   `results/wp3-signed-comparison-domain-identities.md`.
+  Commit `630595f9` removes production type recovery's remaining direct use of
+  numbered physical-register spelling for register-view widths. Default value
+  tags, index and shift widths, constant demotion, scalar floating-register
+  classification, and ABI return fallback widths now use the sidecar's
+  unambiguous physical base. Missing or ambiguous owned identity fails closed
+  to the machine-word default; only explicit no-sidecar compatibility calls
+  retain spelling-based width recovery. The observed-red misleading-name
+  contract, all 93 type-recovery tests, and all four release-built `@widths`
+  fixture lanes pass. This narrows but does not close the final `tag_phys`
+  boundary. See `results/wp3-recovered-register-width-identities.md`.
   Commit `3e302824`
   removes an `argN` spelling decision from
   DWARF aggregate-field recovery: only roles seeded from the authoritative
