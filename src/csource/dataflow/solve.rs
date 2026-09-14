@@ -129,8 +129,7 @@ pub(super) fn solve(flow: &mut DataFlow, cfg: &Cfg) {
                 .iter()
                 .enumerate()
                 .filter(|(index, definition)| {
-                    definition.binding == use_.binding
-                        && live.get(*index).copied().unwrap_or(false)
+                    definition.binding == use_.binding && live.get(*index).copied().unwrap_or(false)
                 })
                 .map(|(index, _)| index)
                 .collect(),
@@ -170,4 +169,3 @@ pub(super) fn solve(flow: &mut DataFlow, cfg: &Cfg) {
         }
     }
 }
-

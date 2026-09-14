@@ -10,11 +10,11 @@
 
 pub mod cfg;
 pub mod dataflow;
-pub mod export;
 /// `S5` --- bounded equivalence checking between two `LlirFunction`s.
 /// Needs the symbolic engine and its solver seam; see the module docs.
 #[cfg(feature = "symbolic")]
 pub mod equiv;
+pub mod export;
 /// `S6` --- path feasibility for a lowered function, on the solver.
 /// Needs the symbolic engine and its solver seam; see the module docs.
 #[cfg(feature = "symbolic")]

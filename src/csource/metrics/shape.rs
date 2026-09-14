@@ -281,7 +281,11 @@ fn push_body_nested(stack: &mut Vec<Frame>, tree: &Tree, frame: &Frame, loop_dep
             } else {
                 frame.nesting
             },
-            loop_depth: if is_body { loop_depth } else { frame.loop_depth },
+            loop_depth: if is_body {
+                loop_depth
+            } else {
+                frame.loop_depth
+            },
             mode: Mode::Normal,
             parent_logical: NO_OPERATOR,
         });
@@ -435,9 +439,11 @@ fn record_call(
     // The callee is the primary expression only when the *first* suffix is the
     // argument list: in `p->fn(x)` the first suffix is the member access, and
     // the name `p` is not what is being called.
-    let first_suffix_is_call =
-        arena.child(node, 1).and_then(|c| arena.tag(c)).and_then(NodeTag::from_u16)
-            == Some(NodeTag::CallArgs);
+    let first_suffix_is_call = arena
+        .child(node, 1)
+        .and_then(|c| arena.tag(c))
+        .and_then(NodeTag::from_u16)
+        == Some(NodeTag::CallArgs);
     if !first_suffix_is_call {
         return;
     }

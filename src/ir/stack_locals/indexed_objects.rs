@@ -45,9 +45,7 @@ pub(super) fn seed_indexed_stack_objects(
             }
         }
         match expr {
-            Expr::Origin { expr, .. } => {
-                collect_expr(expr, sp_delta, ctx, address_defs, starts)
-            }
+            Expr::Origin { expr, .. } => collect_expr(expr, sp_delta, ctx, address_defs, starts),
             Expr::Deref { addr, .. } => collect_expr(addr, sp_delta, ctx, address_defs, starts),
             Expr::Call { target, args, .. } => {
                 collect_expr(target, sp_delta, ctx, address_defs, starts);
@@ -414,9 +412,7 @@ pub(super) fn collect_read_stack_slots(
             }
         }
         match expr {
-            Expr::Origin { expr, .. } => {
-                collect_expr(expr, sp_delta, ctx, address_defs, reads)
-            }
+            Expr::Origin { expr, .. } => collect_expr(expr, sp_delta, ctx, address_defs, reads),
             Expr::Deref { addr, .. } => collect_expr(addr, sp_delta, ctx, address_defs, reads),
             Expr::Call { target, args, .. } => {
                 collect_expr(target, sp_delta, ctx, address_defs, reads);

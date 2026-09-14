@@ -64,7 +64,10 @@ fn report_dict<'py>(
     let reported = PyList::empty(py);
     for diagnostic in diagnostics.iter() {
         let entry = PyDict::new(py);
-        entry.set_item("severity", format!("{:?}", diagnostic.severity).to_lowercase())?;
+        entry.set_item(
+            "severity",
+            format!("{:?}", diagnostic.severity).to_lowercase(),
+        )?;
         entry.set_item("message", diagnostic.message.clone())?;
         entry.set_item("start", diagnostic.span.lo)?;
         entry.set_item("end", diagnostic.span.hi)?;
@@ -249,7 +252,9 @@ fn cfg_dict<'py>(py: Python<'py>, cfg: &Cfg) -> PyResult<Bound<'py, PyDict>> {
 pub fn control_flow_graphs_py<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyList>> {
     let graphs = py.detach(|| {
         let tree = parse(text).into_parts().0;
-        crate::csource::cfg::function_cfgs(&tree, text).into_parts().0
+        crate::csource::cfg::function_cfgs(&tree, text)
+            .into_parts()
+            .0
     });
     let out = PyList::empty(py);
     for graph in &graphs {
@@ -602,11 +607,17 @@ pub fn data_flow_py<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyL
         entry.set_item("bindings", bindings)?;
         entry.set_item(
             "type_conflicts",
-            flow.type_conflicts().iter().map(|b| b.0).collect::<Vec<u32>>(),
+            flow.type_conflicts()
+                .iter()
+                .map(|b| b.0)
+                .collect::<Vec<u32>>(),
         )?;
         entry.set_item(
             "unused_bindings",
-            flow.unused_bindings().iter().map(|b| b.0).collect::<Vec<u32>>(),
+            flow.unused_bindings()
+                .iter()
+                .map(|b| b.0)
+                .collect::<Vec<u32>>(),
         )?;
         out.append(entry)?;
     }
@@ -639,12 +650,7 @@ pub fn control_dependence_py<'py>(py: Python<'py>, text: &str) -> PyResult<Bound
                             .node(crate::syntax::ids::NodeId::new(id))
                             .map(|node| node.kind().name().to_string())
                             .unwrap_or_default();
-                        (
-                            id,
-                            kind,
-                            cdg.depth(id),
-                            cdg.post_dominators().immediate(id),
-                        )
+                        (id, kind, cdg.depth(id), cdg.post_dominators().immediate(id))
                     })
                     .collect();
                 let edges: Vec<(u32, u32, &'static str)> = cdg
@@ -798,7 +804,6 @@ pub fn reaches_py(
     });
     Ok(verdict.name().to_string())
 }
-
 
 /// The bounds every solver-backed query runs under.
 ///
@@ -985,7 +990,14 @@ pub fn path_feasibility_py<'py>(
     max_steps: Option<u64>,
     solver_timeout_ms: Option<u64>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let _ = (text, name, max_paths, max_block_visits, max_steps, solver_timeout_ms);
+    let _ = (
+        text,
+        name,
+        max_paths,
+        max_block_visits,
+        max_steps,
+        solver_timeout_ms,
+    );
     let _ = py;
     Err(unavailable())
 }
@@ -1056,7 +1068,13 @@ pub fn source_findings_py<'py>(
     max_steps: Option<u64>,
     solver_timeout_ms: Option<u64>,
 ) -> PyResult<Bound<'py, PyList>> {
-    let _ = (text, max_paths, max_block_visits, max_steps, solver_timeout_ms);
+    let _ = (
+        text,
+        max_paths,
+        max_block_visits,
+        max_steps,
+        solver_timeout_ms,
+    );
     let _ = py;
     Err(unavailable())
 }
@@ -1115,11 +1133,10 @@ mod tests {
     /// consumer stacking rows would train on scrambled features.
     #[test]
     fn the_feature_names_and_the_feature_row_are_the_same_length() {
-        let report = metrics::analyze(
-            "int f(int a) { if (a && a) { while (a) { a--; } } return a; }",
-        )
-        .into_parts()
-        .0;
+        let report =
+            metrics::analyze("int f(int a) { if (a && a) { while (a) { a--; } } return a; }")
+                .into_parts()
+                .0;
         let function = report.functions.first().expect("one function");
         assert_eq!(
             FEATURE_NAMES.len(),
@@ -1152,7 +1169,10 @@ mod tests {
         .map(|k| k.name())
         .collect();
         for column in KIND_COLUMNS {
-            assert!(known.contains(column), "unknown node kind column {column:?}");
+            assert!(
+                known.contains(column),
+                "unknown node kind column {column:?}"
+            );
         }
         assert_eq!(
             KIND_COLUMNS.len(),

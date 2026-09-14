@@ -82,7 +82,13 @@ pub struct SizeMetrics {
 }
 
 /// Measure the half-open token range `[first, end)`, which must cover `span`.
-pub fn measure(tokens: &Tokens, index: &LineIndex, span: Span, first: u32, end: u32) -> SizeMetrics {
+pub fn measure(
+    tokens: &Tokens,
+    index: &LineIndex,
+    span: Span,
+    first: u32,
+    end: u32,
+) -> SizeMetrics {
     let first_line = index.line(span.lo);
     let last_line = index.line(span.hi.saturating_sub(1).max(span.lo));
 

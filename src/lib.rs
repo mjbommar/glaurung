@@ -74,7 +74,6 @@ pub mod csource;
 /// Native decompiler-quality metrics: type recovery, and the scoring around it
 pub mod metrics;
 
-
 /// Shared decompilation pipeline and diagnostics.
 pub mod decompile;
 

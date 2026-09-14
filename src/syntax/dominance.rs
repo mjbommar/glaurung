@@ -395,11 +395,7 @@ fn reaches_any(cfg: &Cfg, targets: &[u32]) -> Vec<bool> {
 }
 
 /// Reverse postorder of the graph `successors` describes, from `root`.
-fn reverse_postorder(
-    total: usize,
-    root: u32,
-    successors: impl Fn(u32) -> Vec<u32>,
-) -> Vec<u32> {
+fn reverse_postorder(total: usize, root: u32, successors: impl Fn(u32) -> Vec<u32>) -> Vec<u32> {
     let mut seen = vec![false; total];
     let mut order: Vec<u32> = Vec::with_capacity(total);
     // Iterative postorder, so nothing here recurses (`REQ-SYN-3`).
@@ -433,10 +429,7 @@ fn intersect(mut a: u32, mut b: u32, idom: &[Option<u32>], position: &[usize]) -
         if guard > idom.len() * 2 + 8 {
             return a; // malformed tree; refuse rather than spin
         }
-        while position
-            .get(a as usize)
-            .copied()
-            .unwrap_or(usize::MAX)
+        while position.get(a as usize).copied().unwrap_or(usize::MAX)
             > position.get(b as usize).copied().unwrap_or(usize::MAX)
         {
             match idom.get(a as usize).copied().flatten() {
@@ -444,10 +437,7 @@ fn intersect(mut a: u32, mut b: u32, idom: &[Option<u32>], position: &[usize]) -
                 _ => return b,
             }
         }
-        while position
-            .get(b as usize)
-            .copied()
-            .unwrap_or(usize::MAX)
+        while position.get(b as usize).copied().unwrap_or(usize::MAX)
             > position.get(a as usize).copied().unwrap_or(usize::MAX)
         {
             match idom.get(b as usize).copied().flatten() {
@@ -462,8 +452,8 @@ fn intersect(mut a: u32, mut b: u32, idom: &[Option<u32>], position: &[usize]) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::syntax::cfg::{CfgNode, EdgeKind, NodeKind};
     use crate::syntax::cfg::CfgEdge;
+    use crate::syntax::cfg::{CfgNode, EdgeKind, NodeKind};
     use crate::syntax::ids::Span;
 
     /// Build a graph from `(src, dst, kind)` triples over `n` nodes, where 0
@@ -601,10 +591,7 @@ mod tests {
     fn an_infinite_loop_still_has_a_post_dominator_tree() {
         // 0 -> 1 -> 1 forever, and a separate exit 2 nothing reaches.
         // Without a virtual exit this graph has no post-dominator tree at all.
-        let cfg = graph(
-            3,
-            &[(0, 1, EdgeKind::Fall), (1, 1, EdgeKind::Fall)],
-        );
+        let cfg = graph(3, &[(0, 1, EdgeKind::Fall), (1, 1, EdgeKind::Fall)]);
         let post = PostDominators::of(&cfg);
         assert!(!post.dead_ends().is_empty(), "the stuck region is reported");
         // Totality is the contract: this must not panic or spin.
@@ -663,8 +650,8 @@ mod corpus {
     /// the guard that stops it would silently return a wrong answer.
     #[test]
     fn the_fixture_corpus_has_a_consistent_post_dominator_tree() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/decompiler_fixtures/src");
+        let root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/decompiler_fixtures/src");
         let Ok(entries) = std::fs::read_dir(&root) else {
             return;
         };
@@ -717,7 +704,11 @@ mod corpus {
                     }
                 }
                 for edge in cdg.edges() {
-                    assert!(edge.on < n && edge.node < n, "{}: edge out of range", function.name);
+                    assert!(
+                        edge.on < n && edge.node < n,
+                        "{}: edge out of range",
+                        function.name
+                    );
                 }
             }
         }
@@ -812,7 +803,10 @@ mod slice_tests {
         let cdg = ControlDependence::of(&cfg);
         // Slicing on arm 1 must not drag in the other arm.
         let slice = backward_slice(&cdg, &[], 1);
-        assert!(!slice.contains(&2), "the other arm is in the slice: {slice:?}");
+        assert!(
+            !slice.contains(&2),
+            "the other arm is in the slice: {slice:?}"
+        );
     }
 
     #[test]

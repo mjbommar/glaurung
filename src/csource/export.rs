@@ -48,8 +48,8 @@ use crate::csource::cfg::function_cfgs;
 use crate::csource::parse::tag::NodeTag;
 use crate::csource::parse::{parse, Tree};
 use crate::syntax::cfg::Cfg;
-use crate::syntax::dominance::ControlDependence;
 use crate::syntax::diag::Parsed;
+use crate::syntax::dominance::ControlDependence;
 use crate::syntax::graph_export::{ExportEdge, ExportNode, GraphView};
 use crate::syntax::ids::{NodeId, Span};
 
@@ -186,9 +186,13 @@ pub fn cfg_view(name: &str, cfg: &Cfg, text: &str) -> GraphView {
     }
     for edge in cfg.edges() {
         view.edges.push(
-            ExportEdge::new(edge.src.index() as u32, edge.dst.index() as u32, edge.kind.name())
-                .with("kind", edge.kind.name())
-                .with("back", if edge.is_back { "true" } else { "false" }),
+            ExportEdge::new(
+                edge.src.index() as u32,
+                edge.dst.index() as u32,
+                edge.kind.name(),
+            )
+            .with("kind", edge.kind.name())
+            .with("back", if edge.is_back { "true" } else { "false" }),
         );
     }
     view
@@ -234,7 +238,11 @@ pub fn ast_view(
             .map_or("?", |tag| tag.name());
         let leaf = arena.child_count(*node) == 0;
         let span = arena.span(*node, token_spans).unwrap_or_default();
-        let text_of = if leaf { snippet(text, span) } else { String::new() };
+        let text_of = if leaf {
+            snippet(text, span)
+        } else {
+            String::new()
+        };
         let label = if text_of.is_empty() {
             tag.to_string()
         } else {
@@ -278,14 +286,21 @@ pub fn ddg_view(flow: &crate::csource::dataflow::DataFlow, text: &str) -> GraphV
         view.nodes.push(
             ExportNode::new(
                 index as u32,
-                format!("def {}{}", definition.name, if dead { " (dead)" } else { "" }),
+                format!(
+                    "def {}{}",
+                    definition.name,
+                    if dead { " (dead)" } else { "" }
+                ),
             )
             .with("role", "definition")
             .with("variable", definition.name.clone())
             .with("def_kind", definition.kind.name())
             .with("dead_store", if dead { "true" } else { "false" })
             .with("cfg_node", definition.node.to_string())
-            .with("span", format!("{}:{}", definition.span.lo, definition.span.hi))
+            .with(
+                "span",
+                format!("{}:{}", definition.span.lo, definition.span.hi),
+            )
             .with("text", source),
         );
     }
@@ -475,10 +490,10 @@ int greet(const char *name, int times)
             .nodes
             .iter()
             .any(|node| node.attrs.iter().any(|(k, v)| k == "kind" && v == "entry")));
-        assert!(view
-            .nodes
+        assert!(view.nodes.iter().any(|node| node
+            .attrs
             .iter()
-            .any(|node| node.attrs.iter().any(|(k, v)| k == "kind" && v == "loop_header")));
+            .any(|(k, v)| k == "kind" && v == "loop_header")));
         assert!(view
             .edges
             .iter()
@@ -524,7 +539,13 @@ int greet(const char *name, int times)
 
     #[test]
     fn every_representation_and_format_is_total_on_junk() {
-        for junk in ["", "\u{0}\u{1}not C at all", "int f(", "}}}", "\u{4e2d}\u{6587}"] {
+        for junk in [
+            "",
+            "\u{0}\u{1}not C at all",
+            "int f(",
+            "}}}",
+            "\u{4e2d}\u{6587}",
+        ] {
             for repr in Repr::ALL {
                 let views = export(junk, repr).into_parts().0;
                 for view in &views {
@@ -585,7 +606,12 @@ mod ddg_tests {
         let roles: Vec<&str> = view
             .nodes
             .iter()
-            .filter_map(|n| n.attrs.iter().find(|(k, _)| k == "role").map(|(_, v)| v.as_str()))
+            .filter_map(|n| {
+                n.attrs
+                    .iter()
+                    .find(|(k, _)| k == "role")
+                    .map(|(_, v)| v.as_str())
+            })
             .collect();
         assert!(roles.contains(&"definition"));
         assert!(roles.contains(&"use"));
@@ -613,8 +639,17 @@ mod ddg_tests {
         let dead: Vec<&str> = views[0]
             .nodes
             .iter()
-            .filter(|n| n.attrs.iter().any(|(k, v)| k == "dead_store" && v == "true"))
-            .filter_map(|n| n.attrs.iter().find(|(k, _)| k == "variable").map(|(_, v)| v.as_str()))
+            .filter(|n| {
+                n.attrs
+                    .iter()
+                    .any(|(k, v)| k == "dead_store" && v == "true")
+            })
+            .filter_map(|n| {
+                n.attrs
+                    .iter()
+                    .find(|(k, _)| k == "variable")
+                    .map(|(_, v)| v.as_str())
+            })
             .collect();
         assert_eq!(dead, vec!["dead"], "{:?}", dead);
     }
@@ -682,8 +717,16 @@ int classify(int a, int b, int n)
             assert!(!edge.label.is_empty(), "unlabelled: {edge:?}");
             // The label is an edge kind, not a variable name.
             assert!(
-                ["true", "false", "case", "default", "fall", "fall_through", "jump"]
-                    .contains(&edge.label.as_str()),
+                [
+                    "true",
+                    "false",
+                    "case",
+                    "default",
+                    "fall",
+                    "fall_through",
+                    "jump"
+                ]
+                .contains(&edge.label.as_str()),
                 "{edge:?}"
             );
         }
@@ -776,7 +819,14 @@ int classify(int a, int b, int n)
 
     #[test]
     fn every_representation_is_total_on_junk() {
-        for junk in ["", "\u{0}\u{1}", "int f(", "}}}", "while(1){}", "\u{4e2d}\u{6587}"] {
+        for junk in [
+            "",
+            "\u{0}\u{1}",
+            "int f(",
+            "}}}",
+            "while(1){}",
+            "\u{4e2d}\u{6587}",
+        ] {
             for repr in Repr::ALL {
                 let views = export(junk, repr).into_parts().0;
                 for view in &views {

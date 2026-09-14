@@ -550,7 +550,11 @@ mod negative_tests {
         let s = summaries("int f(int a, int b) { return a; }");
         let f = s.get("f").expect("f");
         assert!(f.flows_to(0, Sink::Return), "a should flow: {:?}", f.flows);
-        assert!(!f.flows_to(1, Sink::Return), "b must not flow: {:?}", f.flows);
+        assert!(
+            !f.flows_to(1, Sink::Return),
+            "b must not flow: {:?}",
+            f.flows
+        );
     }
 
     #[test]
@@ -564,7 +568,11 @@ mod negative_tests {
     fn a_constant_return_carries_no_parameter() {
         let s = summaries("int f(int a, int b) { return 0; }");
         let f = s.get("f").expect("f");
-        assert!(f.flows.is_empty(), "nothing flows to a constant: {:?}", f.flows);
+        assert!(
+            f.flows.is_empty(),
+            "nothing flows to a constant: {:?}",
+            f.flows
+        );
     }
 }
 
@@ -602,7 +610,6 @@ mod cross_call_tests {
     }
 }
 
-
 #[cfg(test)]
 mod corpus_tests {
     use super::*;
@@ -612,8 +619,8 @@ mod corpus_tests {
     /// keep every invariant the type promises.
     #[test]
     fn the_fixture_corpus_summarizes_consistently() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/decompiler_fixtures/src");
+        let root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/decompiler_fixtures/src");
         let Ok(entries) = std::fs::read_dir(&root) else {
             return;
         };

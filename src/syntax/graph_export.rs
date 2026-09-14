@@ -165,12 +165,7 @@ pub enum Format {
 
 impl Format {
     /// Every format, in declaration order, for a CLI choice list.
-    pub const ALL: [Format; 4] = [
-        Format::Dot,
-        Format::GraphMl,
-        Format::Json,
-        Format::Mermaid,
-    ];
+    pub const ALL: [Format; 4] = [Format::Dot, Format::GraphMl, Format::Json, Format::Mermaid];
 
     /// This format's stable lowercase name, as a CLI accepts it.
     pub const fn name(self) -> &'static str {
@@ -376,10 +371,7 @@ pub fn to_mermaid(view: &GraphView) -> String {
 
 /// The distinct attribute keys used across `groups`, `first` first, then the
 /// rest in first-appearance order.
-fn collect_keys<'a>(
-    groups: impl Iterator<Item = &'a [Attr]>,
-    first: &str,
-) -> Vec<String> {
+fn collect_keys<'a>(groups: impl Iterator<Item = &'a [Attr]>, first: &str) -> Vec<String> {
     let mut keys = vec![first.to_string()];
     for attrs in groups {
         for (key, _) in attrs {
@@ -509,7 +501,10 @@ mod tests {
         view.nodes
             .push(ExportNode::new(0, "say \"hi\" \\ then\nnext"));
         let out = to_dot(&view);
-        assert!(out.contains(r#"n0 [label="say \"hi\" \\ then\lnext"];"#), "{out}");
+        assert!(
+            out.contains(r#"n0 [label="say \"hi\" \\ then\lnext"];"#),
+            "{out}"
+        );
         // One opening and one closing quote per label: the escapes did not
         // terminate the quoted region early.
         assert_eq!(out.matches('"').count() - out.matches("\\\"").count(), 4);
@@ -539,7 +534,10 @@ mod tests {
         view.nodes
             .push(ExportNode::new(0, "a < b && c > \"d\"\u{1}"));
         let out = to_graphml(&view);
-        assert!(out.contains("a &lt; b &amp;&amp; c &gt; &quot;d&quot;</data>"), "{out}");
+        assert!(
+            out.contains("a &lt; b &amp;&amp; c &gt; &quot;d&quot;</data>"),
+            "{out}"
+        );
         assert!(!out.contains('\u{1}'));
     }
 
@@ -549,7 +547,10 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
         assert_eq!(value["directed"], serde_json::json!(true));
         assert_eq!(value["graph"]["name"], serde_json::json!("greet"));
-        assert_eq!(value["nodes"][1]["label"], serde_json::json!("if (name == NULL)"));
+        assert_eq!(
+            value["nodes"][1]["label"],
+            serde_json::json!("if (name == NULL)")
+        );
         assert_eq!(value["edges"][0]["source"], serde_json::json!(0));
         assert_eq!(value["edges"][0]["target"], serde_json::json!(1));
         assert!(value.get("links").is_none(), "the removed NetworkX key");

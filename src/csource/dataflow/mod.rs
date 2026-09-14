@@ -108,14 +108,11 @@
 //! execution differential passes every one of them, which is the point: this
 //! sees a defect class that testing the return value cannot.
 
-
-
-
 pub mod events;
 pub mod interproc;
-pub mod types;
 pub mod model;
 pub mod solve;
+pub mod types;
 
 #[cfg(test)]
 mod tests;
@@ -169,4 +166,3 @@ pub fn analyze_function(
     solve::solve(&mut flow, &function.cfg);
     flow
 }
-

@@ -217,7 +217,9 @@ fn parameter_types(
 
 /// Whether `haystack` contains `word` as a whole word.
 fn has_word(haystack: &str, word: &str) -> bool {
-    haystack.split_whitespace().any(|candidate| candidate == word)
+    haystack
+        .split_whitespace()
+        .any(|candidate| candidate == word)
 }
 
 /// The token index whose span is exactly `span`.
@@ -227,4 +229,3 @@ fn token_index_of(token_spans: &[Span], span: Span) -> Option<u32> {
         .position(|candidate| *candidate == span)
         .map(|index| index as u32)
 }
-

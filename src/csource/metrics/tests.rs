@@ -43,7 +43,10 @@ fn one_if_is_one_decision() {
 #[test]
 fn nesting_costs_more_than_sequence() {
     // Two ifs in sequence: 1 + 1.
-    let flat = one("void f(int a, int b) { if (a) { a++; } if (b) { b++; } }", "f");
+    let flat = one(
+        "void f(int a, int b) { if (a) { a++; } if (b) { b++; } }",
+        "f",
+    );
     assert_eq!(flat.shape.cognitive, 2);
     assert_eq!(flat.shape.max_nesting, 1);
     assert_eq!(flat.parameters, 2);
@@ -75,13 +78,19 @@ fn an_else_if_ladder_is_not_charged_as_nesting() {
 
 #[test]
 fn a_run_of_like_logical_operators_costs_one() {
-    let single = one("int f(int a, int b, int c) { if (a && b && c) { return 1; } return 0; }", "f");
+    let single = one(
+        "int f(int a, int b, int c) { if (a && b && c) { return 1; } return 0; }",
+        "f",
+    );
     assert_eq!(
         single.shape.cognitive, 2,
         "+1 for the if, +1 for the single && run"
     );
 
-    let mixed = one("int g(int a, int b, int c) { if (a && b || c) { return 1; } return 0; }", "g");
+    let mixed = one(
+        "int g(int a, int b, int c) { if (a && b || c) { return 1; } return 0; }",
+        "g",
+    );
     assert_eq!(
         mixed.shape.cognitive, 3,
         "+1 for the if, +1 for the && run, +1 for the || run"
@@ -196,7 +205,9 @@ fn line_counts_split_code_blank_and_comment() {
 
 #[test]
 fn a_declaration_without_a_body_is_not_a_function() {
-    let report = analyze("int f(int a);\nint g(void) { return 0; }").into_parts().0;
+    let report = analyze("int f(int a);\nint g(void) { return 0; }")
+        .into_parts()
+        .0;
     let names: Vec<&str> = report.functions.iter().map(|f| f.name.as_str()).collect();
     assert_eq!(names, vec!["g"]);
 }
@@ -251,14 +262,26 @@ fn a_constructs_header_is_not_inside_its_body() {
     // implementation and the module docs agreeing.
     let cases = [
         // while: +1 for the while at 0, +1 for the ternary at 0.
-        ("void f(int a, int b, int c) { while (a ? b : c) { c++; } }", 2),
+        (
+            "void f(int a, int b, int c) { while (a ? b : c) { c++; } }",
+            2,
+        ),
         // for, all three clauses: same rule, and the clause tags must not read
         // as body statements.
-        ("void g(int a, int b, int c) { for (a = 0; a < (b ? c : 1); a++) { c++; } }", 2),
+        (
+            "void g(int a, int b, int c) { for (a = 0; a < (b ? c : 1); a++) { c++; } }",
+            2,
+        ),
         // switch selector.
-        ("void h(int a, int b, int c) { switch (a ? b : c) { case 1: break; } }", 2),
+        (
+            "void h(int a, int b, int c) { switch (a ? b : c) { case 1: break; } }",
+            2,
+        ),
         // do-while, whose condition follows its body rather than preceding it.
-        ("void i(int a, int b, int c) { do { c++; } while (a ? b : c); }", 2),
+        (
+            "void i(int a, int b, int c) { do { c++; } while (a ? b : c); }",
+            2,
+        ),
     ];
     for (text, expected) in cases {
         let name = text.split_whitespace().nth(1).unwrap();
@@ -271,7 +294,10 @@ fn a_constructs_header_is_not_inside_its_body() {
     }
 
     // And the contrast: the same ternary in the *body* does nest.
-    let nested = one("void f(int a, int b, int c) { while (a) { c = b ? c : 1; } }", "f");
+    let nested = one(
+        "void f(int a, int b, int c) { while (a) { c = b ? c : 1; } }",
+        "f",
+    );
     assert_eq!(
         nested.shape.cognitive, 3,
         "+1 for the while at 0, +1+1 for the ternary at nesting 1"

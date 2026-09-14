@@ -45,7 +45,12 @@ type Scope = Vec<(String, Binding)>;
 /// opens on a `CompoundStmt` and on the constructs that introduce a scope of
 /// their own (`for`, which may declare its own induction variable), and the
 /// binding of a use is the innermost visible one at that point.
-pub(super) fn collect_events(tree: &Tree, text: &str, token_spans: &[Span], function: &FunctionCfg) -> Events {
+pub(super) fn collect_events(
+    tree: &Tree,
+    text: &str,
+    token_spans: &[Span],
+    function: &FunctionCfg,
+) -> Events {
     let arena = tree.arena();
     let mut definitions: Vec<Definition> = Vec::new();
     let mut uses: Vec<Use> = Vec::new();
@@ -403,9 +408,7 @@ fn promote_writes(
                 if !is_direct_name(tree, target) {
                     continue;
                 }
-                let effect_at = arena
-                    .span(node, token_spans)
-                    .map_or(0, |whole| whole.hi);
+                let effect_at = arena.span(node, token_spans).map_or(0, |whole| whole.hi);
                 if let Some((_, span)) = leftmost_name(tree, text, token_spans, target) {
                     promoted.push((
                         span,
@@ -443,9 +446,7 @@ fn promote_writes(
                 if has_place_suffix(tree, node) {
                     continue;
                 }
-                let effect_at = arena
-                    .span(node, token_spans)
-                    .map_or(0, |whole| whole.hi);
+                let effect_at = arena.span(node, token_spans).map_or(0, |whole| whole.hi);
                 if let Some((_, span)) = leftmost_name(tree, text, token_spans, node) {
                     promoted.push((span, DefKind::IncDec, effect_at));
                 }
@@ -490,7 +491,12 @@ fn resolve(scopes: &[Scope], name: &str) -> Binding {
 }
 
 /// The identifier `node` carries, with its span.
-pub(super) fn name_of(tree: &Tree, text: &str, token_spans: &[Span], node: NodeId) -> Option<(String, Span)> {
+pub(super) fn name_of(
+    tree: &Tree,
+    text: &str,
+    token_spans: &[Span],
+    node: NodeId,
+) -> Option<(String, Span)> {
     let arena = tree.arena();
     let (first, end) = arena.token_extent(node)?;
     for index in first..end {
@@ -684,12 +690,7 @@ fn is_direct_name(tree: &Tree, target: NodeId) -> bool {
 /// `int32_t`, a struct tag, a typedef --- and none of them is a read of a
 /// variable. Collected as spans because the walk that needs the answer sees a
 /// name before it knows what encloses it.
-fn type_name_spans(
-    tree: &Tree,
-    text: &str,
-    token_spans: &[Span],
-    root: NodeId,
-) -> Vec<Span> {
+fn type_name_spans(tree: &Tree, text: &str, token_spans: &[Span], root: NodeId) -> Vec<Span> {
     let arena = tree.arena();
     let mut out = Vec::new();
     for node in arena.preorder(root) {
@@ -731,12 +732,7 @@ fn type_name_spans(
 /// records that this parser resolves neither, deliberately, because the CFG
 /// cannot see the difference. The data-dependence graph can, and the binding
 /// is the evidence: a name that resolves to a local is a value.
-fn ambiguous_type_spans(
-    tree: &Tree,
-    text: &str,
-    token_spans: &[Span],
-    root: NodeId,
-) -> Vec<Span> {
+fn ambiguous_type_spans(tree: &Tree, text: &str, token_spans: &[Span], root: NodeId) -> Vec<Span> {
     let arena = tree.arena();
     let mut out = Vec::new();
     for node in arena.preorder(root) {
@@ -824,12 +820,7 @@ fn lone_parenthesised_name(
 /// data read when it resolves to a local binding --- a function pointer. A
 /// plain `memcpy` resolves to nothing, and counting it as a read of an
 /// undefined variable is noise, not a finding.
-fn callee_name_spans(
-    tree: &Tree,
-    text: &str,
-    token_spans: &[Span],
-    root: NodeId,
-) -> Vec<Span> {
+fn callee_name_spans(tree: &Tree, text: &str, token_spans: &[Span], root: NodeId) -> Vec<Span> {
     let arena = tree.arena();
     let mut out = Vec::new();
     for node in arena.preorder(root) {
@@ -945,5 +936,3 @@ fn node_for_span(cfg: &Cfg, span: Span) -> u32 {
     }
     cfg.entry().index() as u32
 }
-
-

@@ -113,8 +113,17 @@ fn strip_qualifiers(specifiers: &str) -> String {
         .filter(|word| {
             !matches!(
                 *word,
-                "const" | "volatile" | "restrict" | "__restrict" | "__restrict__"
-                    | "static" | "extern" | "register" | "auto" | "inline" | "_Atomic"
+                "const"
+                    | "volatile"
+                    | "restrict"
+                    | "__restrict"
+                    | "__restrict__"
+                    | "static"
+                    | "extern"
+                    | "register"
+                    | "auto"
+                    | "inline"
+                    | "_Atomic"
             )
         })
         .collect::<Vec<_>>()
@@ -341,7 +350,9 @@ impl DataFlow {
         if binding.is_free() {
             return None;
         }
-        self.types.get(binding.0 as usize).filter(|ty| !ty.is_empty())
+        self.types
+            .get(binding.0 as usize)
+            .filter(|ty| !ty.is_empty())
     }
 
     /// Bindings whose reaching definitions disagree about type.
@@ -390,4 +401,3 @@ impl DataFlow {
             .filter_map(|edge| self.uses.get(edge.use_ as usize))
     }
 }
-
