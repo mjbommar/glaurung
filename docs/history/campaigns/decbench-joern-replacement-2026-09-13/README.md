@@ -14,6 +14,9 @@ Choose the shortest document that answers the question at hand:
 - [current full rerun](CURRENT-FULL-RERUN.md): completed 2026-09-13–14 full
   run, exact build/driver provenance, audited scores, timing, coverage, and
   cell-level deltas;
+- [result verification](RESULT-VERIFICATION.md): independent artifact,
+  manifest, score, denominator, rank, and baseline-delta checks, including all
+  90 unresolved identities;
 - [methodology and reproduction](METHODOLOGY.md): pinned inputs, commands,
   controls, and artifact integrity;
 - [difference review](DIFFERENCE-REVIEW.md): exhaustive classification of the

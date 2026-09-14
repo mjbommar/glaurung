@@ -224,8 +224,13 @@ raw `evaluated/*.toml` fragments; it does not trust the generated scoreboard.
 | Verify raw counts | Direct JSON recount matches scoreboard perfect counts | Pass |
 | Use shared comparison universe | Independent merge audit; denominators 91,288 / 86,671 / 94,487 | Pass |
 | Compare old/new cells | 94,389 common identities plus new-only coverage classified | Pass |
+| Reproduce independent audit | Fresh rerun is byte-identical, SHA-256 `b3549cfce21f75a40b6414e2287d94f6591164b35a5da129b3726d58bba2db58` | Pass |
 | Preserve timing and hashes | This record and external artifacts | Pass |
 | Respect upstream boundary | No DecBench post, issue, comment, PR, or repository mutation | Pass |
+
+The exact recheck commands, direct counts, shared-universe arithmetic, and all
+90 unresolved names are recorded in
+[RESULT-VERIFICATION.md](RESULT-VERIFICATION.md).
 
 The full rerun objective is complete. Any submission remains a separate,
 human-only action under DecBench's rules.
