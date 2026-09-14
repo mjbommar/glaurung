@@ -1,35 +1,50 @@
 # Current-code full DecBench rerun
 
-> **Kind:** live measurement record · **Started:** 2026-09-13 · **Status:** in progress
+> **Kind:** completed internal measurement record · **Run:** 2026-09-13–14 · **Status:** complete and independently audited
 
-## Plain-English answer
+## Plain-English result
 
-The historical `41.553%` Union result is not based on today's decompiler. It
-was generated from Glaurung `229fbb1d` on 2026-08-30 and was deliberately
-reused as frozen input for the September Joern-replacement experiment.
+The full rerun completed successfully on the newest clean, committed Glaurung
+revision available when the run was frozen. It generated artifacts for all 803
+manifest binaries, emitted 94,485 unique function identities, evaluated every
+emitted identity, and exited with status 0.
 
-A new full-corpus run **is now executing** against the newest reproducible
-Glaurung revision available when the run was prepared:
-`e170a2b4a8946b84808890fd5a09d46ce7cf6a66`. This revision includes the final
-source-CFG compatibility change at `f9a5cbaa` and all commits through the
-campaign documentation commit at `e170a2b4`.
+When merged locally with the published DecBench comparison universe, this
+column ranks first on GED, type match, byte match, and Union. This is an
+**internal ranking calculation**, not an official DecBench publication or
+submission. No issue, comment, pull request, result, or other material was
+posted upstream.
 
-This is “today's latest committed code,” not “every byte currently visible in
-the shared main worktree.” The distinction is required for reproducibility:
+| Metric | Perfect | Shared denominator | Audited rate | Prior rate | Change |
+|---|---:|---:|---:|---:|---:|
+| GED | 34,512 | 91,288 | **37.806%** | 32.275% | **+5.530 pp** |
+| Type match | 20,124 | 86,671 | **23.219%** | 21.812% | **+1.406 pp** |
+| Byte match | 6,375 | 94,487 | **6.747%** | 5.893% | **+0.854 pp** |
+| **Union** | **43,547** | **94,487** | **46.088%** | 41.553% | **+4.534 pp** |
 
-- `master` and `origin/master` currently point to `0892552157be6bd9267007231419ff6606a2dd38`;
-- the campaign branch and clean run worktree point to the newer `e170a2b4`;
-- the shared `master` worktree currently has 16 modified source files owned by
+The exact perfect-count gains over the clean `229fbb1` run are +5,049 GED,
++1,219 type, +812 byte, and +4,311 Union. Denominators changed because the new
+column makes more functions measurable; percentages above use the newly
+audited shared universe, not the smaller historical denominator.
+
+## Why this is not every byte in the shared worktree
+
+The run used `e170a2b4a8946b84808890fd5a09d46ce7cf6a66`, the newest clean,
+committed revision available when preparation finished. At freeze time:
+
+- `master` and `origin/master` pointed to
+  `0892552157be6bd9267007231419ff6606a2dd38`;
+- the campaign branch and clean run worktree pointed to the newer `e170a2b4`;
+- the shared `master` worktree contained 16 modified source files owned by
   concurrent work;
-- those uncommitted files have no stable commit identity and can change while
-  a multi-hour run is executing.
+- those uncommitted files had no stable identity and could change during a
+  multi-hour run.
 
-Building the shared dirty tree would make the result impossible to reproduce
-or attribute. It could also mix half-finished changes from several agents.
-The correct unit for a leaderboard-quality run is therefore the newest clean,
-committed revision, with executable hashes recorded below. If the outstanding
-source edits are later reviewed and committed, they require a separately named
-rerun; they cannot be silently included in or projected onto this result.
+Building the shared dirty tree would have mixed incomplete work from multiple
+agents and made the result irreproducible. This result therefore means
+"latest clean committed code at run freeze," not "whatever happened to be in
+the shared checkout at some later instant." Any subsequently committed source
+changes require a separately named rerun.
 
 ## Frozen provenance
 
@@ -39,94 +54,178 @@ rerun; they cannot be silently included in or projected onto this result.
 | Clean run worktree | `~/.cache/glaurung/decbench-latest-e170a2b4` |
 | Release CLI SHA-256 | `9bf526586196dff807dd4e5b1529b68f80ed03b20e9a8e6487c7d0a3d49bdec5` |
 | Native extension SHA-256 | `5015721795bdf67c4272c6f71c540f1d72c61301c5f38017cd3a5484134b8110` |
-| Run-only driver SHA-256 | `92bd57b399623db7d89318aaf3e5432e478f8e3adeb7a33eb406eaa3b148ba79` |
+| Final run-only driver SHA-256 | `988f701f35c4dbc6e8ba28f6b60a4b7b111a1d60fc162248c510f5e995e4d2ac` |
 | DecBench | `f76dae075d4d82004fb21132b3f15e43b680e179` |
 | Dataset | `e5eb576d66ee36793b800a4dd45e291e0add4472` (`full`) |
 | Dataset population | 803 binaries / 94,575 manifest functions |
 | Output column | `glaurung-e170a2b4-exact-adapter` |
 
-The run-only driver differs from the committed source only in measurement
-orchestration: deterministic sharding, exclusion of the separately completed
-Coreutils lane, and exact current-adapter routing. It does not change the
-Glaurung executable. Its hash is recorded separately so the orchestration is
-auditable rather than being mistaken for part of the source revision.
+The run-only driver changed measurement orchestration only: exact current
+adapter routing, deterministic sharding, bounded recovery, project exclusion,
+and an include-key file. It did not change the Glaurung executable. The final
+driver hash differs from the earlier live snapshot because bounded recovery
+controls were added before the three timed-out binaries were rerun.
 
-## Exact adapter policy
+## Adapter policy
 
-For each manifest binary, the driver resolves the requested function
-addresses and follows DecBench's current Glaurung adapter policy:
+For each manifest binary, the driver resolved requested function addresses and
+followed DecBench's current Glaurung adapter policy:
 
 - at most 400 resolved addresses: one narrow `--vas` invocation;
 - more than 400: one `--all --limit 30000` invocation, then narrow returned
-  functions to the manifest addresses;
+  functions to manifest addresses;
 - per-function internal timeout: 20,000 ms;
 - first-pass outer timeout: 600 seconds per binary;
-- one output C file and one metadata TOML per completed binary.
+- recovery outer timeout: 3,600 seconds for only the missing binary keys;
+- one C artifact and one metadata TOML per completed binary.
 
-This removes the qualification on the August all-`--vas` run. It also avoids
-starting a process or loading the same binary once per function.
+This loads each binary once per invocation and does not decompile a function a
+second time merely to recover its signature.
 
-## Live progress snapshot
+## Generation coverage and timing
 
-Snapshot taken during the run on 2026-09-13:
+The first pass produced 800/803 binary artifacts. The three 600-second misses
+were recovered individually with the longer bounded timeout:
 
-| Lane | State | Last reported progress |
-|---|---|---:|
-| Coreutils | complete | 327/327 binaries, 7,022 functions |
-| Non-Coreutils shard 0 | complete | 118/119 binaries, 19,311 functions; one timeout |
-| Non-Coreutils shard 1 | running | at least 75/119 binaries, 10,985 functions |
-| Non-Coreutils shard 2 | running | at least 75/119 binaries, 11,687 functions |
-| Non-Coreutils shard 3 | running | at least 25/119 binaries, 6,349 functions |
-| Materialized artifacts | running total | **647/803 C and 647/803 TOML** |
+| Recovery binary | Manifest functions | Wall time | Peak RSS |
+|---|---:|---:|---:|
+| O0 Betaflight STM32F405 | 4,018 | 12m16s | 1,803,044 KiB |
+| O2 Betaflight STM32F405 | 4,008 | 12m23s | 1,804,132 KiB |
+| O2 Bash | 1,557 | 14m38s | 1,563,380 KiB |
 
-The artifact count is the authoritative coverage checkpoint because progress
-logs print only every 25 successful binaries. At the snapshot, three child
-decompilers were CPU-bound on real binaries and their three parent shard
-drivers remained alive. No final score is claimed while generation is still
-in progress.
+First-pass lanes were intentionally concurrent:
 
-The completed Coreutils lane took 2,044 seconds (34m04s), emitted 7,022
-functions, exited successfully, and peaked at 1,757,256 KiB RSS. Non-Coreutils
-shard 0 completed in 1,748 seconds with 118 successful binaries and one
-600-second binary timeout. The timeout is a coverage failure to recover, not a
-zero score and not permission to reduce the denominator.
+| Lane | Binary artifacts | Manifest functions | Wall time | Peak RSS |
+|---|---:|---:|---:|---:|
+| Coreutils | 327/327 | 7,022 | 34m04s | 1,757,256 KiB |
+| Non-Coreutils shard 0 | 118/119 | 19,311 | 29m08s | 1,797,440 KiB |
+| Non-Coreutils shard 1 | 119/119 | 23,473 | 39m48s | 1,379,412 KiB |
+| Non-Coreutils shard 2 | 118/119 | 18,559 | 46m43s | 1,801,580 KiB |
+| Non-Coreutils shard 3 | 118/119 | 16,537 | 42m29s | 5,110,640 KiB |
 
-## Artifact locations
+Final artifact coverage is 803 C files and 803 TOMLs. Identity reconciliation
+found:
 
-| Artifact | Location |
-|---|---|
-| Generated tree | `~/.cache/glaurung/decbench-full/tree` |
-| Run logs and timing | `~/.cache/glaurung/decbench-current-e170a2b4` |
-| Coreutils log | `smoke-coreutils.stdout` |
-| Coreutils resource record | `smoke-coreutils.time.stderr` |
-| Shard logs | `full-shard-{0,1,2,3}.stdout` |
-| Shard resource records | `full-shard-{0,1,2,3}.time.stderr` |
-| Historical audited baseline | `~/.cache/glaurung/decbench-full/audited-score-clean-229fbb1.json` |
+- 94,575 manifest identities;
+- 94,485 emitted marker/TOML identities;
+- 90 unresolved identities across 16 binaries;
+- zero duplicate identities, extra identities, or recorded failed functions.
 
-These large generated artifacts remain outside Git. This document is the
-durable map to them and records the identities needed to interpret them.
+The 90 unresolved names are principally entry/start/TLS aliases, U-Boot
+start/jump aliases, and `__printf__` in two gzip optimization cells. They are
+an explicit 0.095% identity-coverage gap, not silently discarded successes.
+Coverage improved from 94,358 scored functions in the prior run to 94,485,
+adding 127 scored identities and reducing the unscored manifest gap from 217
+to 90.
 
-## Completion and scoring protocol
+## Evaluation timing and direct verification
 
-The run is not complete merely because the four first-pass processes exit.
-Completion requires all of the following:
+Pinned `evaluate-tree` ran with 12 workers and exited 0:
 
-1. join the manifest's 803 binary keys against generated C and TOML artifacts;
-2. enumerate every timeout, nonzero exit, empty output, duplicate identity,
-   missing identity, and out-of-manifest identity;
-3. rerun missing binary keys with a longer bounded outer timeout without
-   overwriting completed outputs;
-4. reach 803/803 binary artifacts or preserve an explicit, investigated gap;
-5. run pinned DecBench `evaluate-tree` for GED, type match, and byte match on
-   only `glaurung-e170a2b4-exact-adapter`;
-6. recompute GED, type, byte, and Union counts from raw per-function TOMLs;
-7. merge the new column into the shared comparison universe rather than reuse
-   the August denominator;
-8. compare every changed perfect/non-perfect cell with the clean `229fbb1`
-   baseline and inspect unexpected regressions;
-9. save final wall time, peak RSS, tool hashes, coverage, score, and rank
-   interpretation in this campaign folder.
+| Measurement | Value |
+|---|---:|
+| Wall time | 4h00m04s |
+| Aggregate user CPU | 61,132.63s |
+| Aggregate system CPU | 3,172.85s |
+| Average CPU utilization | 446% |
+| Peak RSS | 7,672,756 KiB |
+| Swap | 0 |
+| Binaries | 803 |
+| Unique evaluated identities | 94,485 |
 
-Until those gates pass, `41.553%` remains the historical baseline and the new
-run has no honest current-code ranking. Nothing in this process is posted to
-DecBench; any eventual upstream submission or communication is human-only.
+A direct recount of the generated `function_results.json` independently found
+803 groups, 94,485 rows, 94,485 unique identities, and 94,485 `decompiled=true`
+flags. It reproduced the self-column counts exactly:
+
+| Metric | Finite self values | Perfect |
+|---|---:|---:|
+| GED | 89,009 | 34,512 |
+| Type match | 86,669 | 20,124 |
+| Byte match | 94,485 | 6,375 |
+| Union | 94,485 emitted identities | 43,547 |
+
+These self denominators explain the rounded 38.8%, 23.2%, 6.7%, and 46.1%
+shown by the one-column local scoreboard. They are not the denominators used
+for cross-decompiler ranking. The independent audit merged the new fragments
+with the pinned published per-function data and derived shared denominators of
+91,288 GED, 86,671 type, and 94,487 byte/Union, producing the rates in the
+opening table.
+
+## Local rank interpretation
+
+Against the columns in the pinned published DecBench data, the new column is
+locally first on all four measures:
+
+| Measure | Glaurung | Next published column | Margin in perfect functions |
+|---|---:|---:|---:|
+| GED | 34,512 | Kuna, 33,146 | +1,366 |
+| Type match | 20,124 | angr, 6,367 | +13,757 |
+| Byte match | 6,375 | Kuna, 3,061 | +3,314 |
+| Union | 43,547 | Kuna, 36,348 | +7,199 |
+
+This is not an official rank until a human follows DecBench's contribution
+rules and the maintainers accept and recompute the data. It also describes the
+pinned full corpus and these metrics, not arbitrary real-world binaries.
+
+## Cell-level comparison with `229fbb1`
+
+Exact-identity comparison covered 94,389 identities common to the old and new
+stored result sets, plus 96 identities present only in the new set. The old
+set contained no identities absent from the new set. Thirty-one old identities
+had rows but no finite metric, which is why the increase in scored coverage is
+127 rather than 96.
+
+| Metric | Non-perfect/missing to perfect | Perfect to non-perfect | Net common-identity gain | New-only perfect |
+|---|---:|---:|---:|---:|
+| GED | 5,676 | 632 | +5,044 | 5 |
+| Type match | 1,585 | 366 | +1,219 | 0 |
+| Byte match | 1,246 | 434 | +812 | 0 |
+| Union | 5,041 | 735 | +4,306 | 5 |
+
+The improvement is broad rather than fixture-local. The largest Union gain
+clusters are OpenSSH (+1,369), Betaflight (+794), Crazyflie (+562), Bash
+(+493), Cleanflight (+406), Coreutils (+203), and tar (+167). The largest
+regression clusters are OpenSSH (302), Crazyflie (142), Betaflight (65), Bash
+(33), Cleanflight (24), ChibiOS (23), and U-Boot (21). These regressions are
+real follow-up inventory, but they do not overturn the large net gains.
+
+The regression distribution also argues against benchmark gaming: changes are
+spread across hosted utilities, cryptographic/network applications, embedded
+firmware, libraries, and bootloader code, and hundreds of formerly perfect
+cells moved backward while thousands moved forward. The benchmark records the
+net effect of general decompiler changes; it was not made monotonic by special
+casing DecBench functions.
+
+## Artifact locations and hashes
+
+Large generated data remains outside Git:
+
+| Artifact | Location | SHA-256 |
+|---|---|---|
+| Preserved function results | `~/.cache/glaurung/decbench-current-e170a2b4/function_results-e170a2b4.json` | `c1439af9a575fef649e612ce10c06fd7a3e4dcd69552a74e82c173323fab89d4` |
+| Preserved local scoreboard | `~/.cache/glaurung/decbench-current-e170a2b4/scoreboard-e170a2b4.toml` | `fd9a4fdb6df87650093629efd0aa26904bb29b52410de79559b778a42f04577c` |
+| Independent merged audit | `~/.cache/glaurung/decbench-current-e170a2b4/audited-score-e170a2b4.json` | `b3549cfce21f75a40b6414e2287d94f6591164b35a5da129b3726d58bba2db58` |
+| Evaluation stdout | `~/.cache/glaurung/decbench-current-e170a2b4/evaluate-tree.stdout` | recorded locally |
+| Evaluation resource record | `~/.cache/glaurung/decbench-current-e170a2b4/evaluate-tree.time.stderr` | recorded locally |
+| Historical audited baseline | `~/.cache/glaurung/decbench-full/audited-score-clean-229fbb1.json` | recorded locally |
+
+The preserved copies hash-identically to the final files in the materialized
+tree. The audit reads the pinned manifest, published per-function dataset, and
+raw `evaluated/*.toml` fragments; it does not trust the generated scoreboard.
+
+## Completion audit
+
+| Gate | Evidence | Result |
+|---|---|---|
+| Reconcile 803 binary keys | 803 C + 803 TOML artifacts | Pass |
+| Investigate first-pass failures | Three exact keys isolated and recovered with a 3,600s bound | Pass |
+| Audit identities | 94,485 unique emitted; 90 named-resolution gaps; no duplicates/extras | Pass with explicit gap |
+| Run all metrics | Pinned `evaluate-tree`, 803 stored artifacts, exit 0 | Pass |
+| Verify raw counts | Direct JSON recount matches scoreboard perfect counts | Pass |
+| Use shared comparison universe | Independent merge audit; denominators 91,288 / 86,671 / 94,487 | Pass |
+| Compare old/new cells | 94,389 common identities plus new-only coverage classified | Pass |
+| Preserve timing and hashes | This record and external artifacts | Pass |
+| Respect upstream boundary | No DecBench post, issue, comment, PR, or repository mutation | Pass |
+
+The full rerun objective is complete. Any submission remains a separate,
+human-only action under DecBench's rules.

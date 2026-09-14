@@ -9,11 +9,11 @@ Choose the shortest document that answers the question at hand:
 - [coverage and scoring](COVERAGE-AND-SCORING.md): denominators, completeness,
   and exact GED comparison;
 - [performance](PERFORMANCE.md): wall time, memory, and interpretation;
-- [leaderboard submission status](LEADERBOARD-SUBMISSION-STATUS.md): the
-  audited four-metric score, why it is not a current-code submission, and the
-  exact refresh required;
-- [current full rerun](CURRENT-FULL-RERUN.md): live 2026-09-13 generation
-  status, exact build/driver provenance, and the fail-closed completion gates;
+- [leaderboard submission status](LEADERBOARD-SUBMISSION-STATUS.md): current
+  internal ranking status, upstream boundary, and the historical baseline;
+- [current full rerun](CURRENT-FULL-RERUN.md): completed 2026-09-13–14 full
+  run, exact build/driver provenance, audited scores, timing, coverage, and
+  cell-level deltas;
 - [methodology and reproduction](METHODOLOGY.md): pinned inputs, commands,
   controls, and artifact integrity;
 - [difference review](DIFFERENCE-REVIEW.md): exhaustive classification of the

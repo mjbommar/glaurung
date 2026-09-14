@@ -4,24 +4,31 @@
 
 ## Short answer
 
-We have a complete, independently audited, full-corpus DecBench result that is
-valuable for comparison and proves the end-to-end pipeline. It is not a result
-from the 2026-09-13 Glaurung code, and it is not an exact replay of DecBench's
-current Glaurung adapter. A human should therefore not label it "latest
-Glaurung" or submit it without those qualifications.
+The current-code refresh is complete and independently audited. Revision
+`e170a2b4` emitted and evaluated 94,485 unique identities across all 803
+binaries. On the locally merged published comparison universe it records
+34,512/91,288 GED-perfect (37.806%), 20,124/86,671 type-perfect (23.219%),
+6,375/94,487 byte-perfect (6.747%), and 43,547/94,487 Union-perfect
+(46.088%). That is locally first on all four measures. Full provenance,
+coverage, timing, cell-level deltas, artifact paths, and caveats are in
+[CURRENT-FULL-RERUN.md](CURRENT-FULL-RERUN.md).
 
 Nothing has been sent to DecBench. This page is internal evidence for human
 review and does not authorize an agent to create an upstream issue, comment, or
 pull request.
 
-> **Current refresh:** a new 803-binary run against clean committed revision
-> `e170a2b4` is now in progress. Its live provenance, coverage, adapter route,
-> and completion gates are recorded in
-> [CURRENT-FULL-RERUN.md](CURRENT-FULL-RERUN.md). The historical numbers below
-> remain the only final scores until that rerun is generated, evaluated, and
-> audited completely.
+The result remains internal. It is not an official DecBench rank until a human
+follows the upstream contribution rules and maintainers accept and recompute
+the data. Nothing has been sent to DecBench, and this page does not authorize
+an agent to create an upstream issue, comment, pull request, or submission.
 
-## The audited leaderboard result
+## Historical baseline
+
+The remainder of this page records the superseded August baseline and explains
+why it could not be projected onto newer code. Retain it as historical
+provenance; use the current-rerun page above for present measurements.
+
+### The audited August result
 
 The clean reproduction at Glaurung
 `229fbb1d373bdc7bfc3ff3e6f69b105723852225` produced:
