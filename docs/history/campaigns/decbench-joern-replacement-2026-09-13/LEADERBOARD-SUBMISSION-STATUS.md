@@ -14,6 +14,13 @@ Nothing has been sent to DecBench. This page is internal evidence for human
 review and does not authorize an agent to create an upstream issue, comment, or
 pull request.
 
+> **Current refresh:** a new 803-binary run against clean committed revision
+> `e170a2b4` is now in progress. Its live provenance, coverage, adapter route,
+> and completion gates are recorded in
+> [CURRENT-FULL-RERUN.md](CURRENT-FULL-RERUN.md). The historical numbers below
+> remain the only final scores until that rerun is generated, evaluated, and
+> audited completely.
+
 ## The audited leaderboard result
 
 The clean reproduction at Glaurung
