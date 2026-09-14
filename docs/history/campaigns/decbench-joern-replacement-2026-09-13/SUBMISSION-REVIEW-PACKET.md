@@ -4,11 +4,11 @@
 
 ## Decision
 
-The `e170a2b4` full-corpus result is strong and independently audited, but it is
-**not yet a standards-compliant DecBench submission artifact**. DecBench's
-documented external route remains its 250-function eval kit, its published
-Glaurung column remains sample-set-only, and our full run predates DecBench's
-new canonical resource-limit policy.
+The submission-shaped 250-function package is now fully prepared and has
+passed DecBench's own package validator plus an isolated current-DecBench
+ingest. It is ready for human review, but has not been sent. The separate
+`e170a2b4` full-corpus result remains strong internal evidence rather than a
+documented external-submission artifact.
 
 No DecBench issue, comment, pull request, email, upload, or repository change
 was made. Contact and submission remain human-only under DecBench's rules.
@@ -127,11 +127,11 @@ the selected current policy.
 | Full raw/evaluated evidence | Ready | 803/803 binary artifacts retained |
 | Independent score recount | Ready | Two audit JSONs are byte-identical |
 | Coverage reconciliation | Ready with gap | 94,485/94,575; all 90 gaps listed |
-| Documented external package | Not ready | Only the current 250-function kit qualifies |
+| Documented external package | Ready | Current 250-function kit package prepared |
 | Current kit fingerprint | Ready | Fresh download inspected and hashed |
 | Current DecBench revision | Not used | Run pinned `f76dae0`, before `5818d67` |
-| Current CPU/RAM limits | Not proven | Controlled rerun or maintainer direction needed |
-| Current sample-set ZIP | Not prepared | Regenerate, validate, package |
+| Current CPU/RAM limits | Partial | 600s function/3600s process limits used; no canonical cgroup wrapper |
+| Current sample-set ZIP | Ready | Validated, deterministic, privately retained |
 | Full-column publication permission | Unknown | Human must ask; do not infer |
 
 ## Recommended review package
@@ -182,7 +182,7 @@ Do not call the large derived `function_results.json` an ingest package.
 | `~/.cache/glaurung/decbench-current-e170a2b4/scoreboard-e170a2b4.toml` | Local scoreboard | `fd9a4fdb6df87650093629efd0aa26904bb29b52410de79559b778a42f04577c` |
 | `~/.cache/glaurung/decbench-current-e170a2b4/audited-score-e170a2b4.json` | Merged audit | `b3549cfce21f75a40b6414e2287d94f6591164b35a5da129b3726d58bba2db58` |
 | Fresh current eval-kit ZIP | Official input | `4584fa9823a589c6e98e3d24659a12e2933f7ff82d420402320e718ecfb7082c` |
-| Fresh current `results.zip` | Human-review candidate | **Not yet generated** |
+| Fresh current `results.zip` | Human-review candidate | `1d88c5377906b4c3e5a38ef2c187cf5a0a9f47c65919b502355b2aaef7662459` |
 
 The current kit was downloaded from the README's Hugging Face URL at
 `2026-09-14T10:47:40Z` to
@@ -192,6 +192,79 @@ binaries and 250 targets, and declares manifest SHA-256
 `dee8ac8d686d7563730452a3645fe030658b6f16914e3ec8a063e137a757257d`.
 Its own README explicitly forbids executing the binaries; all preparation must
 remain static analysis only.
+
+## Prepared candidate, 2026-09-14
+
+The candidate was generated from the current clean `origin/master` revision
+`0892552157be6bd9267007231419ff6606a2dd38` in the isolated worktree
+`~/.cache/glaurung/decbench-submit-08925521`. The `e170a2b4` campaign revision
+contains additional source-CFG comparison code but no additional decompiler
+output changes relative to this main revision, so the public main revision is
+the clearer submission identity.
+
+Build and run facts:
+
+| Fact | Value |
+|---|---|
+| Build | `uv sync --locked --dev`; `uv run maturin develop --release` |
+| CLI version | `glaurung 0.1.0` |
+| CLI launcher SHA-256 | `0ce0c150b1b0a705b4095c1e51d6b09c307cf2f0bc706f3a2601f1e1bfaadd86` |
+| Native extension SHA-256 | `f6dd812b673bf8b0597ac12f47dafa5fb47f79a29d86cbba4e291dae0b6de156` |
+| Execution | static analysis; eight binary-level workers |
+| Limits | 3,600s per process; 600,000ms per function |
+| Wall time | 8.33s |
+| Sum of binary wall times / targets | 0.212600166s per function |
+| Peak runner RSS | 213,592 KiB |
+| Coverage | 224/224 binaries; 250/250 functions |
+| Failures/timeouts | 0/224 |
+
+The packaged metadata says `is_llm_based: false`, identifies the project URL,
+and reports the end-to-end average time above. Two independent invocations of
+the kit's `package.py` produced byte-identical archives. `unzip -t` reported no
+errors. Direct reconciliation found zero missing and zero extra target
+identities, 224 C members, and one `results.json` member.
+
+Candidate location:
+
+`~/.cache/glaurung/decbench-submission-review-20260914/glaurung-results-git-08925521.zip`
+
+Supporting hashes:
+
+| Artifact | SHA-256 |
+|---|---|
+| Candidate ZIP | `1d88c5377906b4c3e5a38ef2c187cf5a0a9f47c65919b502355b2aaef7662459` |
+| Run diagnostics | `930819613095724c52a5ab7fd6660d7fd04c766baeacea680870ad6e6fbf840e` |
+| Pre-package `results.json` | `ad6ee6c0af79ec8640516d65fdbc7366c2b234e64297ffebee7959ea1c7e5adf` |
+
+### Private ingest rehearsal
+
+DecBench `5818d673b2ec91d0889897260ac6d7459e9ae326` ingested the candidate into an
+isolated copy of the local sample tree and reported:
+
+```text
+Ingested glaurung-review: 224 binaries, 250 functions
+(221 relabeled to DWARF names, 0 off-manifest dropped, 0 missing).
+```
+
+The ingest exited zero after 24:01.56. Its inline results were:
+
+| Metric | Finite | Perfect | Mean / note |
+|---|---:|---:|---|
+| Type match | 235 | 19 | 0.2326393894 |
+| Byte match | 250 | 12 | 0.3038986674; 247/250 compiled |
+| GED | 0 | — | local scoring tree lacks required preprocessed `.i` sources |
+
+The missing GED values are a property of this retained local scoring tree, not
+of the submitted C or manifest resolution. A second attempted isolated ingest
+against the retained full tree showed the same absent-source condition and was
+stopped instead of spending another 24 minutes to produce zero GED rows.
+DecBench's maintainer-side tree must compute authoritative GED. The existing
+full-corpus GED projection must not be substituted for this blinded sample-set
+score.
+
+The rehearsal logs and inline summary are retained under
+`~/.cache/glaurung/decbench-submission-review-20260914/`. No upstream tree was
+modified.
 
 ## Human-only final checklist
 
