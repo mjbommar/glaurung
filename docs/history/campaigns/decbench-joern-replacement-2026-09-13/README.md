@@ -9,6 +9,9 @@ Choose the shortest document that answers the question at hand:
 - [coverage and scoring](COVERAGE-AND-SCORING.md): denominators, completeness,
   and exact GED comparison;
 - [performance](PERFORMANCE.md): wall time, memory, and interpretation;
+- [leaderboard submission status](LEADERBOARD-SUBMISSION-STATUS.md): the
+  audited four-metric score, why it is not a current-code submission, and the
+  exact refresh required;
 - [methodology and reproduction](METHODOLOGY.md): pinned inputs, commands,
   controls, and artifact integrity;
 - [difference review](DIFFERENCE-REVIEW.md): exhaustive classification of the
