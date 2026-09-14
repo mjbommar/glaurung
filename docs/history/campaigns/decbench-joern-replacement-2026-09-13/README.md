@@ -5,6 +5,9 @@
 This directory is the complete internal record of the full-corpus comparison.
 Choose the shortest document that answers the question at hand:
 
+- [submission review packet](SUBMISSION-REVIEW-PACKET.md): prior accepted
+  submission path, upstream changes, current readiness gaps, and the human-only
+  packaging checklist;
 - [Executive summary](EXECUTIVE-SUMMARY.md): conclusions and headline numbers;
 - [coverage and scoring](COVERAGE-AND-SCORING.md): denominators, completeness,
   and exact GED comparison;
