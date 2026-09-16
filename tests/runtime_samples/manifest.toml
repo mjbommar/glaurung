@@ -1,0 +1,550 @@
+version = 1
+
+# Every source has a safe control and an adverse scenario. expected_* describes
+# the process-level oracle; semantic memory and sink oracles will be added as
+# normalized capture support lands.
+
+[[sample]]
+id = "normal_open_file"
+category = "normal"
+source = "src/normal_open_file.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "normal_create_file"
+category = "normal"
+source = "src/normal_create_file.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "normal_read_file"
+category = "normal"
+source = "src/normal_read_file.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "normal_write_file"
+category = "normal"
+source = "src/normal_write_file.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "normal_append_file"
+category = "normal"
+source = "src/normal_append_file.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "normal_stat_file"
+category = "normal"
+source = "src/normal_stat_file.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "normal_mmap_read"
+category = "normal"
+source = "src/normal_mmap_read.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "normal_pipe_roundtrip"
+category = "normal"
+source = "src/normal_pipe_roundtrip.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "normal_socketpair"
+category = "normal"
+source = "src/normal_socketpair.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "normal_dup_fd"
+category = "normal"
+source = "src/normal_dup_fd.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "normal_environment"
+category = "normal"
+source = "src/normal_environment.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "normal_arguments"
+category = "normal"
+source = "src/normal_arguments.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "normal_heap_lifecycle"
+category = "normal"
+source = "src/normal_heap_lifecycle.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "normal_fork_wait"
+category = "normal"
+source = "src/normal_fork_wait.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "normal_stdin_read"
+category = "normal"
+source = "src/normal_stdin_read.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "crash_null_read"
+category = "crash"
+source = "src/crash_null_read.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "signal:SIGSEGV"
+
+[[sample]]
+id = "crash_null_write"
+category = "crash"
+source = "src/crash_null_write.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "signal:SIGSEGV"
+
+[[sample]]
+id = "crash_abort"
+category = "crash"
+source = "src/crash_abort.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "signal:SIGABRT"
+
+[[sample]]
+id = "crash_trap"
+category = "crash"
+source = "src/crash_trap.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "signal:SIGTRAP"
+
+[[sample]]
+id = "crash_raise_segv"
+category = "crash"
+source = "src/crash_raise_segv.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "signal:SIGSEGV"
+
+[[sample]]
+id = "crash_raise_bus"
+category = "crash"
+source = "src/crash_raise_bus.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "signal:SIGBUS"
+
+[[sample]]
+id = "crash_raise_fpe"
+category = "crash"
+source = "src/crash_raise_fpe.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "signal:SIGFPE"
+
+[[sample]]
+id = "crash_raise_ill"
+category = "crash"
+source = "src/crash_raise_ill.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "signal:SIGILL"
+
+[[sample]]
+id = "crash_assert"
+category = "crash"
+source = "src/crash_assert.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "signal:SIGABRT"
+
+[[sample]]
+id = "crash_guard_read"
+category = "crash"
+source = "src/crash_guard_read.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "signal:SIGSEGV"
+
+[[sample]]
+id = "crash_guard_write"
+category = "crash"
+source = "src/crash_guard_write.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "signal:SIGSEGV"
+
+[[sample]]
+id = "crash_readonly_write"
+category = "crash"
+source = "src/crash_readonly_write.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "signal:SIGSEGV"
+
+[[sample]]
+id = "crash_execute_nonexec"
+category = "crash"
+source = "src/crash_execute_nonexec.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "signal:SIGSEGV"
+
+[[sample]]
+id = "crash_bad_function_pointer"
+category = "crash"
+source = "src/crash_bad_function_pointer.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "signal:SIGSEGV"
+
+[[sample]]
+id = "crash_stack_overflow"
+category = "crash"
+source = "src/crash_stack_overflow.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "signal:SIGSEGV"
+
+[[sample]]
+id = "memory_struct_field_overwrite"
+category = "memory_corruption"
+source = "src/memory_struct_field_overwrite.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "memory_heap_canary_overwrite"
+category = "memory_corruption"
+source = "src/memory_heap_canary_overwrite.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "memory_off_by_one"
+category = "memory_corruption"
+source = "src/memory_off_by_one.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "memory_memcpy_overflow"
+category = "memory_corruption"
+source = "src/memory_memcpy_overflow.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "memory_memmove_overflow"
+category = "memory_corruption"
+source = "src/memory_memmove_overflow.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "memory_strcpy_overflow"
+category = "memory_corruption"
+source = "src/memory_strcpy_overflow.c"
+cflags = ["-U_FORTIFY_SOURCE", "-D_FORTIFY_SOURCE=0", "-fno-builtin"]
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "memory_strcat_overflow"
+category = "memory_corruption"
+source = "src/memory_strcat_overflow.c"
+cflags = ["-U_FORTIFY_SOURCE", "-D_FORTIFY_SOURCE=0", "-fno-builtin"]
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "memory_sprintf_overflow"
+category = "memory_corruption"
+source = "src/memory_sprintf_overflow.c"
+cflags = ["-U_FORTIFY_SOURCE", "-D_FORTIFY_SOURCE=0", "-fno-builtin"]
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "memory_read_overflow"
+category = "memory_corruption"
+source = "src/memory_read_overflow.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "memory_integer_truncation"
+category = "memory_corruption"
+source = "src/memory_integer_truncation.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "memory_underallocation"
+category = "memory_corruption"
+source = "src/memory_underallocation.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "memory_index_write"
+category = "memory_corruption"
+source = "src/memory_index_write.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "memory_format_n"
+category = "memory_corruption"
+source = "src/memory_format_n.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "memory_stale_pointer_write"
+category = "memory_corruption"
+source = "src/memory_stale_pointer_write.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "memory_overlapping_copy"
+category = "memory_corruption"
+source = "src/memory_overlapping_copy.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "danger_path_traversal"
+category = "dangerous"
+source = "src/danger_path_traversal.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "danger_command_argument"
+category = "dangerous"
+source = "src/danger_command_argument.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "danger_format_string"
+category = "dangerous"
+source = "src/danger_format_string.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "danger_rwx_mapping"
+category = "dangerous"
+source = "src/danger_rwx_mapping.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "danger_rw_to_rx"
+category = "dangerous"
+source = "src/danger_rw_to_rx.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "danger_mprotect_exec"
+category = "dangerous"
+source = "src/danger_mprotect_exec.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "danger_dlopen_input"
+category = "dangerous"
+source = "src/danger_dlopen_input.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+ldflags = ["-ldl"]
+
+[[sample]]
+id = "danger_symlink_follow"
+category = "dangerous"
+source = "src/danger_symlink_follow.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "danger_world_writable"
+category = "dangerous"
+source = "src/danger_world_writable.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "danger_predictable_temp"
+category = "dangerous"
+source = "src/danger_predictable_temp.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "danger_large_allocation"
+category = "dangerous"
+source = "src/danger_large_allocation.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "danger_ioctl_input"
+category = "dangerous"
+source = "src/danger_ioctl_input.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "danger_bind_listener"
+category = "dangerous"
+source = "src/danger_bind_listener.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "danger_fork_tree"
+category = "dangerous"
+source = "src/danger_fork_tree.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
+[[sample]]
+id = "danger_environment_path"
+category = "dangerous"
+source = "src/danger_environment_path.c"
+good = "good"
+bad = "bad"
+expected_good = "exit:0"
+expected_bad = "exit:0"
+
