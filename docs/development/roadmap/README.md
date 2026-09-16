@@ -69,6 +69,7 @@ record, carrying the commit for every landed item.
 | [source-semantics.md](source-semantics.md) | what to build on the source front end now the dependence graphs exist — declared types, interprocedural flow, and the solver-backed path feasibility the lowering's 18.7% coverage currently gates |
 | [source-analysis-extraction.md](source-analysis-extraction.md) | extract the native C source-analysis and Joern-parity boundary into a standalone Rust crate and Maturin/PyO3 package without duplicating its implementation |
 | [native-decoders.md](native-decoders.md) | replace Capstone with portable, optimized Glaurung-native Rust decoders and a ported upstream QA/QC estate |
+| [runtime-analysis.md](runtime-analysis.md) | turn the 60-program runtime corpus into one process-capsule, live/core acquisition, crash/corruption/context analysis, and trace-guided hybrid reasoning programme |
 | [../test-estate/README.md](../test-estate/README.md) | R7 — the estate-hygiene layer these sit on top of |
 
 ## Progress
