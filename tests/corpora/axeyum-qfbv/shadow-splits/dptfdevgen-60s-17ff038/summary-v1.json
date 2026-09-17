@@ -1,0 +1,11 @@
+{
+  "class_pairs": {
+    "sat/unknown": 21
+  },
+  "content_bytes": 483162,
+  "decided_by": {
+    "z3": 21
+  },
+  "distinct_queries": 21,
+  "schema": "glaurung-shadow-split-summary-v1"
+}

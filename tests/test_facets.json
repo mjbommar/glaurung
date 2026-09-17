@@ -1,10 +1,10 @@
 {
  "note": "Test files classified by what they NEED. Applied as pytest markers by python/tests/conftest.py. Regenerate with tools/gen_test_facets.py; do not hand-edit.",
  "counts": {
-  "core": 329,
+  "core": 332,
   "lfs": 114,
   "fixtures": 38,
-  "toolchain": 37,
+  "toolchain": 38,
   "docker": 20,
   "llm": 5,
   "decbench": 5
@@ -58,7 +58,13 @@
   "test_axeyum_lineage_gate.py": [
    "core"
   ],
+  "test_axeyum_shadow_capture.py": [
+   "core"
+  ],
   "test_axeyum_shard_corpus.py": [
+   "core"
+  ],
+  "test_axeyum_split_verdicts.py": [
    "core"
   ],
   "test_axeyum_validate_shadow_splits.py": [
@@ -967,6 +973,9 @@
   "test_runtime_classifier.py": [
    "core"
   ],
+  "test_runtime_sample_harness.py": [
+   "toolchain"
+  ],
   "test_rust_sysroot_harvest.py": [
    "toolchain"
   ],
@@ -1007,6 +1016,9 @@
    "core"
   ],
   "test_source_cfg_provider.py": [
+   "core"
+  ],
+  "test_source_cfg_unscored_coverage.py": [
    "core"
   ],
   "test_source_dataflow.py": [

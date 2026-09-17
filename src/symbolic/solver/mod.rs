@@ -784,13 +784,269 @@ fn maybe_dump_shadow_split(
         return;
     }
     let hex: String = hash.iter().map(|byte| format!("{byte:02x}")).collect();
-    if let Err(error) =
-        publish_shadow_split_bytes(dir, &hex, script.as_bytes(), z3_class, axeyum_class)
-    {
-        eprintln!("[glaurung-shadow-split] failed to publish {hex}: {error}");
-        return;
+    // The z3-parses-it check (solver-032). The linked libz3 parses the exact
+    // bytes about to be published; a script it rejects is an exporter defect,
+    // not a solver split, and goes to `malformed/` + `malformed.tsv` so no
+    // sweep over `shadow-splits.tsv` can count it as a solver miss again.
+    match publish_shadow_split_checked(dir, &hex, &script, z3_class, axeyum_class) {
+        Ok(ShadowSplitRoute::Indexed) => {
+            // The nondecided backend's stable reason class, beside the index
+            // and never in identity (solver-015): the capture tier's report
+            // histograms it, and `wall-timeout` versus `resource-limit`
+            // versus `error` is the attribution the next fix needs.
+            let (backend, reason) = if matches!(z3, SolveResult::Sat(_) | SolveResult::Unsat) {
+                ("axeyum", shadow_nondecision_reason(axeyum))
+            } else {
+                ("z3", shadow_nondecision_reason(z3))
+            };
+            if let Err(error) = append_shadow_nondecision_reason(dir, &hex, backend, reason) {
+                eprintln!("[glaurung-shadow-split] failed to record the reason for {hex}: {error}");
+            }
+        }
+        Ok(ShadowSplitRoute::Malformed(error)) => {
+            eprintln!("[glaurung-shadow-split] z3 rejects {hex}: {error}");
+        }
+        Err(error) => {
+            eprintln!("[glaurung-shadow-split] failed to publish {hex}: {error}");
+            return;
+        }
     }
     seen.insert(identity);
+}
+
+/// The stable nondecision class of a result that did not decide:
+/// `wall-timeout` / `resource-limit` / `other` for `Unknown`, `error` for
+/// `Error` (its text is deliberately not recorded: solver-015), and
+/// `no-solver` / `decided` for the remaining variants so a caller never has
+/// to special-case them.
+fn shadow_nondecision_reason(result: &SolveResult) -> &'static str {
+    match result {
+        SolveResult::Unknown(reason) => reason.as_str(),
+        SolveResult::Error(_) => "error",
+        SolveResult::NoSolver => "no-solver",
+        SolveResult::Sat(_) | SolveResult::Unsat => "decided",
+    }
+}
+
+/// Publish a both-decided disagreement -- z3 `sat` against Axeyum `unsat` or
+/// the reverse -- under `<dir>/disagreements/` and index it in
+/// `<dir>/disagreements.tsv` (`hash`, z3 class, axeyum class). A disagreement
+/// is a soundness finding on one side or the other, and until 2026-09-17 the
+/// only trace of one was a counter in the process summary: the bytes that
+/// reproduce it were never kept. Same gate as the split capture
+/// (`GLAURUNG_DUMP_SHADOW_SPLITS`), same per-process de-duplication, no cost
+/// when the backends agree.
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+fn maybe_dump_shadow_disagreement(
+    pool: &ExprPool,
+    asserts: &[Assert],
+    z3: &SolveResult,
+    axeyum: &SolveResult,
+) {
+    use sha2::{Digest, Sha256};
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+
+    static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+    static SEEN: OnceLock<Mutex<HashSet<[u8; 32]>>> = OnceLock::new();
+
+    if !is_shadow_disagreement(z3, axeyum) {
+        return;
+    }
+    let dir =
+        DIR.get_or_init(|| std::env::var_os("GLAURUNG_DUMP_SHADOW_SPLITS").map(PathBuf::from));
+    let Some(dir) = dir.as_ref() else { return };
+
+    let (script, _names) = pipe::build_script(pool, asserts);
+    let hash: [u8; 32] = Sha256::digest(script.as_bytes()).into();
+    let seen = SEEN.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut seen = seen.lock().unwrap();
+    if seen.contains(&hash) {
+        return;
+    }
+    let hex: String = hash.iter().map(|byte| format!("{byte:02x}")).collect();
+    let z3_class = shadow_result_class(z3);
+    let axeyum_class = shadow_result_class(axeyum);
+    eprintln!("[glaurung-shadow-split] DISAGREEMENT {hex}: z3 {z3_class}, axeyum {axeyum_class}");
+    if let Err(error) =
+        publish_shadow_disagreement(dir, &hex, script.as_bytes(), z3_class, axeyum_class)
+    {
+        eprintln!("[glaurung-shadow-split] failed to publish disagreement {hex}: {error}");
+        return;
+    }
+    seen.insert(hash);
+}
+
+/// Both backends decided, and differently.
+fn is_shadow_disagreement(z3: &SolveResult, axeyum: &SolveResult) -> bool {
+    matches!(
+        (z3, axeyum),
+        (SolveResult::Sat(_), SolveResult::Unsat) | (SolveResult::Unsat, SolveResult::Sat(_))
+    )
+}
+
+#[cfg(feature = "solver-z3")]
+fn publish_shadow_disagreement(
+    dir: &std::path::Path,
+    hex: &str,
+    script: &[u8],
+    z3_class: &str,
+    axeyum_class: &str,
+) -> std::io::Result<()> {
+    use std::io::Write;
+
+    publish_query_file(&dir.join("disagreements"), hex, script)?;
+    let mut index = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("disagreements.tsv"))?;
+    writeln!(index, "{hex}\t{z3_class}\t{axeyum_class}")
+}
+
+/// `<dir>/nondecisions.tsv`: `hash`, the backend that did not decide, and its
+/// stable reason class -- one row per indexed split.
+#[cfg(feature = "solver-z3")]
+fn append_shadow_nondecision_reason(
+    dir: &std::path::Path,
+    hex: &str,
+    backend: &str,
+    reason: &str,
+) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut index = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("nondecisions.tsv"))?;
+    writeln!(index, "{hex}\t{backend}\t{reason}")
+}
+
+/// Where a shadow split went: `shadow-splits.tsv`, or `malformed.tsv` with
+/// z3's parse error.
+#[cfg(feature = "solver-z3")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ShadowSplitRoute {
+    Indexed,
+    Malformed(String),
+}
+
+/// Publish one split after the linked libz3 has parsed the exact bytes: a
+/// script z3 accepts goes to `shadow-splits.tsv`; one it rejects goes to
+/// `malformed/` + `malformed.tsv` and never to the split index.
+#[cfg(feature = "solver-z3")]
+fn publish_shadow_split_checked(
+    dir: &std::path::Path,
+    hex: &str,
+    script: &str,
+    z3_class: &str,
+    axeyum_class: &str,
+) -> std::io::Result<ShadowSplitRoute> {
+    match z3_parse_check::z3_parse_error(script) {
+        Ok(()) => {
+            publish_shadow_split_bytes(dir, hex, script.as_bytes(), z3_class, axeyum_class)?;
+            Ok(ShadowSplitRoute::Indexed)
+        }
+        Err(error) => {
+            publish_malformed_shadow_split(
+                dir,
+                hex,
+                script.as_bytes(),
+                z3_class,
+                axeyum_class,
+                &error,
+            )?;
+            Ok(ShadowSplitRoute::Malformed(error))
+        }
+    }
+}
+
+/// Ask the linked libz3 whether it parses a script, without solving it.
+///
+/// The `z3` crate's `Solver::from_string` swallows parse errors (it installs a
+/// null error handler and never reads the error code), and it hides the raw
+/// context, so this talks to `z3-sys` directly. `Z3_solver_from_string`
+/// ignores `check-sat`/`get-value`, so nothing here costs solver time.
+#[cfg(feature = "solver-z3")]
+mod z3_parse_check {
+    use std::ffi::{CStr, CString};
+
+    use z3_sys::{
+        ErrorCode, Z3_del_config, Z3_del_context, Z3_get_error_code, Z3_get_error_msg,
+        Z3_mk_config, Z3_mk_context, Z3_mk_solver, Z3_set_error_handler, Z3_solver_dec_ref,
+        Z3_solver_from_string, Z3_solver_inc_ref,
+    };
+
+    /// `Ok(())` when z3 accepts every command in `script`; `Err(text)` with
+    /// z3's own message (`line N column M: invalid extract application`, ...)
+    /// when it does not.
+    pub(super) fn z3_parse_error(script: &str) -> Result<(), String> {
+        let Ok(source) = CString::new(script) else {
+            return Err("script contains a NUL byte".to_string());
+        };
+        // SAFETY: a private config/context/solver triple is created, used and
+        // destroyed inside this function; the error handler is cleared so a
+        // parse failure sets the context's error code instead of aborting;
+        // every pointer read is a valid, live libz3 object of the right kind;
+        // the message returned by `Z3_get_error_msg` is copied before the
+        // context that owns it is deleted.
+        unsafe {
+            let config = Z3_mk_config();
+            let context = Z3_mk_context(config);
+            Z3_del_config(config);
+            Z3_set_error_handler(context, None);
+            let solver = Z3_mk_solver(context);
+            Z3_solver_inc_ref(context, solver);
+            Z3_solver_from_string(context, solver, source.as_ptr());
+            let code = Z3_get_error_code(context);
+            let outcome = if code == ErrorCode::OK {
+                Ok(())
+            } else {
+                let message = Z3_get_error_msg(context, code);
+                Err(if message.is_null() {
+                    format!("z3 error {code:?}")
+                } else {
+                    CStr::from_ptr(message).to_string_lossy().into_owned()
+                })
+            };
+            Z3_solver_dec_ref(context, solver);
+            Z3_del_context(context);
+            outcome
+        }
+    }
+}
+
+/// Publish a z3-rejected split under `<dir>/malformed/` and index it in
+/// `<dir>/malformed.tsv` (`hash`, z3 class, axeyum class, z3's error), never
+/// in `shadow-splits.tsv`. The bytes stay content-addressed so the exporter
+/// defect is reproducible; the error text is recorded, not part of identity.
+#[cfg(feature = "solver-z3")]
+fn publish_malformed_shadow_split(
+    dir: &std::path::Path,
+    hex: &str,
+    script: &[u8],
+    z3_class: &str,
+    axeyum_class: &str,
+    error: &str,
+) -> std::io::Result<()> {
+    use std::io::Write;
+
+    publish_query_file(&dir.join("malformed"), hex, script)?;
+    let one_line: String = error
+        .chars()
+        .map(|c| {
+            if c == '\t' || c == '\n' || c == '\r' {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    let mut index = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("malformed.tsv"))?;
+    writeln!(index, "{hex}\t{z3_class}\t{axeyum_class}\t{one_line}")
 }
 
 #[cfg(feature = "solver-z3")]
@@ -959,6 +1215,39 @@ pub fn shadow_diff_stats() -> (u64, u64, u64, u64) {
     )
 }
 
+/// One line summarizing this thread's process-wide engine constraint cache
+/// (`GLAURUNG_ENGINE_CONSTRAINT_CACHE`, ADR-0303): its policy and traffic.
+/// Printed by `examples/ioctlance` beside the Axeyum-side cache counters so an
+/// A/B of the two caches reads both from one stderr. `Err` carries the same
+/// configuration error the solve path would have reported.
+#[cfg(feature = "solver-axeyum")]
+pub fn engine_cache_summary_line() -> Result<String, String> {
+    let policy = process_cache_policy()?;
+    let stats = process_cache_stats()?;
+    Ok(format!(
+        "[engine-cache] policy={} lookups={} exact-sat-hits={} exact-unsat-hits={} \
+         sat-superset-hits={} unsat-subset-hits={} misses={} replay-attempts={} \
+         replay-successes={} replay-failures={} insertions={} evictions={} \
+         oversize-bypasses={} entries={} assertion-refs={} model-values={}",
+        policy.as_str(),
+        stats.lookups,
+        stats.exact_sat_hits,
+        stats.exact_unsat_hits,
+        stats.sat_superset_hits,
+        stats.unsat_subset_hits,
+        stats.misses,
+        stats.sat_replay_attempts,
+        stats.sat_replay_successes,
+        stats.sat_replay_failures,
+        stats.insertions,
+        stats.evictions,
+        stats.oversize_bypasses,
+        stats.entries,
+        stats.assertion_refs,
+        stats.model_values,
+    ))
+}
+
 /// `(solves, timeouts)` issued on this thread since the last [`reset_solver_meter`].
 pub fn solver_meter() -> (u64, u64) {
     (SOLVE_COUNT.with(Cell::get), TIMEOUT_COUNT.with(Cell::get))
@@ -1116,6 +1405,7 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
             SHADOW_Z3_NANOS.fetch_add(z3_cold_nanos, Ordering::Relaxed);
             SHADOW_AX_NANOS.fetch_add(axeyum_warm_nanos, Ordering::Relaxed);
             maybe_dump_shadow_split(pool, asserts, &rz, &raw);
+            maybe_dump_shadow_disagreement(pool, asserts, &rz, &raw);
             LAST_SOLVE_TIMING.with(|timing| {
                 timing.set(SolveTiming {
                     total_nanos: total_started.elapsed().as_nanos() as u64,
@@ -1305,6 +1595,7 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                 SHADOW_UNK_SPLIT.fetch_add(1, Ordering::Relaxed);
             }
             maybe_dump_shadow_split(pool, asserts, &rz, &ra);
+            maybe_dump_shadow_disagreement(pool, asserts, &rz, &ra);
             LAST_SOLVE_TIMING.with(|timing| {
                 timing.set(SolveTiming {
                     total_nanos: total_started.elapsed().as_nanos() as u64,
@@ -1769,15 +2060,100 @@ fn replace_axeyum_timing(
     execution: Option<AxeyumExecutionClass>,
 ) {
     let previous = LAST_SOLVE_TIMING.with(Cell::get);
+    // When `solve()` already timed Z3 (production Z3, shadow, or the paired
+    // fair-shadow rotation), `axeyum_nanos` is the compatibility alias for the
+    // Axeyum cell it measured, not the wrapper. Overwriting it with the wrapper
+    // time made `z3_nanos + axeyum_nanos > total_nanos` on every fair-shadow
+    // check since 2c999b67 (2026-07-20), so the ordered-trace producer
+    // validator rejected every `solver-z3,solver-axeyum` trace with
+    // "per-backend timing exceeds total timing". Found 2026-09-17 in the
+    // six-cell rerun preflight (docs/development/six-cell-rerun-2026-09-17.md).
+    // The wrapper time is the Axeyum time only in an Axeyum-only measurement.
+    let z3_timed = previous.z3_nanos.is_some();
     LAST_SOLVE_TIMING.with(|timing| {
         timing.set(SolveTiming {
             total_nanos: wrapper_nanos,
-            axeyum_nanos: Some(wrapper_nanos),
-            axeyum_outcome: Some(SolveOutcome::from(result)),
+            axeyum_nanos: if z3_timed {
+                previous.axeyum_nanos
+            } else {
+                Some(wrapper_nanos)
+            },
+            axeyum_outcome: if z3_timed {
+                previous.axeyum_outcome
+            } else {
+                Some(SolveOutcome::from(result))
+            },
             axeyum_execution: execution.or(previous.axeyum_execution),
             ..previous
         });
     });
+}
+
+#[cfg(all(test, feature = "solver-z3", feature = "solver-axeyum"))]
+mod fair_shadow_alias_tests {
+    use std::sync::Mutex;
+
+    use super::*;
+    use crate::ir::types::{CmpOp, Width};
+    use crate::symbolic::expr::Expr;
+
+    static ENVIRONMENT: Mutex<()> = Mutex::new(());
+
+    struct FairShadowEnvironment;
+
+    impl FairShadowEnvironment {
+        fn enable() -> Self {
+            std::env::set_var("GLAURUNG_FAIR_SHADOW", "1");
+            Self
+        }
+    }
+
+    impl Drop for FairShadowEnvironment {
+        fn drop(&mut self) {
+            std::env::remove_var("GLAURUNG_FAIR_SHADOW");
+        }
+    }
+
+    /// The legacy `z3_nanos`/`axeyum_nanos` aliases of a fair-shadow check are
+    /// the cold-Z3 and warm-Axeyum cells, and their sum fits inside the total:
+    /// the invariant `tools/axeyum/validate_ordered_trace.py` enforces on every
+    /// published trace. The engine-cache wrapper must not clobber them.
+    #[test]
+    fn fair_shadow_aliases_survive_the_engine_cache_wrapper() {
+        let _guard = ENVIRONMENT.lock().expect("environment lock");
+        let _environment = FairShadowEnvironment::enable();
+        let mut pool = ExprPool::new();
+        let x = pool.fresh_symbol(Width::W32);
+        let one = pool.constant(Width::W32, 1);
+        let equals = pool.intern(Expr::Cmp {
+            op: CmpOp::Eq,
+            a: x,
+            b: one,
+            width: Width::W32,
+        });
+        let mut prefix = WarmAssertionPrefix::default();
+        prefix.push();
+        let path_id = u64::MAX - 23;
+
+        let (result, _) = solve_for_path_delta(&pool, &[(equals, true)], path_id, 0, 1, &prefix);
+        assert!(matches!(result, SolveResult::Sat(_)));
+        let timing = last_solve_timing();
+        let z3_cold = timing.z3_cold_nanos.expect("fair shadow times cold Z3");
+        let axeyum_warm = timing
+            .axeyum_warm_nanos
+            .expect("fair shadow times warm Axeyum");
+        assert_eq!(timing.z3_nanos, Some(z3_cold));
+        assert_eq!(timing.axeyum_nanos, Some(axeyum_warm));
+        assert_eq!(timing.axeyum_outcome, Some(SolveOutcome::Sat));
+        assert!(
+            z3_cold + axeyum_warm <= timing.total_nanos,
+            "aliases {z3_cold}+{axeyum_warm} exceed total {}",
+            timing.total_nanos
+        );
+
+        axeyum_backend::close_fair_warm_path(path_id);
+        z3_backend::close_warm_path(path_id);
+    }
 }
 
 #[cfg(feature = "solver-axeyum")]
@@ -2144,10 +2520,85 @@ mod neutral_fair_shadow_tests {
 
 #[cfg(all(test, feature = "solver-z3"))]
 mod capture_tests {
+    use super::z3_parse_check::z3_parse_error;
     use super::{
-        append_capture_index, publish_query_file, publish_shadow_split_bytes, shadow_result_class,
-        should_capture_shadow_split, SolveResult, SolveUnknownReason,
+        append_capture_index, append_shadow_nondecision_reason, is_shadow_disagreement,
+        publish_query_file, publish_shadow_disagreement, publish_shadow_split_bytes,
+        publish_shadow_split_checked, shadow_nondecision_reason, shadow_result_class,
+        should_capture_shadow_split, ShadowSplitRoute, SolveResult, SolveUnknownReason,
     };
+
+    #[test]
+    fn a_disagreement_is_both_decided_and_different() {
+        let sat = SolveResult::Sat(Default::default());
+        let unsat = SolveResult::Unsat;
+        let unknown = SolveResult::Unknown(SolveUnknownReason::WallTimeout);
+        let error = SolveResult::Error("x".into());
+        assert!(is_shadow_disagreement(&sat, &unsat));
+        assert!(is_shadow_disagreement(&unsat, &sat));
+        assert!(!is_shadow_disagreement(&sat, &sat));
+        assert!(!is_shadow_disagreement(&unsat, &unsat));
+        assert!(!is_shadow_disagreement(&sat, &unknown));
+        assert!(!is_shadow_disagreement(&error, &unsat));
+        // A split is never a disagreement and a disagreement is never a split.
+        assert!(!should_capture_shadow_split(&sat, &unsat));
+    }
+
+    #[test]
+    fn nondecision_reason_is_the_stable_class_never_the_error_text() {
+        assert_eq!(
+            shadow_nondecision_reason(&SolveResult::Unknown(SolveUnknownReason::WallTimeout)),
+            "wall-timeout"
+        );
+        assert_eq!(
+            shadow_nondecision_reason(&SolveResult::Unknown(SolveUnknownReason::ResourceLimit)),
+            "resource-limit"
+        );
+        assert_eq!(
+            shadow_nondecision_reason(&SolveResult::Error("/home/someone/secret.sys".into())),
+            "error"
+        );
+        assert_eq!(shadow_nondecision_reason(&SolveResult::Unsat), "decided");
+    }
+
+    #[test]
+    fn disagreement_publication_keeps_bytes_under_its_own_directory_and_index() {
+        let directory = tempfile::tempdir().unwrap();
+        let hash = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        let script = b"(set-logic QF_BV)\n(assert false)\n(check-sat)\n";
+
+        publish_shadow_disagreement(directory.path(), hash, script, "sat", "unsat").unwrap();
+
+        assert_eq!(
+            std::fs::read(
+                directory
+                    .path()
+                    .join("disagreements")
+                    .join(format!("{hash}.smt2"))
+            )
+            .unwrap(),
+            script
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("disagreements.tsv")).unwrap(),
+            format!("{hash}\tsat\tunsat\n")
+        );
+        // Never in the split index, and never at the capture root.
+        assert!(!directory.path().join("shadow-splits.tsv").exists());
+        assert!(!directory.path().join(format!("{hash}.smt2")).exists());
+    }
+
+    #[test]
+    fn nondecision_reasons_append_beside_the_split_index() {
+        let directory = tempfile::tempdir().unwrap();
+        let hash = "1111111111111111111111111111111111111111111111111111111111111111";
+        append_shadow_nondecision_reason(directory.path(), hash, "axeyum", "wall-timeout").unwrap();
+        append_shadow_nondecision_reason(directory.path(), hash, "z3", "other").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("nondecisions.tsv")).unwrap(),
+            format!("{hash}\taxeyum\twall-timeout\n{hash}\tz3\tother\n")
+        );
+    }
 
     #[test]
     fn query_publication_is_idempotent_and_collision_safe() {
@@ -2218,6 +2669,95 @@ mod capture_tests {
         assert_eq!(
             std::fs::read_to_string(directory.path().join("shadow-splits.tsv")).unwrap(),
             format!("{hash}\tsat\tunknown\n")
+        );
+    }
+
+    /// The pre-solver-016 export shape: a 1-bit value declared as an 8-bit low
+    /// half makes the concat 57 bits wide, so the next `extract 63 8` is out of
+    /// range. z3's own parser rejects it; the in-process adapter of the day did
+    /// not, which is how 735 of these reached the corpus.
+    const BAD_EXTRACT: &str = "(set-logic QF_BV)\n\
+        (declare-const sym0_64 (_ BitVec 64))\n\
+        (assert (= ((_ extract 63 8) (concat ((_ extract 63 8) sym0_64) \
+        (ite (= sym0_64 #x0000000000000000) #b1 #b0))) ((_ extract 63 8) sym0_64)))\n\
+        (check-sat)\n(get-value (sym0_64))\n";
+
+    #[test]
+    fn z3_parse_check_accepts_a_rendered_query_and_names_a_bad_extract() {
+        use crate::ir::types::{CmpOp, Width};
+        use crate::symbolic::expr::{Expr, ExprPool};
+
+        let mut pool = ExprPool::new();
+        let x = pool.fresh_symbol(Width::W64);
+        let one = pool.constant(Width::W64, 1);
+        let equals = pool.intern(Expr::Cmp {
+            op: CmpOp::Eq,
+            a: x,
+            b: one,
+            width: Width::W64,
+        });
+        let (script, _names) = super::pipe::build_script(&pool, &[(equals, true)]);
+        assert!(
+            script.contains("(get-value"),
+            "the rendered script ends in get-value: {script}"
+        );
+        assert_eq!(z3_parse_error(&script), Ok(()));
+
+        let error = z3_parse_error(BAD_EXTRACT).unwrap_err();
+        assert!(
+            error.contains("invalid extract application"),
+            "z3 must name the malformed extract, got {error:?}"
+        );
+    }
+
+    #[test]
+    fn malformed_shadow_split_goes_to_malformed_tsv_never_the_split_index() {
+        let directory = tempfile::tempdir().unwrap();
+        let bad = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        let good = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        let well_formed = "(set-logic QF_BV)\n(declare-const x (_ BitVec 8))\n\
+            (assert (= x #x01))\n(check-sat)\n(get-value (x))\n";
+
+        let route =
+            publish_shadow_split_checked(directory.path(), bad, BAD_EXTRACT, "sat", "error")
+                .unwrap();
+        let ShadowSplitRoute::Malformed(error) = route else {
+            panic!("a z3-rejected script must be routed as malformed, got {route:?}");
+        };
+        assert!(error.contains("invalid extract application"), "{error}");
+        assert_eq!(
+            publish_shadow_split_checked(directory.path(), good, well_formed, "unknown", "sat")
+                .unwrap(),
+            ShadowSplitRoute::Indexed
+        );
+
+        // The malformed bytes are kept, content-addressed, under malformed/.
+        assert_eq!(
+            std::fs::read_to_string(
+                directory
+                    .path()
+                    .join("malformed")
+                    .join(format!("{bad}.smt2"))
+            )
+            .unwrap(),
+            BAD_EXTRACT
+        );
+        assert!(!directory.path().join(format!("{bad}.smt2")).exists());
+        // malformed.tsv carries the classes and z3's text; shadow-splits.tsv
+        // holds only the well-formed row.
+        let malformed = std::fs::read_to_string(directory.path().join("malformed.tsv")).unwrap();
+        assert!(
+            malformed.starts_with(&format!("{bad}\tsat\terror\t")),
+            "{malformed}"
+        );
+        assert!(
+            malformed.contains("invalid extract application"),
+            "{malformed}"
+        );
+        assert_eq!(malformed.lines().count(), 1);
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("shadow-splits.tsv")).unwrap(),
+            format!("{good}\tunknown\tsat\n")
         );
     }
 }

@@ -9,7 +9,7 @@ Three layers are covered, because each can be wrong on its own:
 * the **contract** the wrapper promises -- totality on any input, a stable
   feature-vector width, and a `hotspots` sort that a typo cannot silently skip.
 
-The Rust unit tests in `src/csource/metrics/tests.rs` already pin the *values*
+The Rust unit tests in cindergraph's `csource/metrics/tests.rs` already pin the *values*
 against hand-computed C. What is here is what only Python can check, plus a
 corpus pass over `tests/decompiler_fixtures/src` that would catch a boundary
 that serialized nothing.

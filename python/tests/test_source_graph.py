@@ -1,6 +1,6 @@
 """Graph export for C source, through `glaurung.source` and the CLI.
 
-The Rust unit tests in `src/syntax/graph_export.rs` and `src/csource/export.rs`
+The Rust unit tests in cindergraph's `syntax/graph_export.rs` and `csource/export.rs`
 pin the escaping, the totality and the shape of each writer against hand-written
 strings. What is here is what only Python can check:
 
@@ -46,8 +46,21 @@ int greet(const char *name, int times)
 
 @pytest.mark.core
 def test_the_choice_lists_come_from_rust():
-    """A format added in Rust must appear here without a second edit."""
-    assert set(glaurung.source.EXPORT_REPRS) == {"cfg", "ast", "ddg", "cdg", "pdg"}
+    """A format added in Rust must appear here without a second edit.
+
+    The facade needs no edit; this literal set is the pin that names each
+    representation the pinned cindergraph revision serves. ``ops`` (the
+    evaluation plan as typed operations) arrived with the re-pin to
+    cindergraph ``8bd2051`` on 2026-09-17.
+    """
+    assert set(glaurung.source.EXPORT_REPRS) == {
+        "cfg",
+        "ast",
+        "ddg",
+        "cdg",
+        "pdg",
+        "ops",
+    }
     assert set(glaurung.source.EXPORT_FORMATS) == {
         "dot",
         "graphml",
@@ -57,7 +70,7 @@ def test_the_choice_lists_come_from_rust():
 
 
 @pytest.mark.core
-@pytest.mark.parametrize("repr_name", ["cfg", "ast"])
+@pytest.mark.parametrize("repr_name", ["cfg", "ast", "ops"])
 @pytest.mark.parametrize("format_name", ["dot", "graphml", "json", "mermaid"])
 def test_every_representation_and_format_produces_a_named_graph(repr_name, format_name):
     graphs = glaurung.source.export_graphs(GREET, repr=repr_name, format=format_name)

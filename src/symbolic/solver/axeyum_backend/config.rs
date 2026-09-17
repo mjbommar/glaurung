@@ -196,16 +196,106 @@ pub(super) fn parse_replay_sat_cache_policy(
     })
 }
 
+/// The model preference `GLAURUNG_AXEYUM_MODEL_PREFERENCE` selects, read once.
+///
+/// `None` when the variable is unset: the `SolverConfig` then keeps Axeyum's
+/// own default, which is `ModelPreference::Any` unless the process carries
+/// Axeyum's `AXEYUM_MODEL_PREFERENCE` lever (ADR-2140). When both are set the
+/// Glaurung variable wins, because it is the one this adapter documents. A
+/// set-but-malformed value panics naming the variable, as
+/// `GLAURUNG_CONCRETIZATION_POLICY` does: a typo must not measure the shipped
+/// arm and report it as the other.
+pub(super) fn model_preference() -> Option<ModelPreference> {
+    *MODEL_PREFERENCE.get_or_init(|| {
+        parse_model_preference(std::env::var(MODEL_PREFERENCE_ENV).ok().as_deref())
+            .unwrap_or_else(|error| panic!("{error}"))
+    })
+}
+
+/// `any` | `zero` | `least-unsigned` (Axeyum's own spellings, so
+/// `prefer-zero` is accepted too; case-insensitive, whitespace trimmed).
+/// `None` for an unset variable; `Err` names the variable and the value.
+pub(super) fn parse_model_preference(
+    value: Option<&str>,
+) -> Result<Option<ModelPreference>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    ModelPreference::parse(&value.trim().to_ascii_lowercase())
+        .map(Some)
+        .ok_or_else(|| {
+            format!(
+                "{MODEL_PREFERENCE_ENV}={value:?} is not one of `any`, `zero`, `least-unsigned`; \
+                 refusing to run the default arm under a lever that was set"
+            )
+        })
+}
+
+/// The canonical-constraint-cache setting `GLAURUNG_AXEYUM_CANONICAL_CACHE`
+/// selects, read once (improvement-list item 5, Axeyum ADR-2144).
+///
+/// `None` when the variable is unset: the `SolverConfig` then keeps Axeyum's
+/// own default, `DEFAULT_CANONICAL_CACHE` (off) unless the process carries
+/// Axeyum's `AXEYUM_CANONICAL_CACHE` lever. When both are set the Glaurung
+/// variable wins. A set-but-malformed value panics naming the variable, as the
+/// model preference does.
+pub(super) fn canonical_cache() -> Option<bool> {
+    *CANONICAL_CACHE.get_or_init(|| {
+        parse_canonical_cache(std::env::var(CANONICAL_CACHE_ENV).ok().as_deref())
+            .unwrap_or_else(|error| panic!("{error}"))
+    })
+}
+
+/// `on` | `off` (Axeyum's own two spellings; case-insensitive, whitespace
+/// trimmed). `None` for an unset variable; `Err` names the variable and the
+/// value.
+pub(super) fn parse_canonical_cache(value: Option<&str>) -> Result<Option<bool>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    match value.trim().to_ascii_lowercase().as_str() {
+        "on" => Ok(Some(true)),
+        "off" => Ok(Some(false)),
+        _ => Err(format!(
+            "{CANONICAL_CACHE_ENV}={value:?} is not `on` or `off`; \
+             refusing to run the default arm under a lever that was set"
+        )),
+    }
+}
+
 pub(super) fn config() -> SolverConfig {
     config_with_work_budgets(solver_work_budgets())
 }
 
 pub(super) fn config_with_work_budgets(work_budgets: SolverWorkBudgets) -> SolverConfig {
+    build_config(work_budgets, model_preference(), canonical_cache())
+}
+
+/// The `SolverConfig` every Axeyum session this adapter creates is built from:
+/// the process check timeout, the AND-flattening lever, the progress-check
+/// budget, and -- when the caller names them -- the model preference and the
+/// canonical constraint cache. `None` leaves `SolverConfig::new()`'s value in
+/// place (see [`model_preference`] and [`canonical_cache`]); the production
+/// readers pass the cached levers, and the tests pass values so the settings
+/// are checked without touching the process environment.
+pub(super) fn build_config(
+    work_budgets: SolverWorkBudgets,
+    model_preference: Option<ModelPreference>,
+    canonical_constraint_cache: Option<bool>,
+) -> SolverConfig {
     let internal_and_flattening = std::env::var(INTERNAL_AND_FLATTENING_ENV)
         .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "on"));
     let config = SolverConfig::new()
         .with_timeout(check_timeout())
         .with_incremental_positive_and_flattening(internal_and_flattening);
+    let config = match model_preference {
+        Some(preference) => config.with_model_preference(preference),
+        None => config,
+    };
+    let config = match canonical_constraint_cache {
+        Some(enabled) => config.with_canonical_constraint_cache(enabled),
+        None => config,
+    };
     match work_budgets.axeyum_progress_checks {
         Some(limit) => config.with_resource_limit(limit),
         None => config,

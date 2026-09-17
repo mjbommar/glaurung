@@ -126,6 +126,11 @@ impl SnapshotIncrementalAxeyumSolver {
         self.solver.replay_checked_sat_cache_stats()
     }
 
+    /// The retained engine's own counters (canonical-cache traffic included).
+    pub(super) fn solver_stats(&self) -> IncrementalBvStats {
+        self.solver.stats()
+    }
+
     fn reset_session(&mut self) {
         self.arena = TermArena::new();
         self.stable_terms = StableTermCache::default();

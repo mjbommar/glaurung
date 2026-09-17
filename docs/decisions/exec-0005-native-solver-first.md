@@ -3,7 +3,7 @@
 > **Kind:** decision · **Status:** maintained
 
 > **Superseded in part by
-> [solver-032](solver-032-axeyum-is-always-authoritative.md).** Axeyum is now
+> [solver-037](solver-037-axeyum-is-always-authoritative.md).** Axeyum is now
 > the sole authoritative SAT/SMT backend. Z3 and pipe selection language below
 > records the historical design, not current policy.
 
@@ -25,7 +25,7 @@ in-process Rust.
 
 ## Historical decision
 
-The following four points describe the pre-`solver-032` state only:
+The following four points describe the pre-`solver-037` state only:
 
 1. **One seam.** `pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult`
    in `src/symbolic/solver/mod.rs`. Backends implement `Solver`
@@ -52,7 +52,7 @@ rev. It is roughly 5,100 lines of adapter across
 snapshot, translate, warm_paths, warm_stats}.rs`, and it carries the retained
 session, warm-path, and direct-delta machinery the one-shot trait cannot express.
 
-Before `solver-032`, `solve()`'s cascade among enabled backends was
+Before `solver-037`, `solve()`'s cascade among enabled backends was
 **z3 > axeyum > pipe**;
 a fourth backend, `solver-bitwuzla`, binds the Bitwuzla 0.9.1 C API directly and
 is deliberately excluded from selection — it exists only as a
@@ -74,7 +74,7 @@ that and is superseded.
   binding is thin and the C dependency is exactly what the shippability goal is
   trying to avoid. It became a benchmark cell instead.
 
-## Current wheel (superseded by solver-032)
+## Current wheel (superseded by solver-037)
 
 The ordinary wheel now ships the pure-Rust Axeyum backend because
 `default = ["triage-core", "solver-axeyum"]`. `solver-axeyum` implies

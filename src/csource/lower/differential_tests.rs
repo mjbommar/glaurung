@@ -16,9 +16,9 @@ use crate::analysis::cfg::{analyze_functions_bytes, Budgets};
 use crate::core::binary::Arch;
 use crate::csource::lower::differential::{compare, vectors, Verdict};
 use crate::csource::lower::{lower_function, LoweredFunction};
-use crate::csource::parse::parse;
 use crate::ir::lift_function::lift_function_from_bytes;
 use crate::ir::types::LlirFunction;
+use cindergraph::csource::parse::parse;
 
 /// The compiler/optimization lanes the harness builds for every fixture.
 const LANES: [&str; 4] = ["gcc-O0", "gcc-O2", "clang-O0", "clang-O2"];

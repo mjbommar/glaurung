@@ -197,6 +197,10 @@ has which gate to run before pushing what.
 
 - [`rust-crate-map.md`](rust-crate-map.md) — per-directory sizes, the feature
   table, and which build compiles what.
+- [`../development/cindergraph-migration-2026-09-17.md`](../development/cindergraph-migration-2026-09-17.md)
+  — the C source-analysis stack is the `cindergraph` crate, pinned by Git
+  revision; what stayed in `src/csource/` and why
+  ([`source-001`](../decisions/source-001-depend-on-cindergraph-by-git-rev.md)).
 - [`python-package-map.md`](python-package-map.md) — modules, the KB schema,
   the lazy CLI registry, the generated stubs.
 - [`module-boundaries.md`](module-boundaries.md) — seven boundaries to hold,

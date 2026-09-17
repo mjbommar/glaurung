@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "name": "glaurung-surfacepen-shadow-splits-v1",
+  "source": "Glaurung 46799b9; Axeyum 11b895a; fair shadow (cold z3 vs warm Axeyum), 60 seconds per function; scripts/shadow-capture.sh (solver-034); expected is the only backend-decided class",
+  "logic": "QF_BV",
+  "files": [
+    {
+      "path": "4d9952c994dad4ffffc2ceb9ae243552c55077391ccd60d2a68fd2550b87cc2b.smt2",
+      "expected": "sat",
+      "family": "shadow-axeyum-decided",
+      "tiers": [
+        "diagnostic",
+        "axeyum-decided",
+        "representative"
+      ]
+    }
+  ]
+}

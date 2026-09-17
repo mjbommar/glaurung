@@ -336,6 +336,7 @@ PURPOSES: dict[str, str] = {
     "GLAURUNG_PARSER_RECOVERY_DEMAND": "Fail (instead of skip) every parser-recovery test whose optional parser or corpus is missing.",
     "GLAURUNG_SIGS_NETWORK_TEST": "Opt in to the signature-publisher test that reads the on-disk harvest cache at `~/.cache/glaurung/system-libs`; skipped when unset.",
     "GLAURUNG_REDECOMP_FORCE": "Force re-decompilation even when cached output looks current.",
+    "GLAURUNG_TRACE_GIT_REV": "The 40-hex Glaurung commit an ordered-trace manifest records when the checkout has no `.git` (a `git archive` extraction); the manifest then says `revision_source: GLAURUNG_TRACE_GIT_REV` with `dirty: null`, which the native replay refuses as unproven-clean. Unset, `git rev-parse HEAD` is used.",
     "GLAURUNG_TRACE_ORACLE_VERSION": "Runtime version tag recorded into ordered-trace oracle output.",
     # --- Python: decbench (opt-in evaluation harness) -------------------
     "DECBENCH_DIR": "Path to the out-of-tree DecBench checkout.",
@@ -399,6 +400,26 @@ PURPOSES: dict[str, str] = {
     "GLAURUNG_AXEYUM_WARM_TIMEOUT_CONTINUE": "Toggle continuing on a warm axeyum path timeout instead of failing.",
     "GLAURUNG_AXEYUM_INTERNAL_AND_FLATTENING": "Toggle axeyum's internal AND-flattening optimization.",
     "GLAURUNG_AXEYUM_REPLAY_SAT_CACHE": "Cache policy for axeyum replay SAT results.",
+    "FAKE_MODE": (
+        "Test-only: selects what the scripted `ioctlance` stand-in in "
+        "`python/tests/test_axeyum_shadow_capture.py` publishes (`split`, `disagreement`, "
+        "`malformed`, `silent`, ...); read by no shipped code."
+    ),
+    "GLAURUNG_AXEYUM_MODEL_PREFERENCE": (
+        "Which model a `sat` returns from the axeyum backend: `any` (default, the search as shipped), "
+        "`zero` (axeyum's replay-checked bit-clearing pass on the lifted model) or `least-unsigned` "
+        "(`zero` plus the bounded magnitude ladder in the SMT-LIB front door). Forwarded to "
+        "`SolverConfig::model_preference` (axeyum ADR-2140); a malformed value refuses to run."
+    ),
+    "GLAURUNG_AXEYUM_CANONICAL_CACHE": (
+        "Whether every axeyum session this adapter creates keeps axeyum's canonical constraint "
+        "cache (axeyum ADR-2144): `on` | `off`, forwarded to `SolverConfig::canonical_constraint_cache`. "
+        "Unset keeps axeyum's own default (off unless the process carries `AXEYUM_CANONICAL_CACHE`). "
+        "Per solver, keyed by the sorted, duplicate-elided set of live assertion identities "
+        "(ADR-0303's key inside one arena); a cached `sat` is served only after its model replays "
+        "against the live set. Answers repeated checks on one path-owned warm session; cannot share "
+        "across paths, which is what `GLAURUNG_ENGINE_CONSTRAINT_CACHE` does. A malformed value refuses to run."
+    ),
     "GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS": "Cap the number of live warm axeyum paths kept.",
     "GLAURUNG_AXEYUM_WARM_MAX_ASSERTIONS_PER_PATH": "Cap assertions per warm axeyum path.",
     "GLAURUNG_ORDERED_TRACE_DIR": "Directory ordered symbolic traces are written to/read from.",

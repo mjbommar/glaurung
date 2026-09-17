@@ -2,7 +2,7 @@
 
 > **Kind:** decision · **Status:** maintained
 
-> **Authority update:** [solver-032](solver-032-axeyum-is-always-authoritative.md)
+> **Authority update:** [solver-037](solver-037-axeyum-is-always-authoritative.md)
 > makes Axeyum authoritative in all new traces. References below to a
 > Z3-authoritative result describe the historical traces that motivated this
 > measurement schema, not current solver selection.

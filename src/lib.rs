@@ -65,10 +65,9 @@ pub mod disasm;
 /// Low-Level Intermediate Representation (Phase 2)
 pub mod ir;
 
-/// Language-neutral parsing substrate: spans, interning, tokens, events, CFGs
-pub mod syntax;
-
-/// C source front end: lexer, parser, control flow, and the parity layer
+/// What Glaurung keeps of the C source front end: the C-to-LLIR lowering and
+/// the solver-backed equivalence and feasibility checks. The parser, CFG,
+/// dataflow, metrics, export and parity layers are the `cindergraph` crate.
 pub mod csource;
 
 /// Native decompiler-quality metrics: type recovery, and the scoring around it

@@ -89,7 +89,7 @@ mod tests;
 pub use ctype::CType;
 pub use func::{lower_function, lower_named_function, LoweredFunction, ParamSlot};
 
-use crate::syntax::ids::NodeId;
+use cindergraph::syntax::ids::NodeId;
 
 /// Why a function could not be lowered.
 ///
@@ -179,7 +179,7 @@ mod coverage {
             let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            let (tree, _) = crate::csource::parse::parse(&text).into_parts();
+            let (tree, _) = cindergraph::csource::parse::parse(&text).into_parts();
             for func in tree.functions(&text) {
                 if func.name.is_empty() {
                     continue;
@@ -237,7 +237,7 @@ mod construct_census {
     //! whatever is behind those. This asks the other question --- which
     //! constructs does each function contain --- so a capability bundle can be
     //! costed before it is built rather than after.
-    use crate::csource::parse::tag::NodeTag;
+    use cindergraph::csource::parse::tag::NodeTag;
     use std::collections::{BTreeMap, BTreeSet};
 
     /// One capability the lowering may or may not have.
@@ -271,14 +271,16 @@ mod construct_census {
             let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            let (tree, _) = crate::csource::parse::parse(&text).into_parts();
+            let (tree, _) = cindergraph::csource::parse::parse(&text).into_parts();
             let arena = tree.arena();
             let defined: BTreeSet<String> = tree
                 .functions(&text)
                 .iter()
                 .map(|f| f.name.clone())
                 .collect();
-            let flows = crate::csource::dataflow::analyze(&text).into_parts().0;
+            let flows = cindergraph::csource::dataflow::analyze(&text)
+                .into_parts()
+                .0;
 
             for func in tree.functions(&text) {
                 if func.name.is_empty() {
@@ -435,7 +437,7 @@ mod unresolved_census {
                 );
             }
 
-            let (tree, _) = crate::csource::parse::parse(&text).into_parts();
+            let (tree, _) = cindergraph::csource::parse::parse(&text).into_parts();
             // File-scope declarations: a `Decl` not inside any function body.
             let function_spans: Vec<_> = tree.functions(&text).iter().map(|f| f.span).collect();
             let spans = tree.token_spans(&text);
@@ -444,7 +446,7 @@ mod unresolved_census {
             for root_node in arena.roots().iter().copied() {
                 for node in arena.preorder(root_node) {
                     if arena.tag(node)
-                        != Some(crate::csource::parse::tag::NodeTag::DeclName.as_u16())
+                        != Some(cindergraph::csource::parse::tag::NodeTag::DeclName.as_u16())
                     {
                         continue;
                     }
@@ -463,7 +465,10 @@ mod unresolved_census {
                 }
             }
 
-            for flow in crate::csource::dataflow::analyze(&text).into_parts().0 {
+            for flow in cindergraph::csource::dataflow::analyze(&text)
+                .into_parts()
+                .0
+            {
                 for index in &flow.unresolved_uses {
                     let name = &flow.uses[*index as usize].name;
                     if let Some(body) = defines.get(name) {
@@ -552,13 +557,15 @@ mod call_census {
             let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            let (tree, _) = crate::csource::parse::parse(&text).into_parts();
+            let (tree, _) = cindergraph::csource::parse::parse(&text).into_parts();
             let defined: BTreeSet<String> = tree
                 .functions(&text)
                 .iter()
                 .map(|f| f.name.clone())
                 .collect();
-            let flows = crate::csource::dataflow::analyze(&text).into_parts().0;
+            let flows = cindergraph::csource::dataflow::analyze(&text)
+                .into_parts()
+                .0;
             // A name `#define`d in this file and *called* is a function-like
             // macro the parser could not expand, not a function.
             let macro_names = defined_macro_names(&text);
@@ -699,7 +706,7 @@ mod remaining_probe {
             let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            let (tree, _) = crate::csource::parse::parse(&text).into_parts();
+            let (tree, _) = cindergraph::csource::parse::parse(&text).into_parts();
             for func in tree.functions(&text) {
                 if func.name.is_empty() {
                     continue;

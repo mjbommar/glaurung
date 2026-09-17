@@ -53,11 +53,25 @@ xorf = { version = "0.13.0", default-features = false, features = ["binary-fuse"
 
 # Native in-process SMT solver (feature `solver-z3`); links libz3. Optional.
 z3 = { version = "0.12", optional = true }
+# The raw libz3 bindings the `z3` crate links, for the shadow-split capture's
+# z3-parses-it check (`Z3_solver_from_string` + `Z3_get_error_msg`); the crate
+# hides its context pointer and swallows parse errors (solver-037).
+z3-sys = { version = "0.8", optional = true }
 # Pure-Rust in-process SMT solver (feature `solver-axeyum`); no C dependency.
 # The exact git revision keeps recall builds independent of a machine-local
 # sibling checkout while preserving the minimal QF_BV consumer profile.
-axeyum-solver = { git = "https://github.com/mjbommar/axeyum.git", rev = "c38a9515e68e7427b1a41a7598805cf60686bd58", optional = true, default-features = false, features = ["qfbv"] }
-axeyum-ir = { git = "https://github.com/mjbommar/axeyum.git", rev = "c38a9515e68e7427b1a41a7598805cf60686bd58", optional = true }
+axeyum-solver = { git = "https://github.com/mjbommar/axeyum.git", rev = "43f1e0f9038de389d7b1a88b9d3b507ed3c6255d", optional = true, default-features = false, features = ["qfbv"] }
+axeyum-ir = { git = "https://github.com/mjbommar/axeyum.git", rev = "43f1e0f9038de389d7b1a88b9d3b507ed3c6255d", optional = true }
+# The C source-analysis stack (tolerant lexer/parser, CFG, dataflow, metrics,
+# graph export, and the DecBench parity projection). Extracted from this tree
+# at `0892552` (cindergraph's EXTRACTION.md) and now consumed as a crate:
+# nothing under `src/` may carry a second copy. Unconditional because the
+# consumers are (the `source_metrics` / `source_cfg` bindings, `src/metrics`,
+# and the C-to-LLIR lowering in `src/csource/lower`). Pure Rust, one transitive
+# dependency (`regex`), MSRV 1.88. Pinned to the GitHub head rather than a
+# machine-local sibling checkout for the same reason the axeyum pins are; see
+# docs/decisions/source-001-depend-on-cindergraph-by-git-rev.md.
+cindergraph = { git = "https://github.com/mjbommar/cindergraph.git", rev = "8bd20512158d19d4cf632caba4bbed629271a3e5" }
 
 # DEV-ONLY differential-test oracle (feature `dev-oracle`); links the system
 # Unicorn engine via pkg-config (libunicorn-dev). Never shipped in the wheel.
@@ -129,7 +143,7 @@ symbolic = ["exec"]
 dev-oracle = ["exec", "dep:unicorn-engine"]
 # Comparison-only native SMT backend via the `z3` crate. Enabling it also
 # enables Axeyum; Z3 must never become the authoritative result.
-solver-z3 = ["solver-axeyum", "dep:z3"]
+solver-z3 = ["solver-axeyum", "dep:z3", "dep:z3-sys"]
 # Native, in-process, pure-Rust SMT backend via the `axeyum` solver. No C
 # dependency and wheel-shippable. This is the default and sole authoritative
 # SAT/SMT backend. Z3 and Bitwuzla are comparison cells only.

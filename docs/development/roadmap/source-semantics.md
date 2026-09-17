@@ -38,7 +38,7 @@ the tree yields `unsigned long` → `total`, `struct point` → `p`, `float` →
 `ratio` directly. Nothing has to be inferred; the data is there and unread.
 
 **The solver is already wired.** `Cargo.toml` pins `axeyum-solver` and
-`axeyum-ir` at rev `c38a9515`, feature `solver-axeyum`, behind
+`axeyum-ir` at rev `8df853252` (bumped 2026-09-16 from `c38a9515`), feature `solver-axeyum`, behind
 `src/symbolic/solver/axeyum_backend.rs`. C reaches LLIR, LLIR runs on
 `src/exec/interp.rs` over the `Domain` trait that `src/symbolic/symdomain.rs`
 implements, and the solver sits behind that. **No new dependency, no new

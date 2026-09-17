@@ -80,7 +80,7 @@ carry the pure-Rust authoritative solver.
 axeyum is [`github.com/mjbommar/axeyum`](https://github.com/mjbommar/axeyum), a
 pure-Rust QF_BV solver by the same author, consumed as two crates
 (`axeyum-solver` with `default-features = false, features = ["qfbv"]`, and
-`axeyum-ir`) pinned by git rev `c38a9515e68e7427b1a41a7598805cf60686bd58`.
+`axeyum-ir`) pinned by git rev `8df853252cdf49c9a27ba71c6ce62fdd1c485dfc` (bumped 2026-09-16 from `c38a9515e`, see [`solver-032`](../decisions/solver-032-axeyum-pin-bump-and-shadow-corpus-prune.md)).
 Production stays on that minimal QF_BV surface deliberately — see
 [`solver-025`](../decisions/solver-025-explicit-qfbv-profile.md); only the text
 bridge opts into the full profile.
@@ -128,9 +128,24 @@ Unknown and error counts are tracked per backend on purpose: a backend that gets
 `<sha256>.smt2` and appends `<sha256>\t<verdict>` to `index.tsv`. Bytes are
 published collision-safely before the index observation, so a partially written
 capture is detectable. The sibling `GLAURUNG_DUMP_SHADOW_SPLITS=<dir>` captures
-only the occurrences where exactly one backend decided. This is how
-`tests/corpora/axeyum-qfbv/` was built; the procedure is in
-[`tests/corpora/axeyum-qfbv/README.md`](../../tests/corpora/axeyum-qfbv/README.md).
+only the occurrences where exactly one backend decided, and (since 2026-09-16)
+parses every such script with the linked libz3 first: a script z3 rejects is
+published under `malformed/` and indexed in `malformed.tsv` with z3's error
+text, never in `shadow-splits.tsv`
+([`solver-032`](../decisions/solver-032-axeyum-pin-bump-and-shadow-corpus-prune.md)).
+Since 2026-09-17 the same directory also gets `nondecisions.tsv` (the
+nondecided backend's stable reason class per split: `wall-timeout`,
+`resource-limit`, `other`, `error` -- never the error text) and, when both
+backends decide *differently*, the bytes under `disagreements/` with a
+`disagreements.tsv` index. This is how `tests/corpora/axeyum-qfbv/` was
+built; the procedure is in
+[`tests/corpora/axeyum-qfbv/README.md`](../../tests/corpora/axeyum-qfbv/README.md),
+and since [`solver-034`](../decisions/solver-034-continuous-shadow-split-capture-tier.md)
+it is a tier -- `scripts/shadow-capture.sh`, weekly in
+`.github/workflows/shadow-capture-weekly.yml` -- rather than a command in a
+README: a new split z3 decides and Axeyum does not is a **finding reported by
+name**; a both-decided disagreement, a malformed export, or a pinned script
+Axeyum stops deciding is a **failure**.
 
 Verified with `rg -n 'GLAURUNG_SHADOW_DIFF|GLAURUNG_FAIR_SHADOW|GLAURUNG_DUMP_QUERIES|GLAURUNG_DUMP_SHADOW_SPLITS|DEFAULT_SOLVER_BUDGET|DEFAULT_CHECK_TIMEOUT_MS' src/symbolic/solver/mod.rs`.
 
@@ -214,7 +229,7 @@ it is not a fallback to another solver.
   [`solver-028`](../decisions/solver-028-finding-confidence-partition.md)).
 - **The engine that produces the queries:**
   [`execution-engine.md`](execution-engine.md).
-- **All 31 solver decisions with their rejected alternatives:**
+- **All 35 solver decisions with their rejected alternatives:**
   [`decisions/`](../decisions/README.md).
 
 ## Examples and gates

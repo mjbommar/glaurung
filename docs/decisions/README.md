@@ -23,7 +23,9 @@ Two series share this directory and once shared a number. `exec-0002` (harden
 the LLIR in place) and `solver-002` (axeyum as the default backend) are
 unrelated decisions that were both called "ADR-002" in their own trees; the
 `exec-` and `solver-` prefixes end that collision, and `Cargo.toml`'s comment on
-the `solver-axeyum` feature points at `solver-002` explicitly.
+the `solver-axeyum` feature points at `solver-002` explicitly. A third series,
+`source-`, opened on 2026-09-17 for the C source-analysis boundary; its one
+record is pointed at by `Cargo.toml`'s comment on the `cindergraph` dependency.
 
 ## Execution engine
 
@@ -55,8 +57,12 @@ sections, not their decision paragraphs alone:
 
 ## Solver integration
 
-Thirty-two decisions from the integration of the pure-Rust `axeyum`
-solver, previously one 1,160-line log. Subject:
+Thirty-seven decisions from the 2026-07 integration of the pure-Rust `axeyum`
+solver, previously one 1,160-line log, plus the six 2026-09 records: the
+pin bump, its re-measurement, the capture tier, the re-pin at the
+warm-session fix, the re-pin at the canonical cache and the kept trail, and
+the universal Axeyum authority rule.
+Subject:
 [`architecture/solver-backends.md`](../architecture/solver-backends.md) and
 [`architecture/solver/`](../architecture/solver/).
 
@@ -93,14 +99,30 @@ solver, previously one 1,160-line log. Subject:
 | `solver-029` | [Separate WDM SystemBuffer address ownership from content taint](solver-029-systembuffer-address-versus-content.md) | held | 2026-07-18 |
 | `solver-030` | [Require structural stack origin before stack-overflow classification](solver-030-structural-stack-origin.md) | held | 2026-07-18 |
 | `solver-031` | [Add a pinned in-process Bitwuzla neutral measurement cell](solver-031-pinned-bitwuzla-measurement-cell.md) | held | 2026-07-19 |
-| `solver-032` | [Axeyum is authoritative for every SAT/SMT decision](solver-032-axeyum-is-always-authoritative.md) | held | 2026-09-17 |
+| `solver-032` | [Move the Axeyum pin to head, and keep only z3-parsed scripts in the shadow-split corpus](solver-032-axeyum-pin-bump-and-shadow-corpus-prune.md) | held | 2026-09-16 |
+| `solver-033` | [The rerun at the 2026-09-16 pin: inconclusive under ADR-0272, and warm Axeyum is the reason](solver-033-six-cell-rerun-at-the-2026-09-16-pin.md) | held | 2026-09-17 |
+| `solver-034` | [A scheduled shadow-split capture tier, so the next divergence is seen the week it appears](solver-034-continuous-shadow-split-capture-tier.md) | held | 2026-09-17 |
+| `solver-035` | [The pin at the warm-session fix: the sizing re-measured, and the model-preference knob consumed](solver-035-warm-fix-repin-and-model-preference.md) | held | 2026-09-17 |
+| `solver-036` | [The pin at the canonical cache and the kept trail: ADR-2145 measured in production, and the library cache consumed](solver-036-canonical-cache-consumed-and-the-kept-trail-measured.md) | held | 2026-09-17 |
+| `solver-037` | [Axeyum is authoritative for every SAT/SMT decision](solver-037-axeyum-is-always-authoritative.md) | held | 2026-09-17 |
 
-`solver-002` is superseded by `solver-032`: Axeyum is now the default and sole
+`solver-002` is superseded by `solver-037`: Axeyum is now the default and sole
 authoritative solver, while all other solver backends are comparison-only.
 `solver-004` and `solver-005` are marked amended because the
 SMT-LIB text bridge became the secondary path behind a native term translator
 (`solver-axeyum-text` still builds it), and the one-shot `Solver` trait gained
 the separate `IncrementalSolver` companion the ADR deferred.
+
+## Source analysis
+
+One decision, 2026-09-17, on the boundary between Glaurung and the
+`cindergraph` crate it extracted its C source-analysis stack into. Subject:
+[`../development/cindergraph-migration-2026-09-17.md`](../development/cindergraph-migration-2026-09-17.md)
+and the kept modules in `src/csource/mod.rs`.
+
+| id | title | status | date |
+|---|---|---|---|
+| `source-001` | [Depend on cindergraph from GitHub by Git revision; the embedded copy is deleted](source-001-depend-on-cindergraph-by-git-rev.md) | held | 2026-09-17 |
 
 ## Cross-cutting
 

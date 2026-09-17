@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "name": "glaurung-intcsst-shadow-splits-v1",
+  "source": "Glaurung 17ff038; Axeyum 8df8532; fair shadow (cold z3 vs warm Axeyum), 60 seconds per function; scripts/shadow-capture.sh (solver-034); expected is the only backend-decided class",
+  "logic": "QF_BV",
+  "files": [
+    {
+      "path": "2403248cbd1bdeb00eb4b55a9c6ec23be3106a725e316549547e16b86ad4e772.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "path": "4f33e94eeb72f5786c5401ffc8ce51be5d59d0466c4477ab3812b138db36e0b5.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided",
+        "representative"
+      ]
+    },
+    {
+      "path": "a7e230cc10752a5951c6a9de2963828c08e110b2c0743a98e7f2b648f93854a5.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "path": "bb0570c8e92400f7c219460d4ee0dc5d4d671bafbda1d61be45a10bf29bdc6f5.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "path": "e8cf72586b76c8c498c7d299fb6c61d03116d296c2e63feb406a9549d4728aa3.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    }
+  ]
+}

@@ -2,6 +2,23 @@
 
 > **Kind:** record · **Date:** 2026-07-14
 
+> **Frozen 2026-09-16.** Every timing in this file — the 1.7–3.2× one-shot gap
+> on real driver formulas, the same-stream and warm-reuse ratios, the crossover
+> tables — was measured on 2026-07-19 or earlier at Axeyum `c38a9515e`. The pin moved to `8df853252`
+> (11,607 Axeyum commits later) on 2026-09-16
+> ([`solver-032`](../../decisions/solver-032-axeyum-pin-bump-and-shadow-corpus-prune.md))
+> and none of these numbers has been re-measured since. Do not quote them as
+> current. The refresh is the six-cell timing campaign (Axeyum ADR-0272's
+> preregistered harness: four drivers, z3 vs Axeyum vs Bitwuzla, warm and cold;
+> [`solver-023`](../../decisions/solver-023-four-cell-solver-control.md),
+> [`solver-031`](../../decisions/solver-031-pinned-bitwuzla-measurement-cell.md)),
+> item 3 of
+> [`development/improvement-list-2026-09-16.md`](../../development/improvement-list-2026-09-16.md).
+> The numbers below are left exactly as written. **Re-measured 2026-09-17** (four cells, no Bitwuzla):
+> [`solver-033`](../../decisions/solver-033-six-cell-rerun-at-the-2026-09-16-pin.md)
+> — one-shot Axeyum is at parity or faster than cold Z3 on three of four
+> drivers; the warm regime is 6–11× slower than warm Z3 on three of four.
+
 > **Status: evolving research notes, not a submission-readiness claim.** Use the
 > benchmark provenance, reviewer checklist, and latest decision-log gates before
 > promoting any result into a paper claim.

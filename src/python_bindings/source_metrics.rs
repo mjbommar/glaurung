@@ -1,6 +1,6 @@
 //! Python bindings for the C source metrics.
 //!
-//! [`crate::csource::metrics`] measures a single piece of C: how big it is, how
+//! [`cindergraph::csource::metrics`] measures a single piece of C: how big it is, how
 //! branchy, how deeply nested, what it calls, and Halstead's token figures.
 //! This exposes that to Python, and the boundary is the one
 //! [`crate::python_bindings::source_cfg`] and
@@ -16,7 +16,7 @@
 //! serialize or a row they can stack; only interactive exploration wants
 //! attributes, and that one is cheap to build in Python on top of a dict.
 //!
-//! Two invariants carry over from [`crate::csource::metrics`] and are
+//! Two invariants carry over from [`cindergraph::csource::metrics`] and are
 //! load-bearing here.
 //!
 //! * **Nothing raises on account of the input.** Parsing is total
@@ -31,11 +31,11 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-use crate::csource::metrics::{self, FunctionMetrics, SourceReport};
-use crate::csource::parse::parse;
-use crate::syntax::cfg::Cfg;
-use crate::syntax::diag::Diagnostics;
-use crate::syntax::ids::NodeId;
+use cindergraph::csource::metrics::{self, FunctionMetrics, SourceReport};
+use cindergraph::csource::parse::parse;
+use cindergraph::syntax::cfg::Cfg;
+use cindergraph::syntax::diag::Diagnostics;
+use cindergraph::syntax::ids::NodeId;
 
 /// Build the `{"lines", "tokens", "bytes", "functions", "diagnostics"}` dict.
 fn report_dict<'py>(
@@ -252,7 +252,7 @@ fn cfg_dict<'py>(py: Python<'py>, cfg: &Cfg) -> PyResult<Bound<'py, PyDict>> {
 pub fn control_flow_graphs_py<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyList>> {
     let graphs = py.detach(|| {
         let tree = parse(text).into_parts().0;
-        crate::csource::cfg::function_cfgs(&tree, text)
+        cindergraph::csource::cfg::function_cfgs(&tree, text)
             .into_parts()
             .0
     });
@@ -448,7 +448,7 @@ pub fn features_py<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyLi
 #[pyfunction]
 #[pyo3(name = "normalize")]
 pub fn normalize_py(py: Python<'_>, text: &str, dialect: &str) -> PyResult<String> {
-    use crate::csource::normalize::Dialect;
+    use cindergraph::csource::normalize::Dialect;
     let dialect = match dialect {
         "preprocessed" => Dialect::Preprocessed(text),
         "decompiled" => Dialect::Decompiled(text),
@@ -482,8 +482,8 @@ pub fn export_graphs_py<'py>(
     repr: &str,
     format: &str,
 ) -> PyResult<Bound<'py, PyList>> {
-    use crate::csource::export::{export, Repr};
-    use crate::syntax::graph_export::{write, Format};
+    use cindergraph::csource::export::{export, Repr};
+    use cindergraph::syntax::graph_export::{write, Format};
 
     let repr_value = Repr::parse(repr).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err(format!(
@@ -521,8 +521,8 @@ pub fn export_graphs_py<'py>(
 #[pyfunction]
 #[pyo3(name = "export_choices")]
 pub fn export_choices_py(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
-    use crate::csource::export::Repr;
-    use crate::syntax::graph_export::Format;
+    use cindergraph::csource::export::Repr;
+    use cindergraph::syntax::graph_export::Format;
 
     let out = PyDict::new(py);
     out.set_item("repr", Repr::ALL.map(|r| r.name()).to_vec())?;
@@ -534,12 +534,14 @@ pub fn export_choices_py(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
 ///
 /// The structured form of `export_graphs(repr="ddg")`, for a caller who wants
 /// the answer rather than a rendering of it. Each function is a dict with
-/// `name`, `definitions`, `uses`, `edges`, `unresolved_uses` and
-/// `dead_stores`; the two defect lists index into the first two.
+/// `name`, `definitions`, `uses`, `edges`, `unresolved_uses`, `dead_stores`,
+/// `bindings`, `type_conflicts`, `unused_bindings` and `unresolved_bindings`;
+/// the defect lists index into the first two, the binding lists into
+/// `bindings`.
 #[pyfunction]
 #[pyo3(name = "data_flow")]
 pub fn data_flow_py<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyList>> {
-    use crate::csource::dataflow::analyze;
+    use cindergraph::csource::dataflow::analyze;
 
     let flows = py.detach(|| analyze(text).into_parts().0);
     let out = PyList::empty(py);
@@ -619,6 +621,19 @@ pub fn data_flow_py<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyL
                 .map(|b| b.0)
                 .collect::<Vec<u32>>(),
         )?;
+        // Since the crate replaced the embedded copy (source-001), a name the
+        // reader could not resolve to a declaration -- a macro constant used
+        // as an array bound, a global from a header -- is a binding too, with
+        // `type` None, so definitions and uses can index it; this list says
+        // which ones those are, so a caller measuring declared bindings can
+        // leave them out rather than reading them as lost declarations.
+        entry.set_item(
+            "unresolved_bindings",
+            flow.unresolved_bindings
+                .iter()
+                .map(|b| b.0)
+                .collect::<Vec<u32>>(),
+        )?;
         out.append(entry)?;
     }
     Ok(out)
@@ -633,8 +648,8 @@ pub fn data_flow_py<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyL
 #[pyfunction]
 #[pyo3(name = "control_dependence")]
 pub fn control_dependence_py<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyList>> {
-    use crate::csource::cfg::function_cfgs;
-    use crate::syntax::dominance::ControlDependence;
+    use cindergraph::csource::cfg::function_cfgs;
+    use cindergraph::syntax::dominance::ControlDependence;
 
     let built = py.detach(|| {
         let tree = parse(text).into_parts().0;
@@ -647,7 +662,7 @@ pub fn control_dependence_py<'py>(py: Python<'py>, text: &str) -> PyResult<Bound
                     .map(|id| {
                         let kind = function
                             .cfg
-                            .node(crate::syntax::ids::NodeId::new(id))
+                            .node(cindergraph::syntax::ids::NodeId::new(id))
                             .map(|node| node.kind().name().to_string())
                             .unwrap_or_default();
                         (id, kind, cdg.depth(id), cdg.post_dominators().immediate(id))
@@ -707,9 +722,9 @@ pub fn backward_slice_py(
     function: &str,
     node: u32,
 ) -> PyResult<Vec<u32>> {
-    use crate::csource::cfg::function_cfgs;
-    use crate::csource::dataflow::analyze_function;
-    use crate::syntax::dominance::{backward_slice, ControlDependence};
+    use cindergraph::csource::cfg::function_cfgs;
+    use cindergraph::csource::dataflow::analyze_function;
+    use cindergraph::syntax::dominance::{backward_slice, ControlDependence};
 
     let sliced = py.detach(|| {
         let tree = parse(text).into_parts().0;
@@ -749,7 +764,7 @@ pub fn backward_slice_py(
 #[pyfunction]
 #[pyo3(name = "call_summaries")]
 pub fn call_summaries_py<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyList>> {
-    use crate::csource::dataflow::{analyze, summarize, Sink};
+    use cindergraph::csource::dataflow::{analyze, summarize, Sink};
 
     let summaries = py.detach(|| summarize(&analyze(text).into_parts().0));
     let out = PyList::empty(py);
@@ -796,7 +811,7 @@ pub fn reaches_py(
     parameter: u32,
     sink: &str,
 ) -> PyResult<String> {
-    use crate::csource::dataflow::{analyze, interproc::reaches, summarize};
+    use cindergraph::csource::dataflow::{analyze, interproc::reaches, summarize};
 
     let verdict = py.detach(|| {
         let summaries = summarize(&analyze(text).into_parts().0);
@@ -1029,7 +1044,7 @@ pub fn source_findings_py<'py>(
     solver_timeout_ms: Option<u64>,
 ) -> PyResult<Bound<'py, PyList>> {
     use crate::csource::feasibility::findings_of;
-    use crate::csource::parse::parse;
+    use cindergraph::csource::parse::parse;
 
     let bounds = bounds_from(max_paths, max_block_visits, max_steps, solver_timeout_ms);
     let found = py.detach(|| {
@@ -1149,7 +1164,7 @@ mod tests {
     /// forever.
     #[test]
     fn every_kind_column_names_a_real_node_kind() {
-        use crate::syntax::cfg::NodeKind;
+        use cindergraph::syntax::cfg::NodeKind;
         let known: Vec<&str> = [
             NodeKind::Entry,
             NodeKind::Exit,
