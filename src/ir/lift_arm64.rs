@@ -1623,16 +1623,23 @@ fn lift_one(ins: &Instruction) -> Vec<Op> {
         }
         "paciasp" | "autiasp" | "dmb" | "csdb" => vec![intrinsic(&mnem, Vec::new())],
         "mrs" => {
-            // MRS Xt,SP_EL0 has fixed sysreg bits 0xd5384100; Rt is bits 4:0.
-            if instruction_word(ins).is_some_and(|word| word & 0xffff_ffe0 == 0xd538_4100)
-                && !ins.operands.is_empty()
-            {
-                let Some(dst) = operand_reg(&ins.operands[0]) else {
-                    return vec![Op::Unknown { mnemonic: mnem }];
-                };
-                return vec![intrinsic("mrs_sp_el0", vec![(dst, Width::W64)])];
-            }
-            vec![Op::Unknown { mnemonic: mnem }]
+            let Some(word) = instruction_word(ins) else {
+                return vec![Op::Unknown { mnemonic: mnem }];
+            };
+            let Some(dst) = ins.operands.first().and_then(operand_reg) else {
+                return vec![Op::Unknown { mnemonic: mnem }];
+            };
+            // A system-register read defines Xt without consuming an incoming
+            // integer register. Keep its value opaque, but preserve that write
+            // so return/input recovery does not mistake Xt for a parameter.
+            // Distinguish system registers by their encoded selector; retain
+            // the established SP_EL0 intrinsic name for existing consumers.
+            let name = if word & 0xffff_ffe0 == 0xd538_4100 {
+                "mrs_sp_el0".to_owned()
+            } else {
+                format!("mrs_sysreg_{:04x}", (word >> 5) & 0xffff)
+            };
+            vec![intrinsic(&name, vec![(dst, Width::W64)])]
         }
         "adrp" => {
             // adrp <Xd>, #<page>. Capstone already resolves the page VA into
@@ -2072,6 +2079,56 @@ pub fn lift_bytes(bytes: &[u8], start_va: u64) -> Vec<LlirInstr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compiled_system_reads_define_the_result_without_integer_inputs() {
+        use crate::program::image::ProgramImage;
+        let directory = tempfile::tempdir().expect("system-read fixture directory");
+        let binary = directory.path().join("reads.elf");
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/cfg/aarch64_system_reads.S");
+        let output = std::process::Command::new("clang")
+            .args([
+                "--target=aarch64-linux-gnu",
+                "-nostdlib",
+                "-fuse-ld=lld",
+                "-no-pie",
+                "-Wl,-e,read_nzcv",
+                "-o",
+            ])
+            .arg(&binary)
+            .arg(source)
+            .output()
+            .expect("compile real system-read fixture");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let image = ProgramImage::from_bytes(std::fs::read(binary).expect("read fixture"))
+            .expect("index fixture");
+        for name in ["read_nzcv", "read_fpcr", "read_sp_el0"] {
+            let address = image
+                .unique_defined_text_symbol_address(name)
+                .expect("fixture symbol");
+            let function = crate::analysis::cfg::discover_function_image_at(
+                &image,
+                &crate::analysis::cfg::Budgets::default(),
+                address,
+            )
+            .expect("fixture CFG");
+            let lifted = crate::ir::lift_function::lift_function_from_image(&image, &function)
+                .expect("lift fixture");
+            let ssa = crate::ir::ssa::compute_ssa(&lifted);
+            let (_, _, parameters) = crate::ir::value_number::value_number_with_parameter_slots(
+                &lifted,
+                &ssa,
+                crate::ir::call_args::CallConv::Aarch64,
+            );
+            assert!(parameters.is_empty(), "system-register destination is defined, not an integer argument: {name}: {parameters:?}");
+            assert!(lifted.blocks.iter().flat_map(|block| &block.instrs).any(|instruction| matches!(&instruction.op, Op::Intrinsic { outs, .. } if outs.iter().any(|(reg, width)| *reg == VReg::phys("x0") && *width == Width::W64))), "system read must define its actual destination: {name}");
+        }
+    }
 
     // NOTE: ARM64 is 4-byte little-endian for data and wide-immediate fields.
     // The byte sequences below are hand-assembled from instruction encodings
@@ -2608,21 +2665,6 @@ mod tests {
             .filter(|i| matches!(i.op, Op::Load { .. }))
             .collect();
         assert_eq!(loads.len(), 2, "expected two loads; got {:#?}", out);
-    }
-
-    #[test]
-    fn unknown_mnemonic_preserves_source() {
-        // MRS X0, NZCV = 0xd53b4200  (LE: 00 42 3b d5) — not in our lifter set.
-        let out = lift_bytes(&[0x00, 0x42, 0x3b, 0xd5], 0x1000);
-        assert_eq!(out.len(), 1);
-        match &out[0].op {
-            Op::Unknown { mnemonic } => assert!(!mnemonic.is_empty(), "empty mnemonic in Unknown"),
-            other => panic!(
-                "expected Unknown preserving mnemonic ({}); got {:?}",
-                last_op_mnem(&out),
-                other
-            ),
-        }
     }
 
     #[test]
