@@ -632,8 +632,12 @@ fn value_number_with_parameter_evidence(
     };
     // A compatibility result name can denote several SSA definitions. Sample
     // signature evidence in a fully versioned view when that projection is
-    // present, so a later result cannot erase a genuine incoming parameter.
-    let exact_parameter_slots = (!keep.is_empty())
+    // present in an argument register, so a later result cannot erase a genuine
+    // incoming parameter. Projection only merges versions of the same physical
+    // base; a return register outside the argument slots cannot erase their
+    // identities and does not need another value-numbering pass.
+    let exact_parameter_slots = keep
+        .overlaps_argument_slots(cc)
         .then(|| value_number_with_parameter_evidence(lf, ssa, cc, source_lifetimes, false).2);
     let ctx = VnCtx::new(lf, keep, build_temp_remap(lf, ssa), ssa);
 

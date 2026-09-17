@@ -410,13 +410,10 @@ fn receiver_stack_reads(
         .iter()
         .any(|range| range.contains(&target))
     {
-        let Some((_, name)) = crate::analysis::elf_plt::elf_plt_map(image.bytes())
-            .into_iter()
-            .find(|(address, _)| *address == target)
-        else {
+        let Some(name) = image.plt_stub_symbol_name(target) else {
             return vec![];
         };
-        let name = name.strip_suffix("@plt").unwrap_or(&name);
+        let name = name.strip_suffix("@plt").unwrap_or(name);
         let Some(body) = image.unique_defined_text_symbol_address(name) else {
             return vec![];
         };
@@ -819,6 +816,28 @@ mod tests {
                 .expect("actual PLT target")
                 .0
         };
+        // Warm the image's legitimate one-shot CFG metadata before measuring
+        // repeated receiver queries; these must not reopen the ELF.
+        assert!(!receiver_stack_reads(
+            &image,
+            target("consume_narrow_stack_pair"),
+            CallConv::SysVAmd64,
+        )
+        .is_empty());
+        let (reads, parses) = crate::decompile::profile::count_object_parses(|| {
+            let mut reads = Vec::new();
+            for _ in 0..3 {
+                reads = receiver_stack_reads(
+                    &image,
+                    target("consume_narrow_stack_pair"),
+                    CallConv::SysVAmd64,
+                );
+                assert!(!reads.is_empty(), "compiled receiver has real stack inputs");
+            }
+            reads
+        });
+        assert!(!reads.is_empty());
+        assert_eq!(parses, 0, "receiver lookups must reuse the indexed image");
         let lift = |name| {
             let address = image
                 .unique_defined_text_symbol_address(name)

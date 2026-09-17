@@ -134,6 +134,7 @@ pub struct ProgramImage {
     memory_ranges: Arc<[IndexedMemoryRange]>,
     executable_ranges: Arc<[Range<u64>]>,
     plt_stub_ranges: Arc<[Range<u64>]>,
+    plt_stub_symbols: Arc<HashMap<u64, String>>,
     eh_frame_functions: Arc<[crate::analysis::exception::EhFrameFunction]>,
     defined_text_symbols_by_name: Arc<HashMap<String, u64>>,
     ambiguous_defined_text_symbol_names: Arc<HashSet<String>>,
@@ -306,6 +307,9 @@ impl ProgramImage {
             }
         }
         let eh_frame_functions = crate::analysis::exception::eh_frame_functions_in(&object, &bytes);
+        let plt_stub_symbols = crate::analysis::elf_plt::elf_plt_map_from_object(&bytes, &object)
+            .into_iter()
+            .collect();
         drop(object);
 
         Ok(Self {
@@ -319,6 +323,7 @@ impl ProgramImage {
             memory_ranges: memory_ranges.into(),
             executable_ranges: executable_ranges.into(),
             plt_stub_ranges: plt_stub_ranges.into(),
+            plt_stub_symbols: Arc::new(plt_stub_symbols),
             eh_frame_functions: eh_frame_functions.into(),
             defined_text_symbols_by_name: Arc::new(defined_text_symbols_by_name),
             ambiguous_defined_text_symbol_names: Arc::new(ambiguous_defined_text_symbol_names),
@@ -407,6 +412,11 @@ impl ProgramImage {
     /// always leaves the function for good.
     pub fn plt_stub_ranges(&self) -> &[Range<u64>] {
         &self.plt_stub_ranges
+    }
+
+    /// Name an exact ELF PLT stub using the index extracted during construction.
+    pub fn plt_stub_symbol_name(&self, address: u64) -> Option<&str> {
+        self.plt_stub_symbols.get(&address).map(String::as_str)
     }
 
     /// Every LSDA-proven exceptional transfer in this image, recovered once.

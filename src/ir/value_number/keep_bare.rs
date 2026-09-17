@@ -43,8 +43,10 @@ impl KeepBare {
         }
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.0.is_empty()
+    pub(crate) fn overlaps_argument_slots(&self, cc: CallConv) -> bool {
+        self.0
+            .keys()
+            .any(|name| crate::ir::abi::argument_slot_of(cc, name).is_some())
     }
 
     pub(crate) fn contains(&self, name: &str, version: u32) -> bool {
