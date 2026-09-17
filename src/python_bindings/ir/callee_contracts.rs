@@ -39,10 +39,13 @@ fn apply_proven_integer_pair_boundary(
     target: u64,
     cc: crate::ir::call_args::CallConv,
     callee_defines_pair: bool,
+    image: &crate::program::image::ProgramImage,
 ) {
     if callee_defines_pair
         && prototype.authority == crate::ir::call_contracts::CallPrototypeAuthority::Recovered
-        && crate::ir::interprocedural_return::caller_observes_integer_pair(caller, target, cc)
+        && crate::ir::interprocedural_return::caller_observes_integer_pair_in_image(
+            caller, target, cc, image,
+        )
     {
         prototype.return_type = wide_integer_return_c_type(cc).to_string();
     }
@@ -1145,6 +1148,7 @@ fn recover_direct_callee_definition(
                 target,
                 cc,
                 callee_defines_pair,
+                image,
             );
             nested.layouts.insert(target, layout);
             nested.prototypes.insert(target, prototype);
@@ -1312,6 +1316,7 @@ pub(super) fn recover_direct_callee_layouts(
                 callee_va,
                 cc,
                 callee_defines_pair,
+                image,
             );
             if dump {
                 eprintln!("callee 0x{callee_va:x}: recovered layout {layout:?}");

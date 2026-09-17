@@ -2061,3 +2061,95 @@ mod analysis_deadline_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod executable_section_end_tests {
+    use super::*;
+    use std::process::Command;
+
+    #[test]
+    fn stripped_arm_call_at_text_end_does_not_decode_readonly_data() {
+        let tmp = tempfile::tempdir().expect("ARM text-end fixture directory");
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/cfg/arm_text_end.S");
+        let binary = tmp.path().join("arm_text_end.elf");
+        let output = match Command::new("clang")
+            .args([
+                "--target=armv7-none-eabi",
+                "-nostdlib",
+                "-fuse-ld=lld",
+                "-Wl,-e,divzero",
+                "-Wl,--build-id=none",
+                "-o",
+            ])
+            .arg(&binary)
+            .arg(&source)
+            .arg(format!("-Wl,-T,{}", source.with_extension("ld").display()))
+            .output()
+        {
+            Ok(output) => output,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                crate::testing::missing_tool("clang");
+                return;
+            }
+            Err(error) => panic!("launch ARM fixture compiler: {error}"),
+        };
+        assert!(
+            output.status.success(),
+            "compile real ARM fixture: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stripped = Command::new("llvm-strip")
+            .arg("--strip-all")
+            .arg(&binary)
+            .output()
+            .expect("launch LLVM strip for ARM fixture");
+        assert!(
+            stripped.status.success(),
+            "strip ARM fixture: {}",
+            String::from_utf8_lossy(&stripped.stderr)
+        );
+        let data = std::fs::read(&binary).expect("read compiled ARM ELF");
+        let image = crate::program::image::ProgramImage::from_bytes(data.clone())
+            .expect("index stripped ARM ELF");
+        let entry = image.entry_va();
+        let text_end = image
+            .executable_ranges()
+            .find(|range| range.contains(&entry))
+            .expect("entry belongs to executable text")
+            .end;
+        let (from_bytes, _, _) =
+            analyze_functions_bytes_with_stats_and_seeds(&data, &Budgets::default(), &[entry]);
+        let from_bytes = from_bytes
+            .iter()
+            .find(|function| function.entry_point.value == entry)
+            .expect("discover trailing function through byte-only path");
+        assert_eq!(
+            from_bytes
+                .basic_blocks
+                .iter()
+                .map(|block| block.instruction_count)
+                .sum::<u32>(),
+            2,
+            "byte-only CFG decoded readonly words as instructions"
+        );
+        let function = discover_function_image_at(&image, &Budgets::default(), entry)
+            .expect("discover trailing divzero function");
+        assert_eq!(
+            function
+                .basic_blocks
+                .iter()
+                .map(|block| block.instruction_count)
+                .sum::<u32>(),
+            2,
+            "readonly words must not become divzero instructions"
+        );
+        assert!(
+            function
+                .basic_blocks
+                .iter()
+                .all(|block| block.end_address.value <= text_end),
+            "CFG crossed the executable section boundary"
+        );
+    }
+}

@@ -356,7 +356,6 @@ ENV_VAR_ALLOWLIST: dict[tuple[str, str], str] = {
     ("ir/value_number/coalesce.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     ("program/environment.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     ("program/format_environment.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
-    ("python_bindings/ir.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     ("python_bindings/ir/callee_contracts.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     # The AST pass-list dump and the two LLIR-stage dumps, moved verbatim out of
     # `python_bindings/ir.rs` when the shared pipeline was split out. Same reads,

@@ -67,7 +67,20 @@ impl RelocationTable {
     /// Build PLT map from .rela.plt section
     pub fn build_plt_map(&mut self, plt_addr: u64, plt_entry_size: u64, symbols: &SymbolTable) {
         // Skip PLT[0] which is reserved
-        let mut current_addr = plt_addr + plt_entry_size;
+        self.build_plt_map_from_first(plt_addr + plt_entry_size, plt_entry_size, symbols);
+    }
+
+    /// Build a PLT map when the section begins with the first import stub.
+    ///
+    /// CET-enabled ELF files use `.plt.sec`, which has no reserved resolver
+    /// entry and therefore aligns its first relocation with the section start.
+    pub fn build_plt_map_from_first(
+        &mut self,
+        first_addr: u64,
+        plt_entry_size: u64,
+        symbols: &SymbolTable,
+    ) {
+        let mut current_addr = first_addr;
 
         for reloc in &self.relocations {
             let sym_idx = reloc.symbol_index();
