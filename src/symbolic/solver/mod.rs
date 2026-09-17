@@ -1743,15 +1743,100 @@ fn replace_axeyum_timing(
     execution: Option<AxeyumExecutionClass>,
 ) {
     let previous = LAST_SOLVE_TIMING.with(Cell::get);
+    // When `solve()` already timed Z3 (production Z3, shadow, or the paired
+    // fair-shadow rotation), `axeyum_nanos` is the compatibility alias for the
+    // Axeyum cell it measured, not the wrapper. Overwriting it with the wrapper
+    // time made `z3_nanos + axeyum_nanos > total_nanos` on every fair-shadow
+    // check since 2c999b67 (2026-07-20), so the ordered-trace producer
+    // validator rejected every `solver-z3,solver-axeyum` trace with
+    // "per-backend timing exceeds total timing". Found 2026-09-17 in the
+    // six-cell rerun preflight (docs/development/six-cell-rerun-2026-09-17.md).
+    // The wrapper time is the Axeyum time only in an Axeyum-only measurement.
+    let z3_timed = previous.z3_nanos.is_some();
     LAST_SOLVE_TIMING.with(|timing| {
         timing.set(SolveTiming {
             total_nanos: wrapper_nanos,
-            axeyum_nanos: Some(wrapper_nanos),
-            axeyum_outcome: Some(SolveOutcome::from(result)),
+            axeyum_nanos: if z3_timed {
+                previous.axeyum_nanos
+            } else {
+                Some(wrapper_nanos)
+            },
+            axeyum_outcome: if z3_timed {
+                previous.axeyum_outcome
+            } else {
+                Some(SolveOutcome::from(result))
+            },
             axeyum_execution: execution.or(previous.axeyum_execution),
             ..previous
         });
     });
+}
+
+#[cfg(all(test, feature = "solver-z3", feature = "solver-axeyum"))]
+mod fair_shadow_alias_tests {
+    use std::sync::Mutex;
+
+    use super::*;
+    use crate::ir::types::{CmpOp, Width};
+    use crate::symbolic::expr::Expr;
+
+    static ENVIRONMENT: Mutex<()> = Mutex::new(());
+
+    struct FairShadowEnvironment;
+
+    impl FairShadowEnvironment {
+        fn enable() -> Self {
+            std::env::set_var("GLAURUNG_FAIR_SHADOW", "1");
+            Self
+        }
+    }
+
+    impl Drop for FairShadowEnvironment {
+        fn drop(&mut self) {
+            std::env::remove_var("GLAURUNG_FAIR_SHADOW");
+        }
+    }
+
+    /// The legacy `z3_nanos`/`axeyum_nanos` aliases of a fair-shadow check are
+    /// the cold-Z3 and warm-Axeyum cells, and their sum fits inside the total:
+    /// the invariant `tools/axeyum/validate_ordered_trace.py` enforces on every
+    /// published trace. The engine-cache wrapper must not clobber them.
+    #[test]
+    fn fair_shadow_aliases_survive_the_engine_cache_wrapper() {
+        let _guard = ENVIRONMENT.lock().expect("environment lock");
+        let _environment = FairShadowEnvironment::enable();
+        let mut pool = ExprPool::new();
+        let x = pool.fresh_symbol(Width::W32);
+        let one = pool.constant(Width::W32, 1);
+        let equals = pool.intern(Expr::Cmp {
+            op: CmpOp::Eq,
+            a: x,
+            b: one,
+            width: Width::W32,
+        });
+        let mut prefix = WarmAssertionPrefix::default();
+        prefix.push();
+        let path_id = u64::MAX - 23;
+
+        let (result, _) = solve_for_path_delta(&pool, &[(equals, true)], path_id, 0, 1, &prefix);
+        assert!(matches!(result, SolveResult::Sat(_)));
+        let timing = last_solve_timing();
+        let z3_cold = timing.z3_cold_nanos.expect("fair shadow times cold Z3");
+        let axeyum_warm = timing
+            .axeyum_warm_nanos
+            .expect("fair shadow times warm Axeyum");
+        assert_eq!(timing.z3_nanos, Some(z3_cold));
+        assert_eq!(timing.axeyum_nanos, Some(axeyum_warm));
+        assert_eq!(timing.axeyum_outcome, Some(SolveOutcome::Sat));
+        assert!(
+            z3_cold + axeyum_warm <= timing.total_nanos,
+            "aliases {z3_cold}+{axeyum_warm} exceed total {}",
+            timing.total_nanos
+        );
+
+        axeyum_backend::close_fair_warm_path(path_id);
+        z3_backend::close_warm_path(path_id);
+    }
 }
 
 #[cfg(feature = "solver-axeyum")]
