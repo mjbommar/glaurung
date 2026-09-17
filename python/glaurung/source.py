@@ -583,6 +583,13 @@ def data_flow(code: str) -> list[dict[str, Any]]:
         the shape of a decompiler's type-recovery failure.
         ``unused_bindings`` lists variables declared and never read -- distinct
         from a dead store, because ``int *b;`` is not a store at all.
+        ``unresolved_bindings`` lists the entries of ``bindings`` the reader
+        could not tie to a declaration -- a macro constant used as an array
+        bound, a global from a header -- which carry ``type`` ``None`` by
+        construction; a caller measuring declared bindings leaves them out.
+        (Since the analysis moved to the ``cindergraph`` crate these names are
+        bindings, so a definition or use can index them; before, they were
+        dropped.)
 
         Each definition and use carries ``binding``, an index into
         ``bindings``, so the three can be joined.

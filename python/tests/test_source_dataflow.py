@@ -29,10 +29,35 @@ def test_the_boundary_returns_every_field():
     assert len(flows) == 1
     flow = flows[0]
     assert flow["name"] == "f"
-    for key in ("definitions", "uses", "edges", "unresolved_uses", "dead_stores"):
+    for key in (
+        "definitions",
+        "uses",
+        "edges",
+        "unresolved_uses",
+        "dead_stores",
+        "unresolved_bindings",
+    ):
         assert key in flow, key
     assert flow["definitions"], "no definitions"
     assert flow["edges"], "no edges"
+
+
+@pytest.mark.core
+def test_an_unresolved_name_is_a_typeless_binding_that_is_listed_as_such():
+    """The one behaviour the cindergraph migration changed on this surface.
+
+    `N` is a macro constant this reader never saw defined. The embedded copy
+    dropped it; the crate keeps it as a binding with ``type`` ``None`` so the
+    use can index it, and names it in ``unresolved_bindings`` (source-001).
+    The declared bindings are unaffected: ``buf`` still carries its type.
+    """
+    (flow,) = glaurung.source.data_flow("int f(void) { int buf[N]; return buf[0]; }")
+    by_name = {b["name"]: i for i, b in enumerate(flow["bindings"])}
+    assert "N" in by_name and "buf" in by_name
+    assert flow["bindings"][by_name["N"]]["type"] is None
+    assert flow["bindings"][by_name["buf"]]["type"] == "int[]"
+    assert flow["unresolved_bindings"] == [by_name["N"]]
+    assert by_name["N"] not in flow["unused_bindings"]
 
 
 @pytest.mark.core
@@ -305,17 +330,31 @@ def test_the_corpus_types_every_binding_and_declares_nothing_it_does_not_use():
     the corpus changed.
     """
     root = Path(__file__).resolve().parents[2] / "tests" / "decompiler_fixtures" / "src"
-    bindings = typed = conflicts = unused = 0
+    bindings = typed = unresolved = conflicts = 0
+    unused: list[str] = []
     for path in sorted(root.glob("*.c")):
         for flow in glaurung.source.data_flow(path.read_text(errors="replace")):
             bindings += len(flow["bindings"])
             typed += sum(1 for b in flow["bindings"] if b["type"])
+            # A macro constant used as an array bound (`LCS_MAX`) is a binding
+            # the reader could not resolve to a declaration: it carries no
+            # type by construction and is listed, not lost (source-001).
+            unresolved += len(flow["unresolved_bindings"])
+            for index in flow["unresolved_bindings"]:
+                assert flow["bindings"][index]["type"] is None, flow["name"]
             conflicts += len(flow["type_conflicts"])
-            unused += len(flow["unused_bindings"])
+            unused += [
+                f"{flow['name']}:{flow['bindings'][i]['name']}"
+                for i in flow["unused_bindings"]
+            ]
     assert bindings > 1000, bindings
-    assert typed == bindings, f"{bindings - typed} bindings carry no type"
+    assert unresolved > 0, "the corpus uses macro constants; none was reported"
+    declared = bindings - unresolved
+    assert typed == declared, f"{declared - typed} declared bindings carry no type"
     assert conflicts == 0, f"{conflicts} type conflicts in hand-written C"
-    assert unused == 0, f"{unused} unused bindings in hand-written C"
+    # Hand-written C declares nothing it does not use, with one exception
+    # pinned by name: a pointer referenced only by `sizeof`, which reads no value.
+    assert unused == ["sizeof_array_versus_pointer:pointer"], unused
 
 
 # --- interprocedural summaries (phase 2 of the source-semantics plan) --------

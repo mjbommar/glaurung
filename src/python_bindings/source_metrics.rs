@@ -534,8 +534,10 @@ pub fn export_choices_py(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
 ///
 /// The structured form of `export_graphs(repr="ddg")`, for a caller who wants
 /// the answer rather than a rendering of it. Each function is a dict with
-/// `name`, `definitions`, `uses`, `edges`, `unresolved_uses` and
-/// `dead_stores`; the two defect lists index into the first two.
+/// `name`, `definitions`, `uses`, `edges`, `unresolved_uses`, `dead_stores`,
+/// `bindings`, `type_conflicts`, `unused_bindings` and `unresolved_bindings`;
+/// the defect lists index into the first two, the binding lists into
+/// `bindings`.
 #[pyfunction]
 #[pyo3(name = "data_flow")]
 pub fn data_flow_py<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyList>> {
@@ -615,6 +617,19 @@ pub fn data_flow_py<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyL
         entry.set_item(
             "unused_bindings",
             flow.unused_bindings()
+                .iter()
+                .map(|b| b.0)
+                .collect::<Vec<u32>>(),
+        )?;
+        // Since the crate replaced the embedded copy (source-001), a name the
+        // reader could not resolve to a declaration -- a macro constant used
+        // as an array bound, a global from a header -- is a binding too, with
+        // `type` None, so definitions and uses can index it; this list says
+        // which ones those are, so a caller measuring declared bindings can
+        // leave them out rather than reading them as lost declarations.
+        entry.set_item(
+            "unresolved_bindings",
+            flow.unresolved_bindings
                 .iter()
                 .map(|b| b.0)
                 .collect::<Vec<u32>>(),
