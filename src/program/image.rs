@@ -88,6 +88,15 @@ impl FileMapping {
         let offset = usize::try_from(offset).ok()?;
         (offset < byte_len).then_some(offset)
     }
+
+    fn translate_file_offset(self, file_offset: u64) -> Option<u64> {
+        let mapped_len = self.va_end.checked_sub(self.va_start)?;
+        let file_end = self.file_start.checked_add(mapped_len)?;
+        if file_offset < self.file_start || file_offset >= file_end {
+            return None;
+        }
+        self.va_start.checked_add(file_offset - self.file_start)
+    }
 }
 
 /// Failure to load or parse a program image.
@@ -134,6 +143,7 @@ pub struct ProgramImage {
     memory_ranges: Arc<[IndexedMemoryRange]>,
     executable_ranges: Arc<[Range<u64>]>,
     plt_stub_ranges: Arc<[Range<u64>]>,
+    plt_stub_symbols: Arc<HashMap<u64, String>>,
     eh_frame_functions: Arc<[crate::analysis::exception::EhFrameFunction]>,
     defined_text_symbols_by_name: Arc<HashMap<String, u64>>,
     ambiguous_defined_text_symbol_names: Arc<HashSet<String>>,
@@ -142,6 +152,7 @@ pub struct ProgramImage {
     exception_call_sites: Arc<OnceLock<Arc<[crate::analysis::exception::ExceptionCallSite]>>>,
     dwarf_functions: Arc<OnceLock<Arc<[crate::debug::dwarf::DwarfFunction]>>>,
     relocated_symbol_slots: Arc<OnceLock<Arc<HashMap<u64, String>>>>,
+    imported_call_targets: Arc<OnceLock<Arc<HashMap<u64, String>>>>,
 }
 
 impl ProgramImage {
@@ -306,6 +317,9 @@ impl ProgramImage {
             }
         }
         let eh_frame_functions = crate::analysis::exception::eh_frame_functions_in(&object, &bytes);
+        let plt_stub_symbols = crate::analysis::elf_plt::elf_plt_map_from_object(&bytes, &object)
+            .into_iter()
+            .collect();
         drop(object);
 
         Ok(Self {
@@ -319,6 +333,7 @@ impl ProgramImage {
             memory_ranges: memory_ranges.into(),
             executable_ranges: executable_ranges.into(),
             plt_stub_ranges: plt_stub_ranges.into(),
+            plt_stub_symbols: Arc::new(plt_stub_symbols),
             eh_frame_functions: eh_frame_functions.into(),
             defined_text_symbols_by_name: Arc::new(defined_text_symbols_by_name),
             ambiguous_defined_text_symbol_names: Arc::new(ambiguous_defined_text_symbol_names),
@@ -327,6 +342,7 @@ impl ProgramImage {
             exception_call_sites: Arc::new(OnceLock::new()),
             dwarf_functions: Arc::new(OnceLock::new()),
             relocated_symbol_slots: Arc::new(OnceLock::new()),
+            imported_call_targets: Arc::new(OnceLock::new()),
         })
     }
 
@@ -409,6 +425,11 @@ impl ProgramImage {
         &self.plt_stub_ranges
     }
 
+    /// Name an exact ELF PLT stub using the index extracted during construction.
+    pub fn plt_stub_symbol_name(&self, address: u64) -> Option<&str> {
+        self.plt_stub_symbols.get(&address).map(String::as_str)
+    }
+
     /// Every LSDA-proven exceptional transfer in this image, recovered once.
     ///
     /// Both function discovery and the decompilation entry points need these,
@@ -472,6 +493,28 @@ impl ProgramImage {
             .clone()
     }
 
+    /// ELF PLT instruction addresses keyed to their relocation-proven import name.
+    ///
+    /// These are static-image facts. A runtime call still needs an exact module
+    /// relation before its target may be joined to one of these names.
+    pub fn imported_call_targets(&self) -> Arc<HashMap<u64, String>> {
+        self.imported_call_targets
+            .get_or_init(|| {
+                let targets = crate::formats::elf::ElfParser::parse(self.bytes())
+                    .ok()
+                    .and_then(|parser| parser.plt_relocations().ok().flatten())
+                    .map(|relocations| {
+                        relocations
+                            .plt_entries()
+                            .map(|(address, name)| (address, name.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Arc::new(targets)
+            })
+            .clone()
+    }
+
     /// Iterate all valid file-backed sections in object order.
     pub fn sections(&self) -> impl Iterator<Item = ProgramSection<'_>> {
         self.sections.iter().map(|section| ProgramSection {
@@ -509,6 +552,37 @@ impl ProgramImage {
             .iter()
             .chain(self.section_mappings.iter())
             .find_map(|mapping| mapping.translate(va, self.bytes.len()))
+    }
+
+    /// Translate an exact file offset to one unambiguous static image VA.
+    ///
+    /// Overlapping segment/section claims are de-duplicated when they yield the
+    /// same VA and rejected when they yield different VAs. Runtime correlation
+    /// must not pick the first mapping merely because it appears first.
+    pub fn file_offset_to_va(&self, file_offset: u64) -> Option<u64> {
+        let mut candidates = self
+            .segment_mappings
+            .iter()
+            .chain(self.section_mappings.iter())
+            .filter_map(|mapping| mapping.translate_file_offset(file_offset));
+        let first = candidates.next()?;
+        candidates
+            .all(|candidate| candidate == first)
+            .then_some(first)
+    }
+
+    /// Lowest mapped static VA, used only after exact image identity is proven.
+    pub fn image_base(&self) -> Option<u64> {
+        self.segment_mappings
+            .iter()
+            .map(|mapping| mapping.va_start)
+            .min()
+            .or_else(|| {
+                self.section_mappings
+                    .iter()
+                    .map(|mapping| mapping.va_start)
+                    .min()
+            })
     }
 }
 

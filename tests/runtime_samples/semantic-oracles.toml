@@ -1,0 +1,2451 @@
+version = 1
+
+# Evaluator-only expectations for the completed crash and memory categories
+# plus the first normal/dangerous representatives. The harness joins these
+# after execution; acquisition and future analyzers receive only the binary,
+# scenario argument, and captured evidence.
+
+[[case]]
+id = "normal_open_file.good"
+sample = "normal_open_file"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "path:input.txt"
+predicate = "open_result"
+expected = "success"
+independent_oracle = "kernel_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:dangerous_file_open"
+predicate = "present"
+expected = "false"
+independent_oracle = "fixture_contract"
+
+[[case]]
+id = "normal_open_file.bad"
+sample = "normal_open_file"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "path:missing-runtime-sample"
+predicate = "open_result"
+expected = "failure:ENOENT"
+independent_oracle = "kernel_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:dangerous_file_open"
+predicate = "present"
+expected = "false"
+independent_oracle = "fixture_contract"
+
+[[case]]
+id = "crash_null_write.good"
+sample = "crash_null_write"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "negative"
+subject = "terminal_fault"
+predicate = "present"
+expected = "false"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "negative"
+subject = "memory_write:null"
+predicate = "executed"
+expected = "false"
+independent_oracle = "source_control_flow"
+
+[[case]]
+id = "crash_null_write.bad"
+sample = "crash_null_write"
+scenario = "bad"
+process_outcome = "signal:SIGSEGV"
+
+[[case.assertion]]
+kind = "terminal"
+subject = "terminal_fault"
+predicate = "signal"
+expected = "SIGSEGV"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "memory"
+subject = "faulting_access"
+predicate = "access"
+expected = "write:null:width=4:value=7"
+independent_oracle = "source_and_kernel_fault"
+
+[[case]]
+id = "memory_struct_field_overwrite.good"
+sample = "memory_struct_field_overwrite"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.data"
+predicate = "changed_interval"
+expected = "offset=7..8:value=aa"
+independent_oracle = "source_layout_and_result"
+applies_to = ["opt:O0"]
+
+[[case.assertion]]
+kind = "negative"
+subject = "stack_object:box.canary"
+predicate = "changed"
+expected = "false:value=0x11223344"
+independent_oracle = "program_result"
+
+[[case]]
+id = "memory_struct_field_overwrite.bad"
+sample = "memory_struct_field_overwrite"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.canary"
+predicate = "changed_interval"
+expected = "offset=0..1:old=44:new=aa:final=0x112233aa"
+independent_oracle = "source_layout_and_result"
+applies_to = ["opt:O0", "compiler:clang,opt:O2"]
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.data"
+predicate = "bounds_violation"
+expected = "write:index=8:declared_length=8"
+independent_oracle = "source_layout"
+applies_to = ["opt:O0", "compiler:clang,opt:O2"]
+
+[[case.assertion]]
+kind = "negative"
+subject = "stack_object:box"
+predicate = "materialized_write"
+expected = "false:result_canary=0x11223344"
+independent_oracle = "compiler_output_and_disassembly"
+applies_to = ["compiler:gcc,opt:O2"]
+
+[[case]]
+id = "danger_rw_to_rx.good"
+sample = "danger_rw_to_rx"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "mapping"
+subject = "anonymous_mapping"
+predicate = "permission_history"
+expected = "RW->unmapped"
+independent_oracle = "kernel_mapping_events"
+
+[[case.assertion]]
+kind = "negative"
+subject = "anonymous_mapping"
+predicate = "executed"
+expected = "false"
+independent_oracle = "source_control_flow"
+
+[[case]]
+id = "danger_rw_to_rx.bad"
+sample = "danger_rw_to_rx"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "mapping"
+subject = "anonymous_mapping"
+predicate = "permission_history"
+expected = "RW->RX->unmapped"
+independent_oracle = "kernel_mapping_events"
+
+[[case.assertion]]
+kind = "mapping"
+subject = "anonymous_mapping"
+predicate = "executed_bytes"
+expected = "c3"
+independent_oracle = "source_and_control_flow"
+
+[[case]]
+id = "danger_bind_listener.good"
+sample = "danger_bind_listener"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "socket:AF_INET/SOCK_STREAM"
+predicate = "bind_endpoint"
+expected = "127.0.0.1:ephemeral"
+independent_oracle = "kernel_socket_state"
+
+[[case.assertion]]
+kind = "negative"
+subject = "socket:AF_INET/SOCK_STREAM"
+predicate = "listen_called"
+expected = "false"
+independent_oracle = "source_and_syscall_trace"
+
+[[case]]
+id = "normal_create_file.good"
+sample = "normal_create_file"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "file:created.txt"
+predicate = "lifecycle"
+expected = "open:create|truncate:0600->write:2:bytes=6f6b->close"
+independent_oracle = "kernel_file_state"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:unsafe_file_create"
+predicate = "present"
+expected = "false"
+independent_oracle = "kernel_file_state"
+
+[[case]]
+id = "normal_create_file.bad"
+sample = "normal_create_file"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "file:created.txt"
+predicate = "lifecycle"
+expected = "open:create|truncate:0600->write:2:bytes=6f6b->close"
+independent_oracle = "kernel_file_state"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:unsafe_file_create"
+predicate = "present"
+expected = "false"
+independent_oracle = "kernel_file_state"
+
+[[case]]
+id = "normal_read_file.good"
+sample = "normal_read_file"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "descriptor:/dev/zero"
+predicate = "read"
+expected = "offset=0:length=16:result=16:all_zero"
+independent_oracle = "kernel_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:out_of_bounds_read"
+predicate = "present"
+expected = "false"
+independent_oracle = "source_buffer_and_kernel_result"
+
+[[case]]
+id = "normal_read_file.bad"
+sample = "normal_read_file"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "descriptor:/dev/zero"
+predicate = "read"
+expected = "offset=0:length=16:result=16:all_zero"
+independent_oracle = "kernel_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:out_of_bounds_read"
+predicate = "present"
+expected = "false"
+independent_oracle = "source_buffer_and_kernel_result"
+
+[[case]]
+id = "normal_write_file.good"
+sample = "normal_write_file"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "file:written.bin"
+predicate = "lifecycle"
+expected = "open:create|truncate:0600->write:8:bytes=676c617572756e67->close"
+independent_oracle = "kernel_file_state"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:unsafe_file_write"
+predicate = "present"
+expected = "false"
+independent_oracle = "kernel_file_state"
+
+[[case]]
+id = "normal_write_file.bad"
+sample = "normal_write_file"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "file:written.bin"
+predicate = "lifecycle"
+expected = "open:create|truncate:0600->write:8:bytes=676c617572756e67->close"
+independent_oracle = "kernel_file_state"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:unsafe_file_write"
+predicate = "present"
+expected = "false"
+independent_oracle = "kernel_file_state"
+
+[[case]]
+id = "normal_append_file.good"
+sample = "normal_append_file"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "file:append.txt"
+predicate = "write"
+expected = "O_APPEND:length=1:bytes=78"
+independent_oracle = "kernel_file_state"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:unsafe_append"
+predicate = "present"
+expected = "false"
+independent_oracle = "source_and_kernel_result"
+
+[[case]]
+id = "normal_append_file.bad"
+sample = "normal_append_file"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "file:append.txt"
+predicate = "write"
+expected = "O_APPEND:length=1:bytes=78"
+independent_oracle = "kernel_file_state"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:unsafe_append"
+predicate = "present"
+expected = "false"
+independent_oracle = "source_and_kernel_result"
+
+[[case]]
+id = "normal_stat_file.good"
+sample = "normal_stat_file"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "path:/dev/null"
+predicate = "stat_result"
+expected = "success:file_type=character_device"
+independent_oracle = "kernel_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:unsafe_metadata_access"
+predicate = "present"
+expected = "false"
+independent_oracle = "fixture_contract"
+
+[[case]]
+id = "normal_stat_file.bad"
+sample = "normal_stat_file"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "path:missing"
+predicate = "stat_result"
+expected = "failure:ENOENT"
+independent_oracle = "kernel_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:unsafe_metadata_access"
+predicate = "present"
+expected = "false"
+independent_oracle = "fixture_contract"
+
+[[case]]
+id = "normal_mmap_read.good"
+sample = "normal_mmap_read"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "mapping"
+subject = "anonymous_mapping"
+predicate = "permission_history"
+expected = "RW:length=4096->unmapped"
+independent_oracle = "kernel_mapping_events"
+
+[[case.assertion]]
+kind = "memory"
+subject = "anonymous_mapping"
+predicate = "changed_interval"
+expected = "offset=0..1:old=00:new=2a:readback=42"
+independent_oracle = "source_and_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:memory_bounds_violation"
+predicate = "present"
+expected = "false"
+independent_oracle = "source_mapping_and_result"
+
+[[case]]
+id = "normal_mmap_read.bad"
+sample = "normal_mmap_read"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "mapping"
+subject = "anonymous_mapping"
+predicate = "permission_history"
+expected = "RW:length=4096->unmapped"
+independent_oracle = "kernel_mapping_events"
+
+[[case.assertion]]
+kind = "memory"
+subject = "anonymous_mapping"
+predicate = "changed_interval"
+expected = "offset=0..1:old=00:new=2a:readback=42"
+independent_oracle = "source_and_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:memory_bounds_violation"
+predicate = "present"
+expected = "false"
+independent_oracle = "source_mapping_and_result"
+
+[[case]]
+id = "normal_pipe_roundtrip.good"
+sample = "normal_pipe_roundtrip"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "pipe"
+predicate = "roundtrip"
+expected = "write:51:length=1->read:51:length=1"
+independent_oracle = "kernel_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:unsafe_ipc"
+predicate = "present"
+expected = "false"
+independent_oracle = "fixture_contract"
+
+[[case]]
+id = "normal_pipe_roundtrip.bad"
+sample = "normal_pipe_roundtrip"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "pipe"
+predicate = "roundtrip"
+expected = "write:51:length=1->read:51:length=1"
+independent_oracle = "kernel_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:unsafe_ipc"
+predicate = "present"
+expected = "false"
+independent_oracle = "fixture_contract"
+
+[[case]]
+id = "normal_socketpair.good"
+sample = "normal_socketpair"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "socketpair:AF_UNIX/SOCK_STREAM"
+predicate = "roundtrip"
+expected = "send:53:length=1->recv:53:length=1"
+independent_oracle = "kernel_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:network_listener"
+predicate = "present"
+expected = "false"
+independent_oracle = "kernel_socket_state"
+
+[[case]]
+id = "normal_socketpair.bad"
+sample = "normal_socketpair"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "socketpair:AF_UNIX/SOCK_STREAM"
+predicate = "roundtrip"
+expected = "send:53:length=1->recv:53:length=1"
+independent_oracle = "kernel_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:network_listener"
+predicate = "present"
+expected = "false"
+independent_oracle = "kernel_socket_state"
+
+[[case]]
+id = "normal_dup_fd.good"
+sample = "normal_dup_fd"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "descriptor:/dev/null"
+predicate = "duplication"
+expected = "open->dup->write:length=1->close_both"
+independent_oracle = "syscall_trace"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:descriptor_leak"
+predicate = "present"
+expected = "false"
+independent_oracle = "process_descriptor_state"
+
+[[case]]
+id = "normal_dup_fd.bad"
+sample = "normal_dup_fd"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "descriptor:/dev/null"
+predicate = "duplication"
+expected = "open->dup->write:length=1->close_both"
+independent_oracle = "syscall_trace"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:descriptor_leak"
+predicate = "present"
+expected = "false"
+independent_oracle = "process_descriptor_state"
+
+[[case]]
+id = "normal_environment.good"
+sample = "normal_environment"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "dataflow"
+subject = "environment:PATH"
+predicate = "observation"
+expected = "name+length+sha256:redacted_value"
+independent_oracle = "environment_inventory"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:secret_disclosure"
+predicate = "present"
+expected = "false"
+independent_oracle = "capture_redaction"
+
+[[case]]
+id = "normal_environment.bad"
+sample = "normal_environment"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "dataflow"
+subject = "environment:PATH"
+predicate = "observation"
+expected = "name+length+sha256:redacted_value"
+independent_oracle = "environment_inventory"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:secret_disclosure"
+predicate = "present"
+expected = "false"
+independent_oracle = "capture_redaction"
+
+[[case]]
+id = "normal_arguments.good"
+sample = "normal_arguments"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "dataflow"
+subject = "argv[1]"
+predicate = "result"
+expected = "sha256(good):argc=2:reported=2"
+independent_oracle = "input_identity_and_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:unsafe_argument_use"
+predicate = "present"
+expected = "false"
+independent_oracle = "fixture_contract"
+
+[[case]]
+id = "normal_arguments.bad"
+sample = "normal_arguments"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "dataflow"
+subject = "argv[1]"
+predicate = "result"
+expected = "sha256(bad):argc=2:reported=12"
+independent_oracle = "input_identity_and_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:unsafe_argument_use"
+predicate = "present"
+expected = "false"
+independent_oracle = "fixture_contract"
+
+[[case]]
+id = "normal_heap_lifecycle.good"
+sample = "normal_heap_lifecycle"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "heap_object"
+predicate = "lifecycle"
+expected = "allocate:32->write:offset31:value07->readback:7->free"
+independent_oracle = "allocator_events_and_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:heap_bounds_violation"
+predicate = "present"
+expected = "false"
+independent_oracle = "source_extent_and_result"
+
+[[case]]
+id = "normal_heap_lifecycle.bad"
+sample = "normal_heap_lifecycle"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "heap_object"
+predicate = "lifecycle"
+expected = "allocate:128->write:offset127:value07->readback:7->free"
+independent_oracle = "allocator_events_and_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:heap_bounds_violation"
+predicate = "present"
+expected = "false"
+independent_oracle = "source_extent_and_result"
+
+[[case]]
+id = "normal_fork_wait.good"
+sample = "normal_fork_wait"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "process_tree"
+predicate = "lifecycle"
+expected = "fork:1->child_exit:7->waitpid:reaped"
+independent_oracle = "process_events_and_wait_status"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:unreaped_child"
+predicate = "present"
+expected = "false"
+independent_oracle = "wait_status"
+
+[[case]]
+id = "normal_fork_wait.bad"
+sample = "normal_fork_wait"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "process_tree"
+predicate = "lifecycle"
+expected = "fork:1->child_exit:7->waitpid:reaped"
+independent_oracle = "process_events_and_wait_status"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:unreaped_child"
+predicate = "present"
+expected = "false"
+independent_oracle = "wait_status"
+
+[[case]]
+id = "normal_stdin_read.good"
+sample = "normal_stdin_read"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "descriptor:stdin"
+predicate = "read"
+expected = "provider=/dev/null:length=8:result=0"
+independent_oracle = "kernel_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:unsafe_stdin_read"
+predicate = "present"
+expected = "false"
+independent_oracle = "source_buffer_and_kernel_result"
+
+[[case]]
+id = "normal_stdin_read.bad"
+sample = "normal_stdin_read"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "descriptor:stdin"
+predicate = "read"
+expected = "provider=/dev/null:length=8:result=0"
+independent_oracle = "kernel_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:unsafe_stdin_read"
+predicate = "present"
+expected = "false"
+independent_oracle = "source_buffer_and_kernel_result"
+
+
+[[case]]
+id = "danger_path_traversal.good"
+sample = "danger_path_traversal"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "dataflow"
+subject = "path_input"
+predicate = "source_to_sink"
+expected = "literal:safe/input.txt->marker:SINK_path"
+independent_oracle = "fixture_stdout"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:path_traversal"
+predicate = "present"
+expected = "false"
+independent_oracle = "fixture_contract"
+
+[[case]]
+id = "danger_path_traversal.bad"
+sample = "danger_path_traversal"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "dataflow"
+subject = "path_input"
+predicate = "source_to_sink"
+expected = "literal:../../etc/passwd->marker:SINK_path"
+independent_oracle = "fixture_stdout"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "filesystem"
+predicate = "effect"
+expected = "none:marker_only"
+independent_oracle = "source_and_syscall_trace"
+
+[[case]]
+id = "danger_command_argument.good"
+sample = "danger_command_argument"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "dataflow"
+subject = "command_argument"
+predicate = "source_to_sink"
+expected = "literal:hello->marker:SINK_command"
+independent_oracle = "fixture_stdout"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:command_metacharacter"
+predicate = "present"
+expected = "false"
+independent_oracle = "fixture_contract"
+
+[[case]]
+id = "danger_command_argument.bad"
+sample = "danger_command_argument"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "dataflow"
+subject = "command_argument"
+predicate = "source_to_sink"
+expected = "literal:semicolon_id->marker:SINK_command"
+independent_oracle = "fixture_stdout"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "process_execution"
+predicate = "effect"
+expected = "none:marker_only"
+independent_oracle = "source_and_syscall_trace"
+
+[[case]]
+id = "danger_format_string.good"
+sample = "danger_format_string"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "dataflow"
+subject = "format_input"
+predicate = "source_to_sink"
+expected = "literal:user-ok->marker:SINK_format"
+independent_oracle = "fixture_stdout"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:untrusted_format_tokens"
+predicate = "present"
+expected = "false"
+independent_oracle = "fixture_contract"
+
+[[case]]
+id = "danger_format_string.bad"
+sample = "danger_format_string"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "dataflow"
+subject = "format_input"
+predicate = "source_to_sink"
+expected = "literal:user-%x-%x->marker:SINK_format"
+independent_oracle = "fixture_stdout"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "format_interpretation"
+predicate = "effect"
+expected = "none:input_passed_as_percent_s_data"
+independent_oracle = "source_and_output"
+
+[[case]]
+id = "danger_rwx_mapping.good"
+sample = "danger_rwx_mapping"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "mapping"
+subject = "anonymous_mapping"
+predicate = "permission_history"
+expected = "RW->unmapped"
+independent_oracle = "kernel_mapping_events"
+
+[[case.assertion]]
+kind = "negative"
+subject = "anonymous_mapping"
+predicate = "simultaneous_wx"
+expected = "false"
+independent_oracle = "source_and_kernel_mapping"
+
+[[case]]
+id = "danger_rwx_mapping.bad"
+sample = "danger_rwx_mapping"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "mapping"
+subject = "anonymous_mapping"
+predicate = "permission_history"
+expected = "RWX->unmapped"
+independent_oracle = "kernel_mapping_events"
+
+[[case.assertion]]
+kind = "mapping"
+subject = "anonymous_mapping"
+predicate = "simultaneous_wx"
+expected = "true:length=4096"
+independent_oracle = "source_and_kernel_mapping"
+
+[[case]]
+id = "danger_mprotect_exec.good"
+sample = "danger_mprotect_exec"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "mapping"
+subject = "anonymous_mapping"
+predicate = "permission_history"
+expected = "RW->R->unmapped"
+independent_oracle = "kernel_mapping_events"
+
+[[case.assertion]]
+kind = "negative"
+subject = "anonymous_mapping"
+predicate = "executable"
+expected = "false"
+independent_oracle = "source_and_kernel_mapping"
+
+[[case]]
+id = "danger_mprotect_exec.bad"
+sample = "danger_mprotect_exec"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "mapping"
+subject = "anonymous_mapping"
+predicate = "permission_history"
+expected = "RW->RX->unmapped"
+independent_oracle = "kernel_mapping_events"
+
+[[case.assertion]]
+kind = "mapping"
+subject = "anonymous_mapping"
+predicate = "executable"
+expected = "true:length=4096:not_executed"
+independent_oracle = "source_and_kernel_mapping"
+
+[[case]]
+id = "danger_dlopen_input.good"
+sample = "danger_dlopen_input"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "dynamic_loader"
+predicate = "requested_object"
+expected = "literal:libm.so.6"
+independent_oracle = "loader_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:environment_controlled_dlopen"
+predicate = "present"
+expected = "false"
+independent_oracle = "fixture_contract"
+
+[[case]]
+id = "danger_dlopen_input.bad"
+sample = "danger_dlopen_input"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "dataflow"
+subject = "environment:RUNTIME_SAMPLE_LIBRARY"
+predicate = "source_to_sink"
+expected = "sha256-bound-value->dlopen"
+independent_oracle = "environment_inventory_and_loader_event"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "dynamic_loader"
+predicate = "requested_object"
+expected = "./untrusted-runtime-sample.so:result=failure"
+independent_oracle = "loader_result"
+
+[[case]]
+id = "danger_symlink_follow.good"
+sample = "danger_symlink_follow"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "file:regular-input"
+predicate = "open_resolution"
+expected = "regular_file:success"
+independent_oracle = "kernel_file_identity"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:symlink_follow"
+predicate = "present"
+expected = "false"
+independent_oracle = "fixture_filesystem_contract"
+
+[[case]]
+id = "danger_symlink_follow.bad"
+sample = "danger_symlink_follow"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "file:link-input"
+predicate = "open_resolution"
+expected = "symlink->symlink-target:success"
+independent_oracle = "kernel_file_identity"
+
+[[case.assertion]]
+kind = "dataflow"
+subject = "path:link-input"
+predicate = "source_to_sink"
+expected = "literal->open_without_O_NOFOLLOW"
+independent_oracle = "source_and_syscall_trace"
+
+[[case]]
+id = "danger_world_writable.good"
+sample = "danger_world_writable"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "file:permissions.out"
+predicate = "mode_after_chmod"
+expected = "0600"
+independent_oracle = "kernel_stat"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:world_writable"
+predicate = "present"
+expected = "false"
+independent_oracle = "kernel_stat"
+
+[[case]]
+id = "danger_world_writable.bad"
+sample = "danger_world_writable"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "file:permissions.out"
+predicate = "mode_after_chmod"
+expected = "0666"
+independent_oracle = "kernel_stat"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "file:permissions.out"
+predicate = "world_writable"
+expected = "true"
+independent_oracle = "kernel_stat"
+
+[[case]]
+id = "danger_predictable_temp.good"
+sample = "danger_predictable_temp"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "temporary_file"
+predicate = "path_policy"
+expected = "safe-<pid>.tmp:O_CREAT|O_EXCL:0600"
+independent_oracle = "source_and_syscall_trace"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:predictable_temp_name"
+predicate = "present"
+expected = "false"
+independent_oracle = "fixture_contract"
+
+[[case]]
+id = "danger_predictable_temp.bad"
+sample = "danger_predictable_temp"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "temporary_file"
+predicate = "path_policy"
+expected = "predictable.tmp:O_CREAT|O_EXCL:0600"
+independent_oracle = "source_and_syscall_trace"
+
+[[case.assertion]]
+kind = "dataflow"
+subject = "temporary_path"
+predicate = "predictability"
+expected = "constant_across_executions"
+independent_oracle = "source_and_repeated_runs"
+
+[[case]]
+id = "danger_large_allocation.good"
+sample = "danger_large_allocation"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "heap_allocation"
+predicate = "requested_bytes"
+expected = "4096"
+independent_oracle = "allocator_interposition"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:large_allocation"
+predicate = "present"
+expected = "false"
+independent_oracle = "fixture_contract"
+
+[[case]]
+id = "danger_large_allocation.bad"
+sample = "danger_large_allocation"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "heap_allocation"
+predicate = "requested_bytes"
+expected = "67108864"
+independent_oracle = "allocator_interposition"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "heap_allocation"
+predicate = "result"
+expected = "environment_dependent:record_success_or_failure"
+independent_oracle = "program_result"
+
+[[case]]
+id = "danger_ioctl_input.good"
+sample = "danger_ioctl_input"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "descriptor:/dev/null"
+predicate = "ioctl_request"
+expected = "0x00000000:result=-1"
+independent_oracle = "syscall_trace"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:untrusted_ioctl_request"
+predicate = "present"
+expected = "false"
+independent_oracle = "fixture_contract"
+
+[[case]]
+id = "danger_ioctl_input.bad"
+sample = "danger_ioctl_input"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "descriptor:/dev/null"
+predicate = "ioctl_request"
+expected = "0xdeadbeef:result=-1"
+independent_oracle = "syscall_trace"
+
+[[case.assertion]]
+kind = "dataflow"
+subject = "ioctl_request"
+predicate = "source_to_sink"
+expected = "scenario_selected->ioctl"
+independent_oracle = "source_and_syscall_trace"
+
+[[case]]
+id = "danger_fork_tree.good"
+sample = "danger_fork_tree"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "process_tree"
+predicate = "children_created"
+expected = "1"
+independent_oracle = "wait_status_and_process_events"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:excessive_fork"
+predicate = "present"
+expected = "false"
+independent_oracle = "fixture_contract"
+
+[[case]]
+id = "danger_fork_tree.bad"
+sample = "danger_fork_tree"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "process_tree"
+predicate = "children_created"
+expected = "3"
+independent_oracle = "wait_status_and_process_events"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "process_tree"
+predicate = "children_reaped"
+expected = "3"
+independent_oracle = "wait_status_and_process_events"
+
+[[case]]
+id = "danger_environment_path.good"
+sample = "danger_environment_path"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "dataflow"
+subject = "search_path"
+predicate = "source_to_sink"
+expected = "literal:/usr/bin->marker:SINK_search_path"
+independent_oracle = "fixture_stdout"
+
+[[case.assertion]]
+kind = "negative"
+subject = "finding:environment_search_path"
+predicate = "present"
+expected = "false"
+independent_oracle = "fixture_contract"
+
+[[case]]
+id = "danger_environment_path.bad"
+sample = "danger_environment_path"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "dataflow"
+subject = "environment:PATH"
+predicate = "source_to_sink"
+expected = "sha256-bound-value->marker:SINK_search_path"
+independent_oracle = "environment_inventory_and_output"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "path_search"
+predicate = "effect"
+expected = "none:marker_only"
+independent_oracle = "source_and_syscall_trace"
+
+
+[[case]]
+id = "crash_null_read.good"
+sample = "crash_null_read"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "negative"
+subject = "terminal_fault"
+predicate = "present"
+expected = "false"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "negative"
+subject = "faulting_access"
+predicate = "executed"
+expected = "false"
+independent_oracle = "source_control_flow"
+
+[[case]]
+id = "crash_null_read.bad"
+sample = "crash_null_read"
+scenario = "bad"
+process_outcome = "signal:SIGSEGV"
+
+[[case.assertion]]
+kind = "terminal"
+subject = "terminal_fault"
+predicate = "signal"
+expected = "SIGSEGV"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "memory"
+subject = "faulting_access"
+predicate = "access"
+expected = "read:null:width=4"
+independent_oracle = "source_and_kernel_fault"
+
+[[case]]
+id = "crash_abort.good"
+sample = "crash_abort"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "negative"
+subject = "terminal_fault"
+predicate = "present"
+expected = "false"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "negative"
+subject = "terminal_fault"
+predicate = "executed"
+expected = "false"
+independent_oracle = "source_control_flow"
+
+[[case]]
+id = "crash_abort.bad"
+sample = "crash_abort"
+scenario = "bad"
+process_outcome = "signal:SIGABRT"
+
+[[case.assertion]]
+kind = "terminal"
+subject = "terminal_fault"
+predicate = "signal"
+expected = "SIGABRT"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "terminal"
+subject = "terminal_fault"
+predicate = "class"
+expected = "explicit_abort"
+independent_oracle = "source_and_wait_status"
+
+[[case]]
+id = "crash_trap.good"
+sample = "crash_trap"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "negative"
+subject = "terminal_fault"
+predicate = "present"
+expected = "false"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "negative"
+subject = "terminal_fault"
+predicate = "executed"
+expected = "false"
+independent_oracle = "source_control_flow"
+
+[[case]]
+id = "crash_trap.bad"
+sample = "crash_trap"
+scenario = "bad"
+process_outcome = "signal:SIGTRAP"
+
+[[case.assertion]]
+kind = "terminal"
+subject = "terminal_fault"
+predicate = "signal"
+expected = "SIGTRAP"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "terminal"
+subject = "terminal_fault"
+predicate = "class"
+expected = "deliberate_signal:SIGTRAP"
+independent_oracle = "source_and_wait_status"
+
+[[case]]
+id = "crash_raise_segv.good"
+sample = "crash_raise_segv"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "negative"
+subject = "terminal_fault"
+predicate = "present"
+expected = "false"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "negative"
+subject = "terminal_fault"
+predicate = "executed"
+expected = "false"
+independent_oracle = "source_control_flow"
+
+[[case]]
+id = "crash_raise_segv.bad"
+sample = "crash_raise_segv"
+scenario = "bad"
+process_outcome = "signal:SIGSEGV"
+
+[[case.assertion]]
+kind = "terminal"
+subject = "terminal_fault"
+predicate = "signal"
+expected = "SIGSEGV"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "terminal"
+subject = "terminal_fault"
+predicate = "class"
+expected = "deliberate_signal:SIGSEGV"
+independent_oracle = "source_and_wait_status"
+
+[[case]]
+id = "crash_raise_bus.good"
+sample = "crash_raise_bus"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "negative"
+subject = "terminal_fault"
+predicate = "present"
+expected = "false"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "negative"
+subject = "terminal_fault"
+predicate = "executed"
+expected = "false"
+independent_oracle = "source_control_flow"
+
+[[case]]
+id = "crash_raise_bus.bad"
+sample = "crash_raise_bus"
+scenario = "bad"
+process_outcome = "signal:SIGBUS"
+
+[[case.assertion]]
+kind = "terminal"
+subject = "terminal_fault"
+predicate = "signal"
+expected = "SIGBUS"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "terminal"
+subject = "terminal_fault"
+predicate = "class"
+expected = "deliberate_signal:SIGBUS"
+independent_oracle = "source_and_wait_status"
+
+[[case]]
+id = "crash_raise_fpe.good"
+sample = "crash_raise_fpe"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "negative"
+subject = "terminal_fault"
+predicate = "present"
+expected = "false"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "negative"
+subject = "terminal_fault"
+predicate = "executed"
+expected = "false"
+independent_oracle = "source_control_flow"
+
+[[case]]
+id = "crash_raise_fpe.bad"
+sample = "crash_raise_fpe"
+scenario = "bad"
+process_outcome = "signal:SIGFPE"
+
+[[case.assertion]]
+kind = "terminal"
+subject = "terminal_fault"
+predicate = "signal"
+expected = "SIGFPE"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "terminal"
+subject = "terminal_fault"
+predicate = "class"
+expected = "deliberate_signal:SIGFPE"
+independent_oracle = "source_and_wait_status"
+
+[[case]]
+id = "crash_raise_ill.good"
+sample = "crash_raise_ill"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "negative"
+subject = "terminal_fault"
+predicate = "present"
+expected = "false"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "negative"
+subject = "terminal_fault"
+predicate = "executed"
+expected = "false"
+independent_oracle = "source_control_flow"
+
+[[case]]
+id = "crash_raise_ill.bad"
+sample = "crash_raise_ill"
+scenario = "bad"
+process_outcome = "signal:SIGILL"
+
+[[case.assertion]]
+kind = "terminal"
+subject = "terminal_fault"
+predicate = "signal"
+expected = "SIGILL"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "terminal"
+subject = "terminal_fault"
+predicate = "class"
+expected = "deliberate_signal:SIGILL"
+independent_oracle = "source_and_wait_status"
+
+[[case]]
+id = "crash_assert.good"
+sample = "crash_assert"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "negative"
+subject = "terminal_fault"
+predicate = "present"
+expected = "false"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "negative"
+subject = "terminal_fault"
+predicate = "executed"
+expected = "false"
+independent_oracle = "source_control_flow"
+
+[[case]]
+id = "crash_assert.bad"
+sample = "crash_assert"
+scenario = "bad"
+process_outcome = "signal:SIGABRT"
+
+[[case.assertion]]
+kind = "terminal"
+subject = "terminal_fault"
+predicate = "signal"
+expected = "SIGABRT"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "terminal"
+subject = "terminal_fault"
+predicate = "class"
+expected = "assertion_failure"
+independent_oracle = "source_and_wait_status"
+
+[[case]]
+id = "crash_guard_read.good"
+sample = "crash_guard_read"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "negative"
+subject = "terminal_fault"
+predicate = "present"
+expected = "false"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "negative"
+subject = "faulting_access"
+predicate = "executed"
+expected = "false"
+independent_oracle = "source_control_flow"
+
+[[case]]
+id = "crash_guard_read.bad"
+sample = "crash_guard_read"
+scenario = "bad"
+process_outcome = "signal:SIGSEGV"
+
+[[case.assertion]]
+kind = "terminal"
+subject = "terminal_fault"
+predicate = "signal"
+expected = "SIGSEGV"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "memory"
+subject = "faulting_access"
+predicate = "access"
+expected = "read:guard_page:permission=none:width=1"
+independent_oracle = "source_mapping_and_kernel_fault"
+
+[[case]]
+id = "memory_heap_canary_overwrite.good"
+sample = "memory_heap_canary_overwrite"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "heap_object:p"
+predicate = "changed_interval"
+expected = "offset=7..8:old=00:new=ff"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "heap_object:canary"
+predicate = "changed"
+expected = "false:value=0x12345678"
+independent_oracle = "program_result"
+
+[[case]]
+id = "memory_heap_canary_overwrite.bad"
+sample = "memory_heap_canary_overwrite"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "heap_object:canary"
+predicate = "changed_interval"
+expected = "offset=0..1:old=78:new=ff:final=0x123456ff"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "memory"
+subject = "heap_object:p"
+predicate = "bounds_violation"
+expected = "write:index=8:declared_data_length=8"
+independent_oracle = "source_layout"
+
+[[case]]
+id = "memory_off_by_one.good"
+sample = "memory_off_by_one"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.text"
+predicate = "changed_interval"
+expected = "offset=0..7:old=00:new=41"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "stack_object:box.tag"
+predicate = "changed"
+expected = "false:value=0x5a"
+independent_oracle = "program_result"
+
+[[case]]
+id = "memory_off_by_one.bad"
+sample = "memory_off_by_one"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.tag"
+predicate = "changed_interval"
+expected = "offset=0..1:old=5a:new=00:final=0x00"
+independent_oracle = "source_layout_and_result"
+applies_to = ["opt:O0", "compiler:clang,opt:O2"]
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.text"
+predicate = "bounds_violation"
+expected = "terminator:index=8:declared_length=8"
+independent_oracle = "source_layout"
+applies_to = ["opt:O0", "compiler:clang,opt:O2"]
+
+[[case.assertion]]
+kind = "negative"
+subject = "stack_object:box.tag"
+predicate = "materialized_write"
+expected = "false:result_unchanged"
+independent_oracle = "compiler_output_and_disassembly"
+applies_to = ["compiler:gcc,opt:O2"]
+[[case]]
+id = "memory_memcpy_overflow.good"
+sample = "memory_memcpy_overflow"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.dst"
+predicate = "changed_interval"
+expected = "offset=0..8:old=00:new=4d"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "stack_object:box.canary"
+predicate = "changed"
+expected = "false:value=0x10203040"
+independent_oracle = "program_result"
+
+[[case]]
+id = "memory_memcpy_overflow.bad"
+sample = "memory_memcpy_overflow"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.canary"
+predicate = "changed_interval"
+expected = "offset=0..4:old=40302010:new=4d4d4d4d:final=0x4d4d4d4d"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.dst"
+predicate = "bounds_violation"
+expected = "memcpy:length=12:declared_length=8"
+independent_oracle = "source_layout"
+
+[[case]]
+id = "memory_memmove_overflow.good"
+sample = "memory_memmove_overflow"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.dst"
+predicate = "changed_interval"
+expected = "offset=0..8:old=00:new=4e"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "stack_object:box.canary"
+predicate = "changed"
+expected = "false:value=0x01020304"
+independent_oracle = "program_result"
+
+[[case]]
+id = "memory_memmove_overflow.bad"
+sample = "memory_memmove_overflow"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.canary"
+predicate = "changed_interval"
+expected = "offset=0..4:old=04030201:new=4e4e4e4e:final=0x4e4e4e4e"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.dst"
+predicate = "bounds_violation"
+expected = "memmove:length=12:declared_length=8"
+independent_oracle = "source_layout"
+
+[[case]]
+id = "memory_strcpy_overflow.good"
+sample = "memory_strcpy_overflow"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.dst"
+predicate = "changed_interval"
+expected = "offset=0..3:old=00:new=414243"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "stack_object:box.canary"
+predicate = "changed"
+expected = "false:value=0x11223344"
+independent_oracle = "program_result"
+
+[[case]]
+id = "memory_strcpy_overflow.bad"
+sample = "memory_strcpy_overflow"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.canary"
+predicate = "changed_interval"
+expected = "offset=0..4:old=44332211:new=494a4b00:final=0x004b4a49"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.dst"
+predicate = "bounds_violation"
+expected = "strcpy:source_bytes=12:declared_length=8"
+independent_oracle = "source_layout"
+
+[[case]]
+id = "memory_strcat_overflow.good"
+sample = "memory_strcat_overflow"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.dst"
+predicate = "changed_interval"
+expected = "offset=3..4:old=00:new=44"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "stack_object:box.canary"
+predicate = "changed"
+expected = "false:value=0x55667788"
+independent_oracle = "program_result"
+
+[[case]]
+id = "memory_strcat_overflow.bad"
+sample = "memory_strcat_overflow"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.canary"
+predicate = "changed_interval"
+expected = "offset=0..4:old=88776655:new=494a4b00:final=0x004b4a49"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.dst"
+predicate = "bounds_violation"
+expected = "strcat:final_bytes=12:declared_length=8"
+independent_oracle = "source_layout"
+
+[[case]]
+id = "memory_sprintf_overflow.good"
+sample = "memory_sprintf_overflow"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.dst"
+predicate = "changed_interval"
+expected = "offset=0..2:old=00:new=6f6b"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "stack_object:box.canary"
+predicate = "changed"
+expected = "false:value=0x66778899"
+independent_oracle = "program_result"
+
+[[case]]
+id = "memory_sprintf_overflow.bad"
+sample = "memory_sprintf_overflow"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.canary"
+predicate = "changed_interval"
+expected = "offset=0..4:old=99887766:new=38394142:final=0x42413938"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.dst"
+predicate = "bounds_violation"
+expected = "sprintf:output_bytes=13:declared_length=8"
+independent_oracle = "source_layout"
+
+[[case]]
+id = "memory_read_overflow.good"
+sample = "memory_read_overflow"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.dst"
+predicate = "changed_interval"
+expected = "offset=0..8:old=00:new=6162636465666768"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "stack_object:box.canary"
+predicate = "changed"
+expected = "false:value=0x1234abcd"
+independent_oracle = "program_result"
+
+[[case]]
+id = "memory_read_overflow.bad"
+sample = "memory_read_overflow"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.canary"
+predicate = "changed_interval"
+expected = "offset=0..4:old=cdab3412:new=696a6b6c:final=0x6c6b6a69"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.dst"
+predicate = "bounds_violation"
+expected = "read:length=12:declared_length=8"
+independent_oracle = "source_layout"
+
+[[case]]
+id = "memory_integer_truncation.good"
+sample = "memory_integer_truncation"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.dst"
+predicate = "changed_interval"
+expected = "offset=0..8:old=00:new=ee"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "stack_object:box.canary"
+predicate = "changed"
+expected = "false:value=0x76543210"
+independent_oracle = "program_result"
+
+[[case]]
+id = "memory_integer_truncation.bad"
+sample = "memory_integer_truncation"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.canary"
+predicate = "changed_interval"
+expected = "offset=0..4:old=10325476:new=eeeeeeee:final=0xeeeeeeee"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "memory"
+subject = "integer_conversion"
+predicate = "bounds_violation"
+expected = "requested=265:narrowed_u8=9:write_length=12:declared_length=8"
+independent_oracle = "source_layout"
+
+[[case]]
+id = "memory_underallocation.good"
+sample = "memory_underallocation"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "heap_object:p"
+predicate = "changed_interval"
+expected = "offset=0..16:old=00:new=aa"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "heap_object:canary"
+predicate = "changed"
+expected = "false:value=0x24681357"
+independent_oracle = "program_result"
+
+[[case]]
+id = "memory_underallocation.bad"
+sample = "memory_underallocation"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "heap_object:canary"
+predicate = "changed_interval"
+expected = "offset=0..4:old=57136824:new=aaaaaaaa:final=0xaaaaaaaa"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "memory"
+subject = "heap_object:p"
+predicate = "bounds_violation"
+expected = "logical_allocation=8:write_length=16"
+independent_oracle = "source_layout"
+
+[[case]]
+id = "memory_index_write.good"
+sample = "memory_index_write"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.a"
+predicate = "changed_interval"
+expected = "offset=12..16:old=00000000:new=ffffffff"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "stack_object:box.canary"
+predicate = "changed"
+expected = "false:value=0x13572468"
+independent_oracle = "program_result"
+
+[[case]]
+id = "memory_index_write.bad"
+sample = "memory_index_write"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.canary"
+predicate = "changed_interval"
+expected = "offset=0..4:old=68245713:new=ffffffff:final=0xffffffff"
+independent_oracle = "source_layout_and_result"
+applies_to = ["opt:O0", "compiler:clang,opt:O2"]
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:box.a"
+predicate = "bounds_violation"
+expected = "write:index=4:declared_elements=4"
+independent_oracle = "source_layout"
+applies_to = ["opt:O0", "compiler:clang,opt:O2"]
+
+[[case.assertion]]
+kind = "negative"
+subject = "stack_object:box.canary"
+predicate = "materialized_write"
+expected = "false:result_unchanged"
+independent_oracle = "compiler_output_and_disassembly"
+applies_to = ["compiler:gcc,opt:O2"]
+[[case]]
+id = "memory_format_n.good"
+sample = "memory_format_n"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:written"
+predicate = "changed_interval"
+expected = "unchanged:value=7"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "format_string"
+predicate = "changed"
+expected = "false:percent_n_executed"
+independent_oracle = "program_result"
+
+[[case]]
+id = "memory_format_n.bad"
+sample = "memory_format_n"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:written"
+predicate = "changed_interval"
+expected = "offset=0..4:old=07000000:new=04000000:final=4"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "memory"
+subject = "format_string"
+predicate = "dangerous_write"
+expected = "percent_n:printed_count=4"
+independent_oracle = "source_layout"
+
+[[case]]
+id = "memory_stale_pointer_write.good"
+sample = "memory_stale_pointer_write"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "heap_object:p"
+predicate = "changed_interval"
+expected = "offset=0..1:old=00:new=01:lifetime=live"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "heap_object:p"
+predicate = "changed"
+expected = "false:write_after_free"
+independent_oracle = "program_result"
+
+[[case]]
+id = "memory_stale_pointer_write.bad"
+sample = "memory_stale_pointer_write"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "heap_object:p"
+predicate = "changed_interval"
+expected = "offset=0..1:old=unknown:new=09:lifetime=ended"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "memory"
+subject = "heap_object:p"
+predicate = "lifetime_violation"
+expected = "write_after_free:offset=0"
+independent_oracle = "source_layout"
+
+[[case]]
+id = "memory_overlapping_copy.good"
+sample = "memory_overlapping_copy"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:b"
+predicate = "changed_interval"
+expected = "offset=1..9:original=6263646566676869:final=6162636465666768"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "negative"
+subject = "copy_operation"
+predicate = "changed"
+expected = "false:invalid_overlap"
+independent_oracle = "program_result"
+
+[[case]]
+id = "memory_overlapping_copy.bad"
+sample = "memory_overlapping_copy"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "memory"
+subject = "stack_object:b"
+predicate = "changed_interval"
+expected = "offset=1..9:original=6263646566676869:final=implementation_defined:observed_b2=98"
+independent_oracle = "source_layout_and_result"
+
+[[case.assertion]]
+kind = "memory"
+subject = "copy_operation"
+predicate = "overlap_violation"
+expected = "memcpy:source=0..8:destination=1..9"
+independent_oracle = "source_layout"
+
+
+[[case]]
+id = "crash_guard_write.good"
+sample = "crash_guard_write"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "negative"
+subject = "terminal_fault"
+predicate = "present"
+expected = "false"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "negative"
+subject = "faulting_access"
+predicate = "executed"
+expected = "false"
+independent_oracle = "source_control_flow"
+
+[[case]]
+id = "crash_guard_write.bad"
+sample = "crash_guard_write"
+scenario = "bad"
+process_outcome = "signal:SIGSEGV"
+
+[[case.assertion]]
+kind = "terminal"
+subject = "terminal_fault"
+predicate = "signal"
+expected = "SIGSEGV"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "memory"
+subject = "faulting_access"
+predicate = "access"
+expected = "write:guard_page:permission=none:width=1:value=1"
+independent_oracle = "source_mapping_and_kernel_fault"
+
+[[case]]
+id = "crash_readonly_write.good"
+sample = "crash_readonly_write"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "negative"
+subject = "terminal_fault"
+predicate = "present"
+expected = "false"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "negative"
+subject = "faulting_access"
+predicate = "executed"
+expected = "false"
+independent_oracle = "source_control_flow"
+
+[[case]]
+id = "crash_readonly_write.bad"
+sample = "crash_readonly_write"
+scenario = "bad"
+process_outcome = "signal:SIGSEGV"
+
+[[case.assertion]]
+kind = "terminal"
+subject = "terminal_fault"
+predicate = "signal"
+expected = "SIGSEGV"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "memory"
+subject = "faulting_access"
+predicate = "access"
+expected = "write:anonymous_mapping:permission=read:width=1:value=2"
+independent_oracle = "source_mapping_and_kernel_fault"
+
+[[case]]
+id = "crash_execute_nonexec.good"
+sample = "crash_execute_nonexec"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "negative"
+subject = "terminal_fault"
+predicate = "present"
+expected = "false"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "negative"
+subject = "faulting_transfer"
+predicate = "executed"
+expected = "false"
+independent_oracle = "source_control_flow"
+
+[[case]]
+id = "crash_execute_nonexec.bad"
+sample = "crash_execute_nonexec"
+scenario = "bad"
+process_outcome = "signal:SIGSEGV"
+
+[[case.assertion]]
+kind = "terminal"
+subject = "terminal_fault"
+predicate = "signal"
+expected = "SIGSEGV"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "control"
+subject = "faulting_transfer"
+predicate = "access"
+expected = "execute:anonymous_mapping:permission=rw:bytes=c3"
+independent_oracle = "source_mapping_and_kernel_fault"
+
+[[case]]
+id = "crash_bad_function_pointer.good"
+sample = "crash_bad_function_pointer"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "negative"
+subject = "terminal_fault"
+predicate = "present"
+expected = "false"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "negative"
+subject = "faulting_transfer"
+predicate = "executed"
+expected = "false"
+independent_oracle = "source_control_flow"
+
+[[case]]
+id = "crash_bad_function_pointer.bad"
+sample = "crash_bad_function_pointer"
+scenario = "bad"
+process_outcome = "signal:SIGSEGV"
+
+[[case.assertion]]
+kind = "terminal"
+subject = "terminal_fault"
+predicate = "signal"
+expected = "SIGSEGV"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "control"
+subject = "faulting_transfer"
+predicate = "target"
+expected = "address=1"
+independent_oracle = "source_and_kernel_fault"
+
+[[case]]
+id = "crash_stack_overflow.good"
+sample = "crash_stack_overflow"
+scenario = "good"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "negative"
+subject = "terminal_fault"
+predicate = "present"
+expected = "false"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "negative"
+subject = "terminal_fault"
+predicate = "executed"
+expected = "false"
+independent_oracle = "source_control_flow"
+
+[[case]]
+id = "crash_stack_overflow.bad"
+sample = "crash_stack_overflow"
+scenario = "bad"
+process_outcome = "signal:SIGSEGV"
+
+[[case.assertion]]
+kind = "terminal"
+subject = "terminal_fault"
+predicate = "signal"
+expected = "SIGSEGV"
+independent_oracle = "wait_status"
+
+[[case.assertion]]
+kind = "terminal"
+subject = "terminal_fault"
+predicate = "class"
+expected = "recursive_stack_exhaustion:rlimit=262144:frame_bytes>=4096"
+independent_oracle = "source_rlimit_and_kernel_fault"
+
+
+[[case]]
+id = "danger_bind_listener.bad"
+sample = "danger_bind_listener"
+scenario = "bad"
+process_outcome = "exit:0"
+
+[[case.assertion]]
+kind = "os_event"
+subject = "socket:AF_INET/SOCK_STREAM"
+predicate = "bind_endpoint"
+expected = "0.0.0.0:ephemeral"
+independent_oracle = "kernel_socket_state"
+
+[[case.assertion]]
+kind = "negative"
+subject = "socket:AF_INET/SOCK_STREAM"
+predicate = "listen_called"
+expected = "false"
+independent_oracle = "source_and_syscall_trace"

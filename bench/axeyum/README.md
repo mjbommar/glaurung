@@ -44,9 +44,9 @@ These five rules are the reason the harness exists; a comparison that drops any
 of them has produced a wrong answer here before.
 
 - **Shadow-differential for tiers 1 and 3.** `GLAURUNG_SHADOW_DIFF=1` runs *both*
-  backends on every query with **z3 authoritative**, so the query stream and path
-  lineage are identical across runs and the two per-backend times are
-  apples-to-apples on the same work.
+  backends on every query with **Axeyum authoritative** and Z3 as an oracle, so
+  the query stream and path lineage are identical across runs and the two
+  per-backend times are apples-to-apples on the same work.
 - **Construction-truth grading for tier 0.** Each case's verdict is known by
   construction — a SAT case carries an explicit witness, an UNSAT case is
   `t == v ∧ t == v^1`. Both backends are graded against that truth, so no solver
@@ -113,8 +113,8 @@ after checking that both revisions match.
 - **z3 as Glaurung uses it** — one fresh solver per call through the `z3` crate.
   That *is* the real integration, but a z3 embedding that reused a context would
   show a smaller floor. The comparison is scoped accordingly.
-- **Tier 3 is z3-authoritative**, which isolates solver cost fairly but means the
-  query stream reflects z3's model choices.
+- **Tier 3 is Axeyum-authoritative.** This measures the production query stream;
+  Z3 observes identical queries but cannot alter exploration or supply a model.
 - **Tiers 0–2 are author-constructed.** They explain mechanism and correctness;
   every real-workload claim rests on tier 3.
 - **Bitwuzla is not in this benchmark.** The pinned `solver-bitwuzla` cell is a

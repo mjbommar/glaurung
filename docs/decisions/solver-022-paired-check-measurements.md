@@ -2,6 +2,11 @@
 
 > **Kind:** decision · **Status:** maintained
 
+> **Authority update:** [solver-037](solver-037-axeyum-is-always-authoritative.md)
+> makes Axeyum authoritative in all new traces. References below to a
+> Z3-authoritative result describe the historical traces that motivated this
+> measurement schema, not current solver selection.
+
 **ADR status:** Accepted.
 **Context:** The pre-submission reviewer audit identifies ratio-of-sums,
 single-run timing, mixed decided populations, and unnamed warm fallbacks as

@@ -60,6 +60,7 @@ and troubleshooting live in the [development setup guide](development/setup.md).
 | Use or rebuild the sample corpus | [Sample corpus](reference/sample-corpus.md) and [`samples/README.md`](../samples/README.md) |
 | Run the right test gate before pushing | [Testing gates](development/testing-gates.md) |
 | Plan runtime, core-dump, and hybrid binary analysis work | [Runtime and hybrid analysis roadmap](development/roadmap/runtime-analysis.md) |
+| Design shared static/runtime identities and evidence boundaries | [Hybrid analysis data model](design/hybrid-analysis-data-model/README.md) |
 | Avoid a trap this project has already hit | [Traps](development/traps.md) |
 | Contribute code | [Contributor policy](../CLAUDE.md) and [development guidelines](development/guidelines.md) |
 | Contribute documentation | [Contributing docs](development/contributing-docs.md) |

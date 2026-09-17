@@ -16,6 +16,94 @@ use super::*;
 use crate::exec::concrete::{shift_reduction, ShiftReduction, DIVIDE_BY_ZERO_QUOTIENT};
 use crate::ir::types::Width;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct StableExprId(usize);
+
+/// Exact pool-independent expression identity within one retained arena.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum StableExprNode {
+    Const {
+        value: u128,
+        width: Width,
+    },
+    Sym {
+        id: u32,
+        width: Width,
+    },
+    Bin {
+        op: BinOp,
+        a: StableExprId,
+        b: StableExprId,
+        width: Width,
+    },
+    Un {
+        op: UnOp,
+        a: StableExprId,
+        width: Width,
+    },
+    Cmp {
+        op: CmpOp,
+        a: StableExprId,
+        b: StableExprId,
+        width: Width,
+    },
+    ZExt {
+        a: StableExprId,
+        from: Width,
+        to: Width,
+    },
+    SExt {
+        a: StableExprId,
+        from: Width,
+        to: Width,
+    },
+    Trunc {
+        a: StableExprId,
+        to: Width,
+    },
+    Extract {
+        a: StableExprId,
+        hi: u16,
+        lo: u16,
+    },
+    Concat {
+        hi: StableExprId,
+        lo: StableExprId,
+        hi_w: Width,
+        lo_w: Width,
+    },
+    Ite {
+        c: StableExprId,
+        t: StableExprId,
+        e: StableExprId,
+        width: Width,
+    },
+}
+
+/// Session-local mapping from exact Glaurung structure to arena-owned terms.
+/// It is dropped with the arena, so cached `TermId`s cannot cross sessions.
+#[derive(Debug, Default)]
+pub(super) struct StableTermCache {
+    nodes: HashMap<StableExprNode, StableExprId>,
+    terms: HashMap<StableExprId, TermId>,
+    assertions: HashMap<(StableExprId, bool), TermId>,
+}
+
+impl StableTermCache {
+    fn intern(&mut self, node: StableExprNode) -> StableExprId {
+        if let Some(id) = self.nodes.get(&node) {
+            return *id;
+        }
+        let id = StableExprId(self.nodes.len());
+        self.nodes.insert(node, id);
+        id
+    }
+
+    pub(super) fn stats(&self) -> (usize, usize, usize) {
+        (self.nodes.len(), self.terms.len(), self.assertions.len())
+    }
+}
+
 pub(super) fn translate_query(
     pool: &ExprPool,
     asserts: &[Assert],
@@ -25,7 +113,11 @@ pub(super) fn translate_query(
         pool,
         arena,
         memo: HashMap::new(),
+        semantic_memo: HashMap::new(),
+        stable_cache: None,
         sym_map: Vec::new(),
+        stable_term_hits: 0,
+        stable_assertion_hits: 0,
     };
     let mut assertions = Vec::with_capacity(asserts.len());
     for &(expr, expected) in asserts {
@@ -35,6 +127,37 @@ pub(super) fn translate_query(
         assertions,
         exprs: translator.memo.len(),
         sym_map: translator.sym_map,
+        stable_term_hits: translator.stable_term_hits,
+        stable_assertion_hits: translator.stable_assertion_hits,
+    })
+}
+
+pub(super) fn translate_query_cached(
+    pool: &ExprPool,
+    asserts: &[Assert],
+    arena: &mut TermArena,
+    stable_cache: &mut StableTermCache,
+) -> Result<TranslatedQuery, IrError> {
+    let mut translator = Translator {
+        pool,
+        arena,
+        memo: HashMap::new(),
+        semantic_memo: HashMap::new(),
+        stable_cache: Some(stable_cache),
+        sym_map: Vec::new(),
+        stable_term_hits: 0,
+        stable_assertion_hits: 0,
+    };
+    let mut assertions = Vec::with_capacity(asserts.len());
+    for &(expr, expected) in asserts {
+        assertions.push(translator.translate_assert(expr, expected)?);
+    }
+    Ok(TranslatedQuery {
+        assertions,
+        exprs: translator.memo.len(),
+        sym_map: translator.sym_map,
+        stable_term_hits: translator.stable_term_hits,
+        stable_assertion_hits: translator.stable_assertion_hits,
     })
 }
 
@@ -48,7 +171,11 @@ pub(super) fn translate_path(
             pool,
             arena: &mut arena,
             memo: HashMap::new(),
+            semantic_memo: HashMap::new(),
+            stable_cache: None,
             sym_map: Vec::new(),
+            stable_term_hits: 0,
+            stable_assertion_hits: 0,
         };
         let mut terms = Vec::with_capacity(asserts.len());
         for &(expression, expected) in asserts {
@@ -69,22 +196,40 @@ pub(super) struct Translator<'a> {
     pool: &'a ExprPool,
     arena: &'a mut TermArena,
     memo: HashMap<ExprId, TermId>,
+    semantic_memo: HashMap<ExprId, StableExprId>,
+    stable_cache: Option<&'a mut StableTermCache>,
     sym_map: Vec<(u32, SymbolId)>,
+    stable_term_hits: usize,
+    stable_assertion_hits: usize,
 }
 
 impl<'a> Translator<'a> {
     /// Build the Bool assertion term for `(e, expected)`, mirroring z3's
     /// truthiness lowering: `e != 0` when expected, `e == 0` otherwise.
     fn translate_assert(&mut self, e: ExprId, expected: bool) -> Result<TermId, IrError> {
+        let semantic = self.semantic_id_if_cached(e);
+        if let Some(term) = semantic.and_then(|id| {
+            self.stable_cache
+                .as_deref()
+                .and_then(|cache| cache.assertions.get(&(id, expected)).copied())
+        }) {
+            self.record_symbols(e)?;
+            self.stable_assertion_hits = self.stable_assertion_hits.saturating_add(1);
+            return Ok(term);
+        }
         let t = self.translate(e)?;
         let w = self.pool.width_of(e).bits() as u32;
         let zero = self.arena.bv_const(w, 0)?;
         let is_zero = self.arena.eq(t, zero)?; // Bool: e == 0
-        if expected {
+        let assertion = if expected {
             self.arena.not(is_zero) // Bool: e != 0
         } else {
             Ok(is_zero)
+        }?;
+        if let (Some(cache), Some(id)) = (self.stable_cache.as_deref_mut(), semantic) {
+            cache.assertions.insert((id, expected), assertion);
         }
+        Ok(assertion)
     }
 
     /// The shift distance reduced to `width`, exactly as
@@ -110,6 +255,17 @@ impl<'a> Translator<'a> {
         if let Some(&t) = self.memo.get(&id) {
             return Ok(t);
         }
+        let semantic = self.semantic_id_if_cached(id);
+        if let Some(term) = semantic.and_then(|stable| {
+            self.stable_cache
+                .as_deref()
+                .and_then(|cache| cache.terms.get(&stable).copied())
+        }) {
+            self.record_symbols(id)?;
+            self.memo.insert(id, term);
+            self.stable_term_hits = self.stable_term_hits.saturating_add(1);
+            return Ok(term);
+        }
         // Clone the node so the immutable pool borrow is released before we
         // mutate the arena / recurse.
         let node = self.pool.get(id).clone();
@@ -132,10 +288,7 @@ impl<'a> Translator<'a> {
                 }
             }
             Expr::Sym { id: sid, width } => {
-                let w = width.bits() as u32;
-                let name = ExprPool::sym_name(sid, width);
-                let symid = self.arena.declare(&name, Sort::BitVec(w))?;
-                self.sym_map.push((sid, symid));
+                let symid = self.record_symbol(sid, width)?;
                 self.arena.var(symid)
             }
             Expr::Bin { op, a, b, width } => {
@@ -288,7 +441,101 @@ impl<'a> Translator<'a> {
             }
         };
         self.memo.insert(id, t);
+        if let (Some(cache), Some(stable)) = (self.stable_cache.as_deref_mut(), semantic) {
+            cache.terms.insert(stable, t);
+        }
         Ok(t)
+    }
+
+    fn semantic_id_if_cached(&mut self, id: ExprId) -> Option<StableExprId> {
+        self.stable_cache.as_ref()?;
+        Some(self.semantic_id(id))
+    }
+
+    fn semantic_id(&mut self, id: ExprId) -> StableExprId {
+        if let Some(stable) = self.semantic_memo.get(&id) {
+            return *stable;
+        }
+        let node = match self.pool.get(id).clone() {
+            Expr::Const { value, width } => StableExprNode::Const { value, width },
+            Expr::Sym { id, width } => StableExprNode::Sym { id, width },
+            Expr::Bin { op, a, b, width } => StableExprNode::Bin {
+                op,
+                a: self.semantic_id(a),
+                b: self.semantic_id(b),
+                width,
+            },
+            Expr::Un { op, a, width } => StableExprNode::Un {
+                op,
+                a: self.semantic_id(a),
+                width,
+            },
+            Expr::Cmp { op, a, b, width } => StableExprNode::Cmp {
+                op,
+                a: self.semantic_id(a),
+                b: self.semantic_id(b),
+                width,
+            },
+            Expr::ZExt { a, from, to } => StableExprNode::ZExt {
+                a: self.semantic_id(a),
+                from,
+                to,
+            },
+            Expr::SExt { a, from, to } => StableExprNode::SExt {
+                a: self.semantic_id(a),
+                from,
+                to,
+            },
+            Expr::Trunc { a, to } => StableExprNode::Trunc {
+                a: self.semantic_id(a),
+                to,
+            },
+            Expr::Extract { a, hi, lo } => StableExprNode::Extract {
+                a: self.semantic_id(a),
+                hi,
+                lo,
+            },
+            Expr::Concat { hi, lo, hi_w, lo_w } => StableExprNode::Concat {
+                hi: self.semantic_id(hi),
+                lo: self.semantic_id(lo),
+                hi_w,
+                lo_w,
+            },
+            Expr::Ite { c, t, e, width } => StableExprNode::Ite {
+                c: self.semantic_id(c),
+                t: self.semantic_id(t),
+                e: self.semantic_id(e),
+                width,
+            },
+        };
+        let stable = self
+            .stable_cache
+            .as_deref_mut()
+            .expect("semantic IDs are requested only with a stable cache")
+            .intern(node);
+        self.semantic_memo.insert(id, stable);
+        stable
+    }
+
+    fn record_symbols(&mut self, root: ExprId) -> Result<(), IrError> {
+        let mut symbols = BTreeMap::new();
+        self.pool.collect_syms(root, &mut symbols);
+        for (id, width) in symbols {
+            self.record_symbol(id, width)?;
+        }
+        Ok(())
+    }
+
+    fn record_symbol(&mut self, id: u32, width: Width) -> Result<SymbolId, IrError> {
+        if let Some((_, symbol)) = self.sym_map.iter().find(|(existing, _)| *existing == id) {
+            return Ok(*symbol);
+        }
+        let name = ExprPool::sym_name(id, width);
+        let symbol = self
+            .arena
+            .declare(&name, Sort::BitVec(width.bits() as u32))?;
+        self.sym_map.push((id, symbol));
+        Ok(symbol)
     }
 
     /// Translate `id`, then coerce it to `target` bits (zero-extend if

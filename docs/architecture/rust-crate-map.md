@@ -59,14 +59,14 @@ rg -l 'feature = "<name>"' src/ | wc -l          # files
 
 | feature | pulls in | `cfg` sites in `src/` | what it gates |
 |---|---|---:|---|
-| `default` | `triage-core` | — | — |
+| `default` | `triage-core`, `solver-axeyum` | — | Authoritative pure-Rust Axeyum plus its `symbolic`/`exec` dependencies. |
 | `triage-core` | — | **0** | Nothing. It is the default feature and it gates no code. |
 | `triage-heuristics` | — | **0** | Nothing. |
 | `triage-containers` | — | **0** | Nothing. |
 | `triage-parsers-extra` | `goblin`, `pelite` | 4 in 1 file | The goblin/pelite secondary parsers in `src/triage/parsers.rs`. |
 | `python-ext` | `pyo3`, `pyo3/extension-module`, `exec` | 279 in 46 files | All of `src/python_bindings/`, `src/disasm/py_api.rs`, and the `#[pyclass]`/`#[pymethods]` blocks scattered through `core/`, `triage/`, `strings/`. |
 | `exec` | — | 3 in 2 files | `src/exec/` and `src/python_bindings/exec.rs`. **Included in `python-ext`**, so the shipped wheel has the concrete emulator. |
-| `symbolic` | `exec` | 2 in 2 files | `src/symbolic/`, 21,459 lines behind one `cfg` in `src/lib.rs`. In neither `default` nor `python-ext`. |
+| `symbolic` | `exec` | 2 in 2 files | `src/symbolic/`; reached by the default `solver-axeyum` feature. |
 | `dev-oracle` | `exec`, `dep:unicorn-engine` | 1 | `src/exec/oracle.rs`, a differential test against system libunicorn. Never shipped. |
 | `solver-z3` | `symbolic`, `dep:z3` | 49 in 5 files | The z3 backend under `src/symbolic/solver/`. |
 | `solver-axeyum` | `symbolic`, `dep:axeyum-solver`, `dep:axeyum-ir` | 57 in 5 files | The pure-Rust QF_BV backend. |
@@ -88,7 +88,7 @@ This is the table to check before believing a green build.
 | `cargo check --features python-ext --lib` | product code only | `#[cfg(test)]` modules — so a test-only call site on a stale signature passes `check` and fails `test` |
 | `maturin` / the shipped wheel | `pyo3/extension-module` + `python-ext`, hence `exec` | `symbolic/` and every solver |
 | `cargo test --features symbolic` | + `symbolic/` | the solver backends, unless one is also named |
-| `scripts/feature-build-gate.sh` | 12 `cargo check --all-targets` lanes covering every combination above **and `fuzz/`** | — |
+| `scripts/feature-build-gate.sh` | 13 `cargo check --all-targets` lanes covering every combination above **and `fuzz/`** | — |
 
 `[tool.maturin]` in `pyproject.toml` sets
 `features = ["pyo3/extension-module", "python-ext"]`, which is where the

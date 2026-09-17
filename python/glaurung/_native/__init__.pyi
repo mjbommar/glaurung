@@ -19,6 +19,7 @@ from . import disasm as disasm
 from . import engine as engine
 from . import ir as ir
 from . import metrics as metrics
+from . import runtime_analysis as runtime_analysis
 from . import similarity as similarity
 from . import source as source
 from . import strings as strings

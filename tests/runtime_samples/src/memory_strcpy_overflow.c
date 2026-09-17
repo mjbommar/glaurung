@@ -1,2 +1,2 @@
 #include "runtime_sample.h"
-struct box{char dst[8];uint32_t canary;};int main(int argc,char **argv){struct box b={{0},0x11223344};strcpy(b.dst,rs_bad(argc,argv)?"ABCDEFGHIJK":"ABC");return rs_result("canary",b.canary);}
+RS_NOINLINE static void rs_copy(char *destination,const char *source){strcpy(destination,source);}struct box{char dst[8];uint32_t canary;};int main(int argc,char **argv){struct box b={{0},0x11223344};char good[]="ABC";char bad[]="ABCDEFGHIJK";const char *source=rs_bad(argc,argv)?bad:good;rs_checkpoint_if("GLAURUNG_RUNTIME_TRACE_BEGIN");rs_copy(b.dst,source);rs_checkpoint_if("GLAURUNG_RUNTIME_TRACE_END");return rs_result("canary",b.canary);}

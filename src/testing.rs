@@ -44,7 +44,7 @@ pub const REQUIRE_ENV: &str = "GLAURUNG_REQUIRE_TOOLCHAINS";
 /// Kept explicit so `toolchain_probe_reports_every_declared_tool` can report
 /// the provisioning of the machine it runs on, rather than each test
 /// discovering its own absence in isolation.
-pub const DECLARED_TOOLS: &[&str] = &["gcc", "clang", "arm-none-eabi-gcc"];
+pub const DECLARED_TOOLS: &[&str] = &["gcc", "clang", "arm-none-eabi-gcc", "llvm-strip"];
 
 /// Record that a test could not run because `tool` is not installed.
 ///

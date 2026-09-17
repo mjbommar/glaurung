@@ -126,6 +126,82 @@ The content SHA-256 identifies binary rows. Session names are scoped to one
 binary. Core KB nodes/edges are session-specific, while many analysis tables are
 binary-wide and carry their own provenance or precedence fields.
 
+Runtime address correlation uses the binary-wide
+`runtime_address_relations` table owned by
+`glaurung.llm.kb.runtime_relations`. Each row retains the capture and process
+scope alongside raw and normalized addresses. It is an immutable measurement,
+not an annotation: it neither participates in `set_by` precedence nor writes
+to static xrefs, names, types, comments, or decompiler IR. The public writer
+resolves through the native analyzer and verifies the selected project
+binary's SHA-256 before inserting a row.
+
+The same module owns `runtime_runs` and `runtime_captures`. Runs are explicit
+project-scoped identities; captures are immutable capsule artifacts within a
+run. `persist_process_capsule` first invokes the native capsule validator and
+checks the capsule executable hash against the selected binary. It retains the
+exact capsule bytes and SHA-256 plus acquisition, host, kernel, and capture-time
+identity. Re-importing identical evidence is idempotent, while reusing a
+capture ID for different bytes or moving it between runs fails closed. With no
+caller-supplied run ID, the capture ID defines a one-capture run; the database
+never guesses grouping from OS PIDs or timestamps. These tables have no
+`set_by` field and do not participate in manual/debug/analysis precedence.
+
+Each capture import transaction also fills `runtime_processes`,
+`runtime_threads`, `runtime_modules`, `runtime_mappings`, `runtime_events`,
+`runtime_pages`, `runtime_objects`, `runtime_object_snapshots`,
+`runtime_outputs`, and `runtime_descriptors`.
+These are normalized identities and observations, not copies in the static
+model. Process ancestry, terminal state, raw provider register names, faults,
+module artifacts, load biases, mapped ranges, permissions, backing, and event
+fields remain scoped by capture. Event order is indexed per process and
+optional thread stream, matching the capsule contract rather than inventing a
+cross-thread causal order. Any failed child-row import rolls back its run and
+capture rows as one transaction.
+
+Deterministic analyzer output lives in `runtime_analysis_reports`, keyed by
+the exact capture, analyzer name, and report schema. The first report fixes the
+canonical JSON and its SHA-256; rerunning that analyzer for the same
+capture/schema must reproduce identical bytes or fail closed. Crash analysis
+loads the capsule and payloads back from the project and verifies the supplied
+executable bytes against the capture before analysis. Mapping behavior instead
+normalizes only already-persisted provider-neutral mapping events and stores
+their capture-scoped lifetimes and permission transitions; it does not infer a
+history from final mapping snapshots. Reports do not enter the
+manual-precedence annotation tables, and their foreign keys remain entirely
+inside the runtime measurement schema.
+
+Exact runtime-to-LLIR joins are normalized into
+`runtime_operation_occurrences`. One row owns only occurrence identity: capture,
+process/thread event position, code origin, and immutable `StaticOperation`
+identity. `runtime_operation_occurrence_evidence` stores content-addressed
+evidence views separately. This matters because several valid relations may
+project different inputs or effects for the same operation occurrence; those
+views must neither collide nor create several static operations. No foreign key
+from either table enters the decompiler or annotation schema.
+
+`runtime_capture_summary_json` is the stable default automation projection over
+these tables. It emits canonical `glaurung-runtime-project-summary-v1` JSON and
+deliberately excludes raw payloads, registers, memory snapshots, paths,
+descriptor targets, event fields, and occurrence evidence values. Observed
+operations expose only their occurrence scope and immutable static-operation
+identity. Terminal rendering is downstream presentation, never an input to
+automation or persistence.
+
+`runtime_evidence_packet_json` is a separate, explicit export boundary. Its
+default policy contains only the redacted summary, completeness states, hashes,
+claim-kind inventories, and declared omissions. The sensitive policy must be
+requested by the caller and then includes exact capsule/report documents and
+base64 payload bytes. Both policies recheck every stored content address before
+emission and omit executable bytes.
+
+`compare_runtime_captures_json` compares two summaries from the selected
+project; `compare_runtime_summaries_json` compares summaries exported from
+different projects or builds. Both report count, event-kind, terminal-state,
+analyzer-outcome, and exact static-operation-set differences without loading
+raw evidence. Different executable hashes are explicit. Static operations are
+not aligned across different builds: that requires a separate proved
+cross-build identity and cannot be inferred from addresses or LLIR indices.
+
 ### Function identity across builds
 
 Every annotation table is keyed on `(binary_id, absolute VA)`, and a recompile
@@ -170,7 +246,7 @@ identity rows collide with the fresh ones on the primary key.
 
 ## See also
 
-- [`python-package-map.md`](python-package-map.md) — the full 35-table list and
+- [`python-package-map.md`](python-package-map.md) — the full table list and
   which of the nine modules owns each one.
 - [`../reference/provenance.md`](../reference/provenance.md) — the `set_by`
   ladder every write in these tables is checked against.

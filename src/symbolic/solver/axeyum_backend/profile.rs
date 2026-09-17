@@ -128,6 +128,16 @@ pub struct WarmAxeyumCheckProfile {
     pub temporary_assumptions_translated: u64,
     /// Number of distinct Glaurung expressions translated during this check.
     pub translated_exprs: u64,
+    /// Existing arena terms recovered by exact cross-pool semantic identity.
+    pub stable_term_reuses: u64,
+    /// Existing assertion wrapper terms recovered by exact semantic identity.
+    pub stable_assertion_reuses: u64,
+    /// Exact semantic-expression identities retained by this session.
+    pub stable_identity_nodes: u64,
+    /// Semantic-expression identities currently bound to Axeyum terms.
+    pub stable_term_entries: u64,
+    /// Semantic assertion identities currently bound to Axeyum Bool terms.
+    pub stable_assertion_entries: u64,
     /// Current retained Axeyum arena term count.
     pub arena_terms: u64,
     /// Number of translated Glaurung symbols.
@@ -235,7 +245,7 @@ pub(super) fn start_warm_profile(
     let query_hash = format!("sha256:{}", hex::encode(Sha256::digest(script.as_bytes())));
     Some(WarmProfileContext {
         profile: WarmAxeyumCheckProfile {
-            schema: "glaurung-axeyum-warm-profile-v7",
+            schema: "glaurung-axeyum-warm-profile-v8",
             process_id: std::process::id(),
             sequence: None,
             query_hash,
@@ -253,6 +263,11 @@ pub(super) fn start_warm_profile(
             persistent_assertions_translated: count(entry.persistent_translated),
             temporary_assumptions_translated: count(entry.temporary_translated),
             translated_exprs: 0,
+            stable_term_reuses: 0,
+            stable_assertion_reuses: 0,
+            stable_identity_nodes: 0,
+            stable_term_entries: 0,
+            stable_assertion_entries: 0,
             arena_terms: 0,
             symbols: 0,
             model_values: 0,

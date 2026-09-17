@@ -41,21 +41,23 @@ deliberately shipped only the one-shot trait first.
 
 Verified with `rg -n 'pub fn solve|pub trait (Solver|IncrementalSolver)|pub type Assert' src/symbolic/solver/mod.rs`.
 
-## Backend priority
+## Solver authority
 
-Among the backends a build actually enables, `solve()` picks **z3 > axeyum >
-pipe**:
+Axeyum is the sole authoritative SAT/SMT backend. It is a default feature, and
+`solve()` returns its result whenever it is compiled:
 
 ```rust
-#[cfg(feature = "solver-z3")]                                  → Z3Solver
-#[cfg(all(not(solver-z3), feature = "solver-axeyum"))]         → AxeyumSolver / warm path
-#[cfg(all(not(solver-z3), not(solver-axeyum)))]                → PipeSolver
+#[cfg(feature = "solver-axeyum")]              → AxeyumSolver / warm path
+#[cfg(not(feature = "solver-axeyum"))]         → NoSolver
 ```
 
-This is a compile-time cascade, not a runtime probe: enabling `solver-z3` means
-z3 answers, full stop. `solver-bitwuzla` is **never** in the cascade at all.
+`solver-z3` implies `solver-axeyum`; Z3 runs only in an explicitly enabled
+shadow/differential comparison and never supplies the returned verdict or
+witness. `solver-bitwuzla` is likewise never authoritative.
 
-`PipeSolver` is the only backend that resolves anything at runtime. It tries, in
+`PipeSolver` is compiled only by the explicit `solver-pipe-oracle`
+comparison feature; production and ordinary test builds contain no subprocess
+solver transport, and `solve()` never selects it. When explicitly built it tries, in
 order, `$GLAURUNG_SMT_SOLVER`, then `bitwuzla`, `z3`, `cvc5` on `PATH`, spawning
 the first that starts and speaking SMT-LIB2 over its stdin/stdout. A candidate
 that is not installed is skipped; when none starts, the result is `NoSolver`.
@@ -64,15 +66,16 @@ that is not installed is skipped; when none starts, the result is `NoSolver`.
 
 | Feature | Backend | Links | Build requirement |
 |---|---|---|---|
-| `solver-z3` | `z3_backend::Z3Solver` — translates the `Expr` DAG straight to z3 AST in-process | libz3, via the `z3` crate **0.12** | a system libz3 (`libz3-dev`) |
+| `solver-z3` | Comparison-only `z3_backend::Z3Solver`; this feature also enables authoritative Axeyum | libz3, via the `z3` crate **0.12** | a system libz3 (`libz3-dev`) |
 | `solver-axeyum` | `axeyum_backend::AxeyumSolver` — translates to `axeyum-ir` terms and solves with `IncrementalBvSolver`; DRAT-checked unsat proofs | nothing (pure Rust) | network access to the pinned git rev |
 | `solver-axeyum-text` | `axeyum_backend::AxeyumTextSolver` — renders SMT-LIB2 via `pipe::build_script` and calls axeyum's `solve_smtlib`; kept as a cross-check | nothing | implies `solver-axeyum` plus `axeyum-solver/full` |
+| `solver-pipe-oracle` | Comparison-only SMT-LIB2 subprocess transport; never selected by `solve()` | external executable selected explicitly or from `PATH` | none; oracle use only |
 | `solver-bitwuzla` | `bitwuzla_backend::BitwuzlaSolver` — binds the official Bitwuzla **0.9.1** C API directly | libbitwuzla | `BITWUZLA_LIB_DIR` must point at the pinned 0.9.1 library, or `GLAURUNG_BITWUZLA_TYPECHECK_ONLY=1` for a link-free `cargo check`; `build.rs` fails closed and rejects any other linked version |
-| *(none)* | `pipe::PipeSolver` | nothing | a solver binary on `PATH` at run time |
+| *(none)* | `NoSolver` (the authoritative entry point abstains) | nothing | none |
 
-Every `solver-*` feature implies `symbolic`, which implies `exec`. None of them
-is in `default` or in `python-ext`, so **the shipped wheel has no solver** — and
-no symbolic engine at all.
+Every `solver-*` feature implies `symbolic`, which implies `exec`. The default
+feature set includes `solver-axeyum`, so normal Rust and Python-extension builds
+carry the pure-Rust authoritative solver.
 
 axeyum is [`github.com/mjbommar/axeyum`](https://github.com/mjbommar/axeyum), a
 pure-Rust QF_BV solver by the same author, consumed as two crates
@@ -112,8 +115,8 @@ Two env-gated modes exist because a solver comparison is very easy to get wrong.
 **`GLAURUNG_SHADOW_DIFF=1`** (requires both `solver-z3` and `solver-axeyum`) runs
 **both** backends on every query, alternating which goes first to cancel
 warm-cache bias, counts agreements, disagreements and unknown-splits separately,
-and returns **z3's** answer authoritatively so the query stream and path lineage
-are identical to a z3-only run. Its stricter sibling `GLAURUNG_FAIR_SHADOW` runs
+and returns **Axeyum's** answer authoritatively. Its stricter sibling
+`GLAURUNG_FAIR_SHADOW` runs
 a four-cell rotation (z3 cold, z3 warm, axeyum cold, axeyum warm), extended to
 six cells when `solver-bitwuzla` is also built
 ([`solver-023`](../decisions/solver-023-four-cell-solver-control.md),
@@ -157,6 +160,57 @@ Any performance claim from here on requires a 100%-decided, 100%-agreed gate,
 original-model replay, and same-stream timing. The method that satisfies those is
 in [`bench/axeyum/README.md`](../../bench/axeyum/README.md); the results are
 files beside it, and they predate the current axeyum pin.
+
+## Integration efficiency contract
+
+The production Glaurung-to-Axeyum path is an in-process Rust API. It must not
+spawn a process, probe `PATH`, serialize SMT-LIB, or communicate through pipes.
+`PipeSolver` is retained only behind `solver-pipe-oracle` for explicit oracle
+and transport tests; ordinary builds do not compile its process/pipe code and
+`solve()` cannot dispatch to it. A build without `solver-axeyum` returns
+`NoSolver`.
+
+Optimization work must measure the boundary instead of hiding it inside total
+solve time. At minimum, record expression translation, assertion import,
+Axeyum solve, model extraction, cache lookup, and end-to-end latency separately,
+along with allocations/bytes, peak retained state, cache hit class, and cold
+versus warm execution class. Prefer direct incremental prefix/delta transfer and
+stable term identities over rebuilding complete snapshots. An optimization is
+accepted only if verdicts and replayed models remain correct, unknown/error
+classes do not regress, and the matched corpus improves without shifting work
+outside the measured interval.
+
+Constraint-cache identity follows the same contract. It hashes deterministic,
+typed native assertion packs whose DAG references use dense topological
+ordinals, rather than rendering SMT-LIB or retaining process-local expression
+IDs. Runtime counterfactual analysis uses a bounded per-worker exact cache;
+SAT hits are replayed against the caller's expression pool before use. Explicit
+comparison builds bypass it so every oracle observes every query.
+
+Related non-identical runtime counterfactuals additionally use direct-delta,
+in-process Axeyum sessions. Each capture-scoped exploration lineage owns one
+session in a domain separate from ordinary symbolic-explorer path IDs. Observed
+prior branch conditions are persistent; the branch currently being negated is
+a temporary assumption and is popped after the check. Exact typed native prefix
+identity permits a rebuilt `ExprPool` to retain the same semantic prefix without
+trusting process-local `ExprId` values. Runtime analysis closes every lineage at
+the end of candidate selection, and the ordinary live-path and assertion caps
+bound retained state. An exact-cache hit need not synchronize the session: the
+next cache miss compares its complete persistent prefix with the session and
+applies the required delta.
+
+Each retained Axeyum arena also owns an exact semantic-term cache. Its keys
+mirror Glaurung's typed expression nodes but replace pool-local child IDs with
+session-local structural IDs. Rebuilt pools can therefore recover an existing
+Axeyum `TermId` or complete assertion wrapper without calling arena builders
+again. The cache cannot leak a `TermId` across arenas: it is created, reset and
+dropped with the retained solver. Profiles report term/assertion reuse and the
+current identity, term and assertion entry counts separately.
+
+`GLAURUNG_AXEYUM_WARM_REUSE=off` also applies to runtime counterfactuals.
+Those queries still use the authoritative native Axeyum adapter, but construct
+a fresh solver for every check. This supplies a matched cold measurement lane;
+it is not a fallback to another solver.
 
 ## Adjacent contracts
 

@@ -9,9 +9,9 @@
 //! each step. axeyum's `IncrementalBvSolver` can push/assert/check, reusing
 //! learned clauses across steps. We compare, over a narrowing path condition
 //! (bit i of a 32-bit x is fixed to bit i of TARGET, for i in 0..K):
-//!   - z3 one-shot       (glaurung's current backend behavior)
-//!   - axeyum one-shot   (our native backend, current behavior)
-//!   - axeyum WARM        (push/assert/check incrementally)
+//!   - z3 one-shot       (comparison oracle)
+//!   - axeyum one-shot   (authoritative cold-path control)
+//!   - axeyum WARM       (authoritative retained-session mechanism)
 //! If warm is much faster than axeyum one-shot (and approaches z3), the
 //! incremental Solver-trait extension (P5) is the lever to competitiveness.
 
@@ -115,7 +115,7 @@ fn main() {
 
     println!("Path-condition depth K={K}, {reps} reps. Cost to explore to depth K (ms/run):");
     println!(
-        "  z3 one-shot     : {:>8.3} ms   (glaurung's current backend)",
+        "  z3 one-shot     : {:>8.3} ms   (comparison oracle)",
         z3
     );
     println!(

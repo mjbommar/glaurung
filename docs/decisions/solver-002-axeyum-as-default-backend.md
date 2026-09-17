@@ -2,10 +2,9 @@
 
 > **Kind:** decision · **Status:** maintained
 
-> **Superseded.** Axeyum was never made a default feature. The shipped
-> configuration is `default = ["triage-core"]` with every solver opt-in, and
-> `solve()`'s cascade is z3 > axeyum > pipe only among the backends a build
-> explicitly enables (`src/symbolic/solver/mod.rs`, `Cargo.toml` `[features]`).
+> **Superseded by [solver-037](solver-037-axeyum-is-always-authoritative.md).**
+> The historical implementation never made Axeyum a default feature: it used
+> `default = ["triage-core"]` and selected among explicitly enabled backends.
 > The perf gate this ADR made the default conditional on never closed; see
 > [solver-014](solver-014-source-prefix-production-win.md) and
 > [solver-021](solver-021-defer-wider-direct-delta-default.md).
@@ -26,10 +25,10 @@
 > session-age growth is fixed upstream (Axeyum ADR-2142) and three of the
 > four drivers no longer hit the 60 s budget, so ADR-0272's fixed-work
 > campaign can be re-registered; the gate is still **not met** — on
-> DptfDevGen's real session warm Axeyum sums to 1.51 s against warm Z3's
-> 0.20 s (unpreregistered, one driver, loaded host), with a residual linear
-> growth in session age that Axeyum names as its follow-up. The default
-> stays as it is.
+> DptfDevGen's historical session measurement remains recorded below, but
+> Axeyum is now the default and sole authoritative SAT/SMT backend; builds
+> without it abstain. The cascade and performance rationale below describe
+> historical policy rather than the current authority boundary.
 
 **ADR status:** Proposed.
 **Context:** Axeyum is pure-Rust, wheel-shippable, proof-carrying, but not

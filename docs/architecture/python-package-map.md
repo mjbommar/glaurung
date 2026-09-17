@@ -18,7 +18,7 @@ find python/glaurung/<dir> -name '*.py' | xargs wc -l | tail -1
 | module / package | files | lines | what it is |
 |---|---:|---:|---|
 | `llm/` | 313 | 133,858 | **84% of the package.** Agents, ~242 tool modules, and the KB. See [`llm-subsystem.md`](llm-subsystem.md). |
-| `cli/` | 57 | 20,000 | the `glaurung` console script: 40 subcommands, 10 formatters, a lazy registry |
+| `cli/` | 61 | 21,440 | the `glaurung` console script: 44 subcommands, 10 formatters, a lazy registry |
 | `windows_analysis.py` | 1 | 1,361 | Windows PE analysis helpers over structured facts |
 | `bench/` | 4 | 1,215 | the deterministic no-LLM regression harness (`python -m glaurung.bench`) |
 | `types/` | 2 | 604 | Windows API prototype-bundle sync (`glaurung types sync`, opt-in; ordinary analysis reads the checked-in bundle) |
@@ -33,7 +33,7 @@ find python/glaurung/<dir> -name '*.py' | xargs wc -l | tail -1
 | `windows_baselines.py` | 1 | 74 | the one place the four Windows/Ghidra parity baseline paths are spelled |
 | `similarity.py` | 1 | 60 | CTPH clustering helpers over the native module |
 
-`cli/` breaks down as `commands/` (39 files, 16,676 lines), `formatters/`
+`cli/` breaks down as `commands/` (43 files, 18,096 lines), `formatters/`
 (10, 2,338), `utils/` (2, 163), and five loose modules of which `main.py` is
 199 lines. `llm/` breaks down as `tools/` (242 files, 99,701 lines),
 `agents/` (29, 15,916), `kb/` (27, 14,835), and 15 top-level modules
@@ -52,14 +52,15 @@ which does not exist.** This is not cosmetic: importing the KB drags in the
 pays for that import. Every doc, tool and test in the tree uses the
 `glaurung.llm.kb.*` path.
 
-The 27 modules, largest first: `xref_db.py` (3,557 — the cross-reference
+The package currently has 32 modules. The largest are `xref_db.py` (3,557 — the cross-reference
 database and every analyst-write setter), `type_db.py` (1,238),
-`cfg_db.py` (928), `binary_diff.py` (834), `windows_function_chunks.py` (760),
-`function_identity.py` (635), `windows_boundaries.py` (591),
+`siglib.py` (1,146), `binary_diff.py` (1,113), `cfg_db.py` (928),
+`function_identity.py` (811), `cfr_index.py` (767),
+`windows_function_chunks.py` (760), `windows_boundaries.py` (591),
 `persistent.py` (578 — the SQLite file itself),
 `structural_fingerprint.py` (541), `lock_state.py` (540),
 `verify_recovery.py` (521), `export.py` (509), `kickoff.py` (497),
-`windows_callsite_facts.py` (436), `patch.py` (366),
+`source_facts.py` (458), `windows_callsite_facts.py` (436), `patch.py` (366),
 `function_disasm.py` (364), `windows_sysinfo.py` (284),
 `pe_direct_calls.py` (276), `bundle.py` (270), `packer_detect.py` (248),
 `windows_memory_operands.py` (248), `module_group.py` (204),
@@ -69,10 +70,10 @@ database and every analyst-write setter), `type_db.py` (1,238),
 ## The `.glaurung` schema
 
 There is no schema file. Tables are created by `CREATE TABLE IF NOT EXISTS`
-statements spread across nine modules, each owning its own:
+statements spread across 13 modules, each owning its own:
 
 ```bash
-rg -n 'CREATE TABLE' python/glaurung/llm/kb | wc -l     # 35
+rg -n 'CREATE TABLE' python/glaurung/llm/kb | wc -l     # 62
 ```
 
 | module | tables |
@@ -81,6 +82,10 @@ rg -n 'CREATE TABLE' python/glaurung/llm/kb | wc -l     # 35
 | `xref_db.py` | `xrefs`, `function_names`, `function_identity`, `comments`, `xref_index_state`, `data_xref_index_state`, `data_labels`, `function_prototypes`, `evidence_log`, `stack_frame_vars`, `undo_log`, `bookmarks`, `journal` |
 | `cfg_db.py` | `basic_blocks`, `cfg_edges`, `cfg_index_state`, `cfg_dominance`, `cfg_dominance_index_state`, `cfg_branch_facts`, `cfg_branch_index_state` |
 | `type_db.py` | `types`, `type_field_uses` |
+| `cfr_index.py` | `cfr_weight_table`, `feature_weight`, `feature_vector`, `function_vector`, `feature_posting` |
+| `function_structural.py` | `function_structural` |
+| `runtime_relations.py` | `runtime_runs`, `runtime_captures`, `runtime_payloads`, `runtime_processes`, `runtime_modules`, `runtime_mappings`, `runtime_threads`, `runtime_events`, `runtime_pages`, `runtime_objects`, `runtime_object_snapshots`, `runtime_outputs`, `runtime_descriptors`, `runtime_operation_occurrences`, `runtime_operation_occurrence_evidence`, `runtime_analysis_reports`, `runtime_address_relations` |
+| `siglib.py` | `siglib`, `siglib_function`, `identity_filter`, `function_match` |
 | `windows_callsite_facts.py` | `callsite_argument_facts`, `callsite_path_conditions` |
 | `windows_boundaries.py` | `function_boundaries` |
 | `windows_function_chunks.py` | `function_chunk_facts` |
@@ -119,7 +124,7 @@ fixture matrix pays that cost once per function, because
 `python/tests/test_cli_startup_is_lazy.py` pins the contract.
 
 There are no hidden or dev-only subcommands: the registry is the whole surface
-and `--help` lists all 40 of them. Four commands share `annotate.py`
+and `--help` lists all 44 of them. Four commands share `annotate.py`
 (`rename`, `comment`, `label`, `proto`), two share `undo.py`, two share
 `bookmark.py`. Global flags are added per-subcommand by
 `BaseCommand.add_common_arguments`, so `--format`, `--json`, `--no-color`,

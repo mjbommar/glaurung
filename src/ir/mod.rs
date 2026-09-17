@@ -52,6 +52,7 @@ pub(crate) mod effectful_loop;
 pub mod exception_recover;
 pub mod expr_reconstruct;
 pub mod expression_width;
+pub mod function_ir;
 pub mod function_tables;
 pub mod got_fold;
 pub mod guard_chain;

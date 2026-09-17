@@ -105,6 +105,10 @@ _sys.modules[__name__ + ".disasm"] = disasm
 analysis = _native.analysis
 _sys.modules[__name__ + ".analysis"] = analysis
 
+# Runtime process-capsule validation and canonicalization.
+runtime_analysis = _native.runtime_analysis
+_sys.modules[__name__ + ".runtime_analysis"] = runtime_analysis
+
 # LLIR (low-level IR) submodule
 ir = _native.ir
 _sys.modules[__name__ + ".ir"] = ir

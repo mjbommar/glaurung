@@ -16,9 +16,11 @@ crate-type = ["cdylib", "rlib"]
 pyo3 = { version = "0.26.0", optional = true }
 sha2 = "0.10"
 hex = "0.4"
+libc = "0.2"
 uuid = { version = "1.0", features = ["v4", "v5"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+ciborium = "0.2"
 bincode = "2.0.1"
 md5 = "0.7"
 chrono = { version = "0.4", features = ["serde"] }
@@ -53,7 +55,7 @@ xorf = { version = "0.13.0", default-features = false, features = ["binary-fuse"
 z3 = { version = "0.12", optional = true }
 # The raw libz3 bindings the `z3` crate links, for the shadow-split capture's
 # z3-parses-it check (`Z3_solver_from_string` + `Z3_get_error_msg`); the crate
-# hides its context pointer and swallows parse errors (solver-032).
+# hides its context pointer and swallows parse errors (solver-037).
 z3-sys = { version = "0.8", optional = true }
 # Pure-Rust in-process SMT solver (feature `solver-axeyum`); no C dependency.
 # The exact git revision keeps recall builds independent of a machine-local
@@ -118,7 +120,7 @@ ruzstd = "0.9.0"
 zstd = { version = "0.13.3", optional = true }
 
 [features]
-default = ["triage-core"]
+default = ["triage-core", "solver-axeyum"]
 triage-core = []
 triage-heuristics = []
 triage-containers = []
@@ -126,9 +128,9 @@ triage-parsers-extra = ["goblin", "pelite"]
 # Compile the WP4 observer beside the production structurer. It records typed
 # shadow evidence only; v1 remains the sole source of rendered output.
 structure-v2-shadow = []
-# The Python extension bundles the (pure-Rust) emulator (`exec`). The symbolic
-# engine / native solver stay opt-in (build the wheel with `--features symbolic`
-# or `solver-z3` to include them).
+# The Python extension bundles the pure-Rust emulator directly. Ordinary builds
+# also receive symbolic execution and authoritative Axeyum through the default
+# `solver-axeyum` feature; `--no-default-features` is the explicit exclusion.
 python-ext = ["pyo3", "pyo3/extension-module", "exec"]
 # Native execution engine (concrete emulator). Pure Rust, no new C dependency —
 # see docs/history/execution-engine-2026-06/. Off by default; opt in with --features exec.
@@ -139,14 +141,12 @@ symbolic = ["exec"]
 # DEV-ONLY: validate the emulator against the Unicorn engine (links system
 # libunicorn). Never shipped. Use: cargo test --features dev-oracle.
 dev-oracle = ["exec", "dep:unicorn-engine"]
-# Native, in-process SMT backend via the `z3` crate (Rust API, links libz3).
-# This is the preferred solver path — keeps the engine self-contained rather
-# than shelling out to a binary. Optional; the base build needs no solver.
-solver-z3 = ["symbolic", "dep:z3", "dep:z3-sys"]
+# Comparison-only native SMT backend via the `z3` crate. Enabling it also
+# enables Axeyum; Z3 must never become the authoritative result.
+solver-z3 = ["solver-axeyum", "dep:z3", "dep:z3-sys"]
 # Native, in-process, pure-Rust SMT backend via the `axeyum` solver. No C
-# dependency, wheel-shippable. Opt-in; the "default once validated" target was
-# retired -- see docs/decisions/solver-002-axeyum-as-default-backend.md.
-# Priority in solve(): solver-z3 > solver-axeyum > pipe.
+# dependency and wheel-shippable. This is the default and sole authoritative
+# SAT/SMT backend. Z3 and Bitwuzla are comparison cells only.
 solver-axeyum = ["symbolic", "dep:axeyum-solver", "dep:axeyum-ir"]
 # Benchmark-only native Bitwuzla 0.9.1 cell. This direct C-API adapter is
 # intentionally not part of production backend selection; it exists only for
@@ -155,6 +155,9 @@ solver-bitwuzla = ["symbolic"]
 # Legacy/reference SMT-LIB text bridge. This deliberately opts into axeyum's
 # full profile; production solver-axeyum remains on the minimal QF_BV surface.
 solver-axeyum-text = ["solver-axeyum", "axeyum-solver/full"]
+# Explicit oracle/comparison-only subprocess topology. Production and ordinary
+# tests do not compile process spawning or PATH-based solver selection.
+solver-pipe-oracle = ["symbolic"]
 # BUILDER-ONLY `.gsig` codec: the reference C zstd encoder at level 19, as an
 # additional `Codec` value. The pure-Rust reader decodes those frames without
 # the feature, and the writer's default codec is unchanged, so enabling this

@@ -1,13 +1,11 @@
 //! SMT solver layer — a pluggable [`Solver`] trait with production backends
 //! plus an optional benchmark-only neutral cell.
 //!
-//! Per the corrected ADR-0005 (native-first), the preferred backend is the
-//! **in-process native [`z3_backend::Z3Solver`]** (feature `solver-z3`, links
-//! libz3) — keeping the engine self-contained rather than shelling out. The
-//! [`pipe::PipeSolver`] (SMT-LIB2 over a subprocess) is a zero-build fallback
-//! for environments without a linked solver. The pure-Rust Axeyum backend is
-//! product-capable; the direct Bitwuzla C API is isolated behind
-//! `solver-bitwuzla` solely for topology-equivalent measurements.
+//! The authoritative backend is the in-process pure-Rust Axeyum integration
+//! (feature `solver-axeyum`). Z3 and Bitwuzla are comparison cells only. The
+//! `pipe::PipeSolver` (SMT-LIB2 over a subprocess) is compiled only by the
+//! explicit `solver-pipe-oracle` comparison feature and is never an
+//! authoritative fallback from [`solve`].
 //!
 //! All backends consume the bit-vector [`ExprPool`](crate::symbolic::ExprPool):
 //! solving needs no Python and no external protocol when `solver-z3` is on.
@@ -26,6 +24,11 @@ use std::collections::BTreeMap;
 
 use crate::symbolic::expr::{ExprId, ExprPool};
 
+#[cfg(all(feature = "solver-axeyum", not(feature = "solver-z3")))]
+use constraint_cache::{
+    authoritative_exact_cache_stats, insert_authoritative_exact_cache,
+    lookup_authoritative_exact_cache,
+};
 #[cfg(feature = "solver-axeyum")]
 use constraint_cache::{
     insert_process_cache, lookup_process_cache, process_cache_policy, process_cache_stats,
@@ -310,6 +313,7 @@ pub(crate) struct WarmAssertionPrefix(Option<Arc<WarmAssertionPrefixNode>>);
 struct WarmAssertionPrefixNode {
     parent: Option<Arc<WarmAssertionPrefixNode>>,
     depth: usize,
+    semantic_identity: Option<Arc<[u8]>>,
 }
 
 impl WarmAssertionPrefix {
@@ -318,7 +322,24 @@ impl WarmAssertionPrefix {
         self.0 = Some(Arc::new(WarmAssertionPrefixNode {
             parent: self.0.clone(),
             depth: self.depth() + 1,
+            semantic_identity: None,
         }));
+    }
+
+    /// Extend a retained lineage with one exact, typed native assertion.
+    ///
+    /// This permits independently rebuilt expression pools to prove a common
+    /// semantic prefix without trusting process-local expression IDs or a
+    /// truncated digest. Existing explorer-owned prefixes continue to use
+    /// pointer ancestry through [`Self::push`].
+    pub(crate) fn push_native(&mut self, pool: &ExprPool, assertion: Assert) -> Result<(), String> {
+        let identity = crate::symbolic::native_trace::assertion_identity(pool, assertion)?;
+        self.0 = Some(Arc::new(WarmAssertionPrefixNode {
+            parent: self.0.clone(),
+            depth: self.depth() + 1,
+            semantic_identity: Some(identity.into()),
+        }));
+        Ok(())
     }
 
     /// Number of persistent source assertions represented by this prefix.
@@ -347,6 +368,35 @@ impl WarmAssertionPrefix {
             }
         }
     }
+
+    /// Exact common semantic-prefix depth for independently rebuilt lineages.
+    pub(crate) fn common_semantic_depth(&self, other: &Self) -> usize {
+        let mut left = prefix_nodes(self.0.clone());
+        let mut right = prefix_nodes(other.0.clone());
+        left.reverse();
+        right.reverse();
+        left.iter()
+            .zip(&right)
+            .take_while(|(left, right)| {
+                Arc::ptr_eq(left, right)
+                    || matches!(
+                        (&left.semantic_identity, &right.semantic_identity),
+                        (Some(left), Some(right)) if left.as_ref() == right.as_ref()
+                    )
+            })
+            .count()
+    }
+}
+
+fn prefix_nodes(
+    mut node: Option<Arc<WarmAssertionPrefixNode>>,
+) -> Vec<Arc<WarmAssertionPrefixNode>> {
+    let mut nodes = Vec::new();
+    while let Some(current) = node {
+        node = current.parent.clone();
+        nodes.push(current);
+    }
+    nodes
 }
 
 fn node_depth(node: &Option<Arc<WarmAssertionPrefixNode>>) -> usize {
@@ -1098,7 +1148,7 @@ fn append_capture_index(dir: &std::path::Path, hex: &str, verdict: &str) -> std:
 
 // Shadow differential: when both backends are compiled and
 // GLAURUNG_SHADOW_DIFF is set, every solve runs BOTH and records whether the
-// sat/unsat verdicts agree (unknowns tolerated). z3 stays authoritative so
+// sat/unsat verdicts agree (unknowns tolerated). Axeyum stays authoritative so
 // exploration is deterministic. This tests verdict parity on the REAL query
 // stream (paper claim C1) independent of model-choice divergence.
 #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
@@ -1214,14 +1264,14 @@ pub fn solver_budget() -> (u64, u64) {
     BUDGET.with(Cell::get)
 }
 
-/// Solve using the best backend compiled in: native z3 when available
-/// (`solver-z3`), otherwise the SMT-LIB pipe fallback. Every call is metered (see
-/// [`solver_meter`]) so the explorer can bound total solving work.
+/// Solve authoritatively with native Axeyum. Z3 may run only as an explicitly
+/// enabled comparison cell and never supplies the returned result. Every call
+/// is metered (see [`solver_meter`]) so the explorer can bound total work.
 pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
     SOLVE_COUNT.with(|c| c.set(c.get() + 1));
     let total_started = std::time::Instant::now();
     // Shadow-differential mode: run both backends, record verdict agreement,
-    // return z3 authoritatively. Diagnostic only (env-gated).
+    // return Axeyum authoritatively. Diagnostic only (env-gated).
     #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
     {
         if fair_shadow_enabled() {
@@ -1452,7 +1502,7 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                     },
                 });
             });
-            return rz;
+            return raw;
         }
         if std::env::var_os("GLAURUNG_SHADOW_DIFF").is_some() {
             // Time each backend on the SAME query for an apples-to-apples
@@ -1557,16 +1607,14 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                     ..SolveTiming::ZERO
                 });
             });
-            return rz;
+            return ra;
         }
     }
 
-    // Backend priority: z3 (perf) > axeyum (pure-Rust) > pipe (zero-dep). See
-    // docs/architecture/solver-backends.md; decisions/solver-002 is superseded.
+    // Axeyum is the sole authoritative SAT/SMT backend. A build without Axeyum
+    // abstains instead of silently delegating to a subprocess solver.
     let __solve_start = std::time::Instant::now();
-    #[cfg(feature = "solver-z3")]
-    let (result, axeyum_execution) = (z3_backend::Z3Solver::new().check(pool, asserts), None);
-    #[cfg(all(not(feature = "solver-z3"), feature = "solver-axeyum"))]
+    #[cfg(feature = "solver-axeyum")]
     let (result, axeyum_execution) = if axeyum_backend::warm_reuse_enabled() {
         let (result, execution) = axeyum_backend::check_warm_thread_local(
             pool,
@@ -1581,48 +1629,30 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
             Some(AxeyumExecutionClass::ColdOneShot),
         )
     };
-    #[cfg(all(not(feature = "solver-z3"), not(feature = "solver-axeyum")))]
-    let (result, axeyum_execution) = (pipe::PipeSolver::new().check(pool, asserts), None);
+    #[cfg(not(feature = "solver-axeyum"))]
+    let (result, axeyum_execution) = (SolveResult::NoSolver, None);
     let __elapsed = __solve_start.elapsed().as_nanos() as u64;
     LAST_SOLVE_TIMING.with(|timing| {
         timing.set(SolveTiming {
             total_nanos: total_started.elapsed().as_nanos() as u64,
-            z3_nanos: {
-                #[cfg(feature = "solver-z3")]
-                {
-                    Some(__elapsed)
-                }
-                #[cfg(not(feature = "solver-z3"))]
-                {
-                    None
-                }
-            },
+            z3_nanos: { None },
             axeyum_nanos: {
-                #[cfg(all(not(feature = "solver-z3"), feature = "solver-axeyum"))]
+                #[cfg(feature = "solver-axeyum")]
                 {
                     Some(__elapsed)
                 }
-                #[cfg(not(all(not(feature = "solver-z3"), feature = "solver-axeyum")))]
+                #[cfg(not(feature = "solver-axeyum"))]
                 {
                     None
                 }
             },
-            z3_outcome: {
-                #[cfg(feature = "solver-z3")]
-                {
-                    Some(SolveOutcome::from(&result))
-                }
-                #[cfg(not(feature = "solver-z3"))]
-                {
-                    None
-                }
-            },
+            z3_outcome: { None },
             axeyum_outcome: {
-                #[cfg(all(not(feature = "solver-z3"), feature = "solver-axeyum"))]
+                #[cfg(feature = "solver-axeyum")]
                 {
                     Some(SolveOutcome::from(&result))
                 }
-                #[cfg(not(all(not(feature = "solver-z3"), feature = "solver-axeyum")))]
+                #[cfg(not(feature = "solver-axeyum"))]
                 {
                     None
                 }
@@ -1639,6 +1669,137 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
     #[cfg(feature = "solver-z3")]
     maybe_dump_query(pool, asserts, &result);
     result
+}
+
+/// Solve one runtime counterfactual with an explicit observed-prefix lineage.
+///
+/// Assertions before `persistent_assertions` are retained. The final selected
+/// branch is supplied as a temporary assumption, so asking about it cannot
+/// contaminate the observed prefix used by a later branch. Exact cache hits may
+/// skip synchronization; the next miss derives its transition from the
+/// retained solver's actual semantic prefix and therefore remains sound.
+pub(crate) fn solve_runtime_for_path_delta(
+    pool: &ExprPool,
+    asserts: &[Assert],
+    path_id: u64,
+    persistent_assertions: usize,
+    persistent_prefix: &WarmAssertionPrefix,
+) -> (SolveResult, bool) {
+    solve_runtime_for_path_delta_with_retention(
+        pool,
+        asserts,
+        path_id,
+        persistent_assertions,
+        persistent_prefix,
+        true,
+    )
+}
+
+pub(crate) fn solve_runtime_for_path_delta_with_retention(
+    pool: &ExprPool,
+    asserts: &[Assert],
+    path_id: u64,
+    persistent_assertions: usize,
+    persistent_prefix: &WarmAssertionPrefix,
+    allow_retention: bool,
+) -> (SolveResult, bool) {
+    #[cfg(not(feature = "solver-axeyum"))]
+    {
+        let _ = (
+            path_id,
+            persistent_assertions,
+            persistent_prefix,
+            allow_retention,
+        );
+        return (solve(pool, asserts), false);
+    }
+
+    #[cfg(feature = "solver-axeyum")]
+    {
+        #[cfg(feature = "solver-z3")]
+        return (solve(pool, asserts), false);
+
+        #[cfg(not(feature = "solver-z3"))]
+        {
+            let wrapper_started = Instant::now();
+            let before = match authoritative_exact_cache_stats() {
+                Ok(stats) => stats,
+                Err(error) => return finish_engine_cache_error(error, wrapper_started),
+            };
+            match lookup_authoritative_exact_cache(pool, asserts) {
+                Ok(CacheLookup::Hit { kind, result }) => {
+                    let after = match authoritative_exact_cache_stats() {
+                        Ok(stats) => stats,
+                        Err(error) => return finish_engine_cache_error(error, wrapper_started),
+                    };
+                    let wrapper_nanos = elapsed_nanos(wrapper_started);
+                    record_engine_cache_check(
+                        EngineCachePolicy::Exact,
+                        Some(kind),
+                        before,
+                        after,
+                        0,
+                        wrapper_nanos,
+                        false,
+                        false,
+                    );
+                    replace_axeyum_timing(
+                        &result,
+                        wrapper_nanos,
+                        Some(AxeyumExecutionClass::EngineCacheHit),
+                    );
+                    return (result, false);
+                }
+                Ok(CacheLookup::Miss) => {}
+                Err(error) => return finish_engine_cache_error(error, wrapper_started),
+            }
+
+            SOLVE_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+            let backend_started = Instant::now();
+            let (result, synced, execution) =
+                axeyum_backend::check_runtime_direct_delta_thread_local_with_retention(
+                    pool,
+                    asserts,
+                    path_id,
+                    persistent_assertions,
+                    persistent_prefix,
+                    allow_retention,
+                );
+            let backend_nanos = elapsed_nanos(backend_started);
+            TOTAL_SOLVE_COUNT.fetch_add(1, Ordering::Relaxed);
+            TOTAL_SOLVE_NANOS.fetch_add(backend_nanos, Ordering::Relaxed);
+            if matches!(result, SolveResult::Unknown(_)) {
+                TIMEOUT_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+            }
+            if let Err(error) = insert_authoritative_exact_cache(pool, asserts, &result) {
+                return finish_engine_cache_error(error, wrapper_started);
+            }
+            let after = match authoritative_exact_cache_stats() {
+                Ok(stats) => stats,
+                Err(error) => return finish_engine_cache_error(error, wrapper_started),
+            };
+            let wrapper_nanos = elapsed_nanos(wrapper_started);
+            record_engine_cache_check(
+                EngineCachePolicy::Exact,
+                None,
+                before,
+                after,
+                backend_nanos,
+                wrapper_nanos,
+                true,
+                synced,
+            );
+            replace_axeyum_timing(&result, wrapper_nanos, Some(execution));
+            (result, synced)
+        }
+    }
+}
+
+pub(crate) fn close_runtime_solver_path(path_id: u64) {
+    #[cfg(feature = "solver-axeyum")]
+    axeyum_backend::close_runtime_direct_delta_path(path_id);
+    #[cfg(not(feature = "solver-axeyum"))]
+    let _ = path_id;
 }
 
 /// Solve in one path-owner context with an explicit persistent-prefix delta.
@@ -2000,6 +2161,17 @@ fn elapsed_nanos(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX)
 }
 
+#[cfg(all(test, not(feature = "solver-axeyum")))]
+mod no_authoritative_solver_tests {
+    use super::{solve, ExprPool, SolveResult};
+
+    #[test]
+    fn solve_abstains_instead_of_using_the_legacy_pipe() {
+        let pool = ExprPool::new();
+        assert_eq!(solve(&pool, &[]), SolveResult::NoSolver);
+    }
+}
+
 #[cfg(all(test, feature = "solver-axeyum"))]
 mod engine_cache_integration_tests {
     use super::{
@@ -2095,6 +2267,122 @@ mod engine_cache_integration_tests {
         );
 
         close_warm_path(path_id);
+    }
+}
+
+#[cfg(all(test, feature = "solver-axeyum", not(feature = "solver-z3")))]
+mod authoritative_exact_cache_integration_tests {
+    use super::{
+        close_runtime_solver_path, last_engine_cache_check, reset_solver_meter,
+        solve_runtime_for_path_delta, solver_meter, CacheHitKind, EngineCachePolicy, ExprPool,
+        SolveResult, WarmAssertionPrefix,
+    };
+    use crate::ir::types::{BinOp, Width};
+    use crate::symbolic::expr::Expr;
+
+    #[test]
+    fn repeated_cross_pool_query_replays_model_without_second_axeyum_call() {
+        reset_solver_meter();
+        let process_unique_constant = u128::from(std::process::id());
+
+        let mut first_pool = ExprPool::new();
+        let first_x = first_pool.fresh_symbol(Width::W32);
+        let first_one = first_pool.constant(Width::W32, process_unique_constant);
+        let first_query = first_pool.intern(Expr::Bin {
+            op: BinOp::Add,
+            a: first_x,
+            b: first_one,
+            width: Width::W32,
+        });
+        let prefix = WarmAssertionPrefix::default();
+        let path_id = 0x52554e54;
+        let (first, _) =
+            solve_runtime_for_path_delta(&first_pool, &[(first_query, true)], path_id, 0, &prefix);
+        assert!(matches!(first, SolveResult::Sat(_)));
+        assert_eq!(solver_meter().0, 1);
+        let first_cache = last_engine_cache_check();
+        assert_eq!(first_cache.policy, EngineCachePolicy::Exact);
+        assert_eq!(first_cache.hit_kind, None);
+        assert!(first_cache.backend_called);
+        assert!(first_cache.warm_synchronized);
+        assert!(first_cache.backend_miss_nanos <= first_cache.wrapper_nanos);
+
+        let mut second_pool = ExprPool::new();
+        let _different_local_expr_id = second_pool.constant(Width::W16, 0xbeef);
+        let second_x = second_pool.fresh_symbol(Width::W32);
+        let second_one = second_pool.constant(Width::W32, process_unique_constant);
+        let second_query = second_pool.intern(Expr::Bin {
+            op: BinOp::Add,
+            a: second_x,
+            b: second_one,
+            width: Width::W32,
+        });
+        let (second, _) = solve_runtime_for_path_delta(
+            &second_pool,
+            &[(second_query, true)],
+            path_id,
+            0,
+            &prefix,
+        );
+        assert_eq!(second, first);
+        assert_eq!(
+            solver_meter().0,
+            1,
+            "cache hit must not invoke Axeyum again"
+        );
+        let second_cache = last_engine_cache_check();
+        assert_eq!(second_cache.policy, EngineCachePolicy::Exact);
+        assert_eq!(second_cache.hit_kind, Some(CacheHitKind::ExactSat));
+        assert!(!second_cache.backend_called);
+        assert!(!second_cache.warm_synchronized);
+        assert_eq!(second_cache.backend_miss_nanos, 0);
+        assert!(second_cache.lookup_nanos <= second_cache.wrapper_nanos);
+        close_runtime_solver_path(path_id);
+    }
+}
+
+#[cfg(all(test, feature = "solver-axeyum"))]
+mod native_warm_prefix_tests {
+    use super::{ExprPool, WarmAssertionPrefix};
+    use crate::ir::types::{BinOp, Width};
+    use crate::symbolic::expr::Expr;
+
+    fn query(pool: &mut ExprPool, constant: u128) -> crate::symbolic::ExprId {
+        let symbol = pool.fresh_symbol(Width::W8);
+        let constant = pool.constant(Width::W8, constant);
+        pool.intern(Expr::Bin {
+            op: BinOp::Add,
+            a: symbol,
+            b: constant,
+            width: Width::W8,
+        })
+    }
+
+    #[test]
+    fn native_prefix_identity_matches_across_pools_and_stops_at_divergence() {
+        let mut left_pool = ExprPool::new();
+        let left_first = query(&mut left_pool, 1);
+        let left_second = query(&mut left_pool, 2);
+        let mut left = WarmAssertionPrefix::default();
+        left.push_native(&left_pool, (left_first, true))
+            .expect("first native identity");
+        left.push_native(&left_pool, (left_second, false))
+            .expect("second native identity");
+
+        let mut right_pool = ExprPool::new();
+        let _different_local_id = right_pool.constant(Width::W16, 0xbeef);
+        let right_first = query(&mut right_pool, 1);
+        let right_second = query(&mut right_pool, 3);
+        let mut right = WarmAssertionPrefix::default();
+        right
+            .push_native(&right_pool, (right_first, true))
+            .expect("first rebuilt identity");
+        right
+            .push_native(&right_pool, (right_second, false))
+            .expect("divergent rebuilt identity");
+
+        assert_eq!(left.common_depth(&right), 0);
+        assert_eq!(left.common_semantic_depth(&right), 1);
     }
 }
 

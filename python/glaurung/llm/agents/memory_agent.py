@@ -560,6 +560,7 @@ from ..tools.java_correlate_behavior_config import (
     build_tool as build_java_correlate_behavior_config,
 )
 from ..tools.java_risk_report import build_tool as build_java_risk_report
+from ..tools.runtime_project_summary import build_tool as build_runtime_project_summary
 from ..tools.minecraft_detect_archive import (
     build_tool as build_minecraft_detect_archive,
 )
@@ -664,7 +665,7 @@ def _apply_tool_filter(agent, tool_filter: set[str]) -> None:
 def _register_analysis_tools_inner(
     agent: Agent[MemoryContext, AgentOutputT],
 ) -> Agent[MemoryContext, AgentOutputT]:
-    """Implementation body: 164 tool_to_pyd_ai calls. Always called inside
+    """Implementation body: 165 tool_to_pyd_ai calls. Always called inside
     a default_tool_strict_for(...) context so the per-model strict choice
     propagates without touching individual registrations."""
     # Wrapper functions expose clear schemas and call atomic tools
@@ -1514,6 +1515,7 @@ def _register_analysis_tools_inner(
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_high_volume_preflight())
     )
+    agent._function_toolset.add_tool(tool_to_pyd_ai(build_runtime_project_summary()))
     agent._function_toolset.add_tool(
         tool_to_pyd_ai(build_windows_pipeline_blocker_task_plan())
     )

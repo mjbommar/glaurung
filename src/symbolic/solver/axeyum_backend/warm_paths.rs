@@ -50,6 +50,8 @@ pub(super) struct DirectDeltaStats {
     prefix_assertions_reused: u64,
     persistent_assertions_translated: u64,
     temporary_assumptions_translated: u64,
+    stable_term_reuses: u64,
+    stable_assertion_reuses: u64,
     assertions_added: u64,
     assertions_popped: u64,
     resets_after_error: u64,
@@ -85,6 +87,10 @@ struct DirectCheckMetrics {
 impl DirectDeltaLineageAxeyumSolver {
     fn has_path(&self, path_id: u64) -> bool {
         self.paths.contains_key(&path_id)
+    }
+
+    fn path_count(&self) -> usize {
+        self.paths.len()
     }
 
     fn check_path(
@@ -149,6 +155,13 @@ impl DirectDeltaLineageAxeyumSolver {
                 .expect("direct path exists while deriving source LCP")
                 .active_prefix
                 .common_depth(persistent_prefix)
+                .max(
+                    self.paths
+                        .get(&path_id)
+                        .expect("direct path exists while deriving semantic LCP")
+                        .active_prefix
+                        .common_semantic_depth(persistent_prefix),
+                )
         };
         let mut profile = profile_before.and_then(|(solver_before, cache_before, _)| {
             start_warm_profile(
@@ -193,6 +206,16 @@ impl DirectDeltaLineageAxeyumSolver {
             .solver_stats();
         let (mut result, metrics) =
             self.transition_and_check(path_id, pool, input, effective_retain, profiling);
+        self.stats.stable_term_reuses = self
+            .stats
+            .stable_term_reuses
+            .saturating_add(metrics.persistent_translation.stable_term_hits)
+            .saturating_add(metrics.temporary_translation.stable_term_hits);
+        self.stats.stable_assertion_reuses = self
+            .stats
+            .stable_assertion_reuses
+            .saturating_add(metrics.persistent_translation.stable_assertion_hits)
+            .saturating_add(metrics.temporary_translation.stable_assertion_hits);
         // The path is still live here whatever the transition returned: an
         // error closes it below, after this fold.
         let engine_after = self
@@ -226,6 +249,23 @@ impl DirectDeltaLineageAxeyumSolver {
                 .persistent_translation
                 .exprs
                 .saturating_add(metrics.temporary_translation.exprs);
+            profile.profile.stable_term_reuses = metrics
+                .persistent_translation
+                .stable_term_hits
+                .saturating_add(metrics.temporary_translation.stable_term_hits);
+            profile.profile.stable_assertion_reuses = metrics
+                .persistent_translation
+                .stable_assertion_hits
+                .saturating_add(metrics.temporary_translation.stable_assertion_hits);
+            let (identity_nodes, term_entries, assertion_entries) = self
+                .paths
+                .get(&path_id)
+                .expect("profiled direct path remains live through attribution")
+                .solver
+                .stable_term_cache_stats();
+            profile.profile.stable_identity_nodes = count(identity_nodes);
+            profile.profile.stable_term_entries = count(term_entries);
+            profile.profile.stable_assertion_entries = count(assertion_entries);
             profile.profile.symbols = metrics
                 .persistent_translation
                 .symbols
@@ -697,8 +737,9 @@ pub(super) fn check_warm_thread_local_selected(
                 if delta.retain_assertions > delta.persistent_assertions
                     || delta.persistent_assertions > asserts.len()
                 {
-                    let (before, after, closed_cache) = DIRECT_DELTA_SOLVERS.with(|lineage| {
-                        let mut lineage = lineage.borrow_mut();
+                    let (before, after, closed_cache) = DIRECT_DELTA_SOLVERS.with(|domains| {
+                        let mut domains = domains.borrow_mut();
+                        let lineage = &mut domains.explorer;
                         let before = lineage.snapshot_stats();
                         lineage.stats.checks = lineage.stats.checks.saturating_add(1);
                         let closed_cache = lineage.close_path(path_id);
@@ -740,7 +781,7 @@ pub(super) fn check_warm_thread_local_selected(
                 );
             }
             let exists = if direct {
-                DIRECT_DELTA_SOLVERS.with(|lineage| lineage.borrow().has_path(path_id))
+                DIRECT_DELTA_SOLVERS.with(|domains| domains.borrow().explorer.has_path(path_id))
             } else {
                 LINEAGE_SOLVERS.with(|lineage| lineage.borrow().has_path(path_id))
             };
@@ -814,8 +855,9 @@ pub(super) fn check_warm_thread_local_selected(
                     removed_cache,
                     created,
                     synced,
-                ) = DIRECT_DELTA_SOLVERS.with(|lineage| {
-                    let mut lineage = lineage.borrow_mut();
+                ) = DIRECT_DELTA_SOLVERS.with(|domains| {
+                    let mut domains = domains.borrow_mut();
+                    let lineage = &mut domains.explorer;
                     let created = !lineage.has_path(path_id);
                     let before = lineage.snapshot_stats();
                     let cache_before = lineage.replay_sat_cache_stats(path_id);
@@ -986,10 +1028,127 @@ pub(crate) fn close_fair_warm_path(path_id: u64) {
     close_retained_lineage_paths(path_id);
 }
 
+/// Drive the runtime-counterfactual direct-delta domain.
+///
+/// This domain is deliberately separate from explorer path IDs: a runtime
+/// analysis can retain observed prefixes without aliasing or closing a dormant
+/// symbolic-exploration lineage that happens to use the same numeric ID.
+pub(crate) fn check_runtime_direct_delta_thread_local(
+    pool: &ExprPool,
+    asserts: &[Assert],
+    path_id: u64,
+    persistent_assertions: usize,
+    persistent_prefix: &WarmAssertionPrefix,
+) -> (SolveResult, bool, AxeyumExecutionClass) {
+    check_runtime_direct_delta_thread_local_with_retention(
+        pool,
+        asserts,
+        path_id,
+        persistent_assertions,
+        persistent_prefix,
+        true,
+    )
+}
+
+pub(crate) fn check_runtime_direct_delta_thread_local_with_retention(
+    pool: &ExprPool,
+    asserts: &[Assert],
+    path_id: u64,
+    persistent_assertions: usize,
+    persistent_prefix: &WarmAssertionPrefix,
+    allow_retention: bool,
+) -> (SolveResult, bool, AxeyumExecutionClass) {
+    check_runtime_direct_delta_selected(
+        pool,
+        asserts,
+        path_id,
+        persistent_assertions,
+        persistent_prefix,
+        allow_retention && warm_reuse_policy() != WarmReusePolicy::Off,
+    )
+}
+
+pub(super) fn check_runtime_direct_delta_selected(
+    pool: &ExprPool,
+    asserts: &[Assert],
+    path_id: u64,
+    persistent_assertions: usize,
+    persistent_prefix: &WarmAssertionPrefix,
+    retain: bool,
+) -> (SolveResult, bool, AxeyumExecutionClass) {
+    if persistent_assertions > asserts.len() || persistent_prefix.depth() != persistent_assertions {
+        return (
+            SolveResult::Error(format!(
+                "invalid runtime direct delta: prefix depth {}, persistent {persistent_assertions}, total {}",
+                persistent_prefix.depth(),
+                asserts.len()
+            )),
+            false,
+            AxeyumExecutionClass::InvalidDirectDelta,
+        );
+    }
+    if !retain {
+        return (
+            AxeyumSolver::new().check(pool, asserts),
+            false,
+            AxeyumExecutionClass::ColdOneShot,
+        );
+    }
+    let limits = warm_reuse_limits();
+    if count(asserts.len()) > limits.max_assertions_per_path {
+        return (
+            AxeyumSolver::new().check(pool, asserts),
+            false,
+            AxeyumExecutionClass::FallbackAssertionCap,
+        );
+    }
+    DIRECT_DELTA_SOLVERS.with(|domains| {
+        let mut domains = domains.borrow_mut();
+        let lineage = &mut domains.runtime_counterfactual;
+        let created = !lineage.has_path(path_id);
+        if created && count(lineage.path_count()) >= limits.max_live_paths {
+            return (
+                AxeyumSolver::new().check(pool, asserts),
+                false,
+                AxeyumExecutionClass::FallbackPathCap,
+            );
+        }
+        let (result, synced, _) = lineage.check_path(
+            path_id,
+            pool,
+            DirectCheckInput {
+                complete_asserts: asserts,
+                persistent: &asserts[..persistent_assertions],
+                persistent_prefix,
+                retain_assertions: 0,
+                temporary: &asserts[persistent_assertions..],
+            },
+        );
+        (
+            result,
+            synced,
+            if created {
+                AxeyumExecutionClass::WarmCreated
+            } else {
+                AxeyumExecutionClass::WarmRetained
+            },
+        )
+    })
+}
+
+pub(crate) fn close_runtime_direct_delta_path(path_id: u64) {
+    DIRECT_DELTA_SOLVERS.with(|domains| {
+        domains
+            .borrow_mut()
+            .runtime_counterfactual
+            .close_path(path_id);
+    });
+}
+
 fn close_retained_lineage_paths(path_id: u64) {
     let snapshot_cache = LINEAGE_SOLVERS.with(|lineage| lineage.borrow_mut().close_path(path_id));
     let direct_cache =
-        DIRECT_DELTA_SOLVERS.with(|lineage| lineage.borrow_mut().close_path(path_id));
+        DIRECT_DELTA_SOLVERS.with(|domains| domains.borrow_mut().explorer.close_path(path_id));
     for cache in [snapshot_cache, direct_cache].into_iter().flatten() {
         subtract_replay_sat_cache_gauges(cache);
         WARM_PATHS_CLOSED.fetch_add(1, Ordering::Relaxed);
@@ -999,7 +1158,7 @@ fn close_retained_lineage_paths(path_id: u64) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{bin, c, cmp, direct_input, expect_pred, solve_native};
+    use super::super::tests::{c, cmp, direct_input};
     use super::*;
     use crate::ir::types::Width;
 
@@ -1101,6 +1260,8 @@ mod tests {
                 prefix_assertions_reused: 3,
                 persistent_assertions_translated: 2,
                 temporary_assumptions_translated: 1,
+                stable_term_reuses: 2,
+                stable_assertion_reuses: 0,
                 assertions_added: 2,
                 assertions_popped: 1,
                 resets_after_error: 0,
@@ -1227,6 +1388,8 @@ mod tests {
                 prefix_assertions_reused: 0,
                 persistent_assertions_translated: 2,
                 temporary_assumptions_translated: 0,
+                stable_term_reuses: 0,
+                stable_assertion_reuses: 0,
                 assertions_added: 2,
                 assertions_popped: 0,
                 resets_after_error: 1,
@@ -1404,7 +1567,7 @@ mod tests {
         assert!(matches!(result, SolveResult::Error(_)));
         assert_eq!(execution, AxeyumExecutionClass::InvalidDirectDelta);
         assert!(!last_direct_delta_synced());
-        assert!(!DIRECT_DELTA_SOLVERS.with(|lineage| lineage.borrow().has_path(owner)));
+        assert!(!DIRECT_DELTA_SOLVERS.with(|domains| domains.borrow().explorer.has_path(owner)));
     }
 
     #[test]
@@ -1454,5 +1617,95 @@ mod tests {
             SnapshotIncrementalAxeyumSolver::new().replay_sat_cache_stats(),
             ReplayCheckedSatCacheStats::default()
         );
+    }
+
+    #[test]
+    fn runtime_direct_delta_reuses_exact_native_prefix_across_expression_pools() {
+        let path_id = 0x52554e54;
+        close_runtime_direct_delta_path(path_id);
+        let before =
+            DIRECT_DELTA_SOLVERS.with(|domains| domains.borrow().runtime_counterfactual.stats());
+
+        let mut first_pool = ExprPool::new();
+        let first_x = first_pool.fresh_symbol(Width::W8);
+        let first_ten = c(&mut first_pool, 10, Width::W8);
+        let first_three = c(&mut first_pool, 3, Width::W8);
+        let first_prefix = cmp(&mut first_pool, CmpOp::Ult, first_x, first_ten, Width::W8);
+        let first_target = cmp(&mut first_pool, CmpOp::Eq, first_x, first_three, Width::W8);
+        let mut first_identity = WarmAssertionPrefix::default();
+        first_identity
+            .push_native(&first_pool, (first_prefix, true))
+            .expect("first native runtime prefix");
+        let (first, first_synced, first_execution) = check_runtime_direct_delta_thread_local(
+            &first_pool,
+            &[(first_prefix, true), (first_target, true)],
+            path_id,
+            1,
+            &first_identity,
+        );
+        assert!(matches!(first, SolveResult::Sat(_)));
+        assert!(first_synced);
+        assert_eq!(first_execution, AxeyumExecutionClass::WarmCreated);
+        let after_first =
+            DIRECT_DELTA_SOLVERS.with(|domains| domains.borrow().runtime_counterfactual.stats());
+
+        let mut second_pool = ExprPool::new();
+        let _different_local_expr_id = c(&mut second_pool, 0xbeef, Width::W16);
+        let second_x = second_pool.fresh_symbol(Width::W8);
+        let second_ten = c(&mut second_pool, 10, Width::W8);
+        let second_four = c(&mut second_pool, 4, Width::W8);
+        let second_prefix = cmp(
+            &mut second_pool,
+            CmpOp::Ult,
+            second_x,
+            second_ten,
+            Width::W8,
+        );
+        let second_target = cmp(
+            &mut second_pool,
+            CmpOp::Eq,
+            second_x,
+            second_four,
+            Width::W8,
+        );
+        let mut second_identity = WarmAssertionPrefix::default();
+        second_identity
+            .push_native(&second_pool, (second_prefix, true))
+            .expect("rebuilt native runtime prefix");
+        let (second, second_synced, second_execution) = check_runtime_direct_delta_thread_local(
+            &second_pool,
+            &[(second_prefix, true), (second_target, true)],
+            path_id,
+            1,
+            &second_identity,
+        );
+        assert!(matches!(second, SolveResult::Sat(_)));
+        assert!(second_synced);
+        assert_eq!(second_execution, AxeyumExecutionClass::WarmRetained);
+
+        let after =
+            DIRECT_DELTA_SOLVERS.with(|domains| domains.borrow().runtime_counterfactual.stats());
+        assert!(
+            after.stable_term_reuses > after_first.stable_term_reuses,
+            "the rebuilt temporary expression must recover at least its shared symbol TermId"
+        );
+        assert_eq!(after.checks - before.checks, 2);
+        assert_eq!(
+            after.full_materializations - before.full_materializations,
+            1
+        );
+        assert_eq!(
+            after.prefix_assertions_reused - before.prefix_assertions_reused,
+            1
+        );
+        assert_eq!(
+            after.persistent_assertions_translated - before.persistent_assertions_translated,
+            1
+        );
+        assert_eq!(
+            after.temporary_assumptions_translated - before.temporary_assumptions_translated,
+            2
+        );
+        close_runtime_direct_delta_path(path_id);
     }
 }

@@ -61,9 +61,10 @@ pub(crate) use config::{
 use profile::{finish_warm_profile, start_warm_profile, AxeyumCheckProfile};
 pub use profile::{ProfiledSolveResult, WarmAxeyumCheckProfile};
 pub use snapshot::{SnapshotIncrementalAxeyumSolver, SnapshotReuseStats};
-use translate::{translate_path, translate_query};
+use translate::{translate_path, translate_query, translate_query_cached, StableTermCache};
 pub(crate) use warm_paths::{
-    check_warm_thread_local, close_fair_warm_path, close_warm_path,
+    check_runtime_direct_delta_thread_local_with_retention, check_warm_thread_local,
+    close_fair_warm_path, close_runtime_direct_delta_path, close_warm_path,
     share_serial_warm_owner_with_children, warm_reuse_enabled,
 };
 use warm_paths::{
@@ -103,8 +104,9 @@ use profile::{
 };
 #[cfg(test)]
 use warm_paths::{
-    adaptive_live_path_limit, check_warm_thread_local_selected, try_reserve_path_counter,
-    DirectDeltaStats, SerialLeaseRelease,
+    adaptive_live_path_limit, check_runtime_direct_delta_selected,
+    check_warm_thread_local_selected, try_reserve_path_counter, DirectDeltaStats,
+    SerialLeaseRelease,
 };
 
 const PROFILE_DIR_ENV: &str = "GLAURUNG_AXEYUM_PROFILE_DIR";
@@ -204,16 +206,19 @@ thread_local! {
     /// One retained snapshot adapter per explorer thread. Glaurung currently
     /// submits complete assertion snapshots rather than explicit path scopes;
     /// the adapter reconstructs the common prefix and maps it to Axeyum scopes.
-    static WARM_SOLVER: RefCell<SnapshotIncrementalAxeyumSolver> =
-        RefCell::new(SnapshotIncrementalAxeyumSolver::new());
+    /// Keep retained solver state on the heap: embedding these large values in
+    /// ELF TLS can make the Python cdylib impossible to load after interpreter
+    /// startup (`cannot allocate memory in static TLS block`).
+    static WARM_SOLVER: RefCell<Box<SnapshotIncrementalAxeyumSolver>> =
+        RefCell::new(Box::new(SnapshotIncrementalAxeyumSolver::new()));
     /// Retained mutable solver state keyed by explorer-owned path identity.
     /// Each worker owns its map; no solver is shared across paths or threads.
-    static LINEAGE_SOLVERS: RefCell<LineageIncrementalAxeyumSolver> =
-        RefCell::new(LineageIncrementalAxeyumSolver::default());
+    static LINEAGE_SOLVERS: RefCell<Box<LineageIncrementalAxeyumSolver>> =
+        RefCell::new(Box::new(LineageIncrementalAxeyumSolver::default()));
     /// Opt-in sessions driven by explicit explorer prefix deltas. Separate from
     /// the accepted snapshot lineage map so the control remains exact.
-    static DIRECT_DELTA_SOLVERS: RefCell<DirectDeltaLineageAxeyumSolver> =
-        RefCell::new(DirectDeltaLineageAxeyumSolver::default());
+    static DIRECT_DELTA_SOLVERS: RefCell<Box<DirectDeltaSolverDomains>> =
+        RefCell::new(Box::new(DirectDeltaSolverDomains::default()));
     /// Whether the immediately preceding Axeyum check synchronized its direct
     /// persistent session. Explorer retain markers advance only on `true`.
     static LAST_DIRECT_DELTA_SYNCED: Cell<bool> = const { Cell::new(false) };
@@ -232,6 +237,12 @@ thread_local! {
 struct WarmReuseLimits {
     max_live_paths: u64,
     max_assertions_per_path: u64,
+}
+
+#[derive(Debug, Default)]
+struct DirectDeltaSolverDomains {
+    explorer: DirectDeltaLineageAxeyumSolver,
+    runtime_counterfactual: DirectDeltaLineageAxeyumSolver,
 }
 
 // ---------------------------------------------------------------------------
@@ -253,6 +264,8 @@ struct TranslatedQuery {
     assertions: Vec<TermId>,
     sym_map: Vec<(u32, SymbolId)>,
     exprs: usize,
+    stable_term_hits: usize,
+    stable_assertion_hits: usize,
 }
 
 impl AxeyumSolver {
@@ -401,6 +414,7 @@ fn one_shot_check(pool: &ExprPool, asserts: &[Assert], solver_config: SolverConf
 #[derive(Debug)]
 pub struct IncrementalAxeyumSolver {
     arena: TermArena,
+    stable_terms: StableTermCache,
     solver: IncrementalBvSolver,
     symbol_frames: Vec<Vec<(u32, SymbolId)>>,
 }
@@ -447,6 +461,7 @@ impl IncrementalAxeyumSolver {
         }
         Self {
             arena: TermArena::new(),
+            stable_terms: StableTermCache::default(),
             solver,
             symbol_frames: vec![Vec::new()],
         }
@@ -477,6 +492,10 @@ impl IncrementalAxeyumSolver {
         self.arena.len()
     }
 
+    fn stable_term_cache_stats(&self) -> (usize, usize, usize) {
+        self.stable_terms.stats()
+    }
+
     fn active_symbol_map(&self) -> Vec<(u32, SymbolId)> {
         self.symbol_frames.iter().flatten().copied().collect()
     }
@@ -486,7 +505,7 @@ impl IncrementalAxeyumSolver {
         pool: &ExprPool,
         assertions: &[Assert],
     ) -> Result<TranslatedQuery, IrError> {
-        translate_query(pool, assertions, &mut self.arena)
+        translate_query_cached(pool, assertions, &mut self.arena, &mut self.stable_terms)
     }
 
     fn assert_measured(
@@ -504,6 +523,8 @@ impl IncrementalAxeyumSolver {
             roots: 1,
             exprs: count(translated.exprs),
             symbols: count(translated.sym_map.len()),
+            stable_term_hits: count(translated.stable_term_hits),
+            stable_assertion_hits: count(translated.stable_assertion_hits),
         };
         let term = translated.assertions[0];
         AxeyumIncrementalSolver::assert(&mut self.solver, &self.arena, term)
@@ -562,6 +583,8 @@ impl IncrementalAxeyumSolver {
             roots: count(assumptions.len()),
             exprs: count(translated.exprs),
             symbols: count(translated.sym_map.len()),
+            stable_term_hits: count(translated.stable_term_hits),
+            stable_assertion_hits: count(translated.stable_assertion_hits),
         };
         let mut symbols = self.active_symbol_map();
         symbols.extend(translated.sym_map);
@@ -601,6 +624,8 @@ struct DirectTranslationMetrics {
     roots: u64,
     exprs: u64,
     symbols: u64,
+    stable_term_hits: u64,
+    stable_assertion_hits: u64,
 }
 
 impl DirectTranslationMetrics {
@@ -609,6 +634,10 @@ impl DirectTranslationMetrics {
         self.roots = self.roots.saturating_add(other.roots);
         self.exprs = self.exprs.saturating_add(other.exprs);
         self.symbols = self.symbols.saturating_add(other.symbols);
+        self.stable_term_hits = self.stable_term_hits.saturating_add(other.stable_term_hits);
+        self.stable_assertion_hits = self
+            .stable_assertion_hits
+            .saturating_add(other.stable_assertion_hits);
     }
 }
 
@@ -1600,6 +1629,29 @@ mod tests {
     }
 
     #[test]
+    fn runtime_direct_delta_selector_provides_a_true_cold_axeyum_lane() {
+        let mut pool = ExprPool::new();
+        let x = pool.fresh_symbol(Width::W8);
+        let zero = c(&mut pool, 0, Width::W8);
+        let x_is_zero = cmp(&mut pool, CmpOp::Eq, x, zero, Width::W8);
+        let path_id = 0x434f4c44;
+        close_runtime_direct_delta_path(path_id);
+
+        let (result, synchronized, execution) = check_runtime_direct_delta_selected(
+            &pool,
+            &[(x_is_zero, true)],
+            path_id,
+            0,
+            &WarmAssertionPrefix::default(),
+            false,
+        );
+
+        assert!(matches!(result, SolveResult::Sat(_)));
+        assert!(!synchronized);
+        assert_eq!(execution, AxeyumExecutionClass::ColdOneShot);
+    }
+
+    #[test]
     fn snapshot_incremental_handles_empty_and_shrinking_snapshots() {
         let mut pool = ExprPool::new();
         let x = pool.fresh_symbol(Width::W8);
@@ -1661,6 +1713,38 @@ mod tests {
             matches!(solver.check(), SolveResult::Sat(_)),
             "the contradictory one-shot assumption must not persist"
         );
+    }
+
+    #[test]
+    fn retained_translator_recovers_exact_terms_across_expression_pools() {
+        let mut first_pool = ExprPool::new();
+        let first_x = first_pool.fresh_symbol(Width::W8);
+        let first_three = c(&mut first_pool, 3, Width::W8);
+        let first_query = cmp(&mut first_pool, CmpOp::Eq, first_x, first_three, Width::W8);
+        let mut solver = IncrementalAxeyumSolver::new();
+        let (first, first_translation, _) =
+            solver.check_assuming_measured(&first_pool, &[(first_query, true)], false, false);
+        assert!(matches!(first, SolveResult::Sat(_)));
+        assert_eq!(first_translation.stable_assertion_hits, 0);
+        let arena_after_first = solver.arena_len();
+
+        let mut second_pool = ExprPool::new();
+        let _different_local_expr_id = c(&mut second_pool, 0xbeef, Width::W16);
+        let second_x = second_pool.fresh_symbol(Width::W8);
+        let second_three = c(&mut second_pool, 3, Width::W8);
+        let second_query = cmp(
+            &mut second_pool,
+            CmpOp::Eq,
+            second_x,
+            second_three,
+            Width::W8,
+        );
+        let (second, second_translation, _) =
+            solver.check_assuming_measured(&second_pool, &[(second_query, true)], false, false);
+        assert_eq!(second, first);
+        assert_eq!(second_translation.exprs, 0);
+        assert_eq!(second_translation.stable_assertion_hits, 1);
+        assert_eq!(solver.arena_len(), arena_after_first);
     }
 
     #[test]

@@ -1,2 +1,2 @@
 #include "runtime_sample.h"
-struct box{char dst[8];uint32_t canary;};int main(int argc,char **argv){struct box b={{'A','B','C','\0'},0x55667788};strcat(b.dst,rs_bad(argc,argv)?"DEFGHIJK":"D");return rs_result("canary",b.canary);}
+RS_NOINLINE static void rs_append(char *destination,const char *source){strcat(destination,source);}struct box{char dst[8];uint32_t canary;};int main(int argc,char **argv){struct box b={{'A','B','C','\0'},0x55667788};char good[]="D";char bad[]="DEFGHIJK";const char *source=rs_bad(argc,argv)?bad:good;rs_checkpoint_if("GLAURUNG_RUNTIME_TRACE_BEGIN");rs_append(b.dst,source);rs_checkpoint_if("GLAURUNG_RUNTIME_TRACE_END");return rs_result("canary",b.canary);}

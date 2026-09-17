@@ -43,6 +43,13 @@ static void rs_checkpoint(void) {
     }
 }
 
+static void rs_checkpoint_if(const char *environment_name) {
+    if (getenv(environment_name) != NULL) {
+        fflush(NULL);
+        raise(SIGSTOP);
+    }
+}
+
 static int rs_result(const char *label, long value) {
     printf("RESULT %s %ld\n", label, value);
     fflush(stdout);

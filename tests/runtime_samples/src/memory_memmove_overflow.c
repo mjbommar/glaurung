@@ -1,2 +1,2 @@
 #include "runtime_sample.h"
-struct box{char dst[8];uint32_t canary;};int main(int argc,char **argv){struct box b={{0},0x01020304};char src[16];memset(src,'N',sizeof src);memmove(b.dst,src,rs_bad(argc,argv)?12:8);return rs_result("canary",b.canary);}
+RS_NOINLINE static void rs_move(void *destination,const void *source,size_t length){memmove(destination,source,length);}struct box{char dst[8];uint32_t canary;};int main(int argc,char **argv){struct box b={{0},0x01020304};char src[16];memset(src,'N',sizeof src);rs_checkpoint_if("GLAURUNG_RUNTIME_TRACE_BEGIN");rs_move(b.dst,src,rs_bad(argc,argv)?12:8);rs_checkpoint_if("GLAURUNG_RUNTIME_TRACE_END");return rs_result("canary",b.canary);}

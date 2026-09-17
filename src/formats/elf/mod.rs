@@ -232,7 +232,14 @@ impl<'data> ElfParser<'data> {
 
         // Build PLT map if this is .rela.plt
         if is_plt {
-            if let Some(plt_section) = sections.by_name(".plt") {
+            if let Some(plt_section) = sections.by_name(".plt.sec") {
+                let entry_size = if table.count() > 0 {
+                    plt_section.header.sh_size / table.count() as u64
+                } else {
+                    16
+                };
+                table.build_plt_map_from_first(plt_section.header.sh_addr, entry_size, &symbols);
+            } else if let Some(plt_section) = sections.by_name(".plt") {
                 let plt_addr = plt_section.header.sh_addr;
                 let plt_size = plt_section.header.sh_size;
                 let num_entries = table.count() as u64 + 1; // +1 for PLT[0]

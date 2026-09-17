@@ -51,15 +51,17 @@ modules. On 2026-08-28 a signature change to
 above, different axis — that one is a feature not being built, this one is
 test code not being built.
 
-### `--features python-ext` does not build `src/symbolic/` either
+### Do not assume one feature lane covers every gated tree
 
 Before pushing anything that touches a feature-gated tree, run
 `scripts/feature-build-gate.sh`.
 
-`src/lib.rs` gates `symbolic` on its own feature, which is in neither
-`default` nor `python-ext`: 26 files and 21,459 lines of product code
-(`find src/symbolic -name '*.rs' | wc -l`; `wc -l`, measured 2026-09-02 at
-`b8884687`) that `cargo test --features python-ext` never compiles.
+Historically, `src/lib.rs` gated `symbolic` on a feature absent from both
+`default` and `python-ext`, so the ordinary Python-extension test command never
+compiled it. That specific blind spot is closed: the default feature set now
+includes authoritative `solver-axeyum`, which implies `symbolic` and `exec`.
+The general trap remains for every other opt-in tree and for invocations using
+`--no-default-features`.
 
 Proven by experiment on 2026-08-17: appending invalid Rust to
 `src/symbolic/expr.rs` produced 0 errors under `--features python-ext` and 2
@@ -68,7 +70,7 @@ backends sat uncompilable for seventeen days — `BinOp::LogicalAnd` and
 `BinOp::LogicalOr` were added on 2026-07-31 and no backend was updated — and
 how `triage-parsers-extra` stayed broken for 350 days.
 
-Two gates close it now: `scripts/feature-build-gate.sh` type-checks twelve
+Two gates close it now: `scripts/feature-build-gate.sh` type-checks thirteen
 configurations including `fuzz/`, which is a separate crate that no
 root-manifest check can see; and `test-suite.yml`'s `symbolic` job *runs* the
 symbolic tests and fails if fewer than 50 are reachable.

@@ -32,6 +32,7 @@ mod type_maps;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyList};
+use sha2::{Digest, Sha256};
 
 // `select_renderable_dwarf_local_facts` has no production caller in this module
 // -- its only consumer here is the `mod tests` below, so the import is gated the
@@ -1063,12 +1064,14 @@ fn decompile_all_py(
             output.rendered.line_mappings,
             pipeline_fingerprint,
         );
-        let variables = crate::ir::recovered_variables::recovered_variables_from_llir(
+        let variables = crate::ir::recovered_variables::recovered_variables_from_llir_with_identity(
             &result.pseudocode,
             output.prepared.prototype.as_ref(),
             &output.prepared.stack_facts,
             calling_convention_pointer_width(cc),
             &output.raw,
+            &hex::encode(Sha256::digest(image.bytes())),
+            "glaurung-raw-llir-v1",
         );
         let variables = variables_to_py(py, &variables)?;
         if include_line_mappings {
@@ -1325,12 +1328,14 @@ fn decompile_many_py(
             output.rendered.line_mappings,
             pipeline_fingerprint,
         );
-        let variables = crate::ir::recovered_variables::recovered_variables_from_llir(
+        let variables = crate::ir::recovered_variables::recovered_variables_from_llir_with_identity(
             &result.pseudocode,
             output.prepared.prototype.as_ref(),
             &output.prepared.stack_facts,
             calling_convention_pointer_width(cc),
             &output.raw,
+            &hex::encode(Sha256::digest(image.bytes())),
+            "glaurung-raw-llir-v1",
         );
         let variables = variables_to_py(py, &variables)?;
         if include_line_mappings {
@@ -1386,6 +1391,111 @@ fn variables_to_py(
         item.set_item("arg_index", variable.arg_index)?;
         item.set_item("stack_offset", variable.stack_offset)?;
         item.set_item("size", variable.size)?;
+        if let Some(static_variable) = &variable.static_variable {
+            let node = PyDict::new(py);
+            node.set_item("id", &static_variable.id)?;
+            node.set_item("function_id", &static_variable.function_id)?;
+            node.set_item("image_sha256", &static_variable.image_sha256)?;
+            node.set_item("source_name", &static_variable.source_name)?;
+            node.set_item("type_id", &static_variable.type_id)?;
+            let origin = PyDict::new(py);
+            match &static_variable.origin {
+                crate::ir::function_ir::StaticVariableOrigin::Dwarf {
+                    declaration_debug_info_offset,
+                } => {
+                    origin.set_item("kind", "dwarf")?;
+                    origin.set_item(
+                        "declaration_debug_info_offset",
+                        declaration_debug_info_offset,
+                    )?;
+                }
+                crate::ir::function_ir::StaticVariableOrigin::AbiArgument {
+                    position,
+                    recovery_profile,
+                } => {
+                    origin.set_item("kind", "abi_argument")?;
+                    origin.set_item("position", position)?;
+                    origin.set_item("recovery_profile", recovery_profile)?;
+                }
+                crate::ir::function_ir::StaticVariableOrigin::FrameStorage {
+                    base,
+                    displacement,
+                    recovery_profile,
+                } => {
+                    origin.set_item("kind", "frame_storage")?;
+                    origin.set_item("base", base)?;
+                    origin.set_item("displacement", displacement)?;
+                    origin.set_item("recovery_profile", recovery_profile)?;
+                }
+            }
+            node.set_item("origin", origin)?;
+            item.set_item("static_variable", node)?;
+        } else {
+            item.set_item("static_variable", py.None())?;
+        }
+        if let Some(static_type) = &variable.static_type {
+            let node = PyDict::new(py);
+            node.set_item("id", &static_type.id)?;
+            node.set_item("image_sha256", &static_type.image_sha256)?;
+            node.set_item("c_type", &static_type.c_type)?;
+            node.set_item(
+                "type_debug_info_offset",
+                static_type.type_debug_info_offset,
+            )?;
+            let origin = PyDict::new(py);
+            match &static_type.origin {
+                crate::ir::function_ir::StaticTypeOrigin::Dwarf {
+                    type_debug_info_offset,
+                } => {
+                    origin.set_item("kind", "dwarf")?;
+                    origin.set_item("type_debug_info_offset", type_debug_info_offset)?;
+                }
+                crate::ir::function_ir::StaticTypeOrigin::Recovered {
+                    shape,
+                    recovery_profile,
+                } => {
+                    origin.set_item("kind", "recovered")?;
+                    origin.set_item("recovery_profile", recovery_profile)?;
+                    let shape_dict = PyDict::new(py);
+                    match shape {
+                        crate::ir::function_ir::RecoveredTypeShape::Integer {
+                            signed,
+                            width,
+                        } => {
+                            shape_dict.set_item("kind", "integer")?;
+                            shape_dict.set_item("signed", signed)?;
+                            shape_dict.set_item("width", width)?;
+                        }
+                        crate::ir::function_ir::RecoveredTypeShape::Float { width } => {
+                            shape_dict.set_item("kind", "float")?;
+                            shape_dict.set_item("width", width)?;
+                        }
+                        crate::ir::function_ir::RecoveredTypeShape::DataPointer {
+                            pointee_width,
+                            pointer_width,
+                        } => {
+                            shape_dict.set_item("kind", "data_pointer")?;
+                            shape_dict.set_item("pointee_width", pointee_width)?;
+                            shape_dict.set_item("pointer_width", pointer_width)?;
+                        }
+                        crate::ir::function_ir::RecoveredTypeShape::BoolLike => {
+                            shape_dict.set_item("kind", "bool_like")?;
+                        }
+                        crate::ir::function_ir::RecoveredTypeShape::CodePointer {
+                            pointer_width,
+                        } => {
+                            shape_dict.set_item("kind", "code_pointer")?;
+                            shape_dict.set_item("pointer_width", pointer_width)?;
+                        }
+                    }
+                    origin.set_item("shape", shape_dict)?;
+                }
+            }
+            node.set_item("origin", origin)?;
+            item.set_item("static_type", node)?;
+        } else {
+            item.set_item("static_type", py.None())?;
+        }
         // Always present, empty when unclaimed. A consumer that filters on
         // truthiness gets the right answer; one that checks for the key does
         // not have to special-case a producer that never emits it.
@@ -1868,6 +1978,8 @@ mod tests {
             register_locals: Vec::new(),
             stack_objects: vec![
                 DwarfStackObject {
+                    declaration_debug_info_offset: None,
+                    type_debug_info_offset: None,
                     base: DwarfStackBase::Register(11),
                     offset: -24,
                     byte_size: 16,
@@ -1876,6 +1988,8 @@ mod tests {
                     c_type: None,
                 },
                 DwarfStackObject {
+                    declaration_debug_info_offset: None,
+                    type_debug_info_offset: None,
                     base: DwarfStackBase::Register(7),
                     offset: -8,
                     byte_size: 8,
@@ -1909,6 +2023,8 @@ mod tests {
             static_locals: Vec::new(),
             register_locals: Vec::new(),
             stack_objects: vec![DwarfStackObject {
+                declaration_debug_info_offset: None,
+                type_debug_info_offset: None,
                 base: DwarfStackBase::CallFrameCfa,
                 offset: -40,
                 byte_size: 16,
@@ -1938,6 +2054,8 @@ mod tests {
             static_locals: Vec::new(),
             register_locals: Vec::new(),
             stack_objects: vec![DwarfStackObject {
+                declaration_debug_info_offset: None,
+                type_debug_info_offset: None,
                 base: DwarfStackBase::CallFrameCfa,
                 offset: -24,
                 byte_size: 8,
@@ -1969,6 +2087,8 @@ mod tests {
             static_locals: Vec::new(),
             register_locals: Vec::new(),
             stack_objects: vec![DwarfStackObject {
+                declaration_debug_info_offset: None,
+                type_debug_info_offset: None,
                 base: DwarfStackBase::CallFrameCfa,
                 offset: -12,
                 byte_size: 4,
@@ -2001,6 +2121,8 @@ mod tests {
             static_locals: Vec::new(),
             register_locals: Vec::new(),
             stack_objects: vec![DwarfStackObject {
+                declaration_debug_info_offset: None,
+                type_debug_info_offset: None,
                 base: DwarfStackBase::Register(5),
                 offset: -32,
                 byte_size: 4,
@@ -2034,6 +2156,8 @@ mod tests {
             static_locals: Vec::new(),
             stack_objects: Vec::new(),
             register_locals: vec![DwarfRegisterLocal {
+                declaration_debug_info_offset: None,
+                type_debug_info_offset: None,
                 source_name: "i".to_string(),
                 c_type: "unsigned int".to_string(),
                 locations: vec![DwarfRegisterLocation {
@@ -2098,6 +2222,8 @@ mod tests {
             static_locals: Vec::new(),
             stack_objects: Vec::new(),
             register_locals: vec![DwarfRegisterLocal {
+                declaration_debug_info_offset: None,
+                type_debug_info_offset: None,
                 source_name: "i".to_string(),
                 c_type: "int".to_string(),
                 locations: vec![DwarfRegisterLocation {
@@ -2175,6 +2301,8 @@ mod tests {
         use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
 
         let at_rsi = |name: &str, c_type: &str| DwarfRegisterLocal {
+            declaration_debug_info_offset: None,
+            type_debug_info_offset: None,
             source_name: name.to_string(),
             c_type: c_type.to_string(),
             locations: vec![DwarfRegisterLocation {
@@ -2243,6 +2371,8 @@ mod tests {
         use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
 
         let at_rsi = |name: &str| DwarfRegisterLocal {
+            declaration_debug_info_offset: None,
+            type_debug_info_offset: None,
             source_name: name.to_string(),
             c_type: "uint32_t".to_string(),
             locations: vec![DwarfRegisterLocation {
@@ -2314,6 +2444,8 @@ mod tests {
             static_locals: Vec::new(),
             stack_objects: Vec::new(),
             register_locals: vec![DwarfRegisterLocal {
+                declaration_debug_info_offset: None,
+                type_debug_info_offset: None,
                 source_name: "i".to_string(),
                 c_type: "int".to_string(),
                 locations: vec![DwarfRegisterLocation {
@@ -2407,6 +2539,8 @@ mod tests {
             static_locals: Vec::new(),
             stack_objects: Vec::new(),
             register_locals: vec![DwarfRegisterLocal {
+                declaration_debug_info_offset: None,
+                type_debug_info_offset: None,
                 source_name: "result".to_string(),
                 c_type: "struct sensor *".to_string(),
                 locations: vec![DwarfRegisterLocation {
@@ -2474,6 +2608,8 @@ mod tests {
             static_locals: Vec::new(),
             stack_objects: Vec::new(),
             register_locals: vec![DwarfRegisterLocal {
+                declaration_debug_info_offset: None,
+                type_debug_info_offset: None,
                 source_name: "return".to_string(),
                 c_type: "int".to_string(),
                 locations: vec![DwarfRegisterLocation {

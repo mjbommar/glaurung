@@ -57,10 +57,11 @@ sections, not their decision paragraphs alone:
 
 ## Solver integration
 
-Thirty-one decisions from the 2026-07 integration of the pure-Rust `axeyum`
-solver, previously one 1,160-line log, plus the five 2026-09 records: the
+Thirty-seven decisions from the 2026-07 integration of the pure-Rust `axeyum`
+solver, previously one 1,160-line log, plus the six 2026-09 records: the
 pin bump, its re-measurement, the capture tier, the re-pin at the
-warm-session fix, and the re-pin at the canonical cache and the kept trail.
+warm-session fix, the re-pin at the canonical cache and the kept trail, and
+the universal Axeyum authority rule.
 Subject:
 [`architecture/solver-backends.md`](../architecture/solver-backends.md) and
 [`architecture/solver/`](../architecture/solver/).
@@ -103,10 +104,11 @@ Subject:
 | `solver-034` | [A scheduled shadow-split capture tier, so the next divergence is seen the week it appears](solver-034-continuous-shadow-split-capture-tier.md) | held | 2026-09-17 |
 | `solver-035` | [The pin at the warm-session fix: the sizing re-measured, and the model-preference knob consumed](solver-035-warm-fix-repin-and-model-preference.md) | held | 2026-09-17 |
 | `solver-036` | [The pin at the canonical cache and the kept trail: ADR-2145 measured in production, and the library cache consumed](solver-036-canonical-cache-consumed-and-the-kept-trail-measured.md) | held | 2026-09-17 |
+| `solver-037` | [Axeyum is authoritative for every SAT/SMT decision](solver-037-axeyum-is-always-authoritative.md) | held | 2026-09-17 |
 
-`solver-002` is the one superseded record: axeyum was never made a default
-feature, and the shipped configuration is `default = ["triage-core"]` with every
-solver opt-in. `solver-004` and `solver-005` are marked amended because the
+`solver-002` is superseded by `solver-037`: Axeyum is now the default and sole
+authoritative solver, while all other solver backends are comparison-only.
+`solver-004` and `solver-005` are marked amended because the
 SMT-LIB text bridge became the secondary path behind a native term translator
 (`solver-axeyum-text` still builds it), and the one-shot `Solver` trait gained
 the separate `IncrementalSolver` companion the ADR deferred.
