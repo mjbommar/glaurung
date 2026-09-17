@@ -26,9 +26,13 @@ The decision record is
 | cindergraph on GitHub (`origin/main`), the pin | `ed5e55eb8fb7855b7675ac9ae3f7afbb4941a825` "Document design and evaluation references" | 2026-09-15 |
 | cindergraph local `main`, **not on GitHub** | `de1865c`, 19 commits past `ed5e55e` (`repr="ops"`, loop metadata, the external-facts contract, the export schema attributes, `__version__`) | 2026-09-16/17 |
 
-Glaurung depends on what is on GitHub, so the pin is `ed5e55e`. Nothing in
-this migration needs the unpushed 19; they are additions (new exports, new
-attributes), not changes to the surface Glaurung consumes.
+Glaurung depends on what is on GitHub, so the first pin was `ed5e55e`.
+Nothing in this migration needed the then-unpushed 19; they were additions
+(new exports, new attributes), not changes to the surface Glaurung consumes.
+**Nothing waits now:** cindergraph's `main` was pushed at `8bd2051` (27
+commits past `ed5e55e`, the 19 plus the parity port of List 1's four
+corrections) and Glaurung re-pinned to it the same day; the measurement is
+the [re-pin section](#re-pin-to-8bd2051-2026-09-17) at the end of this note.
 
 ## What is being replaced
 
@@ -81,7 +85,10 @@ another name, which is the re-vendoring this migration exists to end.
 against `elide_empty_for_headers` by a human. Until that lands and Glaurung
 re-pins, Glaurung's parity projection at the crate differs from `af9f826d`'s
 on exactly those four shapes. The ten tests that pin them are listed in the
-decision record so the port can carry them across.
+decision record so the port can carry them across. *(Closed the same day:
+ported as cindergraph `3461022`, `657aed4`, `339e19b`, `5c21383` with the ten
+tests and a mutation control each, on GitHub in `8bd2051`; the `for (;;)`
+rule was decided by the recorded Joern data — see the re-pin section.)*
 
 ## List 2: what cindergraph changed that Glaurung's consumers see
 
@@ -247,3 +254,114 @@ fails on `master` too (three env reads other lanes added on 2026-09-17:
 wheel with `solver-axeyum` under pytest (the TLS trap above); the full
 `python/tests` suite (only the two selections above). `cargo doc --no-deps --features solver-axeyum` ran: 162 warnings, none naming a `cindergraph::` path (`master`'s count was not measured).
 
+
+## Re-pin to `8bd2051`, 2026-09-17
+
+Branch `gl-cinder2-2026-09-17` on `master` at `2f1e5493`. cindergraph's
+`main` was pushed at `8bd20512158d19d4cf632caba4bbed629271a3e5`, 27 commits
+past `ed5e55e`: the 19 that were unpushed above (`repr="ops"`, loop metadata,
+the single-parse session, the external-facts contract, the export attributes
+`op`/`type`/`line`/`column`/declarator/parameter, `expr_internal` CFG marks,
+`__version__`, path-argument errors, a defect conformance corpus) plus the
+port of List 1's four corrections (`3461022` dedup, `657aed4` constant-true
+loop, `339e19b` literal `if`, `5c21383` ternary loop test, sized and measured
+in cindergraph's `docs/benchmarks/glaurung-parity-corrections-2026-09-17.md`).
+The `for (;;)` conflict was decided there by the recorded Joern data:
+`elide_empty_for_headers` stays for the clause-less `for` and the ported
+constant-true rule fires only on a literal condition, so the two never both
+fire; the stated residual is `while (1) {}` (a header with a self-cycle)
+against `for (;;) {}` (one node). Nothing now waits on an unpushed commit.
+
+`Cargo.toml` moves the one line to the new revision; `cargo update -p
+cindergraph` follows in both `Cargo.lock` and `fuzz/Cargo.lock`.
+
+**No consumer changed.** `cargo check --all-targets --keep-going` in every
+lane `scripts/feature-build-gate.sh` lists (the ten cargo lanes plus
+`--all-features`, `solver-z3` type-checked against the linked libz3 and
+`solver-bitwuzla` under `GLAURUNG_BITWUZLA_TYPECHECK_ONLY=1`) reports only
+the two pre-existing `recover_types` E0425s in `benches/ir_dataflow.rs`; the
+fuzz crate checks clean. The gate script itself prints FAILED on the eleven
+cargo lanes and ok on the fuzz crate, exactly the `master` state. The only
+change to a type Glaurung consumes is additive:
+`cindergraph::csource::cfg::FunctionCfg` gains `expression_internal:
+Vec<NodeId>`, and no `.rs` file in this repository names that struct. `cargo fmt --all --
+--check` is clean.
+
+**The Rust sweep, `cargo test --features solver-axeyum --no-fail-fast`:**
+4,701 tests over 37 binaries, **4,682 passed / 1 failed / 18 ignored** — the
+same figure as the migration, and the same set by name: the one failure is
+`ir::ast::tests::an_in_place_update_of_a_coalesced_slot_is_an_assignment_not_a_pointer_store`
+(on `master` before the migration), and the 18 ignored are the migration's
+18. The corpus gate `tests/source_dataflow_corpus.rs` passes at the new pin.
+
+**The parity projection.** `tools/source_cfg_projection_dump.py` over the
+same 930 functions, the extension built at `ed5e55e` (this branch's tree
+before the re-pin) against the extension built at `8bd2051`, both
+`--release --features python-ext,symbolic`:
+`before 930  after 930  only-before 0  only-after 0  changed 0`, and the two
+dumps have the same SHA-256
+(`958fcd26f1e9e63d1e7a02be2e8aa6fa7ba2f1dd836bd3be9318ac80eb5ae573`). So the
+expected count is the measured one: none of the four corrections fires on the
+in-repo corpora, and none of the other 23 commits moves the projection either.
+That a zero is not a stale binary is checked two ways: the rebuilt `.so`
+differs in size and mtime, and the four corrections fire on their own inputs
+through the new extension's `parity_cfgs` — `if (x) {} return x;` is 1 node /
+0 edges (2 / 1 at `ed5e55e` per cindergraph's sizing table),
+`while (1) { if (x) break; x--; }` 4 / 4 (was 5 / 6),
+`if (1) { if (0) g(); } h();` 3 / 3 (was 4 / 5),
+`while (i < (x ? 14 : 8)) i++;` 4 / 4 (was 5 / 6), with the residual pair
+`while (1) {}` 2 nodes and `for (;;) {}` 1 node as upstream states. The
+corpus itself confirms the attribution: no `while (<literal>)` or
+`do … while (<literal>)` outside comments, two `for (;;)` (excluded from the
+ported detector by construction), no literal `if`, and one ternary in a `for`
+*init* clause (`111_self_referential_struct.c`, the rule's negative fixture),
+so only the dedup rule could have fired on a shape grep cannot see, and the
+diff says it did not. This matches cindergraph's own measurement of the port
+(byte-identical over its 930-function copy of the same fixtures).
+
+**Python** (extension as above; `TMPDIR` on tmpfs — the first attempt with
+temp files on `/data0`, busy with other lanes at ~300 ms await, sat in
+`folio_wait_bit_common` at 68 % for ten minutes, the same trap as the
+migration's SQLite lock test, and was killed):
+`-k axeyum` **55 passed**; `python/tests/test_src_dependency_boundaries.py`
+**11 passed** (the four no-drift-back guards accept the new 40-hex revision;
+`test_every_env_var_read_in_src_is_a_reviewed_allowlist_entry` is green
+since `2f1e5493`); `-k "source or metrics or cfg"` **501 passed, 753 skipped, 5 failed**
+(the migration measured 466 / 753 / 36 failing instances over 10 ids).
+Every difference by name: **one failure was the re-pin** —
+`test_source_graph.py::test_the_choice_lists_come_from_rust` pins the
+`EXPORT_REPRS` set literally and cindergraph now serves `ops`; the pin gains
+`"ops"`, and `test_every_representation_and_format_produces_a_named_graph`
+now also runs `ops` through the facade in all four formats (+4 instances,
+passing). The 5 remaining instances are the migration's: 3 of
+`test_decompiler_entrypoint_equivalence` and 1 of `test_decompile_vas_sources`
+need the gitignored `tests/decompiler_fixtures/build/` corpus, and
+`test_gen_pass_reference` fails on `master` at `2f1e5493` too
+(`docs/reference/decompiler-passes.md is stale`, no cindergraph path). The
+other 31 instances over seven ids the migration counted as "failing
+identically on `master`" (`test_build_configuration_invariants`,
+`test_cli_annotate`, `test_decompiler_emission_invariants`,
+`test_decompiler_fixture_structural`) all died there on
+`FileNotFoundError: 'glaurung'` — the console script was not installed in
+that lane's venv — and pass here, where `.venv/bin/glaurung` exists; they
+were never a product failure on either side.
+
+**Did not run:** the same as the migration — the DecBench corpus runs
+(`tests/source_cfg_ged.rs` over `GLAURUNG_DECBENCH_TREE`,
+`tools/decbench_matrix.py`, the parity aggregate; the corpus and the DecBench
+fork are not on this host), the `solver-axeyum` wheel under pytest (the
+static-TLS trap), the full `python/tests` suite (only the three selections
+above), and clippy / rustdoc (no Rust source changed, only the manifest and
+lockfiles).
+
+**Delegating `python/glaurung/source.py` to the `cindergraph` package.** It
+is now possible for most of the facade and still not made: 16 of
+`glaurung.source`'s 18 module-level functions have a same-named counterpart in
+`cindergraph.source` at `8bd2051` (which also adds `native_graphs`,
+`query_reaches`, `query_reaches_by_id`), but `path_feasibility` and
+`source_findings` do not — they are Glaurung's solver-backed
+`src/csource/feasibility.rs`, deliberately outside the crate — so a delegating
+facade would be two extension modules in one wheel (PyO3 0.29 abi3-py312
+against Glaurung's 0.26) with two functions kept native. That is the second
+change with its own measurement the decision record names, and this re-pin
+does not make it.
