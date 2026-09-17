@@ -1,7 +1,7 @@
 # Shadow-split regression set: every z3-valid script under this directory,
 # with the verdict z3 gives it and the verdict the pinned Axeyum gave it.
 # z3: Z3 version 4.13.3 - 64 bit, -T:10; classified by tools/axeyum/split_verdicts.py.
-# axeyum: axeyum-solver 11b895a35dc583ea593f1dd6cd2412b8ef9387fa via tests/axeyum_shadow_split_verdicts.rs (solve_smtlib, 30 s wall), 2026-09-17, debug build, scripts/shadow-capture.sh
+# axeyum: axeyum-solver 43f1e0f9038de389d7b1a88b9d3b507ed3c6255d via tests/axeyum_shadow_split_verdicts.rs (solve_smtlib, 30 s wall), 2026-09-17, debug build, scripts/shadow-capture.sh
 # columns: capture	sha256	z3	axeyum
 dptfdevgen-60s-17ff038	04f16a898c68763608be6f1ca34ff56a198daaabfa4ff78f7df53ba35c711b4d	sat	sat
 dptfdevgen-60s-17ff038	06da0886d04aed6a61d4042080616abcc66fde36982845b99a2cb6b3818029bf	sat	sat

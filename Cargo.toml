@@ -58,8 +58,8 @@ z3-sys = { version = "0.8", optional = true }
 # Pure-Rust in-process SMT solver (feature `solver-axeyum`); no C dependency.
 # The exact git revision keeps recall builds independent of a machine-local
 # sibling checkout while preserving the minimal QF_BV consumer profile.
-axeyum-solver = { git = "https://github.com/mjbommar/axeyum.git", rev = "11b895a35dc583ea593f1dd6cd2412b8ef9387fa", optional = true, default-features = false, features = ["qfbv"] }
-axeyum-ir = { git = "https://github.com/mjbommar/axeyum.git", rev = "11b895a35dc583ea593f1dd6cd2412b8ef9387fa", optional = true }
+axeyum-solver = { git = "https://github.com/mjbommar/axeyum.git", rev = "43f1e0f9038de389d7b1a88b9d3b507ed3c6255d", optional = true, default-features = false, features = ["qfbv"] }
+axeyum-ir = { git = "https://github.com/mjbommar/axeyum.git", rev = "43f1e0f9038de389d7b1a88b9d3b507ed3c6255d", optional = true }
 
 # DEV-ONLY differential-test oracle (feature `dev-oracle`); links the system
 # Unicorn engine via pkg-config (libunicorn-dev). Never shipped in the wheel.

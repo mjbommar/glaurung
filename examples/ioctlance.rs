@@ -590,6 +590,7 @@ fn main() {
                     sat_cache.cache.model_bits,
                 );
             }
+            print_axeyum_cache_lines();
             if cold_retry.retries > 0 {
                 eprintln!(
                     "[axeyum-warm-timeout-cold-retry] retries={} recoveries={} unknowns={} errors={}",
@@ -634,6 +635,30 @@ fn main() {
             }
         }
     }
+    // The Axeyum-only build is the one Glaurung's own engine cache can run in
+    // (its wrapper refuses a `solver-z3` build), so that build prints the two
+    // cache lines on its own: an A/B of the two caches reads both from here.
+    #[cfg(all(feature = "solver-axeyum", not(feature = "solver-z3")))]
+    {
+        let warm = glaurung::symbolic::solver::axeyum_backend::warm_reuse_stats();
+        let paths = glaurung::symbolic::solver::axeyum_backend::warm_path_reuse_stats();
+        eprintln!(
+            "[axeyum-warm] checks={} exact={} prefix-roots={} added={} popped={} resets={} paths-created={} paths-closed={} paths-live={} paths-peak={} path-cap-fallbacks={} assertion-cap-fallbacks={}",
+            warm.checks,
+            warm.exact_snapshot_reuses,
+            warm.prefix_assertions_reused,
+            warm.assertions_added,
+            warm.assertions_popped,
+            warm.resets_after_error,
+            paths.paths_created,
+            paths.paths_closed,
+            paths.live_paths,
+            paths.peak_live_paths,
+            paths.path_limit_fallbacks,
+            paths.assertion_limit_fallbacks,
+        );
+        print_axeyum_cache_lines();
+    }
     lines.sort_by(|left, right| left.0.cmp(&right.0));
     for (line, finding_is_high_confidence) in &lines {
         let finding = line.split_once('\t').map_or(line.as_str(), |(_, row)| row);
@@ -647,5 +672,31 @@ fn main() {
             .finish("completed")
             .unwrap_or_else(|error| panic!("ordered trace publication failed: {error}"));
         eprintln!("[ordered-trace] published={}", published.display());
+    }
+}
+
+/// The two constraint caches an Axeyum build can carry, one line each: Axeyum's
+/// per-session canonical cache (`GLAURUNG_AXEYUM_CANONICAL_CACHE`, Axeyum
+/// ADR-2144) and Glaurung's process-wide one (`GLAURUNG_ENGINE_CONSTRAINT_CACHE`,
+/// ADR-0303). `configured=unset` means Axeyum's own default decided `enabled`.
+#[cfg(feature = "solver-axeyum")]
+fn print_axeyum_cache_lines() {
+    let canonical = glaurung::symbolic::solver::axeyum_backend::canonical_cache_stats();
+    eprintln!(
+        "[axeyum-canonical-cache] configured={} enabled={} hits={} misses={} replay-rejections={} superset-hits={}",
+        match canonical.configured {
+            None => "unset",
+            Some(true) => "on",
+            Some(false) => "off",
+        },
+        u8::from(canonical.enabled),
+        canonical.hits,
+        canonical.misses,
+        canonical.replay_rejections,
+        canonical.superset_hits,
+    );
+    match glaurung::symbolic::solver::engine_cache_summary_line() {
+        Ok(line) => eprintln!("{line}"),
+        Err(error) => eprintln!("[engine-cache] error={error}"),
     }
 }

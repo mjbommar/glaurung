@@ -1165,6 +1165,39 @@ pub fn shadow_diff_stats() -> (u64, u64, u64, u64) {
     )
 }
 
+/// One line summarizing this thread's process-wide engine constraint cache
+/// (`GLAURUNG_ENGINE_CONSTRAINT_CACHE`, ADR-0303): its policy and traffic.
+/// Printed by `examples/ioctlance` beside the Axeyum-side cache counters so an
+/// A/B of the two caches reads both from one stderr. `Err` carries the same
+/// configuration error the solve path would have reported.
+#[cfg(feature = "solver-axeyum")]
+pub fn engine_cache_summary_line() -> Result<String, String> {
+    let policy = process_cache_policy()?;
+    let stats = process_cache_stats()?;
+    Ok(format!(
+        "[engine-cache] policy={} lookups={} exact-sat-hits={} exact-unsat-hits={} \
+         sat-superset-hits={} unsat-subset-hits={} misses={} replay-attempts={} \
+         replay-successes={} replay-failures={} insertions={} evictions={} \
+         oversize-bypasses={} entries={} assertion-refs={} model-values={}",
+        policy.as_str(),
+        stats.lookups,
+        stats.exact_sat_hits,
+        stats.exact_unsat_hits,
+        stats.sat_superset_hits,
+        stats.unsat_subset_hits,
+        stats.misses,
+        stats.sat_replay_attempts,
+        stats.sat_replay_successes,
+        stats.sat_replay_failures,
+        stats.insertions,
+        stats.evictions,
+        stats.oversize_bypasses,
+        stats.entries,
+        stats.assertion_refs,
+        stats.model_values,
+    ))
+}
+
 /// `(solves, timeouts)` issued on this thread since the last [`reset_solver_meter`].
 pub fn solver_meter() -> (u64, u64) {
     (SOLVE_COUNT.with(Cell::get), TIMEOUT_COUNT.with(Cell::get))
