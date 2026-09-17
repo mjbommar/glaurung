@@ -1,7 +1,7 @@
 # Cindergraph migration, 2026-09-17
 
-> **Kind:** record · **Date:** 2026-09-17 · **Status:** in progress (sizing
-> committed first; the switch follows on the same branch)
+> **Kind:** record · **Date:** 2026-09-17 · **Status:** done on branch
+> `gl-cinder-2026-09-17` (sizing, then the switch, then the measurement below)
 
 Cindergraph's Milestone H ("Glaurung migration", its `docs/ROADMAP.md` §12)
 and item 10 of [`improvement-list-2026-09-16.md`](improvement-list-2026-09-16.md):
@@ -144,3 +144,83 @@ The Python facades (`python/glaurung/source.py`, `source_cfg.py`) keep their
 surface over Glaurung's own `_native` bindings, which now call the crate;
 whether they should delegate to the `cindergraph` Python package is answered in
 the decision record and not acted on here.
+
+## Verification
+
+Branch `gl-cinder-2026-09-17`; the base is `master` at `af9f826d`. Every
+cargo command ran through `cargo-serialized.sh`.
+
+**The Rust sweep, `cargo test --features solver-axeyum --no-fail-fast`.**
+The base lists 5,283 tests over 36 binaries (`-- --list` from a detached
+worktree at `af9f826d`; the 5,263 / 1 / 19 of `solver-036` plus the five
+item-4 tests, all accounted for by name). The branch runs 4,701 over 37
+binaries: **4,681 passed / 2 failed / 18 ignored** on the first run, then
+the corpus test was restated (below) and passes, so the standing figure is
+**4,682 / 1 / 18**. Every difference by name:
+
+| difference | count | what |
+|---|---|---|
+| gone, `csource::{cfg,dataflow,export,joern,lex,metrics,normalize,parse}::*` and `syntax::*` unit tests | 583 | moved to cindergraph — 571 under the same name, `a_struct_body_is_one_opaque_node_and_declares_no_locals` and `the_corpus_recovers_a_type_for_almost_every_binding` under changed names, and the ten parity tests of List 1 nowhere (the finding) |
+| of those, ignored | 1 | `csource::normalize::sanitize_decompiled_c_matches_python_reference_on_real_files` (`#[ignore]`), which is why 19 ignored became 18 |
+| new, `tests/source_dataflow_corpus.rs::the_corpus_recovers_a_type_for_almost_every_binding` | 1 | the corpus gate kept over the crate. It failed on the first run at 86.4 % because the crate interns unresolved identities (macro constants used as array bounds: `LCS_MAX`, `GAUSS_DIM`, … — 568 of 4,170 bindings) as bindings with an empty type, which the copy dropped; restated over *declared* bindings it is 100.0 %, and the one unused value binding (`sizeof_array_versus_pointer:pointer`, read only by `sizeof`) is pinned by name, the same pin cindergraph's own copy of the gate carries |
+| the one pre-existing failure | 1 | `ir::ast::tests::an_in_place_update_of_a_coalesced_slot_is_an_assignment_not_a_pointer_store`, failing on `master` before this lane |
+| doc-tests `identity::cfr (line 49)`, `identity::values (line 59)` | 0 | listed without and run with a `- compile` suffix; the same two tests |
+
+5,283 − 583 + 1 = 4,701. Nothing else moved: the lowering's 87 tests, the
+solver-backed 41, the bindings' and `src/metrics`' tests all pass unchanged.
+Master's build printed 261 warnings, the branch 259; the two fewer lived in
+the deleted files, and the one in a touched file (`unused import: super::*`,
+`src/csource/lower/mod.rs:142`) is on `master` too.
+
+**The parity projection.** No in-repo fixture pins its bytes: the ten unit
+tests that did are the ones cindergraph lacks, `tests/source_cfg_ged.rs`
+skips without `GLAURUNG_DECBENCH_TREE` (the corpus is not on this host),
+and `python/tests/test_source_cfg_provider.py` checks shape, determinism and
+the two flags, not the graphs. So the bytes were measured directly:
+`glaurung._native.csource.parity_cfgs` over every function in
+`tests/decbench_corpus/src`, `tests/decompiler_fixtures/src` and
+`tests/decompiler_output_canaries` — 930 functions — under `master`'s
+extension (the copy) and this branch's (the crate). Same 930 names on both
+sides; **42 functions differ**, and in every one the crate's graph is the
+smaller. 41 are short-circuit loop tests (`while (*a && *a == *b)`,
+`for (…; guard < 64 && right != 0; …)`): one node and two edges fewer per
+such loop (36 functions at −1/−2, three at −2/−4, `big151_branch_ladder` at
+−26/−52, `wide154_dense_effects` at −41/−82), which is cindergraph's
+`elide_redundant_loop_headers` (its `280e35a`/`47f9e35`; Joern has no
+structural header there), a fix the copy never had. The 42nd,
+`103_computed_goto.c::threaded_interpreter` (16 → 14 nodes, 22 → 20 edges),
+is the crate's computed-`goto` dispatch modelled as one fan-out node
+(`cfg/dispatch.rs`, `IndirectDispatchInfo`) where the copy emitted a chain of
+binary forks — a general-CFG change, not a parity rule. None of the 42 goes
+the other way, so none of the four missing Glaurung corrections fires on this
+corpus; their effect is on the DecBench shapes the campaign measured, which is
+why the port is still owed. The dump-and-diff is
+`tools/source_cfg_projection_dump.py`, so the comparison repeats with any two
+builds of the extension.
+
+**Every feature configuration.** `scripts/feature-build-gate.sh` reports
+FAILED on all eleven cargo lanes and ok on the fuzz crate, exactly as on
+`master`: the only errors, confirmed with `cargo check --all-targets
+--keep-going` per lane so the bench cannot mask another target, are the two
+`recover_types` E0425s in `benches/ir_dataflow.rs` (pre-existing, unrelated).
+`cargo fmt --all -- --check` is clean. `cargo clippy --lib --tests
+--features solver-axeyum` shows no new warning in any touched file.
+
+**Python.** The extension built with `--release --features python-ext,symbolic`
+(a `solver-axeyum` build fails to `dlopen` on this host with "cannot allocate
+memory in static TLS block" — 6,928 bytes of static TLS against `master`'s
+1,080; `master`'s installed extension has no `axeyum_solver` symbols either,
+so this is the solver feature, not the migration, and
+`GLIBC_TUNABLES=glibc.rtld.optional_static_tls=1048576` loads it).
+`uv run pytest python/tests -k axeyum`: 55 passed.
+`uv run pytest python/tests -k "source or metrics or cfg"`: PYTEST_SOURCE_COUNT.
+`python/tests/test_src_dependency_boundaries.py`: the four new guards pass and
+each was killed by exactly one mutant; `test_every_env_var_read_in_src_is_a_reviewed_allowlist_entry`
+fails on `master` too (three env reads other lanes added on 2026-09-17:
+`TRACE_GIT_REV_ENV`, `CANONICAL_CACHE_ENV`, `MODEL_PREFERENCE_ENV`).
+
+**Did not run:** the DecBench corpus runs (`tests/source_cfg_ged.rs` over
+`GLAURUNG_DECBENCH_TREE`, `tools/decbench_matrix.py`, the parity aggregate)
+— the corpus and the DecBench fork are not on this host; the `python-ext`
+wheel with `solver-axeyum` under pytest (the TLS trap above). `cargo doc --no-deps --features solver-axeyum` ran: 162 warnings, none naming a `cindergraph::` path (`master`'s count was not measured).
+
