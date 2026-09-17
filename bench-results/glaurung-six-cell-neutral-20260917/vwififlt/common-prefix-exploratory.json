@@ -1,0 +1,272 @@
+{
+  "all_four_decided_in_prefix": 1842,
+  "checks_per_repetition_full": [
+    17411,
+    17339,
+    17318,
+    17011,
+    17355
+  ],
+  "common_prefix_checks": 1842,
+  "driver": {
+    "label": "win10-vwififlt.sys",
+    "sha256": "13c3b69a5d0179ed3cc2c999ff97edbaedd63da55ddb74427251c360706a3820"
+  },
+  "four_cell_comparisons_common_prefix": {
+    "axeyum_cold_over_warm": {
+      "bootstrap_95_percent_ci": [
+        1.6434998803061969,
+        2.022938764403186
+      ],
+      "bootstrap_samples": 10000,
+      "denominator_median_per_occurrence_latency_nanos": {
+        "p50": 1780662,
+        "p90": 59227041,
+        "p95": 102286932,
+        "p99": 139502541
+      },
+      "numerator_median_per_occurrence_latency_nanos": {
+        "p50": 3086609,
+        "p90": 5248509,
+        "p95": 5613068,
+        "p99": 6325679
+      },
+      "occurrences": 1842,
+      "per_occurrence_geomean_speedup": 1.8205847529385366,
+      "per_run_geomean_speedup": {
+        "coefficient_of_variation": 0.015474427924171192,
+        "mean": 1.820758517051757,
+        "sample_standard_deviation": 0.02817519643943824,
+        "values": [
+          1.8079145656019135,
+          1.8591162344879466,
+          1.84089293634884,
+          1.8047098192906907,
+          1.7911590295293955
+        ]
+      },
+      "ratio_direction": "axeyum_cold_nanos/axeyum_warm_nanos"
+    },
+    "cold_z3_over_axeyum": {
+      "bootstrap_95_percent_ci": [
+        0.6300925549802895,
+        0.6670314029330892
+      ],
+      "bootstrap_samples": 10000,
+      "denominator_median_per_occurrence_latency_nanos": {
+        "p50": 3086609,
+        "p90": 5248509,
+        "p95": 5613068,
+        "p99": 6325679
+      },
+      "numerator_median_per_occurrence_latency_nanos": {
+        "p50": 1925756,
+        "p90": 3544407,
+        "p95": 3871303,
+        "p99": 4254587
+      },
+      "occurrences": 1842,
+      "per_occurrence_geomean_speedup": 0.6484109900855157,
+      "per_run_geomean_speedup": {
+        "coefficient_of_variation": 0.011127973451918826,
+        "mean": 0.6484431711021282,
+        "sample_standard_deviation": 0.00721585839310254,
+        "values": [
+          0.6534816615951986,
+          0.642392534880779,
+          0.6393783179831067,
+          0.65089968008121,
+          0.6560636609703471
+        ]
+      },
+      "ratio_direction": "z3_cold_nanos/axeyum_cold_nanos"
+    },
+    "warm_z3_over_axeyum": {
+      "bootstrap_95_percent_ci": [
+        0.08080104264292597,
+        0.10113483834504311
+      ],
+      "bootstrap_samples": 10000,
+      "denominator_median_per_occurrence_latency_nanos": {
+        "p50": 1780662,
+        "p90": 59227041,
+        "p95": 102286932,
+        "p99": 139502541
+      },
+      "numerator_median_per_occurrence_latency_nanos": {
+        "p50": 150716,
+        "p90": 252129,
+        "p95": 289047,
+        "p99": 384600
+      },
+      "occurrences": 1842,
+      "per_occurrence_geomean_speedup": 0.09047744683034249,
+      "per_run_geomean_speedup": {
+        "coefficient_of_variation": 0.009669261018814984,
+        "mean": 0.09048083648445003,
+        "sample_standard_deviation": 0.0008748828251688653,
+        "values": [
+          0.09043510688105263,
+          0.09090246802726995,
+          0.08920239582896546,
+          0.09028398667906166,
+          0.09158022500590046
+        ]
+      },
+      "ratio_direction": "z3_warm_nanos/axeyum_warm_nanos"
+    },
+    "z3_cold_over_warm": {
+      "bootstrap_95_percent_ci": [
+        12.779640916202402,
+        13.317775522825606
+      ],
+      "bootstrap_samples": 10000,
+      "denominator_median_per_occurrence_latency_nanos": {
+        "p50": 150716,
+        "p90": 252129,
+        "p95": 289047,
+        "p99": 384600
+      },
+      "numerator_median_per_occurrence_latency_nanos": {
+        "p50": 1925756,
+        "p90": 3544407,
+        "p95": 3871303,
+        "p99": 4254587
+      },
+      "occurrences": 1842,
+      "per_occurrence_geomean_speedup": 13.047308512153803,
+      "per_run_geomean_speedup": {
+        "coefficient_of_variation": 0.010716516658769033,
+        "mean": 13.047910400313473,
+        "sample_standard_deviation": 0.13982814916708505,
+        "values": [
+          13.06394225757506,
+          13.138063425873616,
+          13.195015877000744,
+          13.011001033787513,
+          12.831529407330425
+        ]
+      },
+      "ratio_direction": "z3_cold_nanos/z3_warm_nanos"
+    }
+  },
+  "methodology": "same functions and seeds as analyze-glaurung-paired-traces.py v2 path, applied to the common prefix only",
+  "per_cell_full_trace": {
+    "axeyum_cold": {
+      "sum_nanos_per_rep": [
+        31900784396,
+        34594765399,
+        31661474729,
+        29149716879,
+        37744223774
+      ],
+      "unknown_per_rep": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "axeyum_warm": {
+      "sum_nanos_per_rep": [
+        54336166366,
+        54566607918,
+        50280797271,
+        50112230194,
+        59112761157
+      ],
+      "unknown_per_rep": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "z3_cold": {
+      "sum_nanos_per_rep": [
+        21174624555,
+        25084247288,
+        21073973295,
+        20146547043,
+        26776810625
+      ],
+      "unknown_per_rep": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "z3_warm": {
+      "sum_nanos_per_rep": [
+        3700751209,
+        4673858850,
+        3662124909,
+        3581753376,
+        5033362555
+      ],
+      "unknown_per_rep": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    }
+  },
+  "per_cell_latency_common_prefix": {
+    "axeyum_cold": {
+      "max": 19380066,
+      "occurrences": 9210,
+      "p50": 3169331,
+      "p90": 5395811,
+      "p95": 5907435,
+      "p99": 7174726,
+      "sum_nanos_all_reps": 30421135795,
+      "unknown": 0
+    },
+    "axeyum_warm": {
+      "max": 197450210,
+      "occurrences": 9210,
+      "p50": 1896725,
+      "p90": 59791580,
+      "p95": 103262208,
+      "p99": 140341521,
+      "sum_nanos_all_reps": 143391667655,
+      "unknown": 0
+    },
+    "z3_cold": {
+      "max": 18329256,
+      "occurrences": 9210,
+      "p50": 1949316,
+      "p90": 3659242,
+      "p95": 4047666,
+      "p99": 4782974,
+      "sum_nanos_all_reps": 19738617809,
+      "unknown": 0
+    },
+    "z3_warm": {
+      "max": 1747729,
+      "occurrences": 9210,
+      "p50": 154749,
+      "p90": 266667,
+      "p95": 315626,
+      "p99": 459214,
+      "sum_nanos_all_reps": 1513137933,
+      "unknown": 0
+    }
+  },
+  "preregistered": false,
+  "reason": "repetitions are not fixed-work; the registered analyzer refuses the driver (fixed-work check identity drift)",
+  "schema": "axeyum-glaurung-common-prefix-exploratory-v1",
+  "trace_paths": [
+    "/data0/axeyum/scratch/sixcell/campaign/02-vwififlt-r1/traces/glaurung-ordered-trace-1780812-a27529f867ec4cecbad13e85d317192f",
+    "/data0/axeyum/scratch/sixcell/campaign/02-vwififlt-r2/traces/glaurung-ordered-trace-1784291-b17af308e74f4a989463559e083d033f",
+    "/data0/axeyum/scratch/sixcell/campaign/02-vwififlt-r3/traces/glaurung-ordered-trace-1793885-9c014fb9999c4cc99025e5caa5bebd35",
+    "/data0/axeyum/scratch/sixcell/campaign/02-vwififlt-r4/traces/glaurung-ordered-trace-1804487-56dce2f80db64ac9a3c9ae0e412d22ad",
+    "/data0/axeyum/scratch/sixcell/campaign/02-vwififlt-r5/traces/glaurung-ordered-trace-1816278-933f148190c84e57a374e1d889af082c"
+  ]
+}

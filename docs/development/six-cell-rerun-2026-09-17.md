@@ -1,7 +1,7 @@
 # Six-cell rerun at the 2026-09-16 Axeyum pin — sizing and preflight
 
-> **Kind:** working note · **Status:** preflight, written before any timing row
-> was observed. The result, when it exists, is in
+> **Kind:** working note · **Status:** preflight (sections below the host
+> section were written before any timing row was observed). The result is in
 > `bench-results/glaurung-six-cell-neutral-20260917/` and in
 > [`solver-033`](../decisions/solver-033-six-cell-rerun-at-the-2026-09-16-pin.md).
 
@@ -141,3 +141,17 @@ revision is therefore this branch's head, which differs from master
 4. Analyze with the head analyzer, once per driver, then an independent
    same-input rerun for byte identity; write `README.md`, `result-summary.json`,
    and `solver-033`.
+
+## Outcome (written after the run)
+
+Ran 2026-09-17 05:37–06:26 UTC on s4, CPU 2, one-minute load median 8.2 and
+max 16.3 during the run (the launcher waited for two consecutive minutes below
+8 before starting; the other lanes came back). All 20 processes exit 0 and
+validate. Zero errors, zero decided disagreements, 52 unknowns (51 warm
+Axeyum at the 250 ms cap on DptfDevGen, 1 cold Z3 on SurfacePen). The
+preregistered analyzer refuses all four drivers: the work is not fixed across
+repetitions because every process hits the 60 s solve budget on one root, and
+it hits it because warm Axeyum at the new pin sums to 37–54 s per process.
+Results, the exploratory common-prefix ratios, and the July-versus-now table
+are in `bench-results/glaurung-six-cell-neutral-20260917/README.md`; the
+decision text is `solver-033`. Not run: Bitwuzla cells; a quiet-host repeat.

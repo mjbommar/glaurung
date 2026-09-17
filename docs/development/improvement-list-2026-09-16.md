@@ -35,6 +35,11 @@ nobody re-checked. Dormant, not broken.
    result is the decision `solver-002` has been waiting on since July: whether
    Axeyum becomes the default backend. Nothing else on this list matters as
    much as that number.
+   **Done 2026-09-17 as four cells** (Bitwuzla not buildable on the host):
+   [`solver-033`](../decisions/solver-033-six-cell-rerun-at-the-2026-09-16-pin.md).
+   Gate not met; every driver inconclusive under ADR-0272 because warm Axeyum
+   at the new pin pushes each process into the 60 s solve budget. Cold Axeyum
+   is at parity or faster; warm Axeyum's latency grows with session age.
 
 ## Then
 

@@ -14,7 +14,10 @@
 > [`solver-031`](../../decisions/solver-031-pinned-bitwuzla-measurement-cell.md)),
 > item 3 of
 > [`development/improvement-list-2026-09-16.md`](../../development/improvement-list-2026-09-16.md).
-> The numbers below are left exactly as written.
+> The numbers below are left exactly as written. **Re-measured 2026-09-17** (four cells, no Bitwuzla):
+> [`solver-033`](../../decisions/solver-033-six-cell-rerun-at-the-2026-09-16-pin.md)
+> — one-shot Axeyum is at parity or faster than cold Z3 on three of four
+> drivers; the warm regime is 6–11× slower than warm Z3 on three of four.
 
 > **Status: evolving research notes, not a submission-readiness claim.** Use the
 > benchmark provenance, reviewer checklist, and latest decision-log gates before

@@ -1,0 +1,487 @@
+{
+  "drivers": [
+    {
+      "label": "dptf",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/sqfs-intel-DptfDevGen.sys",
+      "sha256": "074be1b90deb21897538a6b093af9826e62610ffd878c92289af31c5ca3f724b"
+    },
+    {
+      "label": "vwififlt",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/win10-vwififlt.sys",
+      "sha256": "13c3b69a5d0179ed3cc2c999ff97edbaedd63da55ddb74427251c360706a3820"
+    },
+    {
+      "label": "intcsst",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/windows-update-intel-audio-IntcSST.sys",
+      "sha256": "f7c8e4f106baa5b2a1a18e60731ad42a6f734aee1d049576eaf6d123d5629750"
+    },
+    {
+      "label": "surfacepen",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/windows-update-SurfacePenBleLcAddrAdaptationDriver.sys",
+      "sha256": "3c062dc57832caab776bec99656798474af7ffb59ef751c9a004a95c0ae74405"
+    }
+  ],
+  "ended_utc": "2026-09-17T06:26:07.204505+00:00",
+  "executable": "/data0/axeyum/scratch/sixcell/target/release/examples/ioctlance",
+  "executable_sha256": "4f3e5c376ef2da45ec0fc904b94874931ba3d5ff717da1e4482ca46c3a055f3f",
+  "fixed_environment": {
+    "GLAURUNG_AXEYUM_REPLAY_SAT_CACHE": "1",
+    "GLAURUNG_AXEYUM_WARM_MAX_ASSERTIONS_PER_PATH": "512",
+    "GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS": "9",
+    "GLAURUNG_CHECK_TIMEOUT_MS": "250",
+    "GLAURUNG_FAIR_SHADOW": "1",
+    "IOCTLANCE_DEADLINE_SECS": "600",
+    "IOCTLANCE_MAX_ANALYZED_FUNCTIONS": "100000",
+    "IOCTLANCE_SOLVE_BUDGET": "20000",
+    "IOCTLANCE_SOLVE_SECS": "60"
+  },
+  "glaurung_revision": "b1f420ab1e406ec2479509f65143211191428be0",
+  "logical_cpu": 2,
+  "registration": "ADR-0272",
+  "repetitions_per_driver": 5,
+  "runs": [
+    {
+      "command": [
+        "/home/mjbommar/projects/personal/axeyum/scripts/mem-run.sh",
+        "taskset",
+        "-c",
+        "2",
+        "/data0/axeyum/scratch/sixcell/target/release/examples/ioctlance",
+        "samples/binaries/platforms/windows/vendor/realworld/sqfs-intel-DptfDevGen.sys"
+      ],
+      "driver": "dptf",
+      "ended_utc": "2026-09-17T05:38:49.339062+00:00",
+      "repetition": 1,
+      "return_code": 0,
+      "run": "01-dptf-r1",
+      "started_utc": "2026-09-17T05:37:42.787783+00:00",
+      "trace_parent": "/data0/axeyum/scratch/sixcell/campaign/01-dptf-r1/traces",
+      "traces": [
+        "/data0/axeyum/scratch/sixcell/campaign/01-dptf-r1/traces/glaurung-ordered-trace-1761669-3b8628b8ea4442fea6b079a18846c8b6"
+      ],
+      "validation": "accepted",
+      "validator_return_code": 0
+    },
+    {
+      "command": [
+        "/home/mjbommar/projects/personal/axeyum/scripts/mem-run.sh",
+        "taskset",
+        "-c",
+        "2",
+        "/data0/axeyum/scratch/sixcell/target/release/examples/ioctlance",
+        "samples/binaries/platforms/windows/vendor/realworld/sqfs-intel-DptfDevGen.sys"
+      ],
+      "driver": "dptf",
+      "ended_utc": "2026-09-17T05:40:02.019491+00:00",
+      "repetition": 2,
+      "return_code": 0,
+      "run": "01-dptf-r2",
+      "started_utc": "2026-09-17T05:38:49.613779+00:00",
+      "trace_parent": "/data0/axeyum/scratch/sixcell/campaign/01-dptf-r2/traces",
+      "traces": [
+        "/data0/axeyum/scratch/sixcell/campaign/01-dptf-r2/traces/glaurung-ordered-trace-1762383-cb6f3d9648b74e71b31ccd5c65f06e01"
+      ],
+      "validation": "accepted",
+      "validator_return_code": 0
+    },
+    {
+      "command": [
+        "/home/mjbommar/projects/personal/axeyum/scripts/mem-run.sh",
+        "taskset",
+        "-c",
+        "2",
+        "/data0/axeyum/scratch/sixcell/target/release/examples/ioctlance",
+        "samples/binaries/platforms/windows/vendor/realworld/sqfs-intel-DptfDevGen.sys"
+      ],
+      "driver": "dptf",
+      "ended_utc": "2026-09-17T05:41:29.561460+00:00",
+      "repetition": 3,
+      "return_code": 0,
+      "run": "01-dptf-r3",
+      "started_utc": "2026-09-17T05:40:02.248881+00:00",
+      "trace_parent": "/data0/axeyum/scratch/sixcell/campaign/01-dptf-r3/traces",
+      "traces": [
+        "/data0/axeyum/scratch/sixcell/campaign/01-dptf-r3/traces/glaurung-ordered-trace-1773798-b8503f76566747e7b4d2cc585da048cc"
+      ],
+      "validation": "accepted",
+      "validator_return_code": 0
+    },
+    {
+      "command": [
+        "/home/mjbommar/projects/personal/axeyum/scripts/mem-run.sh",
+        "taskset",
+        "-c",
+        "2",
+        "/data0/axeyum/scratch/sixcell/target/release/examples/ioctlance",
+        "samples/binaries/platforms/windows/vendor/realworld/sqfs-intel-DptfDevGen.sys"
+      ],
+      "driver": "dptf",
+      "ended_utc": "2026-09-17T05:42:46.874238+00:00",
+      "repetition": 4,
+      "return_code": 0,
+      "run": "01-dptf-r4",
+      "started_utc": "2026-09-17T05:41:29.961789+00:00",
+      "trace_parent": "/data0/axeyum/scratch/sixcell/campaign/01-dptf-r4/traces",
+      "traces": [
+        "/data0/axeyum/scratch/sixcell/campaign/01-dptf-r4/traces/glaurung-ordered-trace-1775154-6da29dfbf67d4dcda37ce66c9540758b"
+      ],
+      "validation": "accepted",
+      "validator_return_code": 0
+    },
+    {
+      "command": [
+        "/home/mjbommar/projects/personal/axeyum/scripts/mem-run.sh",
+        "taskset",
+        "-c",
+        "2",
+        "/data0/axeyum/scratch/sixcell/target/release/examples/ioctlance",
+        "samples/binaries/platforms/windows/vendor/realworld/sqfs-intel-DptfDevGen.sys"
+      ],
+      "driver": "dptf",
+      "ended_utc": "2026-09-17T05:43:59.868598+00:00",
+      "repetition": 5,
+      "return_code": 0,
+      "run": "01-dptf-r5",
+      "started_utc": "2026-09-17T05:42:47.405297+00:00",
+      "trace_parent": "/data0/axeyum/scratch/sixcell/campaign/01-dptf-r5/traces",
+      "traces": [
+        "/data0/axeyum/scratch/sixcell/campaign/01-dptf-r5/traces/glaurung-ordered-trace-1777816-4adad3dc8c4c436483279a9b1e515dd2"
+      ],
+      "validation": "accepted",
+      "validator_return_code": 0
+    },
+    {
+      "command": [
+        "/home/mjbommar/projects/personal/axeyum/scripts/mem-run.sh",
+        "taskset",
+        "-c",
+        "2",
+        "/data0/axeyum/scratch/sixcell/target/release/examples/ioctlance",
+        "samples/binaries/platforms/windows/vendor/realworld/win10-vwififlt.sys"
+      ],
+      "driver": "vwififlt",
+      "ended_utc": "2026-09-17T05:48:12.367277+00:00",
+      "repetition": 1,
+      "return_code": 0,
+      "run": "02-vwififlt-r1",
+      "started_utc": "2026-09-17T05:44:00.139605+00:00",
+      "trace_parent": "/data0/axeyum/scratch/sixcell/campaign/02-vwififlt-r1/traces",
+      "traces": [
+        "/data0/axeyum/scratch/sixcell/campaign/02-vwififlt-r1/traces/glaurung-ordered-trace-1780812-a27529f867ec4cecbad13e85d317192f"
+      ],
+      "validation": "accepted",
+      "validator_return_code": 0
+    },
+    {
+      "command": [
+        "/home/mjbommar/projects/personal/axeyum/scripts/mem-run.sh",
+        "taskset",
+        "-c",
+        "2",
+        "/data0/axeyum/scratch/sixcell/target/release/examples/ioctlance",
+        "samples/binaries/platforms/windows/vendor/realworld/win10-vwififlt.sys"
+      ],
+      "driver": "vwififlt",
+      "ended_utc": "2026-09-17T05:52:43.537265+00:00",
+      "repetition": 2,
+      "return_code": 0,
+      "run": "02-vwififlt-r2",
+      "started_utc": "2026-09-17T05:48:15.172952+00:00",
+      "trace_parent": "/data0/axeyum/scratch/sixcell/campaign/02-vwififlt-r2/traces",
+      "traces": [
+        "/data0/axeyum/scratch/sixcell/campaign/02-vwififlt-r2/traces/glaurung-ordered-trace-1784291-b17af308e74f4a989463559e083d033f"
+      ],
+      "validation": "accepted",
+      "validator_return_code": 0
+    },
+    {
+      "command": [
+        "/home/mjbommar/projects/personal/axeyum/scripts/mem-run.sh",
+        "taskset",
+        "-c",
+        "2",
+        "/data0/axeyum/scratch/sixcell/target/release/examples/ioctlance",
+        "samples/binaries/platforms/windows/vendor/realworld/win10-vwififlt.sys"
+      ],
+      "driver": "vwififlt",
+      "ended_utc": "2026-09-17T05:57:21.476087+00:00",
+      "repetition": 3,
+      "return_code": 0,
+      "run": "02-vwififlt-r3",
+      "started_utc": "2026-09-17T05:52:47.826711+00:00",
+      "trace_parent": "/data0/axeyum/scratch/sixcell/campaign/02-vwififlt-r3/traces",
+      "traces": [
+        "/data0/axeyum/scratch/sixcell/campaign/02-vwififlt-r3/traces/glaurung-ordered-trace-1793885-9c014fb9999c4cc99025e5caa5bebd35"
+      ],
+      "validation": "accepted",
+      "validator_return_code": 0
+    },
+    {
+      "command": [
+        "/home/mjbommar/projects/personal/axeyum/scripts/mem-run.sh",
+        "taskset",
+        "-c",
+        "2",
+        "/data0/axeyum/scratch/sixcell/target/release/examples/ioctlance",
+        "samples/binaries/platforms/windows/vendor/realworld/win10-vwififlt.sys"
+      ],
+      "driver": "vwififlt",
+      "ended_utc": "2026-09-17T06:00:50.328847+00:00",
+      "repetition": 4,
+      "return_code": 0,
+      "run": "02-vwififlt-r4",
+      "started_utc": "2026-09-17T05:57:24.463064+00:00",
+      "trace_parent": "/data0/axeyum/scratch/sixcell/campaign/02-vwififlt-r4/traces",
+      "traces": [
+        "/data0/axeyum/scratch/sixcell/campaign/02-vwififlt-r4/traces/glaurung-ordered-trace-1804487-56dce2f80db64ac9a3c9ae0e412d22ad"
+      ],
+      "validation": "accepted",
+      "validator_return_code": 0
+    },
+    {
+      "command": [
+        "/home/mjbommar/projects/personal/axeyum/scripts/mem-run.sh",
+        "taskset",
+        "-c",
+        "2",
+        "/data0/axeyum/scratch/sixcell/target/release/examples/ioctlance",
+        "samples/binaries/platforms/windows/vendor/realworld/win10-vwififlt.sys"
+      ],
+      "driver": "vwififlt",
+      "ended_utc": "2026-09-17T06:04:57.718883+00:00",
+      "repetition": 5,
+      "return_code": 0,
+      "run": "02-vwififlt-r5",
+      "started_utc": "2026-09-17T06:01:01.784916+00:00",
+      "trace_parent": "/data0/axeyum/scratch/sixcell/campaign/02-vwififlt-r5/traces",
+      "traces": [
+        "/data0/axeyum/scratch/sixcell/campaign/02-vwififlt-r5/traces/glaurung-ordered-trace-1816278-933f148190c84e57a374e1d889af082c"
+      ],
+      "validation": "accepted",
+      "validator_return_code": 0
+    },
+    {
+      "command": [
+        "/home/mjbommar/projects/personal/axeyum/scripts/mem-run.sh",
+        "taskset",
+        "-c",
+        "2",
+        "/data0/axeyum/scratch/sixcell/target/release/examples/ioctlance",
+        "samples/binaries/platforms/windows/vendor/realworld/windows-update-intel-audio-IntcSST.sys"
+      ],
+      "driver": "intcsst",
+      "ended_utc": "2026-09-17T06:07:23.157071+00:00",
+      "repetition": 1,
+      "return_code": 0,
+      "run": "03-intcsst-r1",
+      "started_utc": "2026-09-17T06:05:01.371620+00:00",
+      "trace_parent": "/data0/axeyum/scratch/sixcell/campaign/03-intcsst-r1/traces",
+      "traces": [
+        "/data0/axeyum/scratch/sixcell/campaign/03-intcsst-r1/traces/glaurung-ordered-trace-1836478-379357c9f8a341ceae2e539d66c7cda9"
+      ],
+      "validation": "accepted",
+      "validator_return_code": 0
+    },
+    {
+      "command": [
+        "/home/mjbommar/projects/personal/axeyum/scripts/mem-run.sh",
+        "taskset",
+        "-c",
+        "2",
+        "/data0/axeyum/scratch/sixcell/target/release/examples/ioctlance",
+        "samples/binaries/platforms/windows/vendor/realworld/windows-update-intel-audio-IntcSST.sys"
+      ],
+      "driver": "intcsst",
+      "ended_utc": "2026-09-17T06:09:25.768232+00:00",
+      "repetition": 2,
+      "return_code": 0,
+      "run": "03-intcsst-r2",
+      "started_utc": "2026-09-17T06:07:30.098978+00:00",
+      "trace_parent": "/data0/axeyum/scratch/sixcell/campaign/03-intcsst-r2/traces",
+      "traces": [
+        "/data0/axeyum/scratch/sixcell/campaign/03-intcsst-r2/traces/glaurung-ordered-trace-1837898-354cde0a283b415ea3883358ddccfd87"
+      ],
+      "validation": "accepted",
+      "validator_return_code": 0
+    },
+    {
+      "command": [
+        "/home/mjbommar/projects/personal/axeyum/scripts/mem-run.sh",
+        "taskset",
+        "-c",
+        "2",
+        "/data0/axeyum/scratch/sixcell/target/release/examples/ioctlance",
+        "samples/binaries/platforms/windows/vendor/realworld/windows-update-intel-audio-IntcSST.sys"
+      ],
+      "driver": "intcsst",
+      "ended_utc": "2026-09-17T06:11:14.303098+00:00",
+      "repetition": 3,
+      "return_code": 0,
+      "run": "03-intcsst-r3",
+      "started_utc": "2026-09-17T06:09:27.706347+00:00",
+      "trace_parent": "/data0/axeyum/scratch/sixcell/campaign/03-intcsst-r3/traces",
+      "traces": [
+        "/data0/axeyum/scratch/sixcell/campaign/03-intcsst-r3/traces/glaurung-ordered-trace-1840834-f391be4a2e9d4452ac0efab1ca24f831"
+      ],
+      "validation": "accepted",
+      "validator_return_code": 0
+    },
+    {
+      "command": [
+        "/home/mjbommar/projects/personal/axeyum/scripts/mem-run.sh",
+        "taskset",
+        "-c",
+        "2",
+        "/data0/axeyum/scratch/sixcell/target/release/examples/ioctlance",
+        "samples/binaries/platforms/windows/vendor/realworld/windows-update-intel-audio-IntcSST.sys"
+      ],
+      "driver": "intcsst",
+      "ended_utc": "2026-09-17T06:13:23.346365+00:00",
+      "repetition": 4,
+      "return_code": 0,
+      "run": "03-intcsst-r4",
+      "started_utc": "2026-09-17T06:11:15.753143+00:00",
+      "trace_parent": "/data0/axeyum/scratch/sixcell/campaign/03-intcsst-r4/traces",
+      "traces": [
+        "/data0/axeyum/scratch/sixcell/campaign/03-intcsst-r4/traces/glaurung-ordered-trace-1841544-4f63cd387195455399ae70681e275c8c"
+      ],
+      "validation": "accepted",
+      "validator_return_code": 0
+    },
+    {
+      "command": [
+        "/home/mjbommar/projects/personal/axeyum/scripts/mem-run.sh",
+        "taskset",
+        "-c",
+        "2",
+        "/data0/axeyum/scratch/sixcell/target/release/examples/ioctlance",
+        "samples/binaries/platforms/windows/vendor/realworld/windows-update-intel-audio-IntcSST.sys"
+      ],
+      "driver": "intcsst",
+      "ended_utc": "2026-09-17T06:15:23.213673+00:00",
+      "repetition": 5,
+      "return_code": 0,
+      "run": "03-intcsst-r5",
+      "started_utc": "2026-09-17T06:13:25.484293+00:00",
+      "trace_parent": "/data0/axeyum/scratch/sixcell/campaign/03-intcsst-r5/traces",
+      "traces": [
+        "/data0/axeyum/scratch/sixcell/campaign/03-intcsst-r5/traces/glaurung-ordered-trace-1843740-2f0107a8a6e5465d917d08c8517bb41d"
+      ],
+      "validation": "accepted",
+      "validator_return_code": 0
+    },
+    {
+      "command": [
+        "/home/mjbommar/projects/personal/axeyum/scripts/mem-run.sh",
+        "taskset",
+        "-c",
+        "2",
+        "/data0/axeyum/scratch/sixcell/target/release/examples/ioctlance",
+        "samples/binaries/platforms/windows/vendor/realworld/windows-update-SurfacePenBleLcAddrAdaptationDriver.sys"
+      ],
+      "driver": "surfacepen",
+      "ended_utc": "2026-09-17T06:17:25.281958+00:00",
+      "repetition": 1,
+      "return_code": 0,
+      "run": "04-surfacepen-r1",
+      "started_utc": "2026-09-17T06:15:24.943561+00:00",
+      "trace_parent": "/data0/axeyum/scratch/sixcell/campaign/04-surfacepen-r1/traces",
+      "traces": [
+        "/data0/axeyum/scratch/sixcell/campaign/04-surfacepen-r1/traces/glaurung-ordered-trace-1847131-928b1169723444999238579e1d828778"
+      ],
+      "validation": "accepted",
+      "validator_return_code": 0
+    },
+    {
+      "command": [
+        "/home/mjbommar/projects/personal/axeyum/scripts/mem-run.sh",
+        "taskset",
+        "-c",
+        "2",
+        "/data0/axeyum/scratch/sixcell/target/release/examples/ioctlance",
+        "samples/binaries/platforms/windows/vendor/realworld/windows-update-SurfacePenBleLcAddrAdaptationDriver.sys"
+      ],
+      "driver": "surfacepen",
+      "ended_utc": "2026-09-17T06:19:29.410373+00:00",
+      "repetition": 2,
+      "return_code": 0,
+      "run": "04-surfacepen-r2",
+      "started_utc": "2026-09-17T06:17:28.181306+00:00",
+      "trace_parent": "/data0/axeyum/scratch/sixcell/campaign/04-surfacepen-r2/traces",
+      "traces": [
+        "/data0/axeyum/scratch/sixcell/campaign/04-surfacepen-r2/traces/glaurung-ordered-trace-1847920-2aa84d7aa69b4e1c9a501fc2e7a3bcf5"
+      ],
+      "validation": "accepted",
+      "validator_return_code": 0
+    },
+    {
+      "command": [
+        "/home/mjbommar/projects/personal/axeyum/scripts/mem-run.sh",
+        "taskset",
+        "-c",
+        "2",
+        "/data0/axeyum/scratch/sixcell/target/release/examples/ioctlance",
+        "samples/binaries/platforms/windows/vendor/realworld/windows-update-SurfacePenBleLcAddrAdaptationDriver.sys"
+      ],
+      "driver": "surfacepen",
+      "ended_utc": "2026-09-17T06:21:47.218025+00:00",
+      "repetition": 3,
+      "return_code": 0,
+      "run": "04-surfacepen-r3",
+      "started_utc": "2026-09-17T06:19:32.744287+00:00",
+      "trace_parent": "/data0/axeyum/scratch/sixcell/campaign/04-surfacepen-r3/traces",
+      "traces": [
+        "/data0/axeyum/scratch/sixcell/campaign/04-surfacepen-r3/traces/glaurung-ordered-trace-1848733-0f41d116a7b7420ea47f92f7f6d67f0e"
+      ],
+      "validation": "accepted",
+      "validator_return_code": 0
+    },
+    {
+      "command": [
+        "/home/mjbommar/projects/personal/axeyum/scripts/mem-run.sh",
+        "taskset",
+        "-c",
+        "2",
+        "/data0/axeyum/scratch/sixcell/target/release/examples/ioctlance",
+        "samples/binaries/platforms/windows/vendor/realworld/windows-update-SurfacePenBleLcAddrAdaptationDriver.sys"
+      ],
+      "driver": "surfacepen",
+      "ended_utc": "2026-09-17T06:23:55.006722+00:00",
+      "repetition": 4,
+      "return_code": 0,
+      "run": "04-surfacepen-r4",
+      "started_utc": "2026-09-17T06:21:49.910923+00:00",
+      "trace_parent": "/data0/axeyum/scratch/sixcell/campaign/04-surfacepen-r4/traces",
+      "traces": [
+        "/data0/axeyum/scratch/sixcell/campaign/04-surfacepen-r4/traces/glaurung-ordered-trace-1849608-4d1289ab664840a0beccbafcde6a7f17"
+      ],
+      "validation": "accepted",
+      "validator_return_code": 0
+    },
+    {
+      "command": [
+        "/home/mjbommar/projects/personal/axeyum/scripts/mem-run.sh",
+        "taskset",
+        "-c",
+        "2",
+        "/data0/axeyum/scratch/sixcell/target/release/examples/ioctlance",
+        "samples/binaries/platforms/windows/vendor/realworld/windows-update-SurfacePenBleLcAddrAdaptationDriver.sys"
+      ],
+      "driver": "surfacepen",
+      "ended_utc": "2026-09-17T06:26:04.406847+00:00",
+      "repetition": 5,
+      "return_code": 0,
+      "run": "04-surfacepen-r5",
+      "started_utc": "2026-09-17T06:23:59.293971+00:00",
+      "trace_parent": "/data0/axeyum/scratch/sixcell/campaign/04-surfacepen-r5/traces",
+      "traces": [
+        "/data0/axeyum/scratch/sixcell/campaign/04-surfacepen-r5/traces/glaurung-ordered-trace-1850442-8f3769d6eaa54474b80535d0faf1bfa0"
+      ],
+      "validation": "accepted",
+      "validator_return_code": 0
+    }
+  ],
+  "schema": "axeyum-glaurung-six-cell-campaign-v1",
+  "started_utc": "2026-09-17T05:37:42.787548+00:00",
+  "terminal_status": "complete"
+}
