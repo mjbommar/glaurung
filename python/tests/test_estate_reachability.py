@@ -134,6 +134,12 @@ FEATURE_GATED_TEST_RUNNERS: dict[str, tuple[str, str]] = {
         "exec",
         "cargo test --features exec --test register_view_semantics",
     ),
+    # Typed by scripts/shadow-capture.sh (stage 4) and so by
+    # .github/workflows/shadow-capture-weekly.yml; solver-034.
+    "axeyum_shadow_split_verdicts": (
+        "solver-axeyum-text",
+        "cargo test --features solver-axeyum-text --test axeyum_shadow_split_verdicts",
+    ),
 }
 
 _INNER_CFG_RE = re.compile(r"^#!\[cfg\((.*)\)\]", re.M)

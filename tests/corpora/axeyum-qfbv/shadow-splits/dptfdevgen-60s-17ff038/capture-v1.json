@@ -1,0 +1,56 @@
+{
+  "schema": "glaurung-shadow-split-capture-v1",
+  "producer": {
+    "glaurung_revision": "17ff0387482980e6611fc087a3802295d874a279",
+    "axeyum_revision": "8df853252cdf49c9a27ba71c6ce62fdd1c485dfc",
+    "tier": "scripts/shadow-capture.sh",
+    "tool": "tools/axeyum/shadow_capture.py"
+  },
+  "driver": {
+    "path": "samples/binaries/platforms/windows/vendor/realworld/sqfs-intel-DptfDevGen.sys",
+    "sha256": "074be1b90deb21897538a6b093af9826e62610ffd878c92289af31c5ca3f724b",
+    "bytes": 80312
+  },
+  "policy": {
+    "fair_shadow": true,
+    "solver_seconds_per_function": 60,
+    "analysis_deadline_seconds": 600,
+    "solve_budget": 20000,
+    "max_analyzed_functions": 100000,
+    "check_timeout_ms": 250,
+    "environment": {
+      "GLAURUNG_DUMP_SHADOW_SPLITS": "tests/corpora/axeyum-qfbv/shadow-splits/dptfdevgen-60s-17ff038",
+      "GLAURUNG_FAIR_SHADOW": "1",
+      "IOCTLANCE_DEADLINE_SECS": "600",
+      "IOCTLANCE_MAX_ANALYZED_FUNCTIONS": "100000",
+      "IOCTLANCE_SOLVE_BUDGET": "20000",
+      "IOCTLANCE_SOLVE_SECS": "60"
+    }
+  },
+  "run": {
+    "functions_analyzed": 7,
+    "functions_reachable": 12,
+    "queries": 1357,
+    "agree_or_nondecided": 1357,
+    "sat_unsat_disagreements": 0,
+    "both_sat": 830,
+    "different_model": 288,
+    "z3_nondecided_occurrences": 0,
+    "axeyum_nondecided_occurrences": 47,
+    "split_occurrences": 47,
+    "warm_checks": 1357,
+    "warm_resets": 0,
+    "path_cap_fallbacks": 0,
+    "assertion_cap_fallbacks": 0,
+    "wall_seconds": 60.445,
+    "max_rss_kib_children_so_far": 148508
+  },
+  "started_at": "2026-09-17T07:00:32+00:00",
+  "nondecision_reasons": {
+    "axeyum:wall-timeout": 21
+  },
+  "validated_summary": "summary-v1.json",
+  "split_index": "shadow-splits.tsv",
+  "capture_index": "capture-index-v1.json",
+  "nondecision_index": "nondecisions.tsv"
+}

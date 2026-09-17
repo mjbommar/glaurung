@@ -96,6 +96,7 @@ re-measurement. Subject:
 | `solver-031` | [Add a pinned in-process Bitwuzla neutral measurement cell](solver-031-pinned-bitwuzla-measurement-cell.md) | held | 2026-07-19 |
 | `solver-032` | [Move the Axeyum pin to head, and keep only z3-parsed scripts in the shadow-split corpus](solver-032-axeyum-pin-bump-and-shadow-corpus-prune.md) | held | 2026-09-16 |
 | `solver-033` | [The rerun at the 2026-09-16 pin: inconclusive under ADR-0272, and warm Axeyum is the reason](solver-033-six-cell-rerun-at-the-2026-09-16-pin.md) | held | 2026-09-17 |
+| `solver-034` | [A scheduled shadow-split capture tier, so the next divergence is seen the week it appears](solver-034-continuous-shadow-split-capture-tier.md) | held | 2026-09-17 |
 
 `solver-002` is the one superseded record: axeyum was never made a default
 feature, and the shipped configuration is `default = ["triage-core"]` with every

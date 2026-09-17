@@ -80,17 +80,29 @@ class SplitVerdictsTests(unittest.TestCase):
                 json.dumps({"name": name, "files": files}), encoding="utf-8"
             )
             (capture / "capture-index-v1.json").write_text(
-                json.dumps({"version": 1, "name": name, "source": "test", "files": files}),
+                json.dumps(
+                    {"version": 1, "name": name, "source": "test", "files": files}
+                ),
                 encoding="utf-8",
             )
             (capture / "capture-v1.json").write_text(
-                json.dumps({"schema": "glaurung-shadow-split-capture-v1"}), encoding="utf-8"
+                json.dumps({"schema": "glaurung-shadow-split-capture-v1"}),
+                encoding="utf-8",
             )
         return capture
 
     def run_tool(self, *extra: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [sys.executable, str(SCRIPT), str(self.splits), "--z3", str(self.z3), "--jobs", "2", *extra],
+            [
+                sys.executable,
+                str(SCRIPT),
+                str(self.splits),
+                "--z3",
+                str(self.z3),
+                "--jobs",
+                "2",
+                *extra,
+            ],
             check=False,
             text=True,
             capture_output=True,
@@ -106,7 +118,10 @@ class SplitVerdictsTests(unittest.TestCase):
         ]
 
     def test_clean_corpus_writes_verdicts_and_exits_zero(self) -> None:
-        self.make_capture("drv-60s-abc", [(GOOD_SAT, "unknown", "sat"), (GOOD_UNSAT, "unsat", "unknown")])
+        self.make_capture(
+            "drv-60s-abc",
+            [(GOOD_SAT, "unknown", "sat"), (GOOD_UNSAT, "unsat", "unknown")],
+        )
         result = self.run_tool()
         self.assertEqual(result.returncode, 0, result.stderr)
         rows = self.rows(self.splits / "verdicts.tsv")
@@ -115,14 +130,18 @@ class SplitVerdictsTests(unittest.TestCase):
         self.assertEqual({row[3] for row in rows}, {"unmeasured"})
 
     def test_malformed_script_fails_the_gate_without_prune(self) -> None:
-        self.make_capture("drv-60s-abc", [(GOOD_SAT, "unknown", "sat"), (BAD, "sat", "error")])
+        self.make_capture(
+            "drv-60s-abc", [(GOOD_SAT, "unknown", "sat"), (BAD, "sat", "error")]
+        )
         result = self.run_tool()
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("1 malformed scripts z3 rejects", result.stderr)
         self.assertIn("invalid extract application", result.stderr)
 
     def test_undecided_script_fails_the_gate(self) -> None:
-        self.make_capture("drv-60s-abc", [(GOOD_SAT, "unknown", "sat"), (UNDECIDED, "unknown", "sat")])
+        self.make_capture(
+            "drv-60s-abc", [(GOOD_SAT, "unknown", "sat"), (UNDECIDED, "unknown", "sat")]
+        )
         result = self.run_tool()
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("z3 unknown", result.stderr)
@@ -130,7 +149,11 @@ class SplitVerdictsTests(unittest.TestCase):
     def test_prune_moves_malformed_and_regenerates_sidecars(self) -> None:
         capture = self.make_capture(
             "drv-60s-abc",
-            [(GOOD_SAT, "unknown", "sat"), (BAD, "sat", "error"), (GOOD_UNSAT, "unsat", "unknown")],
+            [
+                (GOOD_SAT, "unknown", "sat"),
+                (BAD, "sat", "error"),
+                (GOOD_UNSAT, "unsat", "unknown"),
+            ],
         )
         destination = self.root / "malformed"
         result = self.run_tool("--prune-to", str(destination))
@@ -147,23 +170,36 @@ class SplitVerdictsTests(unittest.TestCase):
         self.assertEqual(malformed_rows[0][0], bad_hash)
         self.assertIn("invalid extract application", malformed_rows[0][1])
         # Live capture: index, sidecars and summary now describe two scripts.
-        self.assertEqual(len((capture / "shadow-splits.tsv").read_text().splitlines()), 2)
+        self.assertEqual(
+            len((capture / "shadow-splits.tsv").read_text().splitlines()), 2
+        )
         summary = json.loads((capture / "summary-v1.json").read_text())
         self.assertEqual(summary["distinct_queries"], 2)
-        self.assertEqual(len(json.loads((capture / "manifest-v1.json").read_text())["files"]), 2)
-        self.assertEqual(len(json.loads((capture / "capture-index-v1.json").read_text())["files"]), 2)
+        self.assertEqual(
+            len(json.loads((capture / "manifest-v1.json").read_text())["files"]), 2
+        )
+        self.assertEqual(
+            len(json.loads((capture / "capture-index-v1.json").read_text())["files"]), 2
+        )
         pruned = json.loads((capture / "capture-v1.json").read_text())["pruned"]
         self.assertEqual(pruned["malformed_scripts"], 1)
         # The pruned tree passes the gate.
         self.assertEqual(self.run_tool().returncode, 0)
 
     def test_axeyum_results_fill_the_column_and_opposition_fails(self) -> None:
-        self.make_capture("drv-60s-abc", [(GOOD_SAT, "unknown", "sat"), (GOOD_UNSAT, "unsat", "unknown")])
+        self.make_capture(
+            "drv-60s-abc",
+            [(GOOD_SAT, "unknown", "sat"), (GOOD_UNSAT, "unsat", "unknown")],
+        )
         sat_hash = hashlib.sha256(GOOD_SAT).hexdigest()
         unsat_hash = hashlib.sha256(GOOD_UNSAT).hexdigest()
         results = self.root / "axeyum.tsv"
-        results.write_text(f"drv-60s-abc\t{sat_hash}\tsat\t12\ndrv-60s-abc\t{unsat_hash}\tunsat\t3\n")
-        result = self.run_tool("--axeyum-results", str(results), "--axeyum-note", "fixture")
+        results.write_text(
+            f"drv-60s-abc\t{sat_hash}\tsat\t12\ndrv-60s-abc\t{unsat_hash}\tunsat\t3\n"
+        )
+        result = self.run_tool(
+            "--axeyum-results", str(results), "--axeyum-note", "fixture"
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
         rows = {row[1]: row[3] for row in self.rows(self.splits / "verdicts.tsv")}
         self.assertEqual(rows, {sat_hash: "sat", unsat_hash: "unsat"})
@@ -173,6 +209,80 @@ class SplitVerdictsTests(unittest.TestCase):
         result = self.run_tool("--axeyum-results", str(results))
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("z3 sat but axeyum unsat", result.stderr)
+
+    def test_a_pinned_decided_row_measured_undecided_is_a_regression(self) -> None:
+        self.make_capture(
+            "drv-60s-abc",
+            [(GOOD_SAT, "unknown", "sat"), (GOOD_UNSAT, "unsat", "unknown")],
+        )
+        sat_hash = hashlib.sha256(GOOD_SAT).hexdigest()
+        unsat_hash = hashlib.sha256(GOOD_UNSAT).hexdigest()
+        results = self.root / "axeyum.tsv"
+        results.write_text(
+            f"drv-60s-abc\t{sat_hash}\tsat\t12\ndrv-60s-abc\t{unsat_hash}\tunsat\t3\n"
+        )
+        self.assertEqual(self.run_tool("--axeyum-results", str(results)).returncode, 0)
+        # The floor is the committed decided column; losing one is a failure.
+        results.write_text(
+            f"drv-60s-abc\t{sat_hash}\tsat\t12\ndrv-60s-abc\t{unsat_hash}\tunknown:WallTimeout\t30000\n"
+        )
+        result = self.run_tool("--axeyum-results", str(results))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(
+            f"drv-60s-abc/{unsat_hash}: REGRESSION pinned axeyum unsat (z3 unsat), now unknown:WallTimeout",
+            result.stderr,
+        )
+        # The regressed verdict is recorded, so the file names what was measured.
+        rows = {row[1]: row[3] for row in self.rows(self.splits / "verdicts.tsv")}
+        self.assertEqual(rows[unsat_hash], "unknown:WallTimeout")
+
+    def test_a_new_undecided_row_is_reported_not_failed_and_a_decided_one_is_promoted(
+        self,
+    ) -> None:
+        self.make_capture("drv-60s-abc", [(GOOD_SAT, "unknown", "sat")])
+        sat_hash = hashlib.sha256(GOOD_SAT).hexdigest()
+        results = self.root / "axeyum.tsv"
+        results.write_text(f"drv-60s-abc\t{sat_hash}\tsat\t12\n")
+        self.assertEqual(self.run_tool("--axeyum-results", str(results)).returncode, 0)
+        # A second capture lands a script with no committed row.
+        self.make_capture("drv-60s-def", [(GOOD_UNSAT, "unsat", "unknown")])
+        unsat_hash = hashlib.sha256(GOOD_UNSAT).hexdigest()
+        results.write_text(
+            f"drv-60s-abc\t{sat_hash}\tsat\t12\ndrv-60s-def\t{unsat_hash}\tunknown:WallTimeout\t30000\n"
+        )
+        result = self.run_tool("--axeyum-results", str(results))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(
+            f"NEW: drv-60s-def/{unsat_hash}\tz3 unsat\taxeyum unknown:WallTimeout",
+            result.stdout,
+        )
+        self.assertIn(
+            "new rows: 1 (1 axeyum undecided: capability gaps, not failures)",
+            result.stdout,
+        )
+        # Not in the floor: a later run that still cannot decide it is not a regression...
+        result = self.run_tool("--axeyum-results", str(results))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("new rows: 0", result.stdout)
+        # ...and one that decides it promotes it into the floor.
+        results.write_text(
+            f"drv-60s-abc\t{sat_hash}\tsat\t12\ndrv-60s-def\t{unsat_hash}\tunsat\t40\n"
+        )
+        result = self.run_tool("--axeyum-results", str(results))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(
+            f"PROMOTED: drv-60s-def/{unsat_hash}\tz3 unsat\taxeyum unsat (was unknown:WallTimeout)",
+            result.stdout,
+        )
+        rows = {row[1]: row[3] for row in self.rows(self.splits / "verdicts.tsv")}
+        self.assertEqual(rows[unsat_hash], "unsat")
+        # Now it IS in the floor.
+        results.write_text(
+            f"drv-60s-abc\t{sat_hash}\tsat\t12\ndrv-60s-def\t{unsat_hash}\tunknown:Other\t40\n"
+        )
+        result = self.run_tool("--axeyum-results", str(results))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("REGRESSION", result.stderr)
 
     def test_check_mode_detects_drift_and_writes_nothing(self) -> None:
         self.make_capture("drv-60s-abc", [(GOOD_SAT, "unknown", "sat")])
@@ -184,7 +294,9 @@ class SplitVerdictsTests(unittest.TestCase):
         result = self.run_tool("--check")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("verdicts.tsv says z3 unsat, z3 now says sat", result.stderr)
-        self.assertNotEqual(verdicts.read_text(), before, "--check must not rewrite the file")
+        self.assertNotEqual(
+            verdicts.read_text(), before, "--check must not rewrite the file"
+        )
 
 
 if __name__ == "__main__":

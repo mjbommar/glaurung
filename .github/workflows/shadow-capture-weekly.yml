@@ -1,0 +1,120 @@
+# Does Axeyum still decide what z3 decides on the real driver query stream --
+# and did anything new diverge this week?
+#
+# The shadow-split corpus (tests/corpora/axeyum-qfbv/shadow-splits/) was
+# captured once, in July 2026, by a command in a README. Nobody ran it again;
+# the improvement list of 2026-09-16 found it two months stale with 735
+# exporter-defect scripts being quoted as solver misses. solver-032 pinned
+# the 107 valid scripts with verdicts; solver-034 makes the capture a tier.
+#
+# Weekly, not per push: one driver is about `ceiling x dispatch roots` of
+# wall time (59.5 s for the smallest at a 60 s ceiling, solver-034's sizing),
+# the four July drivers are minutes, and the build of two solver
+# configurations on a cold hosted runner is longer than the capture. Offset
+# from the hour like every other scheduled job here.
+#
+# What the job can and cannot do on a hosted runner:
+#   - The drivers are Git LFS objects under samples/, and `lfs: true` fetches
+#     them; the pinned corpus scripts are LFS objects too. Both are checked
+#     for pointer files by the script before anything is measured.
+#   - libz3 comes from apt (the same package feature-build-gate.yml links),
+#     and so does the `z3` binary split_verdicts.py classifies with. The
+#     runner's z3 (4.8.x on ubuntu-24.04) is OLDER than the 4.13.3 the
+#     committed verdicts.tsv was classified with; the script records the
+#     version in the file it writes, and the file is uploaded, not committed.
+#   - The job does NOT commit. New capture directories are LFS objects that
+#     need a human to review the finding and push them; the artifact carries
+#     everything needed (the new <capture>/ trees, verdicts.tsv, report.json,
+#     the per-driver logs, the replay TSV).
+#
+# Exit semantics (scripts/shadow-capture.sh): a NEW split where z3 decides
+# and Axeyum does not is a finding reported by name and the job stays green;
+# a both-decided DISAGREEMENT, a MALFORMED export, a REGRESSION of a pinned
+# decided script, or a run that issued no checks fails the job.
+name: shadow-split capture weekly
+
+on:
+  schedule:
+    - cron: "29 3 * * 2"
+  workflow_dispatch:
+    inputs:
+      ceiling:
+        description: Per-function solver ceiling in seconds (IOCTLANCE_SOLVE_SECS)
+        default: "60"
+
+jobs:
+  capture:
+    name: capture, classify, replay
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install libz3 and z3
+        run: sudo apt-get update && sudo apt-get install -y libz3-dev z3
+      - name: Sync dependencies
+        run: uv sync --locked --dev
+      - name: Capture tier
+        id: tier
+        run: |
+          set +e
+          scripts/shadow-capture.sh \
+            --ceiling "${{ github.event.inputs.ceiling || '60' }}" \
+            --out artifacts/shadow-capture 2>&1 | tee artifacts-tier.log
+          status=${PIPESTATUS[0]}
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          grep -E '^NEW: ' artifacts-tier.log | while read -r line; do echo "::notice::$line"; done
+          exit "$status"
+      # The invariant perf-nightly models: prove the job measured something.
+      # The script fails closed on `queries=0` itself; this reads the report
+      # independently so a wiring mistake in the script cannot pass as a
+      # week with nothing to report.
+      - name: Prove the run measured something
+        if: always()
+        run: |
+          uv run python - <<'PY'
+          import json, pathlib, sys
+          path = pathlib.Path("artifacts/shadow-capture/report.json")
+          if not path.is_file():
+              sys.exit("NO REPORT: the capture stage never wrote report.json")
+          report = json.loads(path.read_text())
+          checks = sum(int(d.get("run", {}).get("queries", 0)) for d in report["drivers"])
+          splits = sum(int(d.get("capture", {}).get("splits", 0)) for d in report["drivers"])
+          print(f"drivers={len(report['drivers'])} checks={checks} distinct new splits={splits}")
+          if checks == 0:
+              sys.exit("NO MEASUREMENTS: zero checks across every driver is not the same as no divergence.")
+          PY
+      # Only the captures this run created: the pinned corpus is 300+ MB of
+      # LFS objects and is already in the repository.
+      - name: Collect the new captures
+        if: always()
+        run: |
+          uv run python - <<'PY'
+          import json, pathlib, shutil
+          out = pathlib.Path("artifacts/shadow-capture")
+          path = out / "report.json"
+          if path.is_file():
+              for capture in json.loads(path.read_text()).get("created_captures", []):
+                  source = pathlib.Path(capture)
+                  if source.is_dir():
+                      shutil.copytree(source, out / "captures" / source.name, dirs_exist_ok=True)
+                      print(f"collected {source}")
+          verdicts = pathlib.Path("tests/corpora/axeyum-qfbv/shadow-splits/verdicts.tsv")
+          if verdicts.is_file():
+              shutil.copy(verdicts, out / "verdicts.tsv")
+          PY
+      - name: Upload the capture, the verdicts and the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shadow-capture
+          path: |
+            artifacts/shadow-capture/
+            artifacts-tier.log
+          if-no-files-found: warn

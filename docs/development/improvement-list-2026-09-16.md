@@ -1,5 +1,7 @@
 # Improvement list from the Axeyum side, 2026-09-16
 
+> **Kind:** plan · **Status:** maintained (the status section at the end is the ledger)
+
 Measured today against Axeyum `defc4f806` and this checkout at `2fbf1af4`.
 Every number below was produced this afternoon and can be re-run; nothing is
 inherited from the July integration notes.
@@ -77,3 +79,18 @@ nobody re-checked. Dormant, not broken.
     It needs cindergraph's Milestone H (Glaurung on the cindergraph crate, not
     an embedded copy) and cindergraph's items 1–3 (operator, resolved type,
     typed operations export) to stop being a research script.
+
+## Status, 2026-09-17
+
+| item | status | where |
+|---|---|---|
+| 1 pin bump | **done** | `7d6f5f70` (pin `c38a9515e` → `8df853252`), merged in `11b68faf`; [`solver-032`](../decisions/solver-032-axeyum-pin-bump-and-shadow-corpus-prune.md) |
+| 2 prune and regenerate the corpus | **done** | `0d07b09d`: 735 z3-rejected scripts moved to `malformed-exports-pre-solver-016/`, the 107 valid pinned in `shadow-splits/verdicts.tsv`, capture parses with the linked libz3 before indexing; [`solver-032`](../decisions/solver-032-axeyum-pin-bump-and-shadow-corpus-prune.md) |
+| 3 six-cell rerun | **done, gate not met** | `2931047d` / `da49fbc4`, merged in `3b3f2b4b`: four cells (no Bitwuzla on the host); every driver inconclusive under ADR-0272 because warm Axeyum at the new pin hits the 60 s budget; cold Axeyum at parity or faster; [`solver-033`](../decisions/solver-033-six-cell-rerun-at-the-2026-09-16-pin.md) |
+| 4 value-selection policy | **waiting on Axeyum** | Axeyum's ADR-2140 (model preference) is merged on Axeyum's local `main` and not yet pushed; the adapter cannot consume a knob the pinned rev does not have |
+| 5 canonical constraint-cache identity (ADR-0303) | **waiting** | not started; depends on the same Axeyum-side landing cadence as item 4, and on a pin bump after it |
+| 6 adapter vs `stats()` | **done, no change** | `4544067f`: `check_assuming_measured` times the two adapter-side phases and `stats()` the six in-solver phases; the profile sums them as disjoint. Not redundant; documented in a doc comment |
+| 7 continuous shadow-split capture | **done** | `17ff0387`: `scripts/shadow-capture.sh`, `tools/axeyum/shadow_capture.py`, `.github/workflows/shadow-capture-weekly.yml`, the regression floor in `split_verdicts.py` and the Rust replay; [`solver-034`](../decisions/solver-034-continuous-shadow-split-capture-tier.md) |
+| 8 tests that shell out to `git rev-parse` | **done** | `3a95df4f`: a checkout without `.git` publishes a trace; the six git-bound tests skip with the reason named |
+| 9 label the July notes as frozen | **done** | `4544067f`: dated banner on `PAPER-NOTES.md` and `FEEDBACK-LOG.md`, pointing at item 3's rerun; no number edited |
+| 10 decompiled C → cindergraph → Axeyum | **Milestone H** | cindergraph's roadmap (Glaurung on the cindergraph crate, not an embedded copy), plus its items 1–3; not started here |
