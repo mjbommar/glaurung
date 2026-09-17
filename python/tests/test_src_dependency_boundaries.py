@@ -376,7 +376,6 @@ ENV_VAR_ALLOWLIST: dict[tuple[str, str], str] = {
     ("ir/value_number/coalesce.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     ("program/environment.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     ("program/format_environment.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
-    ("python_bindings/ir.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     ("python_bindings/ir/callee_contracts.rs", '"GLAURUNG_DUMP_PASSES"'): "diagnostic",
     # The AST pass-list dump and the two LLIR-stage dumps, moved verbatim out of
     # `python_bindings/ir.rs` when the shared pipeline was split out. Same reads,
@@ -443,6 +442,18 @@ ENV_VAR_ALLOWLIST: dict[tuple[str, str], str] = {
         "WARM_SERIAL_SIBLING_REUSE_ENV",
     ): "budget",
     ("symbolic/solver/axeyum_backend/config.rs", "REPLAY_SAT_CACHE_ENV"): "budget",
+    # ADR-2144 (solver-036): the library cache is a schedule of repeated checks;
+    # a served `sat` replays against the live set before it is returned and an
+    # `unsat` is served only for a superset, so it cannot move a verdict.
+    ("symbolic/solver/axeyum_backend/config.rs", "CANONICAL_CACHE_ENV"): "budget",
+    # ADR-2140 (solver-035): which model a `sat` returns when several satisfy;
+    # a preference, never a promise, and every model still replays. It moves
+    # a witness, not a verdict.
+    ("symbolic/solver/axeyum_backend/config.rs", "MODEL_PREFERENCE_ENV"): "budget",
+    # solver-032: a checkout without `.git` publishes a trace with the recorded
+    # revision; the replay side refuses such traces (`ordered_replay.rs`), so it
+    # gates provenance text, never a decision.
+    ("symbolic/ordered_trace.rs", "TRACE_GIT_REV_ENV"): "diagnostic",
     (
         "symbolic/solver/axeyum_backend/config.rs",
         "INTERNAL_AND_FLATTENING_ENV",
