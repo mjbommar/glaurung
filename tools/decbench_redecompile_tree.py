@@ -42,8 +42,9 @@ import sys
 import time
 import collections
 import os
-import shutil
 import re
+
+from decbench_inputs import find_binary, normalise_address, strip_copy
 
 TREE = pathlib.Path(
     os.environ.get(
@@ -134,10 +135,7 @@ for opt, proj, binstem in keys:
     if not FORCE and (d / "decompiled" / f"{NAME}_{binstem}.c").exists():
         stats["skipped"] += 1
         continue
-    src = d / "compiled" / binstem
-    if not src.exists():
-        cand = list((d / "compiled").glob(binstem + "*"))
-        src = cand[0] if cand else None
+    src = find_binary(d / "compiled", binstem)
     if src is None or not src.exists():
         stats["no-binary"] += 1
         continue
@@ -147,14 +145,20 @@ for opt, proj, binstem in keys:
         stats["no-symbols"] += 1
         continue
     stripped = TMP / f"{opt}_{proj}_{binstem}"
-    shutil.copy2(src, stripped)
-    subprocess.run(["strip", str(stripped)], capture_output=True)
+    receipt = strip_copy(src, stripped)
+    ledger = os.environ.get("STRIP_LEDGER")
+    if ledger:
+        with open(ledger, "a") as handle:
+            handle.write(
+                json.dumps({"opt": opt, "project": proj, "binary": binstem, **receipt})
+                + "\n"
+            )
     cmd = [
         G,
         "decompile",
         str(stripped),
         "--vas",
-        ",".join(hex(a & ~1) for a in addrs.values()),
+        ",".join(hex(a) for a in addrs.values()),
         "--style",
         "decbench",
         "--format",
@@ -176,10 +180,10 @@ for opt, proj, binstem in keys:
     except Exception:
         stats["bad-json"] += 1
         continue
-    by_addr = {int(rec["entry_va"]) & ~1: rec for rec in recs}
+    by_addr = {normalise_address(src, int(rec["entry_va"])): rec for rec in recs}
     parts, meta, failed = [], {}, []
     for nm, a in addrs.items():
-        rec = by_addr.get(a & ~1)
+        rec = by_addr.get(normalise_address(src, a))
         if rec is None:
             failed.append(nm)
             continue

@@ -9,7 +9,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use crate::ir::call_args::CallConv;
-use crate::ir::types::{CallTarget, LlirFunction, Op, VReg};
+use crate::ir::types::{BinOp, CallTarget, LlirFunction, MemOp, Op, VReg, Value};
 use crate::ir::use_def::{for_each_def, for_each_use};
 
 /// Whether this exact direct-call boundary proves a two-register INTEGER result.
@@ -24,8 +24,10 @@ fn proves_integer_pair_return(
         && callee_defines_integer_pair_on_every_return(callee, cc)
 }
 
-/// Require both halves to be consumed after the call and before either storage
-/// is overwritten. The bounded same-block walk is intentional: crossing a CFG
+/// Require both halves to be consumed after the call, using the original
+/// registers or full-width stack spills reloaded in the same block. A stack
+/// write without a read is insufficient: outgoing areas also contain padding.
+/// The bounded same-block walk is intentional: crossing a CFG
 /// join would require reaching-definition identity, and declining that shape is
 /// safer than attributing an unrelated later register use to this call.
 pub(crate) fn caller_observes_integer_pair(
@@ -33,13 +35,33 @@ pub(crate) fn caller_observes_integer_pair(
     target: u64,
     cc: CallConv,
 ) -> bool {
+    caller_observes_integer_pair_impl(caller, target, cc, None)
+}
+
+/// Include machine-proven stack inputs of a subsequent direct receiver.
+pub(crate) fn caller_observes_integer_pair_in_image(
+    caller: &LlirFunction,
+    target: u64,
+    cc: CallConv,
+    image: &crate::program::image::ProgramImage,
+) -> bool {
+    caller_observes_integer_pair_impl(caller, target, cc, Some(image))
+}
+
+fn caller_observes_integer_pair_impl(
+    caller: &LlirFunction,
+    target: u64,
+    cc: CallConv,
+    image: Option<&crate::program::image::ProgramImage>,
+) -> bool {
     if crate::ir::abi::wide_integer_return_pair(cc, crate::ir::abi::wide_integer_return_width(cc))
         .is_none()
     {
         return false;
     }
 
-    for block in &caller.blocks {
+    let stack_entries = stack_coordinate_entries(caller, cc);
+    for (block_index, block) in caller.blocks.iter().enumerate() {
         for (call_index, instruction) in block.instrs.iter().enumerate() {
             if !matches!(
                 instruction.op,
@@ -52,14 +74,115 @@ pub(crate) fn caller_observes_integer_pair(
             }
             let mut observed = [false; 2];
             let mut overwritten = [false; 2];
+            let Some(mut coordinates) = stack_entries[block_index].clone() else {
+                continue;
+            };
+            for prefix in &block.instrs[..=call_index] {
+                advance_stack_coordinates(&prefix.op, &mut coordinates, cc);
+            }
+            let mut spills: HashMap<(i64, u8), usize> = HashMap::new();
             for later in &block.instrs[call_index + 1..] {
-                for_each_use(&later.op, |register| {
-                    if let Some(part) = pair_part(cc, register) {
-                        if !overwritten[part] {
-                            observed[part] = true;
+                // A later call owns fresh result registers even before ABI
+                // effects have been attached to the lifted instruction.
+                if let Op::Call {
+                    target: receiver,
+                    effects,
+                } = &later.op
+                {
+                    if let Some(effects) = effects {
+                        for argument in &effects.args {
+                            if effects.args_are_exact || effects.proven_args.contains(argument) {
+                                if let Some(part) = pair_part(cc, argument) {
+                                    if !overwritten[part] {
+                                        observed[part] = true;
+                                    }
+                                }
+                            }
                         }
                     }
-                });
+                    if !spills.is_empty() {
+                        if let (Some(image), CallTarget::Direct(receiver)) = (image, receiver) {
+                            let return_bytes = call_stack_return_bytes(cc);
+                            for (offset, size) in receiver_stack_reads(image, *receiver, cc) {
+                                let Some(offset) = coordinates
+                                    .get(&stack_pointer(cc))
+                                    .copied()
+                                    .and_then(|base| base.checked_sub(return_bytes))
+                                    .and_then(|base| base.checked_add(offset))
+                                else {
+                                    continue;
+                                };
+                                for ((saved_offset, saved_size), part) in &spills {
+                                    if *saved_offset == offset && *saved_size == size {
+                                        observed[*part] = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if observed == [true, true] {
+                        return true;
+                    }
+                    break;
+                }
+                if let Op::Store { addr, src } = &later.op {
+                    if let Some(key) = local_stack_key(addr, &coordinates) {
+                        // Writing a stack slot alone proves neither a source
+                        // argument nor a returned high half: it may be padding.
+                        spills.retain(|(offset, size), _| {
+                            offset.saturating_add(i64::from(*size)) <= key.0
+                                || key.0.saturating_add(i64::from(key.1)) <= *offset
+                        });
+                        if let Value::Reg(register) = src {
+                            if let Some(part) = pair_part(cc, register) {
+                                let part_bytes = crate::ir::abi::wide_integer_return_width(cc) / 2;
+                                if !overwritten[part] && addr.size == part_bytes {
+                                    spills.insert(key, part);
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    // An untracked store can alias a saved stack value.
+                    spills.clear();
+                }
+                if let Op::CondStore { addr, .. } = &later.op {
+                    if let Some((offset, size)) = local_stack_key(addr, &coordinates) {
+                        spills.retain(|(saved, saved_size), _| {
+                            saved.saturating_add(i64::from(*saved_size)) <= offset
+                                || offset.saturating_add(i64::from(size)) <= *saved
+                        });
+                    } else {
+                        spills.clear();
+                    }
+                    continue;
+                }
+                if matches!(later.op, Op::Unknown { .. }) {
+                    break;
+                }
+                if matches!(later.op, Op::Intrinsic { .. }) {
+                    spills.clear();
+                }
+                if let Op::Load { addr, .. } = &later.op {
+                    if let Some(part) = local_stack_key(addr, &coordinates)
+                        .and_then(|key| spills.get(&key))
+                        .copied()
+                    {
+                        observed[part] = true;
+                    }
+                }
+                let zero_idiom = matches!(&later.op,
+                    Op::Bin { op: BinOp::Xor | BinOp::Sub, lhs: Value::Reg(left), rhs: Value::Reg(right), .. }
+                    if left == right);
+                if !zero_idiom {
+                    for_each_use(&later.op, |register| {
+                        if let Some(part) = pair_part(cc, register) {
+                            if !overwritten[part] {
+                                observed[part] = true;
+                            }
+                        }
+                    });
+                }
                 if observed == [true, true] {
                     return true;
                 }
@@ -70,6 +193,7 @@ pub(crate) fn caller_observes_integer_pair(
                         }
                     }
                 });
+                advance_stack_coordinates(&later.op, &mut coordinates, cc);
             }
         }
     }
@@ -159,6 +283,197 @@ pub(crate) fn callee_defines_integer_pair_on_every_return(
     returns != 0
 }
 
+fn call_stack_return_bytes(cc: CallConv) -> i64 {
+    match cc {
+        CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Cdecl32 => {
+            i64::from(crate::ir::abi::machine_word_bytes(cc))
+        }
+        CallConv::Arm | CallConv::ArmHardFloat | CallConv::Aarch64 => 0,
+    }
+}
+
+// Read only the receiver's entry block: crossing a join needs reaching memory
+// definitions. Coordinates describe its incoming SP, including a pushed return
+// address on x86. Stores block overlapping later reads from serving as inputs.
+fn receiver_stack_reads(
+    image: &crate::program::image::ProgramImage,
+    target: u64,
+    cc: CallConv,
+) -> Vec<(i64, u8)> {
+    let budgets = crate::analysis::cfg::Budgets {
+        max_blocks: 1,
+        max_instructions: 128,
+        timeout_ms: 10,
+        ..crate::analysis::cfg::Budgets::default()
+    };
+    let Some(function) = crate::analysis::cfg::discover_function_image_at(image, &budgets, target)
+    else {
+        return vec![];
+    };
+    let Ok(lifted) = crate::ir::lift_function::lift_function_from_image(image, &function) else {
+        return vec![];
+    };
+    let Some(entry) = lifted
+        .blocks
+        .iter()
+        .find(|block| block.start_va == lifted.entry_va)
+    else {
+        return vec![];
+    };
+    let mut coordinates = HashMap::from([(stack_pointer(cc), 0i64)]);
+    let mut writes: Vec<(i64, u8)> = vec![];
+    let mut reads = vec![];
+    for instruction in entry.instrs.iter().take(128) {
+        let op = &instruction.op;
+        if matches!(
+            op,
+            Op::Call { .. } | Op::Unknown { .. } | Op::Intrinsic { .. }
+        ) {
+            break;
+        }
+        let coordinate = |addr: &MemOp| {
+            if addr.index.is_some() || addr.segment.is_some() {
+                return None;
+            }
+            coordinates
+                .get(addr.base.as_ref()?)
+                .copied()?
+                .checked_add(addr.disp)
+        };
+        if let Op::Load { addr, .. } = op {
+            if let Some(offset) = coordinate(addr) {
+                if offset >= call_stack_return_bytes(cc)
+                    && !writes.iter().any(|(start, size)| {
+                        start.saturating_add(i64::from(*size)) > offset
+                            && offset.saturating_add(i64::from(addr.size)) > *start
+                    })
+                {
+                    reads.push((offset, addr.size));
+                }
+            }
+        }
+        if let Op::Store { addr, .. } | Op::CondStore { addr, .. } = op {
+            let Some(offset) = coordinate(addr) else {
+                break;
+            };
+            writes.push((offset, addr.size));
+        }
+        advance_stack_coordinates(op, &mut coordinates, cc);
+    }
+    reads
+}
+
+fn local_stack_key(addr: &MemOp, coordinates: &HashMap<VReg, i64>) -> Option<(i64, u8)> {
+    if addr.index.is_some() || addr.segment.is_some() {
+        return None;
+    }
+    Some((
+        coordinates
+            .get(addr.base.as_ref()?)?
+            .checked_add(addr.disp)?,
+        addr.size,
+    ))
+}
+
+fn stack_pointer(cc: CallConv) -> VReg {
+    VReg::phys(match cc {
+        CallConv::SysVAmd64 | CallConv::Win64 => "rsp",
+        CallConv::Cdecl32 => "esp",
+        CallConv::Arm | CallConv::ArmHardFloat | CallConv::Aarch64 => "sp",
+    })
+}
+
+fn advance_stack_coordinates(op: &Op, coordinates: &mut HashMap<VReg, i64>, cc: CallConv) {
+    if matches!(op, Op::Unknown { .. }) {
+        coordinates.clear();
+        return;
+    }
+    let adjusted = match op {
+        Op::Assign {
+            dst,
+            src: Value::Reg(source),
+        } => coordinates
+            .get(source)
+            .copied()
+            .map(|offset| (dst.clone(), offset)),
+        Op::Bin {
+            dst,
+            op,
+            lhs: Value::Reg(source),
+            rhs: Value::Const(change),
+        } => {
+            let change = match op {
+                BinOp::Add => Some(*change),
+                BinOp::Sub => change.checked_neg(),
+                _ => None,
+            };
+            coordinates
+                .get(source)
+                .copied()
+                .and_then(|base| change.and_then(|change| base.checked_add(change)))
+                .map(|offset| (dst.clone(), offset))
+        }
+        _ => None,
+    };
+    for_each_def(op, |register| {
+        coordinates.remove(register);
+    });
+    if matches!(op, Op::Call { .. }) {
+        for name in crate::ir::abi::caller_saved_registers(cc) {
+            coordinates.remove(&VReg::phys(*name));
+        }
+    }
+    if let Some((register, offset)) = adjusted {
+        coordinates.insert(register, offset);
+    }
+}
+
+fn stack_coordinate_entries(
+    function: &LlirFunction,
+    cc: CallConv,
+) -> Vec<Option<HashMap<VReg, i64>>> {
+    let by_va: HashMap<_, _> = function
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| (block.start_va, index))
+        .collect();
+    let mut incoming = vec![None; function.blocks.len()];
+    let Some(&entry) = by_va.get(&function.entry_va) else {
+        return incoming;
+    };
+    incoming[entry] = Some(HashMap::from([(stack_pointer(cc), 0)]));
+    let mut queue = VecDeque::from([entry]);
+    while let Some(index) = queue.pop_front() {
+        let Some(mut outgoing) = incoming[index].clone() else {
+            continue;
+        };
+        for instruction in &function.blocks[index].instrs {
+            advance_stack_coordinates(&instruction.op, &mut outgoing, cc);
+        }
+        for successor in &function.blocks[index].succs {
+            let Some(&successor) = by_va.get(successor) else {
+                continue;
+            };
+            let merged = incoming[successor].as_ref().map_or_else(
+                || outgoing.clone(),
+                |previous| {
+                    previous
+                        .iter()
+                        .filter(|(key, value)| outgoing.get(*key) == Some(*value))
+                        .map(|(key, value)| (key.clone(), *value))
+                        .collect()
+                },
+            );
+            if incoming[successor].as_ref() != Some(&merged) {
+                incoming[successor] = Some(merged);
+                queue.push_back(successor);
+            }
+        }
+    }
+    incoming
+}
+
 fn pair_part(cc: CallConv, register: &VReg) -> Option<usize> {
     let VReg::Phys(name) = register else {
         return None;
@@ -177,6 +492,124 @@ fn is_machine_return(op: &Op) -> bool {
 mod tests {
     use super::*;
     use crate::ir::types::{LlirBlock, LlirInstr, Value};
+
+    #[test]
+    fn compiled_call_boundaries_do_not_claim_padding_or_later_results() {
+        use crate::program::image::ProgramImage;
+        use std::process::Command;
+        let directory = tempfile::tempdir().expect("call fixture directory");
+        let binary = directory.path().join("calls.elf");
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/cfg/return_pair_consumption.S");
+        let output = Command::new("clang")
+            .args([
+                "--target=x86_64-linux-gnu",
+                "-nostdlib",
+                "-fuse-ld=lld",
+                "-no-pie",
+                "-Wl,-e,padding_caller",
+                "-o",
+            ])
+            .arg(&binary)
+            .arg(source)
+            .output()
+            .expect("compile real call fixture");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let image = ProgramImage::from_bytes(std::fs::read(binary).expect("read fixture"))
+            .expect("index fixture");
+        let lift = |name| {
+            let address = image
+                .unique_defined_text_symbol_address(name)
+                .expect("fixture symbol");
+            let function = crate::analysis::cfg::discover_function_image_at(
+                &image,
+                &crate::analysis::cfg::Budgets::default(),
+                address,
+            )
+            .expect("fixture CFG");
+            crate::ir::lift_function::lift_function_from_image(&image, &function)
+                .expect("lift fixture")
+        };
+        let scalar = lift("scalar_error");
+        let pair = lift("unrelated_pair");
+        assert!(
+            caller_observes_integer_pair_in_image(
+                &lift("stack_pair_caller"),
+                pair.entry_va,
+                CallConv::SysVAmd64,
+                &image
+            ),
+            "both returned parts consumed by a stack receiver must remain recoverable"
+        );
+        let cc = CallConv::SysVAmd64;
+        assert!(
+            !caller_observes_integer_pair_in_image(
+                &lift("clear_only_caller"),
+                scalar.entry_va,
+                cc,
+                &image
+            ),
+            "architectural self-zeroing is a definition, not consumption"
+        );
+        assert!(
+            !caller_observes_integer_pair_in_image(
+                &lift("partial_overwrite_caller"),
+                scalar.entry_va,
+                cc,
+                &image
+            ),
+            "a partial slot overwrite must invalidate full-width high-half provenance"
+        );
+
+        assert!(
+            caller_observes_integer_pair_in_image(
+                &lift("frame_pair_caller"),
+                pair.entry_va,
+                cc,
+                &image
+            ),
+            "spills read through proven frame aliases must remain recoverable"
+        );
+        assert!(
+            !caller_observes_integer_pair_in_image(
+                &lift("alias_overwrite_caller"),
+                scalar.entry_va,
+                cc,
+                &image
+            ),
+            "an overwritten frame-alias slot must not retain high-half provenance"
+        );
+
+        assert!(
+            !caller_observes_integer_pair_in_image(
+                &lift("padding_caller"),
+                scalar.entry_va,
+                cc,
+                &image
+            ),
+            "receiver consumes the scalar slot, not its adjacent padding"
+        );
+        assert!(
+            proves_integer_pair_return(&lift("pair_caller"), &pair, pair.entry_va, cc),
+            "real pair must remain recoverable"
+        );
+        assert!(
+            proves_integer_pair_return(&lift("spill_pair_caller"), &pair, pair.entry_va, cc),
+            "a wide result saved and reloaded must remain recoverable"
+        );
+        assert!(
+            !proves_integer_pair_return(&lift("later_call_caller"), &scalar, scalar.entry_va, cc),
+            "later call's results must not prove earlier scalar return"
+        );
+        assert!(
+            !proves_integer_pair_return(&lift("padding_caller"), &scalar, scalar.entry_va, cc),
+            "unused padding must not prove a scalar's high result"
+        );
+    }
 
     fn instruction(va: u64, op: Op) -> LlirInstr {
         LlirInstr { va, op }

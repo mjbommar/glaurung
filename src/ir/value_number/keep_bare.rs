@@ -43,6 +43,10 @@ impl KeepBare {
         }
     }
 
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     pub(crate) fn contains(&self, name: &str, version: u32) -> bool {
         self.0
             .get(name)
