@@ -479,6 +479,19 @@ impl IncrementalAxeyumSolver {
         )
     }
 
+    /// Check under one-shot assumptions, timing the two phases that live on
+    /// **this** side of the crate boundary: translating Glaurung's expression
+    /// DAG into the Axeyum arena (`DirectTranslationMetrics::nanos`) and
+    /// converting Axeyum's model back into a Glaurung [`Model`] (the returned
+    /// `model_extract_nanos`).
+    ///
+    /// This is not a duplicate of `IncrementalBvSolver::stats()`. That reports
+    /// the phases *inside* Axeyum (word rewrite, bit-blast, CNF encode, solve,
+    /// model lift, replay) and `profile::finish_warm_profile` already takes its
+    /// delta per check; the two are summed as non-overlapping phases against
+    /// `total_nanos`, and `unattributed_nanos` is what neither covers.
+    /// Checked 2026-09-16 at Axeyum `8df853252` (solver-032); `stats()` itself
+    /// predates the old pin (`c8ffb43d8`, 2026-07-15).
     fn check_assuming_measured(
         &mut self,
         pool: &ExprPool,
