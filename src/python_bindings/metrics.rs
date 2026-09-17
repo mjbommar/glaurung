@@ -160,7 +160,7 @@ impl PySkeleton {
 /// skeleton, by name.
 ///
 /// Returns `{function name: Skeleton}`. Total on every input, like
-/// [`crate::csource::joern::parity_cfgs`]: a file the front end only partly
+/// [`cindergraph::parity::parity_cfgs`]: a file the front end only partly
 /// recovered yields the functions it did recover rather than raising, and a
 /// file with two definitions of one name keeps the last --- the same rule the
 /// parity CFGs use, so the two maps have the same keys for the same input and

@@ -1,6 +1,6 @@
 """Reaching definitions and dead stores, through `glaurung.source`.
 
-The Rust unit tests in `src/csource/dataflow.rs` pin the analysis against
+The Rust unit tests in cindergraph's `csource/dataflow/` pin the analysis against
 hand-written C, including the cases that took several rounds to get right: a
 bare `int x;` is not a store, `a[i] = v` does not define `a`, `sum = sum + i`
 reads the value that reached the statement rather than the one it is about to

@@ -472,6 +472,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cindergraph"
+version = "0.1.0"
+source = "git+https://github.com/mjbommar/cindergraph.git?rev=ed5e55eb8fb7855b7675ac9ae3f7afbb4941a825#ed5e55eb8fb7855b7675ac9ae3f7afbb4941a825"
+dependencies = [
+ "regex",
+]
+
+[[package]]
 name = "clang-sys"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -829,6 +837,7 @@ dependencies = [
  "bytes",
  "capstone",
  "chrono",
+ "cindergraph",
  "cpp_demangle",
  "criterion",
  "encoding_rs",

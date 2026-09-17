@@ -24,7 +24,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use glaurung::syntax::ged::{ged, GedGraph, GedNode};
+use cindergraph::syntax::ged::{ged, GedGraph, GedNode};
 
 /// The tree to read, or `None` when the corpus is not present on this machine.
 ///

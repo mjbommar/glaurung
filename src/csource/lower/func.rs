@@ -19,11 +19,11 @@
 
 use std::collections::BTreeMap;
 
-use crate::csource::lex::TokenKind;
-use crate::csource::parse::tag::NodeTag;
-use crate::csource::parse::{parse, FunctionDef, Tree};
 use crate::ir::types::{LlirFunction, Op, VReg, Value, Width};
-use crate::syntax::ids::{NodeId, Span, TokenId};
+use cindergraph::csource::lex::TokenKind;
+use cindergraph::csource::parse::tag::NodeTag;
+use cindergraph::csource::parse::{parse, FunctionDef, Tree};
+use cindergraph::syntax::ids::{NodeId, Span, TokenId};
 
 use super::build::FnBuilder;
 use super::ctype::{CType, IntType};

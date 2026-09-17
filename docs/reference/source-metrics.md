@@ -11,8 +11,9 @@ that score a decompilation against a ground truth and mean nothing with only one
 side. Those cover benchmarking and nothing else. These are the other kind: a
 property of a single piece of source.
 
-* Rust: [`src/csource/metrics/`](../../src/csource/metrics/mod.rs), on the
-  language-neutral half in [`src/syntax/metrics.rs`](../../src/syntax/metrics.rs)
+* Rust: the `cindergraph` crate's `csource/metrics/`, on the language-neutral
+  half in its `syntax/metrics.rs` (consumed by Git revision since 2026-09-17;
+  [`source-001`](../decisions/source-001-depend-on-cindergraph-by-git-rev.md))
 * Python: `glaurung.source` (`python/glaurung/source.py`)
 * CLI: `glaurung source-metrics`
 

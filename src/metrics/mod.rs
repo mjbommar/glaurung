@@ -6,7 +6,7 @@
 //! and the component inventory are `docs/design/static-c-analysis/`.
 //!
 //! What lives here is only what is language- and format-agnostic about a
-//! metric. The graph edit distance is in [`crate::syntax::ged`], because it is
+//! metric. The graph edit distance is in [`cindergraph::syntax::ged`], because it is
 //! a graph algorithm over degree sequences with no C in it and no metric in it
 //! either.
 //!

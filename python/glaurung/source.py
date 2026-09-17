@@ -27,7 +27,7 @@ Quick start:
     f 1 0
 
 Definitions for every metric are in the Rust module documentation
-(`src/csource/metrics/`) and summarized in `docs/reference/source-metrics.md`;
+(the `cindergraph` crate's `csource/metrics/`) and summarized in `docs/reference/source-metrics.md`;
 the ones people disagree about -- cognitive complexity's `else if` rule,
 Halstead's operator split -- are written out there rather than left implied.
 """

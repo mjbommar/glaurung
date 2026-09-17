@@ -4,7 +4,7 @@
 //!
 //! # Why a tree, when a graph is already here
 //!
-//! [`crate::syntax::ged`] reimplements the distance DecBench scores, and
+//! [`cindergraph::syntax::ged`] reimplements the distance DecBench scores, and
 //! `docs/design/metrics-research/what-ged-measures.md` measures what it can
 //! see. Two of those measurements are the whole reason this module exists:
 //!
@@ -202,10 +202,10 @@
 
 use std::collections::BTreeMap;
 
-use crate::csource::parse::tag::NodeTag;
-use crate::csource::parse::{parse, FunctionDef, Tree};
-use crate::syntax::ids::NodeId;
-use crate::syntax::tree::Arena;
+use cindergraph::csource::parse::tag::NodeTag;
+use cindergraph::csource::parse::{parse, FunctionDef, Tree};
+use cindergraph::syntax::ids::NodeId;
+use cindergraph::syntax::tree::Arena;
 
 /// The version of the projection rules, bumped whenever a canonicalization
 /// changes.
@@ -352,7 +352,7 @@ impl SkeletonKind {
     /// all", which is the same question as "is it in the single-node CFG
     /// class". A skeleton whose kinds are all *false* here is branchless, and
     /// every branchless function is one graph to
-    /// [`crate::syntax::ged`] --- which is the gap this module exists to fill.
+    /// [`cindergraph::syntax::ged`] --- which is the gap this module exists to fill.
     pub const fn is_control(self) -> bool {
         !matches!(
             self,
@@ -439,7 +439,7 @@ impl Skeleton {
     /// Whether this function has no control flow --- the single-node CFG class.
     ///
     /// Every member of this class is one and the same graph to
-    /// [`crate::syntax::ged`]: one node, no edges, entry and exit. 27.24% of
+    /// [`cindergraph::syntax::ged`]: one node, no edges, entry and exit. 27.24% of
     /// the scored corpus lives here.
     pub fn is_branchless(&self) -> bool {
         !self.kinds.iter().any(|kind| kind.is_control())
@@ -553,7 +553,7 @@ pub fn skeleton(tree: &Tree, func: &FunctionDef) -> Skeleton {
 ///
 /// The whole-file entry point, and the one the corpus gates use. A file with
 /// two definitions of the same name keeps the last, which is the same rule
-/// [`crate::csource::joern::parity_cfgs`] applies, so the two maps have the
+/// [`cindergraph::parity::parity_cfgs`] applies, so the two maps have the
 /// same keys for the same input.
 pub fn skeletons(text: &str) -> BTreeMap<String, Skeleton> {
     let tree = parse(text).into_parts().0;
@@ -812,7 +812,7 @@ impl<'a> Builder<'a> {
 
     /// Project one statement node.
     ///
-    /// The dispatch mirrors [`crate::csource::cfg`]'s, deliberately: a
+    /// The dispatch mirrors [`cindergraph::csource::cfg`]'s, deliberately: a
     /// construct that contributes no control-flow event contributes no skeleton
     /// node either, so the two views of "what is a statement here" cannot
     /// drift.
@@ -1127,7 +1127,7 @@ impl<'a> Builder<'a> {
 
 /// Whether a tag names a construct's *body* rather than one of its clauses.
 ///
-/// The same rule `crate::csource::cfg::reach::is_body` applies, restated
+/// The same rule `cindergraph::csource::cfg::reach::is_body` applies, restated
 /// because it is `pub(super)` there: a `for`'s three clause nodes are not
 /// bodies, an unparsed region is, and everything else follows
 /// [`NodeTag::is_statement`].
@@ -1155,8 +1155,8 @@ fn is_significant(tag: NodeTag) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::csource::joern::parity_cfgs;
-    use crate::syntax::ged::{ged, GedGraph, GedNode};
+    use cindergraph::parity::parity_cfgs;
+    use cindergraph::syntax::ged::{ged, GedGraph, GedNode};
     use std::path::{Path, PathBuf};
 
     // --- helpers -------------------------------------------------------------
@@ -1181,7 +1181,7 @@ mod tests {
     }
 
     /// One named function's Joern-parity CFG in the degree-and-flag view that
-    /// is all [`crate::syntax::ged`] can see.
+    /// is all [`cindergraph::syntax::ged`] can see.
     ///
     /// This is what makes the "GED says these are the same" half of the
     /// separation tests real rather than asserted: the graph comes from the

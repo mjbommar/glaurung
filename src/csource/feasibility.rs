@@ -1121,7 +1121,7 @@ mod corpus {
             let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            let (tree, _) = crate::csource::parse::parse(&text).into_parts();
+            let (tree, _) = cindergraph::csource::parse::parse(&text).into_parts();
             for func in tree.functions(&text) {
                 if func.name.is_empty() {
                     continue;
@@ -1202,7 +1202,7 @@ mod corpus {
                 continue;
             };
             let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-            let (tree, _) = crate::csource::parse::parse(&text).into_parts();
+            let (tree, _) = cindergraph::csource::parse::parse(&text).into_parts();
             for func in tree.functions(&text) {
                 if func.name.is_empty() {
                     continue;
@@ -1266,9 +1266,9 @@ mod witness_differential {
     // how `let Verdict::Feasible(..)` came to mean the wrong enum.
     use crate::csource::lower::differential::{compare, Verdict as Cell};
     use crate::csource::lower::lower_function;
-    use crate::csource::parse::parse;
     use crate::ir::lift_function::lift_function_from_bytes;
     use crate::ir::types::LlirFunction;
+    use cindergraph::csource::parse::parse;
 
     fn fixtures_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/decompiler_fixtures")

@@ -24,10 +24,10 @@
 //! into ops `src/exec` can execute. The cut is at the parse tree: nothing in
 //! `value` reads it.
 
-use crate::csource::lex::TokenKind;
-use crate::csource::parse::tag::NodeTag;
 use crate::ir::types::{BinOp, VReg};
-use crate::syntax::ids::NodeId;
+use cindergraph::csource::lex::TokenKind;
+use cindergraph::csource::parse::tag::NodeTag;
+use cindergraph::syntax::ids::NodeId;
 
 use super::build::BlockRef;
 use super::call::{inline_call, parenthesised_type};
