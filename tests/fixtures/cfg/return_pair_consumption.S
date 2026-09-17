@@ -41,6 +41,7 @@ padding_caller:
     add $8, %rsp
     ret
 .size padding_caller,.-padding_caller
+.globl capture_scalar
 .type capture_scalar,@function
 capture_scalar:
     mov 8(%rsp), %rax
@@ -167,3 +168,122 @@ partial_overwrite_caller:
     add $24, %rsp
     ret
 .size partial_overwrite_caller,.-partial_overwrite_caller
+
+.text
+.globl narrow_stack_pair_caller
+.type narrow_stack_pair_caller,@function
+narrow_stack_pair_caller:
+    sub $8, %rsp
+    xor %edi, %edi
+    call unrelated_pair
+    push %rdx
+    push %rax
+    call consume_narrow_stack_pair
+    add $24, %rsp
+    ret
+.size narrow_stack_pair_caller,.-narrow_stack_pair_caller
+.globl consume_narrow_stack_pair
+.type consume_narrow_stack_pair,@function
+consume_narrow_stack_pair:
+    mov 8(%rsp), %rax
+    movzbl 16(%rsp), %edx
+    add %rdx, %rax
+    ret
+.size consume_narrow_stack_pair,.-consume_narrow_stack_pair
+
+.text
+.globl interior_stack_pair_caller
+.type interior_stack_pair_caller,@function
+interior_stack_pair_caller:
+    sub $8, %rsp
+    xor %edi, %edi
+    call unrelated_pair
+    push %rdx
+    push %rax
+    call consume_interior_stack_pair
+    add $24, %rsp
+    ret
+.size interior_stack_pair_caller,.-interior_stack_pair_caller
+.type consume_interior_stack_pair,@function
+consume_interior_stack_pair:
+    mov 8(%rsp), %rax
+    movzbl 17(%rsp), %edx
+    add %rdx, %rax
+    ret
+.size consume_interior_stack_pair,.-consume_interior_stack_pair
+
+.globl narrow_spill_pair_caller
+.type narrow_spill_pair_caller,@function
+narrow_spill_pair_caller:
+    sub $24, %rsp
+    xor %edi, %edi
+    call unrelated_pair
+    mov %rax, 8(%rsp)
+    mov %rdx, 16(%rsp)
+    xor %eax, %eax
+    xor %edx, %edx
+    mov 8(%rsp), %rcx
+    movzbl 17(%rsp), %esi
+    lea (%rcx,%rsi), %rax
+    add $24, %rsp
+    ret
+.size narrow_spill_pair_caller,.-narrow_spill_pair_caller
+
+.text
+.globl branch_spill_pair_caller
+.type branch_spill_pair_caller,@function
+branch_spill_pair_caller:
+    sub $24, %rsp
+    xor %edi, %edi
+    call unrelated_pair
+    mov %rax, 8(%rsp)
+    mov %rdx, 16(%rsp)
+    xor %eax, %eax
+    xor %edx, %edx
+    jmp .Lread_saved_pair
+.Lread_saved_pair:
+    mov 8(%rsp), %rcx
+    mov 16(%rsp), %rsi
+    lea (%rcx,%rsi), %rax
+    add $24, %rsp
+    ret
+.size branch_spill_pair_caller,.-branch_spill_pair_caller
+
+.globl branch_overwrite_caller
+.type branch_overwrite_caller,@function
+branch_overwrite_caller:
+    sub $24, %rsp
+    xor %edi, %edi
+    call unrelated_pair
+    mov %rax, 8(%rsp)
+    mov %rdx, 16(%rsp)
+    xor %eax, %eax
+    xor %edx, %edx
+    test %esi, %esi
+    je .Luntouched_slot
+    movb $123, 16(%rsp)
+    jmp .Ljoin_slot_reads
+.Luntouched_slot:
+    jmp .Ljoin_slot_reads
+.Ljoin_slot_reads:
+    mov 8(%rsp), %rcx
+    mov 16(%rsp), %rsi
+    lea (%rcx,%rsi), %rax
+    add $24, %rsp
+    ret
+.size branch_overwrite_caller,.-branch_overwrite_caller
+
+.globl branch_later_call_caller
+.type branch_later_call_caller,@function
+branch_later_call_caller:
+    sub $8, %rsp
+    mov $42, %edi
+    call scalar_error
+    jmp .Lfresh_result
+.Lfresh_result:
+    xor %edi, %edi
+    call unrelated_pair
+    add %rdx, %rax
+    add $8, %rsp
+    ret
+.size branch_later_call_caller,.-branch_later_call_caller

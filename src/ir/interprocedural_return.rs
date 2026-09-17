@@ -25,11 +25,10 @@ fn proves_integer_pair_return(
 }
 
 /// Require both halves to be consumed after the call, using the original
-/// registers or full-width stack spills reloaded in the same block. A stack
-/// write without a read is insufficient: outgoing areas also contain padding.
-/// The bounded same-block walk is intentional: crossing a CFG
-/// join would require reaching-definition identity, and declining that shape is
-/// safer than attributing an unrelated later register use to this call.
+/// registers or reads contained in full-width stack spills. A stack write
+/// without a read is insufficient: outgoing areas also contain padding.
+/// A bounded forward must-analysis carries provenance across CFG edges and
+/// intersects it at joins. A subsequent call ends the original result lifetime.
 pub(crate) fn caller_observes_integer_pair(
     caller: &LlirFunction,
     target: u64,
@@ -46,6 +45,27 @@ pub(crate) fn caller_observes_integer_pair_in_image(
     image: &crate::program::image::ProgramImage,
 ) -> bool {
     caller_observes_integer_pair_impl(caller, target, cc, Some(image))
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct PairObservation {
+    observed: [bool; 2],
+    overwritten: [bool; 2],
+    coordinates: HashMap<VReg, i64>,
+    spills: HashMap<(i64, u8), usize>,
+}
+
+impl PairObservation {
+    fn meet(&mut self, other: &Self) {
+        for part in 0..2 {
+            self.observed[part] &= other.observed[part];
+            self.overwritten[part] |= other.overwritten[part];
+        }
+        self.coordinates
+            .retain(|register, coordinate| other.coordinates.get(register) == Some(coordinate));
+        self.spills
+            .retain(|slot, part| other.spills.get(slot) == Some(part));
+    }
 }
 
 fn caller_observes_integer_pair_impl(
@@ -72,128 +92,210 @@ fn caller_observes_integer_pair_impl(
             ) {
                 continue;
             }
-            let mut observed = [false; 2];
-            let mut overwritten = [false; 2];
             let Some(mut coordinates) = stack_entries[block_index].clone() else {
                 continue;
             };
             for prefix in &block.instrs[..=call_index] {
                 advance_stack_coordinates(&prefix.op, &mut coordinates, cc);
             }
-            let mut spills: HashMap<(i64, u8), usize> = HashMap::new();
-            for later in &block.instrs[call_index + 1..] {
-                // A later call owns fresh result registers even before ABI
-                // effects have been attached to the lifted instruction.
-                if let Op::Call {
-                    target: receiver,
-                    effects,
-                } = &later.op
-                {
-                    if let Some(effects) = effects {
-                        for argument in &effects.args {
-                            if effects.args_are_exact || effects.proven_args.contains(argument) {
-                                if let Some(part) = pair_part(cc, argument) {
-                                    if !overwritten[part] {
-                                        observed[part] = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if !spills.is_empty() {
-                        if let (Some(image), CallTarget::Direct(receiver)) = (image, receiver) {
-                            let return_bytes = call_stack_return_bytes(cc);
-                            for (offset, size) in receiver_stack_reads(image, *receiver, cc) {
-                                let Some(offset) = coordinates
-                                    .get(&stack_pointer(cc))
-                                    .copied()
-                                    .and_then(|base| base.checked_sub(return_bytes))
-                                    .and_then(|base| base.checked_add(offset))
-                                else {
-                                    continue;
-                                };
-                                for ((saved_offset, saved_size), part) in &spills {
-                                    if *saved_offset == offset && *saved_size == size {
-                                        observed[*part] = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if observed == [true, true] {
-                        return true;
-                    }
+            let mut incoming = vec![None; caller.blocks.len()];
+            incoming[block_index] = Some(PairObservation {
+                observed: [false; 2],
+                overwritten: [false; 2],
+                coordinates,
+                spills: HashMap::new(),
+            });
+            let by_va = caller
+                .blocks
+                .iter()
+                .enumerate()
+                .map(|(index, block)| (block.start_va, index))
+                .collect::<HashMap<_, _>>();
+            let mut pending = VecDeque::from([block_index]);
+            let mut successes = vec![false; caller.blocks.len()];
+            let mut steps = 0;
+            while let Some(index) = pending.pop_front() {
+                steps += 1;
+                if steps > 512 {
+                    // An unfinished fixed point cannot support a result claim.
+                    successes.fill(false);
                     break;
                 }
-                if let Op::Store { addr, src } = &later.op {
-                    if let Some(key) = local_stack_key(addr, &coordinates) {
-                        // Writing a stack slot alone proves neither a source
-                        // argument nor a returned high half: it may be padding.
-                        spills.retain(|(offset, size), _| {
-                            offset.saturating_add(i64::from(*size)) <= key.0
-                                || key.0.saturating_add(i64::from(key.1)) <= *offset
-                        });
-                        if let Value::Reg(register) = src {
-                            if let Some(part) = pair_part(cc, register) {
-                                let part_bytes = crate::ir::abi::wide_integer_return_width(cc) / 2;
-                                if !overwritten[part] && addr.size == part_bytes {
-                                    spills.insert(key, part);
+                successes[index] = false;
+                let Some(PairObservation {
+                    mut observed,
+                    mut overwritten,
+                    mut coordinates,
+                    mut spills,
+                }) = incoming[index].clone()
+                else {
+                    continue;
+                };
+                let next_block = &caller.blocks[index];
+                let start = if index == block_index {
+                    call_index + 1
+                } else {
+                    0
+                };
+                let mut stopped = false;
+                for later in &next_block.instrs[start..] {
+                    // A later call owns fresh result registers even before ABI
+                    // effects have been attached to the lifted instruction.
+                    if let Op::Call {
+                        target: receiver,
+                        effects,
+                    } = &later.op
+                    {
+                        if let Some(effects) = effects {
+                            for argument in &effects.args {
+                                if effects.args_are_exact || effects.proven_args.contains(argument)
+                                {
+                                    if let Some(part) = pair_part(cc, argument) {
+                                        if !overwritten[part] {
+                                            observed[part] = true;
+                                        }
+                                    }
                                 }
                             }
+                        }
+                        if !spills.is_empty() {
+                            if let (Some(image), CallTarget::Direct(receiver)) = (image, receiver) {
+                                let return_bytes = call_stack_return_bytes(cc);
+                                for (offset, size) in receiver_stack_reads(image, *receiver, cc) {
+                                    let Some(offset) = coordinates
+                                        .get(&stack_pointer(cc))
+                                        .copied()
+                                        .and_then(|base| base.checked_sub(return_bytes))
+                                        .and_then(|base| base.checked_add(offset))
+                                    else {
+                                        continue;
+                                    };
+                                    for ((saved_offset, saved_size), part) in &spills {
+                                        if stack_read_is_contained(
+                                            (*saved_offset, *saved_size),
+                                            (offset, size),
+                                        ) {
+                                            observed[*part] = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if observed == [true, true] {
+                            successes[index] = true;
+                        }
+                        stopped = true;
+                        break;
+                    }
+                    if let Op::Store { addr, src } = &later.op {
+                        if let Some(key) = local_stack_key(addr, &coordinates) {
+                            // Writing a stack slot alone proves neither a source
+                            // argument nor a returned high half: it may be padding.
+                            spills.retain(|(offset, size), _| {
+                                offset.saturating_add(i64::from(*size)) <= key.0
+                                    || key.0.saturating_add(i64::from(key.1)) <= *offset
+                            });
+                            if let Value::Reg(register) = src {
+                                if let Some(part) = pair_part(cc, register) {
+                                    let part_bytes =
+                                        crate::ir::abi::wide_integer_return_width(cc) / 2;
+                                    if !overwritten[part] && addr.size == part_bytes {
+                                        spills.insert(key, part);
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+                        // An untracked store can alias a saved stack value.
+                        spills.clear();
+                    }
+                    if let Op::CondStore { addr, .. } = &later.op {
+                        if let Some((offset, size)) = local_stack_key(addr, &coordinates) {
+                            spills.retain(|(saved, saved_size), _| {
+                                saved.saturating_add(i64::from(*saved_size)) <= offset
+                                    || offset.saturating_add(i64::from(size)) <= *saved
+                            });
+                        } else {
+                            spills.clear();
                         }
                         continue;
                     }
-                    // An untracked store can alias a saved stack value.
-                    spills.clear();
-                }
-                if let Op::CondStore { addr, .. } = &later.op {
-                    if let Some((offset, size)) = local_stack_key(addr, &coordinates) {
-                        spills.retain(|(saved, saved_size), _| {
-                            saved.saturating_add(i64::from(*saved_size)) <= offset
-                                || offset.saturating_add(i64::from(size)) <= *saved
-                        });
-                    } else {
+                    if matches!(later.op, Op::Unknown { .. }) {
+                        stopped = true;
+                        break;
+                    }
+                    if matches!(later.op, Op::Intrinsic { .. }) {
                         spills.clear();
                     }
-                    continue;
-                }
-                if matches!(later.op, Op::Unknown { .. }) {
-                    break;
-                }
-                if matches!(later.op, Op::Intrinsic { .. }) {
-                    spills.clear();
-                }
-                if let Op::Load { addr, .. } = &later.op {
-                    if let Some(part) = local_stack_key(addr, &coordinates)
-                        .and_then(|key| spills.get(&key))
-                        .copied()
-                    {
-                        observed[part] = true;
+                    if let Op::Load { addr, .. } = &later.op {
+                        if let Some(part) = local_stack_key(addr, &coordinates).and_then(|key| {
+                            spills.iter().find_map(|(saved, part)| {
+                                stack_read_is_contained(*saved, key).then_some(*part)
+                            })
+                        }) {
+                            observed[part] = true;
+                        }
                     }
-                }
-                let zero_idiom = matches!(&later.op,
+                    let zero_idiom = matches!(&later.op,
                     Op::Bin { op: BinOp::Xor | BinOp::Sub, lhs: Value::Reg(left), rhs: Value::Reg(right), .. }
                     if left == right);
-                if !zero_idiom {
-                    for_each_use(&later.op, |register| {
+                    if !zero_idiom {
+                        for_each_use(&later.op, |register| {
+                            if let Some(part) = pair_part(cc, register) {
+                                if !overwritten[part] {
+                                    observed[part] = true;
+                                }
+                            }
+                        });
+                    }
+                    if observed == [true, true] {
+                        successes[index] = true;
+                        stopped = true;
+                        break;
+                    }
+                    for_each_def(&later.op, |register| {
                         if let Some(part) = pair_part(cc, register) {
-                            if !overwritten[part] {
-                                observed[part] = true;
+                            if !observed[part] {
+                                overwritten[part] = true;
                             }
                         }
                     });
+                    advance_stack_coordinates(&later.op, &mut coordinates, cc);
                 }
-                if observed == [true, true] {
-                    return true;
+                if stopped {
+                    continue;
                 }
-                for_each_def(&later.op, |register| {
-                    if let Some(part) = pair_part(cc, register) {
-                        if !observed[part] {
-                            overwritten[part] = true;
-                        }
+                let state = PairObservation {
+                    observed,
+                    overwritten,
+                    coordinates,
+                    spills,
+                };
+                for successor in &next_block.succs {
+                    let Some(&successor) = by_va.get(successor) else {
+                        continue;
+                    };
+                    // Returning to the block containing the original call crosses
+                    // that call again; it owns a fresh result and ends this proof.
+                    if successor == block_index {
+                        continue;
                     }
-                });
-                advance_stack_coordinates(&later.op, &mut coordinates, cc);
+                    let merged = match &incoming[successor] {
+                        Some(old) => {
+                            let mut merged = old.clone();
+                            merged.meet(&state);
+                            merged
+                        }
+                        None => state.clone(),
+                    };
+                    if incoming[successor].as_ref() != Some(&merged) {
+                        incoming[successor] = Some(merged);
+                        pending.push_back(successor);
+                    }
+                }
+            }
+            if pending.is_empty() && successes.iter().any(|success| *success) {
+                return true;
             }
         }
     }
@@ -300,6 +402,28 @@ fn receiver_stack_reads(
     target: u64,
     cc: CallConv,
 ) -> Vec<(i64, u8)> {
+    // Use the same local symbol contract as direct-callee recovery: a PLT
+    // relocation can name a body defined in this image. External or ambiguous
+    // symbols provide no machine-read evidence.
+    let target = if image
+        .plt_stub_ranges()
+        .iter()
+        .any(|range| range.contains(&target))
+    {
+        let Some((_, name)) = crate::analysis::elf_plt::elf_plt_map(image.bytes())
+            .into_iter()
+            .find(|(address, _)| *address == target)
+        else {
+            return vec![];
+        };
+        let name = name.strip_suffix("@plt").unwrap_or(&name);
+        let Some(body) = image.unique_defined_text_symbol_address(name) else {
+            return vec![];
+        };
+        body
+    } else {
+        target
+    };
     let budgets = crate::analysis::cfg::Budgets {
         max_blocks: 1,
         max_instructions: 128,
@@ -361,6 +485,21 @@ fn receiver_stack_reads(
         advance_stack_coordinates(op, &mut coordinates, cc);
     }
     reads
+}
+
+// The saved word retains provenance until any overlapping write invalidates
+// it. Reading any nonempty contained portion consumes that returned part.
+fn stack_read_is_contained(saved: (i64, u8), read: (i64, u8)) -> bool {
+    if read.1 == 0 || read.0 < saved.0 {
+        return false;
+    }
+    match (
+        saved.0.checked_add(i64::from(saved.1)),
+        read.0.checked_add(i64::from(read.1)),
+    ) {
+        (Some(saved_end), Some(read_end)) => read_end <= saved_end,
+        _ => false,
+    }
 }
 
 fn local_stack_key(addr: &MemOp, coordinates: &HashMap<VReg, i64>) -> Option<(i64, u8)> {
@@ -545,7 +684,41 @@ mod tests {
             ),
             "both returned parts consumed by a stack receiver must remain recoverable"
         );
+        for name in [
+            "narrow_stack_pair_caller",
+            "interior_stack_pair_caller",
+            "narrow_spill_pair_caller",
+            "branch_spill_pair_caller",
+        ] {
+            assert!(
+                caller_observes_integer_pair_in_image(
+                    &lift(name),
+                    pair.entry_va,
+                    CallConv::SysVAmd64,
+                    &image
+                ),
+                "a contained byte read of an untouched saved result must count: {name}"
+            );
+        }
         let cc = CallConv::SysVAmd64;
+        assert!(
+            !caller_observes_integer_pair_in_image(
+                &lift("branch_overwrite_caller"),
+                pair.entry_va,
+                cc,
+                &image
+            ),
+            "a join must discard spill provenance if either predecessor overwrites it"
+        );
+        assert!(
+            !caller_observes_integer_pair_in_image(
+                &lift("branch_later_call_caller"),
+                scalar.entry_va,
+                cc,
+                &image
+            ),
+            "a new call in a later block still ends the earlier scalar result lifetime"
+        );
         assert!(
             !caller_observes_integer_pair_in_image(
                 &lift("clear_only_caller"),
@@ -608,6 +781,74 @@ mod tests {
         assert!(
             !proves_integer_pair_return(&lift("padding_caller"), &scalar, scalar.entry_va, cc),
             "unused padding must not prove a scalar's high result"
+        );
+    }
+
+    #[test]
+    fn compiled_plt_receivers_preserve_real_stack_consumption() {
+        use crate::program::image::ProgramImage;
+        use std::process::Command;
+        let directory = tempfile::tempdir().expect("PLT fixture directory");
+        let binary = directory.path().join("calls.so");
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/cfg/return_pair_consumption.S");
+        let output = Command::new("clang")
+            .args([
+                "--target=x86_64-linux-gnu",
+                "-nostdlib",
+                "-fuse-ld=lld",
+                "-shared",
+                "-fPIC",
+                "-o",
+            ])
+            .arg(&binary)
+            .arg(source)
+            .output()
+            .expect("compile real PLT fixture");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let image = ProgramImage::from_bytes(std::fs::read(binary).expect("read fixture"))
+            .expect("index fixture");
+        let plt = crate::analysis::elf_plt::elf_plt_map(image.bytes());
+        let target = |name: &str| {
+            plt.iter()
+                .find(|(_, symbol)| symbol == &format!("{name}@plt"))
+                .expect("actual PLT target")
+                .0
+        };
+        let lift = |name| {
+            let address = image
+                .unique_defined_text_symbol_address(name)
+                .expect("fixture symbol");
+            let function = crate::analysis::cfg::discover_function_image_at(
+                &image,
+                &crate::analysis::cfg::Budgets::default(),
+                address,
+            )
+            .expect("fixture CFG");
+            crate::ir::lift_function::lift_function_from_image(&image, &function)
+                .expect("lift fixture")
+        };
+        assert!(
+            caller_observes_integer_pair_in_image(
+                &lift("narrow_stack_pair_caller"),
+                target("unrelated_pair"),
+                CallConv::SysVAmd64,
+                &image
+            ),
+            "a locally defined PLT receiver consumes both saved result parts"
+        );
+        assert!(
+            !caller_observes_integer_pair_in_image(
+                &lift("padding_caller"),
+                target("scalar_error"),
+                CallConv::SysVAmd64,
+                &image
+            ),
+            "a locally defined PLT scalar receiver does not consume adjacent padding"
         );
     }
 
