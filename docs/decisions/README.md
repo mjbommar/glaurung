@@ -23,7 +23,9 @@ Two series share this directory and once shared a number. `exec-0002` (harden
 the LLIR in place) and `solver-002` (axeyum as the default backend) are
 unrelated decisions that were both called "ADR-002" in their own trees; the
 `exec-` and `solver-` prefixes end that collision, and `Cargo.toml`'s comment on
-the `solver-axeyum` feature points at `solver-002` explicitly.
+the `solver-axeyum` feature points at `solver-002` explicitly. A third series,
+`source-`, opened on 2026-09-17 for the C source-analysis boundary; its one
+record is pointed at by `Cargo.toml`'s comment on the `cindergraph` dependency.
 
 ## Execution engine
 
@@ -108,6 +110,17 @@ solver opt-in. `solver-004` and `solver-005` are marked amended because the
 SMT-LIB text bridge became the secondary path behind a native term translator
 (`solver-axeyum-text` still builds it), and the one-shot `Solver` trait gained
 the separate `IncrementalSolver` companion the ADR deferred.
+
+## Source analysis
+
+One decision, 2026-09-17, on the boundary between Glaurung and the
+`cindergraph` crate it extracted its C source-analysis stack into. Subject:
+[`../development/cindergraph-migration-2026-09-17.md`](../development/cindergraph-migration-2026-09-17.md)
+and the kept modules in `src/csource/mod.rs`.
+
+| id | title | status | date |
+|---|---|---|---|
+| `source-001` | [Depend on cindergraph from GitHub by Git revision; the embedded copy is deleted](source-001-depend-on-cindergraph-by-git-rev.md) | held | 2026-09-17 |
 
 ## Cross-cutting
 
