@@ -9,6 +9,17 @@
 > The perf gate this ADR made the default conditional on never closed; see
 > [solver-014](solver-014-source-prefix-production-win.md) and
 > [solver-021](solver-021-defer-wider-direct-delta-default.md).
+>
+> **Re-measured 2026-09-17 at the `8df853252` pin
+> ([solver-033](solver-033-six-cell-rerun-at-the-2026-09-16-pin.md)):** the
+> gate is not met. Cold Axeyum is at parity or faster than cold Z3 on three of
+> four drivers (Z3/Axeyum 1.18 / 0.65 / 1.41 / 1.92), but in the production
+> topology — retained sessions — warm Axeyum is 6–11× slower than warm Z3 on
+> three of four (0.17 / 0.09 / 0.31 / 1.22; July was 0.84 / 1.05 / 2.23 / 2.28)
+> and its per-check latency grows with session age. Those ratios are
+> exploratory: the preregistered analyzer refused all four drivers because the
+> warm cells pushed every process into the frozen 60 s solve budget and the
+> work was no longer fixed. The default stays as it is.
 
 **ADR status:** Proposed.
 **Context:** Axeyum is pure-Rust, wheel-shippable, proof-carrying, but not

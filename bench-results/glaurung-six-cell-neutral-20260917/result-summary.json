@@ -1,0 +1,793 @@
+{
+  "schema": "axeyum-glaurung-six-cell-result-v1",
+  "date": "2026-09-17",
+  "cells": 4,
+  "status": "measured; every driver inconclusive under ADR-0272 (fixed-work gate failed); exploratory common-prefix ratios reported and labelled",
+  "registration": "registration.json",
+  "raw_campaign": {
+    "path": "/data0/axeyum/scratch/sixcell/campaign",
+    "campaign_sha256": "bbff6518327dd04d44c00ee3d1628acd4aa39336c1464f7e8681e89768640e3e",
+    "processes": 20,
+    "producer_validated_processes": 20,
+    "started_utc": "2026-09-17T05:37:42.787548+00:00",
+    "ended_utc": "2026-09-17T06:26:07.204505+00:00",
+    "host": "s4",
+    "cpu": "12th Gen Intel(R) Core(TM) i5-12600K, logical CPU 2 (SMT sibling 3)",
+    "load1_samples_during_run": {
+      "min": 2.38,
+      "median": 8.155000000000001,
+      "max": 16.25,
+      "n": 96
+    }
+  },
+  "population": {
+    "repetitions": 5,
+    "repeated_check_occurrences": 208359,
+    "measured_solver_cells": 833436,
+    "unknown": 52,
+    "operational_error": 0,
+    "decided_disagreement": 0,
+    "unknown_note": "every unknown is a warm-Axeyum cell that hit the 250 ms warm safety cap (GLAURUNG_CHECK_TIMEOUT_MS); no cold cell and no Z3 cell returned unknown"
+  },
+  "drivers": {
+    "dptf": {
+      "checks_per_repetition": [
+        1365,
+        1142,
+        1380,
+        1272,
+        1333
+      ],
+      "fixed_work_across_repetitions": false,
+      "preregistered_analyzer": {
+        "exit": 2,
+        "refusal": "paired trace analysis failed: fixed-work check identity drift in /data0/axeyum/scratch/sixcell/campaign/01-dptf-r2/traces/glaurung-ordered-trace-1762383-cb6f3d9648b74e71b31ccd5c65f06e01"
+      },
+      "verdict_under_adr_0272": "inconclusive: fixed-work gate failed (deadline=1 in every repetition; IOCTLANCE_SOLVE_SECS=60 cut one root at a wall-clock-dependent point)",
+      "z3_cold_outcomes_rep1": {
+        "unsat": 483,
+        "sat": 882
+      },
+      "warm_execution_rep1": {
+        "warm-created": 8,
+        "z3:warm-created": 8,
+        "warm-retained": 1357,
+        "z3:warm-retained": 1357
+      },
+      "unknown_cells_total": 51,
+      "unknown_per_cell_per_rep": {
+        "z3_cold": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "z3_warm": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "axeyum_cold": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "axeyum_warm": [
+          19,
+          0,
+          28,
+          2,
+          2
+        ]
+      },
+      "error_cells_total": 0,
+      "decided_disagreement": 0,
+      "per_cell_sum_nanos_per_rep": {
+        "z3_cold": [
+          2304837909,
+          2576827413,
+          2733658734,
+          2194988568,
+          3434589180
+        ],
+        "z3_warm": [
+          211360862,
+          245150321,
+          265090063,
+          204319149,
+          347771404
+        ],
+        "axeyum_cold": [
+          2121373686,
+          1881952375,
+          2289572847,
+          1928376533,
+          2645089519
+        ],
+        "axeyum_warm": [
+          37647570839,
+          18836956925,
+          43034161410,
+          24915496251,
+          31160304794
+        ]
+      },
+      "per_cell_latency_common_prefix": {
+        "axeyum_cold": {
+          "max": 12270035,
+          "occurrences": 4915,
+          "p50": 1755035,
+          "p90": 2589056,
+          "p95": 2883296,
+          "p99": 3851627,
+          "sum_nanos_all_reps": 8691258861,
+          "unknown": 0
+        },
+        "axeyum_warm": {
+          "max": 249457891,
+          "occurrences": 4915,
+          "p50": 979156,
+          "p90": 79473854,
+          "p95": 124808874,
+          "p99": 173018769,
+          "sum_nanos_all_reps": 90587233929,
+          "unknown": 0
+        },
+        "z3_cold": {
+          "max": 12390037,
+          "occurrences": 4915,
+          "p50": 1842397,
+          "p90": 4074087,
+          "p95": 4915892,
+          "p99": 6968763,
+          "sum_nanos_all_reps": 11268510291,
+          "unknown": 0
+        },
+        "z3_warm": {
+          "max": 3299169,
+          "occurrences": 4915,
+          "p50": 170127,
+          "p90": 391734,
+          "p95": 480614,
+          "p99": 751257,
+          "sum_nanos_all_reps": 1053741775,
+          "unknown": 0
+        }
+      },
+      "common_prefix": {
+        "checks": 983,
+        "all_four_decided": 983,
+        "exploratory_not_preregistered": true,
+        "ratios": {
+          "cold_z3_over_axeyum": [
+            1.1767756033750703,
+            1.1259598095607672,
+            1.230283860645298
+          ],
+          "warm_z3_over_axeyum": [
+            0.1677543882069413,
+            0.14349833385656555,
+            0.1966407888823775
+          ],
+          "z3_cold_over_warm": [
+            10.724052283228009,
+            10.452201988942663,
+            11.003809659057888
+          ],
+          "axeyum_cold_over_warm": [
+            1.5287594548293628,
+            1.3018307665312772,
+            1.7882861445109572
+          ]
+        },
+        "process_cv": {
+          "axeyum_cold_over_warm": 0.07422041374439943,
+          "cold_z3_over_axeyum": 0.059308532238129916,
+          "warm_z3_over_axeyum": 0.03858418981034439,
+          "z3_cold_over_warm": 0.051062733957049605
+        },
+        "stability_gate_3_percent_warm_pair": "not met",
+        "report_sha256": "bed6b4b7e4d16892821db864f62f027e3cd2ba3dd8f43f64a01c024924ce2d01"
+      },
+      "july_2026_07_19": {
+        "checks": 603,
+        "cold_z3_over_axeyum": [
+          1.1576703166932718,
+          1.049243310545004,
+          1.277438571736778
+        ],
+        "warm_z3_over_axeyum": [
+          0.8447895855905234,
+          0.7368386142570622,
+          0.9691566300192415
+        ],
+        "z3_cold_over_warm": 8.169137749708117,
+        "axeyum_cold_over_warm": 5.961284827549321,
+        "axeyum_warm_p50_p99_nanos": [
+          80190,
+          2407293
+        ],
+        "z3_warm_p50_p99_nanos": [
+          77099,
+          238542
+        ]
+      }
+    },
+    "vwififlt": {
+      "checks_per_repetition": [
+        17411,
+        17339,
+        17318,
+        17011,
+        17355
+      ],
+      "fixed_work_across_repetitions": false,
+      "preregistered_analyzer": {
+        "exit": 2,
+        "refusal": "paired trace analysis failed: fixed-work check identity drift in /data0/axeyum/scratch/sixcell/campaign/02-vwififlt-r2/traces/glaurung-ordered-trace-1784291-b17af308e74f4a989463559e083d033f"
+      },
+      "verdict_under_adr_0272": "inconclusive: fixed-work gate failed (deadline=1 in every repetition; IOCTLANCE_SOLVE_SECS=60 cut one root at a wall-clock-dependent point)",
+      "z3_cold_outcomes_rep1": {
+        "sat": 12898,
+        "unsat": 4513
+      },
+      "warm_execution_rep1": {
+        "warm-created": 40,
+        "z3:warm-created": 40,
+        "warm-retained": 17371,
+        "z3:warm-retained": 17371
+      },
+      "unknown_cells_total": 0,
+      "unknown_per_cell_per_rep": {
+        "z3_cold": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "z3_warm": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "axeyum_cold": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "axeyum_warm": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "error_cells_total": 0,
+      "decided_disagreement": 0,
+      "per_cell_sum_nanos_per_rep": {
+        "z3_cold": [
+          21174624555,
+          25084247288,
+          21073973295,
+          20146547043,
+          26776810625
+        ],
+        "z3_warm": [
+          3700751209,
+          4673858850,
+          3662124909,
+          3581753376,
+          5033362555
+        ],
+        "axeyum_cold": [
+          31900784396,
+          34594765399,
+          31661474729,
+          29149716879,
+          37744223774
+        ],
+        "axeyum_warm": [
+          54336166366,
+          54566607918,
+          50280797271,
+          50112230194,
+          59112761157
+        ]
+      },
+      "per_cell_latency_common_prefix": {
+        "axeyum_cold": {
+          "max": 19380066,
+          "occurrences": 9210,
+          "p50": 3169331,
+          "p90": 5395811,
+          "p95": 5907435,
+          "p99": 7174726,
+          "sum_nanos_all_reps": 30421135795,
+          "unknown": 0
+        },
+        "axeyum_warm": {
+          "max": 197450210,
+          "occurrences": 9210,
+          "p50": 1896725,
+          "p90": 59791580,
+          "p95": 103262208,
+          "p99": 140341521,
+          "sum_nanos_all_reps": 143391667655,
+          "unknown": 0
+        },
+        "z3_cold": {
+          "max": 18329256,
+          "occurrences": 9210,
+          "p50": 1949316,
+          "p90": 3659242,
+          "p95": 4047666,
+          "p99": 4782974,
+          "sum_nanos_all_reps": 19738617809,
+          "unknown": 0
+        },
+        "z3_warm": {
+          "max": 1747729,
+          "occurrences": 9210,
+          "p50": 154749,
+          "p90": 266667,
+          "p95": 315626,
+          "p99": 459214,
+          "sum_nanos_all_reps": 1513137933,
+          "unknown": 0
+        }
+      },
+      "common_prefix": {
+        "checks": 1842,
+        "all_four_decided": 1842,
+        "exploratory_not_preregistered": true,
+        "ratios": {
+          "cold_z3_over_axeyum": [
+            0.6484109900855157,
+            0.6300925549802895,
+            0.6670314029330892
+          ],
+          "warm_z3_over_axeyum": [
+            0.09047744683034249,
+            0.08080104264292597,
+            0.10113483834504311
+          ],
+          "z3_cold_over_warm": [
+            13.047308512153803,
+            12.779640916202402,
+            13.317775522825606
+          ],
+          "axeyum_cold_over_warm": [
+            1.8205847529385366,
+            1.6434998803061969,
+            2.022938764403186
+          ]
+        },
+        "process_cv": {
+          "axeyum_cold_over_warm": 0.015474427924171192,
+          "cold_z3_over_axeyum": 0.011127973451918826,
+          "warm_z3_over_axeyum": 0.009669261018814984,
+          "z3_cold_over_warm": 0.010716516658769033
+        },
+        "stability_gate_3_percent_warm_pair": "accepted",
+        "report_sha256": "bb07bdf8a9329c88e98de3e4d1b96cb5afab2219c48ac5203a288fa7f47d2553"
+      },
+      "july_2026_07_19": {
+        "checks": 5182,
+        "cold_z3_over_axeyum": [
+          0.695218308113155,
+          0.6815636030665063,
+          0.7090135694663657
+        ],
+        "warm_z3_over_axeyum": [
+          1.0523175624250058,
+          1.0190334669191259,
+          1.0879487540736614
+        ],
+        "z3_cold_over_warm": 5.601075721202616,
+        "axeyum_cold_over_warm": 8.478071249145646,
+        "axeyum_warm_p50_p99_nanos": [
+          172397,
+          1872678
+        ],
+        "z3_warm_p50_p99_nanos": [
+          218785,
+          615631
+        ]
+      }
+    },
+    "intcsst": {
+      "checks_per_repetition": [
+        7961,
+        7903,
+        7919,
+        7998,
+        8030
+      ],
+      "fixed_work_across_repetitions": false,
+      "preregistered_analyzer": {
+        "exit": 2,
+        "refusal": "paired trace analysis failed: fixed-work check identity drift in /data0/axeyum/scratch/sixcell/campaign/03-intcsst-r2/traces/glaurung-ordered-trace-1837898-354cde0a283b415ea3883358ddccfd87"
+      },
+      "verdict_under_adr_0272": "inconclusive: fixed-work gate failed (deadline=1 in every repetition; IOCTLANCE_SOLVE_SECS=60 cut one root at a wall-clock-dependent point)",
+      "z3_cold_outcomes_rep1": {
+        "sat": 6138,
+        "unsat": 1823
+      },
+      "warm_execution_rep1": {
+        "warm-created": 33,
+        "z3:warm-created": 33,
+        "warm-retained": 7928,
+        "z3:warm-retained": 7928
+      },
+      "unknown_cells_total": 0,
+      "unknown_per_cell_per_rep": {
+        "z3_cold": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "z3_warm": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "axeyum_cold": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "axeyum_warm": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "error_cells_total": 0,
+      "decided_disagreement": 0,
+      "per_cell_sum_nanos_per_rep": {
+        "z3_cold": [
+          23212347655,
+          21775234957,
+          21463261809,
+          23778839800,
+          21355916233
+        ],
+        "z3_warm": [
+          2589360104,
+          2218652032,
+          2047624417,
+          2499846374,
+          2198705047
+        ],
+        "axeyum_cold": [
+          14842378806,
+          14511310906,
+          14139394061,
+          15798039858,
+          14650095335
+        ],
+        "axeyum_warm": [
+          36834724670,
+          34368052046,
+          34054957868,
+          39910471487,
+          39621932126
+        ]
+      },
+      "per_cell_latency_common_prefix": {
+        "axeyum_cold": {
+          "max": 18334462,
+          "occurrences": 19705,
+          "p50": 1297339,
+          "p90": 4891729,
+          "p95": 5577203,
+          "p99": 6454927,
+          "sum_nanos_all_reps": 39862567648,
+          "unknown": 0
+        },
+        "axeyum_warm": {
+          "max": 181634585,
+          "occurrences": 19705,
+          "p50": 686241,
+          "p90": 9530844,
+          "p95": 58057464,
+          "p99": 128454691,
+          "sum_nanos_all_reps": 154550225205,
+          "unknown": 0
+        },
+        "z3_cold": {
+          "max": 14905916,
+          "occurrences": 19705,
+          "p50": 2006221,
+          "p90": 3774539,
+          "p95": 4202373,
+          "p99": 5629315,
+          "sum_nanos_all_reps": 40969015271,
+          "unknown": 0
+        },
+        "z3_warm": {
+          "max": 4106832,
+          "occurrences": 19705,
+          "p50": 192057,
+          "p90": 358650,
+          "p95": 419302,
+          "p99": 644643,
+          "sum_nanos_all_reps": 4095622125,
+          "unknown": 0
+        }
+      },
+      "common_prefix": {
+        "checks": 3941,
+        "all_four_decided": 3941,
+        "exploratory_not_preregistered": true,
+        "ratios": {
+          "cold_z3_over_axeyum": [
+            1.4130223543451754,
+            1.372640243568294,
+            1.4549761931264527
+          ],
+          "warm_z3_over_axeyum": [
+            0.30547548518672646,
+            0.2837685285391297,
+            0.3293247034752783
+          ],
+          "z3_cold_over_warm": [
+            9.57829408827806,
+            9.412444922229309,
+            9.744216021845551
+          ],
+          "axeyum_cold_over_warm": [
+            2.070691963846414,
+            1.9486744274171888,
+            2.200503143506156
+          ]
+        },
+        "process_cv": {
+          "axeyum_cold_over_warm": 0.021235701690812705,
+          "cold_z3_over_axeyum": 0.02902031217389119,
+          "warm_z3_over_axeyum": 0.011809778511625435,
+          "z3_cold_over_warm": 0.014230975101472742
+        },
+        "stability_gate_3_percent_warm_pair": "accepted",
+        "report_sha256": "07e3ba4b8851fb81404bf61967bdf67a9e155714a4c4cb3fb688d62a791f1707"
+      },
+      "july_2026_07_19": {
+        "checks": 2309,
+        "cold_z3_over_axeyum": [
+          2.7864989780258025,
+          2.6975702155795527,
+          2.87724862836104
+        ],
+        "warm_z3_over_axeyum": [
+          2.2321409311830975,
+          2.1243390662116637,
+          2.3408220813096814
+        ],
+        "z3_cold_over_warm": 6.67504289862044,
+        "axeyum_cold_over_warm": 5.347081261795381,
+        "axeyum_warm_p50_p99_nanos": [
+          53292,
+          763547
+        ],
+        "z3_warm_p50_p99_nanos": [
+          144486,
+          547461
+        ]
+      }
+    },
+    "surfacepen": {
+      "checks_per_repetition": [
+        15273,
+        15090,
+        15032,
+        15082,
+        15145
+      ],
+      "fixed_work_across_repetitions": false,
+      "preregistered_analyzer": {
+        "exit": 2,
+        "refusal": "paired trace analysis failed: fixed-work check identity drift in /data0/axeyum/scratch/sixcell/campaign/04-surfacepen-r2/traces/glaurung-ordered-trace-1847920-2aa84d7aa69b4e1c9a501fc2e7a3bcf5"
+      },
+      "verdict_under_adr_0272": "inconclusive: fixed-work gate failed (deadline=1 in every repetition; IOCTLANCE_SOLVE_SECS=60 cut one root at a wall-clock-dependent point)",
+      "z3_cold_outcomes_rep1": {
+        "sat": 13193,
+        "unsat": 2080
+      },
+      "warm_execution_rep1": {
+        "warm-created": 129,
+        "z3:warm-created": 129,
+        "warm-retained": 15144,
+        "z3:warm-retained": 15144
+      },
+      "unknown_cells_total": 1,
+      "unknown_per_cell_per_rep": {
+        "z3_cold": [
+          0,
+          0,
+          0,
+          1,
+          0
+        ],
+        "z3_warm": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "axeyum_cold": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "axeyum_warm": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "error_cells_total": 0,
+      "decided_disagreement": 0,
+      "per_cell_sum_nanos_per_rep": {
+        "z3_cold": [
+          29113366810,
+          28477670584,
+          28312477498,
+          28543449657,
+          28477909716
+        ],
+        "z3_warm": [
+          2941965355,
+          2903143636,
+          2847229545,
+          2841984937,
+          2863786495
+        ],
+        "axeyum_cold": [
+          26413036924,
+          23494781179,
+          22716822518,
+          23364971908,
+          24584532799
+        ],
+        "axeyum_warm": [
+          40694794924,
+          31340071440,
+          29203040244,
+          31082868014,
+          34248127428
+        ]
+      },
+      "per_cell_latency_common_prefix": {
+        "axeyum_cold": {
+          "max": 28510302,
+          "occurrences": 60580,
+          "p50": 485220,
+          "p90": 5749456,
+          "p95": 10228632,
+          "p99": 15606973,
+          "sum_nanos_all_reps": 105992937378,
+          "unknown": 0
+        },
+        "axeyum_warm": {
+          "max": 141999494,
+          "occurrences": 60580,
+          "p50": 56140,
+          "p90": 2334486,
+          "p95": 8628933,
+          "p99": 72851348,
+          "sum_nanos_all_reps": 140785205778,
+          "unknown": 0
+        },
+        "z3_cold": {
+          "max": 23293351,
+          "occurrences": 60580,
+          "p50": 709519,
+          "p90": 8163170,
+          "p95": 10501073,
+          "p99": 12020058,
+          "sum_nanos_all_reps": 120710045444,
+          "unknown": 0
+        },
+        "z3_warm": {
+          "max": 10890598,
+          "occurrences": 60580,
+          "p50": 97247,
+          "p90": 273016,
+          "p95": 426977,
+          "p99": 725983,
+          "sum_nanos_all_reps": 9776778548,
+          "unknown": 0
+        }
+      },
+      "common_prefix": {
+        "checks": 12116,
+        "all_four_decided": 12116,
+        "exploratory_not_preregistered": true,
+        "ratios": {
+          "cold_z3_over_axeyum": [
+            1.9238778614424314,
+            1.8814385049867162,
+            1.9663574091858989
+          ],
+          "warm_z3_over_axeyum": [
+            1.2156909998288397,
+            1.1742427090018208,
+            1.2575467096044999
+          ],
+          "z3_cold_over_warm": [
+            8.614886316833392,
+            8.504438463963607,
+            8.731366167011588
+          ],
+          "axeyum_cold_over_warm": [
+            5.443713434111036,
+            5.318160800292477,
+            5.574432357144519
+          ]
+        },
+        "process_cv": {
+          "axeyum_cold_over_warm": 0.004855500592210737,
+          "cold_z3_over_axeyum": 0.0027718361939426234,
+          "warm_z3_over_axeyum": 0.006225906437025453,
+          "z3_cold_over_warm": 0.0021911128567115848
+        },
+        "stability_gate_3_percent_warm_pair": "accepted",
+        "report_sha256": "bd7d263f2c5946beb27b742d7bfb812fca1fc3a7d2a968aa814844fc5decf4d1"
+      },
+      "july_2026_07_19": {
+        "checks": 4808,
+        "cold_z3_over_axeyum": [
+          2.581078946265587,
+          2.5237158256889343,
+          2.640029849504213
+        ],
+        "warm_z3_over_axeyum": [
+          2.2818744062992065,
+          2.2213106163673353,
+          2.345166930301163
+        ],
+        "z3_cold_over_warm": 7.652010620967516,
+        "axeyum_cold_over_warm": 6.764972151657223,
+        "axeyum_warm_p50_p99_nanos": [
+          42172,
+          429971
+        ],
+        "z3_warm_p50_p99_nanos": [
+          90103,
+          564331
+        ]
+      }
+    }
+  },
+  "analysis_reproduction": {
+    "preregistered_analyzer_refused_all_four_drivers": true,
+    "common_prefix_independent_same-input_rerun_byte_identical": true,
+    "bootstrap_samples": 10000,
+    "bootstrap_seed": 0,
+    "ratio_direction": "numerator_nanos/denominator_nanos; greater than 1 favors denominator"
+  }
+}

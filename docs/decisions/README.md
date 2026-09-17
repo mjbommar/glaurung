@@ -56,7 +56,8 @@ sections, not their decision paragraphs alone:
 ## Solver integration
 
 Thirty-one decisions from the 2026-07 integration of the pure-Rust `axeyum`
-solver, previously one 1,160-line log, plus the 2026-09 pin bump. Subject:
+solver, previously one 1,160-line log, plus the 2026-09 pin bump and its
+re-measurement. Subject:
 [`architecture/solver-backends.md`](../architecture/solver-backends.md) and
 [`architecture/solver/`](../architecture/solver/).
 
@@ -94,6 +95,7 @@ solver, previously one 1,160-line log, plus the 2026-09 pin bump. Subject:
 | `solver-030` | [Require structural stack origin before stack-overflow classification](solver-030-structural-stack-origin.md) | held | 2026-07-18 |
 | `solver-031` | [Add a pinned in-process Bitwuzla neutral measurement cell](solver-031-pinned-bitwuzla-measurement-cell.md) | held | 2026-07-19 |
 | `solver-032` | [Move the Axeyum pin to head, and keep only z3-parsed scripts in the shadow-split corpus](solver-032-axeyum-pin-bump-and-shadow-corpus-prune.md) | held | 2026-09-16 |
+| `solver-033` | [The rerun at the 2026-09-16 pin: inconclusive under ADR-0272, and warm Axeyum is the reason](solver-033-six-cell-rerun-at-the-2026-09-16-pin.md) | held | 2026-09-17 |
 
 `solver-002` is the one superseded record: axeyum was never made a default
 feature, and the shipped configuration is `default = ["triage-core"]` with every

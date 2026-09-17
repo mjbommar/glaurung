@@ -11,7 +11,10 @@
 > current. The refresh is the
 > six-cell campaign (Axeyum ADR-0272's harness), item 3 of
 > [`development/improvement-list-2026-09-16.md`](../../development/improvement-list-2026-09-16.md).
-> The entries below are left exactly as written.
+> The entries below are left exactly as written. **Re-measured 2026-09-17** (four cells, no Bitwuzla):
+> [`solver-033`](../../decisions/solver-033-six-cell-rerun-at-the-2026-09-16-pin.md)
+> — one-shot Axeyum is at parity or faster than cold Z3 on three of four
+> drivers; the warm regime is 6–11× slower than warm Z3 on three of four.
 
 > **Status: historical append-oriented integration evidence log.** Individual
 > findings and timings are revision-bound. Later decisions may supersede an

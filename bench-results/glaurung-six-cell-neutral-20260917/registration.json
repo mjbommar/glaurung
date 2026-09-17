@@ -1,0 +1,176 @@
+{
+  "schema": "axeyum-glaurung-six-cell-registration-v1",
+  "date": "2026-09-17",
+  "zero_result_rows": true,
+  "preregistration": "axeyum: docs/research/09-decisions/adr-0272-preregister-six-cell-neutral-warm-regime.md (protocol); glaurung: docs/development/six-cell-rerun-2026-09-17.md (changed pins)",
+  "cells": 4,
+  "changed_pins_against_adr_0272": {
+    "glaurung_revision": {
+      "july": "2961d7c1bca03f14b77b12fb852d193413207982",
+      "now": "b1f420ab1e406ec2479509f65143211191428be0",
+      "note": "master 11b68faf plus the preflight producer fix b1f420ab (docs/development/six-cell-rerun-2026-09-17.md); the campaign runs from a clean detached worktree at b1f420ab"
+    },
+    "source_equivalent_master": "11b68faffc8475115d8eadc2b233bd1a731e3862",
+    "axeyum_pin": {
+      "july": "a9abc6cdcdda0451e6a9b6aca5f8ff924e49e513",
+      "now": "8df853252cdf49c9a27ba71c6ce62fdd1c485dfc"
+    },
+    "features": {
+      "july": [
+        "solver-z3",
+        "solver-axeyum",
+        "solver-bitwuzla"
+      ],
+      "now": [
+        "solver-z3",
+        "solver-axeyum"
+      ]
+    },
+    "measurement_schema": {
+      "july": "glaurung-ordered-check-measurement-v3",
+      "now": "glaurung-ordered-check-measurement-v2"
+    },
+    "executable_sha256": {
+      "july": "5d454daf6c12c1d69bc0e28e12c391286b53d1a7735514043b85ea82057ef17b",
+      "now": "4f3e5c376ef2da45ec0fc904b94874931ba3d5ff717da1e4482ca46c3a055f3f"
+    },
+    "producer_validator": {
+      "july": "docs/axeyum-integration/capture/validate_ordered_trace.py",
+      "now": "tools/axeyum/validate_ordered_trace.py",
+      "now_sha256": "81fcfb73fd7efa83256a5f45b0d2721697fe525a09c7cc9076ccdbc5f0ec28ed"
+    },
+    "analyzer": {
+      "july_revision": "5d74283b8cc1779df4d67b654c44d6b7dcc94611",
+      "july_sha256": "ff2131bfc67d21045d5c36ca8b214cfe6528e5d085b4584453d4f8dd02c47d93",
+      "now_revision": "0cd81574eb2a121c924411edc7e7fc865a9597b9",
+      "now_sha256": "d9431ad02710f161a077f0fbbc1cbaf4d6c777a52831808a5b5df9b8773150c6",
+      "control": "head analyzer reproduces July dptf/report.json f89f28b935b4e55840c3240e6ef0db78ae5c9db861eefa1f542a3b8ffa62aacc byte-for-byte from the raw July traces"
+    },
+    "bitwuzla": "not built: prebuilt 0.9.1 library gone from this host; no gmp headers, meson, or sudo; see docs/development/six-cell-rerun-2026-09-17.md",
+    "toolchain": {
+      "july": "rustc 1.97.0-nightly (f53b654a8 2026-04-30)",
+      "now": "rustc 1.99.0-nightly (be8e82435 2026-07-11)"
+    },
+    "kernel": {
+      "july": "7.0.0-27-generic",
+      "now": "7.0.0-31-generic"
+    },
+    "host": {
+      "july": "server0",
+      "now": "s4"
+    }
+  },
+  "producer": {
+    "repository": "glaurung",
+    "revision": "b1f420ab1e406ec2479509f65143211191428be0",
+    "dirty": false,
+    "measurement_schema": "glaurung-ordered-check-measurement-v2",
+    "authoritative_backend": "z3-cold",
+    "neutral_backend": null
+  },
+  "axeyum": {
+    "implementation_revision": "8df853252cdf49c9a27ba71c6ce62fdd1c485dfc",
+    "analyzer_path": "scripts/analyze-glaurung-paired-traces.py"
+  },
+  "release_executable": {
+    "path": "/data0/axeyum/scratch/sixcell/target/release/examples/ioctlance",
+    "sha256": "4f3e5c376ef2da45ec0fc904b94874931ba3d5ff717da1e4482ca46c3a055f3f",
+    "features": [
+      "solver-z3",
+      "solver-axeyum"
+    ],
+    "build": "cargo build --release --example ioctlance --features solver-z3,solver-axeyum -j2 (cargo-serialized.sh --batch, CARGO_TARGET_DIR=/data0/axeyum/scratch/sixcell/target)"
+  },
+  "resolved_libraries": [
+    {
+      "path": "/usr/lib/x86_64-linux-gnu/libz3.so.4",
+      "sha256": "eff8f0f91482d0809aae7aa0ed54cb52ff5ee9b5fe1ed1d2bfa9153c4a2fcfaf"
+    },
+    {
+      "path": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
+      "sha256": "9d339ecb409578d6a5d587e6c537a8f9589b8a13fefba30d167433a4b5758bee"
+    },
+    {
+      "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+      "sha256": "1c488db6f4fe8cecb72456bc018de000b7a9b539c2994864b0416b5e8371b3d8"
+    },
+    {
+      "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+      "sha256": "85e64f97e348786a8fb4d9f3d52fec289e2fb86bba20f0731dfe61990525e0f7"
+    },
+    {
+      "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+      "sha256": "bda779ea9e9ad234f60315477d7cfd0bdde861cd8ddd9df8cdaf62f18c4cec14"
+    },
+    {
+      "path": "/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.35",
+      "sha256": "5bb0d21308f123b6ad46c6f35b42cedfcb8d6d439a53aa3dae04d880aaffdde3"
+    }
+  ],
+  "drivers": [
+    {
+      "label": "DptfDevGen",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/sqfs-intel-DptfDevGen.sys",
+      "sha256": "074be1b90deb21897538a6b093af9826e62610ffd878c92289af31c5ca3f724b"
+    },
+    {
+      "label": "vwififlt",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/win10-vwififlt.sys",
+      "sha256": "13c3b69a5d0179ed3cc2c999ff97edbaedd63da55ddb74427251c360706a3820"
+    },
+    {
+      "label": "IntcSST",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/windows-update-intel-audio-IntcSST.sys",
+      "sha256": "f7c8e4f106baa5b2a1a18e60731ad42a6f734aee1d049576eaf6d123d5629750"
+    },
+    {
+      "label": "SurfacePen",
+      "path": "samples/binaries/platforms/windows/vendor/realworld/windows-update-SurfacePenBleLcAddrAdaptationDriver.sys",
+      "sha256": "3c062dc57832caab776bec99656798474af7ffb59ef751c9a004a95c0ae74405"
+    }
+  ],
+  "protocol": {
+    "runner": {
+      "path": "bench-results/glaurung-six-cell-neutral-20260917/run-glaurung-four-cell-20260917.py",
+      "sha256": "1a85b88ad7c78884291b35765191b08bcf5f0e5305dd930a14bf37c41c8ffbb7",
+      "copied_from": "axeyum scripts/run-glaurung-six-cell-neutral.py daeec160c41862e3a70cc216831971a402d8b7392e3e6b60504b2503e89fbc7c",
+      "edits": [
+        "GLAURUNG_REVISION",
+        "EXECUTABLE_SHA256",
+        "validator path",
+        "module docstring"
+      ]
+    },
+    "repetitions_per_driver": 5,
+    "process_order": "driver-major, repetition 1 through 5",
+    "logical_cpu": 2,
+    "worker_count": 1,
+    "bootstrap_samples": 10000,
+    "bootstrap_seed": 0,
+    "environment": {
+      "GLAURUNG_FAIR_SHADOW": "1",
+      "GLAURUNG_CHECK_TIMEOUT_MS": "250",
+      "GLAURUNG_AXEYUM_REPLAY_SAT_CACHE": "1",
+      "GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS": "9",
+      "GLAURUNG_AXEYUM_WARM_MAX_ASSERTIONS_PER_PATH": "512",
+      "IOCTLANCE_DEADLINE_SECS": "600",
+      "IOCTLANCE_MAX_ANALYZED_FUNCTIONS": "100000",
+      "IOCTLANCE_SOLVE_BUDGET": "20000",
+      "IOCTLANCE_SOLVE_SECS": "60"
+    },
+    "contrasts": [
+      "cold_z3_over_axeyum",
+      "warm_z3_over_axeyum",
+      "z3_cold_over_warm",
+      "axeyum_cold_over_warm"
+    ],
+    "gate_read_by_solver_002": "warm and cold Z3/Axeyum ratios per driver; >1 favours Axeyum"
+  },
+  "observations": {
+    "trace_paths": [],
+    "timing_rows": 0,
+    "ratios": [],
+    "confidence_intervals": [],
+    "driver_conclusions": []
+  }
+}
