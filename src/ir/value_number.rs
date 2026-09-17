@@ -610,7 +610,35 @@ pub fn value_number_with_parameter_slots_lifetimes_and_identities(
     HashSet<usize>,
     ValueIdentities,
 ) {
-    let keep = keep_bare::definitions(lf, ssa, cc);
+    value_number_with_parameter_evidence(lf, ssa, cc, source_lifetimes, true)
+}
+
+fn value_number_with_parameter_evidence(
+    lf: &LlirFunction,
+    ssa: &crate::ir::ssa::SsaInfo,
+    cc: CallConv,
+    source_lifetimes: &[SourceRegisterLifetime],
+    keep_result_names: bool,
+) -> (
+    LlirFunction,
+    HashMap<VReg, u8>,
+    HashSet<usize>,
+    ValueIdentities,
+) {
+    let keep = if keep_result_names {
+        keep_bare::definitions(lf, ssa, cc)
+    } else {
+        keep_bare::KeepBare::default()
+    };
+    // A compatibility result name can denote several SSA definitions. Sample
+    // signature evidence in a fully versioned view when that projection is
+    // present in an argument register, so a later result cannot erase a genuine
+    // incoming parameter. Projection only merges versions of the same physical
+    // base; a return register outside the argument slots cannot erase their
+    // identities and does not need another value-numbering pass.
+    let exact_parameter_slots = keep
+        .overlaps_argument_slots(cc)
+        .then(|| value_number_with_parameter_evidence(lf, ssa, cc, source_lifetimes, false).2);
     let ctx = VnCtx::new(lf, keep, build_temp_remap(lf, ssa), ssa);
 
     let mut out = lf.clone();
@@ -716,7 +744,13 @@ pub fn value_number_with_parameter_slots_lifetimes_and_identities(
         &definition_widths_by_value,
         &mut identities,
     );
-    let parameter_slots = live_in_arg_slots_llir_with_identities(&out, cc, &identities);
+    let parameter_slots = exact_parameter_slots
+        .unwrap_or_else(|| live_in_arg_slots_llir_with_identities(&out, cc, &identities));
+    if !keep_result_names {
+        // Only the pre-coalescing evidence is consumed by the compatibility
+        // view above. No presentation/coalescing work is needed in this view.
+        return (out, definition_widths, parameter_slots, identities);
+    }
     let renames = coalesce_phi_copies_with_definition_sites(
         &mut out,
         &phi_copies.pairs,
@@ -956,6 +990,51 @@ mod tests {
     use super::*;
     use crate::ir::ssa::{compute_ssa, compute_ssa_for_target};
     use crate::ir::use_def::def_uses;
+
+    #[test]
+    fn real_arm_entry_pointer_survives_later_result_storage_reuse() {
+        use crate::program::image::ProgramImage;
+        let directory = tempfile::tempdir().expect("ARM input fixture directory");
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/cfg/arm_input_return_reuse.S");
+        let binary = directory.path().join("input_reuse.elf");
+        let output = std::process::Command::new("clang")
+            .args([
+                "--target=armv7-none-eabi",
+                "-nostdlib",
+                "-fuse-ld=lld",
+                "-Wl,-e,entry",
+                "-o",
+            ])
+            .arg(&binary)
+            .arg(source)
+            .output()
+            .expect("compile real ARM fixture");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let image = ProgramImage::from_bytes(std::fs::read(binary).expect("read fixture"))
+            .expect("index ARM fixture");
+        let function = crate::analysis::cfg::discover_function_image_at(
+            &image,
+            &crate::analysis::cfg::Budgets::default(),
+            image.entry_va(),
+        )
+        .expect("ARM CFG");
+        let mut lifted = crate::ir::lift_function::lift_function_from_image(&image, &function)
+            .expect("lift ARM instructions");
+        let cc = CallConv::Arm;
+        crate::ir::abi::annotate_calls(&mut lifted, cc);
+        let ssa = crate::ir::ssa::compute_ssa_for_target(&lifted, *image.target());
+        let (_, _, slots, _) =
+            value_number_with_parameter_slots_lifetimes_and_identities(&lifted, &ssa, cc, &[]);
+        assert!(
+            slots.contains(&0),
+            "incoming r0 pointer was lost to later return-storage definitions"
+        );
+    }
 
     #[test]
     fn opaque_ssa_identity_survives_llir_to_ast_lowering() {

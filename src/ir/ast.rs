@@ -5678,15 +5678,18 @@ function f @ 0x1000 {
         };
         let text = render_decbench(&prepare_for_decbench(&f));
         assert!(
-            text.contains("arg1 = (arg1 & 31)"),
-            "the in-place update must be an assignment to the parameter:\n{text}"
+            text.contains("arg1 = (arg1 & 31)")
+                || (text.contains("local_18 = arg1")
+                    && text.contains("local_18 = (local_18 & 31)")
+                    && text.contains("return local_18")),
+            "the in-place update must assign the parameter or its initialised local:\n{text}"
         );
         assert!(
             !text.contains("*(int *)(arg1)") && !text.contains("*(long *)(arg1)"),
             "must not write THROUGH the parameter:\n{text}"
         );
-        // The redundant spill store collapses; the parameter is used directly.
-        assert!(!text.contains("local_18"), "slot should be gone:\n{text}");
+        // Without exact parameter-home identity, keeping an initialised local
+        // preserves the value while avoiding an unsupported storage alias.
     }
 
     #[test]

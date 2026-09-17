@@ -246,6 +246,16 @@ pub(super) fn discover_function(
                 blocks.insert(start_va, (cur_va, instrs));
                 break 'block;
             }
+            // Container mappings can cover readonly data after the text section.
+            // Recheck executable membership during linear decoding, not only
+            // for branch targets: a trailing call has no local terminator.
+            let region = match in_exec_regions(regions, cur_va) {
+                Some(region) => region,
+                None => {
+                    blocks.insert(start_va, (cur_va, instrs));
+                    break 'block;
+                }
+            };
             // Map VA -> file offset using shared helper for robustness. The CODE
             // resolver: in a relocatable object every section shares address 0, and
             // the general one would hand back whichever section is listed first.
@@ -256,7 +266,8 @@ pub(super) fn discover_function(
             if fo >= data.len() {
                 break 'block;
             }
-            let slice = &data[fo..];
+            let remaining = usize::try_from(region.end - cur_va).unwrap_or(usize::MAX);
+            let slice = &data[fo..data.len().min(fo.saturating_add(remaining))];
             let addr = Address::new(AddressKind::VA, cur_va, bits, None, None).ok()?;
             match backend.disassemble_instruction(&addr, slice) {
                 Ok(i) => stream.push(i),
