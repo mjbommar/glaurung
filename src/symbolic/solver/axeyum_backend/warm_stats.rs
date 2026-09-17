@@ -212,6 +212,76 @@ pub fn replay_sat_cache_stats() -> ReplaySatCacheProcessStats {
     }
 }
 
+/// Process-wide aggregate of Axeyum's per-solver canonical constraint cache
+/// (Axeyum ADR-2144) across every retained path-owned session.
+///
+/// The counters are folded from each session's `IncrementalBvSolver::stats()`
+/// around every warm check, so they sum the sessions that were live at any
+/// point in the process, closed ones included. All four stay zero while the
+/// cache is off.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CanonicalCacheProcessStats {
+    /// What `GLAURUNG_AXEYUM_CANONICAL_CACHE` selected: `None` when unset.
+    pub configured: Option<bool>,
+    /// Whether the `SolverConfig` handed to new sessions has the cache on
+    /// (the Glaurung lever, else Axeyum's own default and lever).
+    pub enabled: bool,
+    /// Checks answered by the cache: exact `sat`/`unsat`, superset `unsat`,
+    /// and replayed model reuse together.
+    pub hits: u64,
+    /// Checks the cache could not answer.
+    pub misses: u64,
+    /// Cached models refused because they did not replay against the live
+    /// set; each was solved fresh.
+    pub replay_rejections: u64,
+    /// `unsat` verdicts served because a cached unsat set was a subset of the
+    /// live set (also counted in `hits`).
+    pub superset_hits: u64,
+}
+
+/// Returns canonical-cache traffic accumulated across all retained path-owned
+/// solvers.
+pub fn canonical_cache_stats() -> CanonicalCacheProcessStats {
+    CanonicalCacheProcessStats {
+        configured: canonical_cache(),
+        enabled: config().canonical_constraint_cache,
+        hits: CANONICAL_CACHE_HITS.load(Ordering::Relaxed),
+        misses: CANONICAL_CACHE_MISSES.load(Ordering::Relaxed),
+        replay_rejections: CANONICAL_CACHE_REPLAY_REJECTIONS.load(Ordering::Relaxed),
+        superset_hits: CANONICAL_CACHE_SUPERSET_HITS.load(Ordering::Relaxed),
+    }
+}
+
+/// Folds one session's canonical-cache counters, taken from `stats()` before
+/// and after a check, into the process counters. Every field is monotone
+/// within a session, so the fold is the saturating difference.
+pub(super) fn record_canonical_cache_delta(
+    before: &IncrementalBvStats,
+    after: &IncrementalBvStats,
+) {
+    let monotone = [
+        (&CANONICAL_CACHE_HITS, before.cache_hits, after.cache_hits),
+        (
+            &CANONICAL_CACHE_MISSES,
+            before.cache_misses,
+            after.cache_misses,
+        ),
+        (
+            &CANONICAL_CACHE_REPLAY_REJECTIONS,
+            before.cache_replay_rejections,
+            after.cache_replay_rejections,
+        ),
+        (
+            &CANONICAL_CACHE_SUPERSET_HITS,
+            before.cache_superset_hits,
+            after.cache_superset_hits,
+        ),
+    ];
+    for (counter, before, after) in monotone {
+        counter.fetch_add(after.saturating_sub(before), Ordering::Relaxed);
+    }
+}
+
 pub(super) fn record_replay_sat_cache_delta(
     before: ReplayCheckedSatCacheStats,
     after: ReplayCheckedSatCacheStats,

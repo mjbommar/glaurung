@@ -50,8 +50,8 @@ mod warm_paths;
 mod warm_stats;
 
 use config::{
-    config, replay_sat_cache_policy, select_warm_timeout_continuation, warm_reuse_limits,
-    warm_reuse_policy, warm_timeout_continue_enabled, WarmReusePolicy,
+    canonical_cache, config, replay_sat_cache_policy, select_warm_timeout_continuation,
+    warm_reuse_limits, warm_reuse_policy, warm_timeout_continue_enabled, WarmReusePolicy,
 };
 pub(crate) use config::{
     direct_delta_enabled, last_direct_delta_synced, reset_direct_delta_sync,
@@ -76,23 +76,26 @@ use warm_paths::{
 #[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
 pub(crate) use warm_paths::check_fair_warm_thread_local;
 pub use warm_stats::{
-    adaptive_lineage_reuse_stats, auto_lineage_reuse_stats, replay_sat_cache_stats,
-    serial_sibling_reuse_stats, warm_path_reuse_stats, warm_reuse_stats,
+    adaptive_lineage_reuse_stats, auto_lineage_reuse_stats, canonical_cache_stats,
+    replay_sat_cache_stats, serial_sibling_reuse_stats, warm_path_reuse_stats, warm_reuse_stats,
     warm_timeout_cold_retry_stats, warm_timeout_continuation_stats, AdaptiveLineageReuseStats,
-    AutoLineageReuseStats, ReplaySatCacheProcessStats, SerialSiblingReuseStats, WarmPathReuseStats,
-    WarmTimeoutColdRetryStats, WarmTimeoutContinuationStats,
+    AutoLineageReuseStats, CanonicalCacheProcessStats, ReplaySatCacheProcessStats,
+    SerialSiblingReuseStats, WarmPathReuseStats, WarmTimeoutColdRetryStats,
+    WarmTimeoutContinuationStats,
 };
-use warm_stats::{record_replay_sat_cache_delta, subtract_replay_sat_cache_gauges};
+use warm_stats::{
+    record_canonical_cache_delta, record_replay_sat_cache_delta, subtract_replay_sat_cache_gauges,
+};
 
 // Re-exports whose only consumer is this module's own `#[cfg(test)]` block. In a
 // shipped `lib` build each of these would be an unused import, so they are gated
 // to match.
 #[cfg(test)]
 use config::{
-    build_config, config_with_work_budgets, parse_direct_delta, parse_model_preference,
-    parse_replay_sat_cache_policy, parse_warm_limit, parse_warm_owner_transfer,
-    parse_warm_reuse_policy, parse_warm_serial_sibling_reuse, parse_warm_timeout_cold_retry,
-    parse_warm_timeout_continue,
+    build_config, config_with_work_budgets, parse_canonical_cache, parse_direct_delta,
+    parse_model_preference, parse_replay_sat_cache_policy, parse_warm_limit,
+    parse_warm_owner_transfer, parse_warm_reuse_policy, parse_warm_serial_sibling_reuse,
+    parse_warm_timeout_cold_retry, parse_warm_timeout_continue,
 };
 #[cfg(test)]
 use profile::{
@@ -119,6 +122,18 @@ const INTERNAL_AND_FLATTENING_ENV: &str = "GLAURUNG_AXEYUM_INTERNAL_AND_FLATTENI
 /// bit-clearing pass, so the concretization policy `LeastUnsigned` starts its
 /// probe ladder from a model that is already a local unsigned minimum.
 pub(crate) const MODEL_PREFERENCE_ENV: &str = "GLAURUNG_AXEYUM_MODEL_PREFERENCE";
+/// Whether every Axeyum session this adapter creates keeps Axeyum's canonical
+/// constraint cache (Axeyum ADR-2144): `on` | `off`, forwarded to
+/// `SolverConfig::canonical_constraint_cache`. Unset keeps Axeyum's own
+/// default, which is OFF unless the process carries Axeyum's
+/// `AXEYUM_CANONICAL_CACHE` lever. The cache is per solver, keyed by the
+/// sorted, duplicate-elided set of live assertion identities (ADR-0303's key
+/// inside one arena); a cached `sat` is served only after its model replays
+/// against the live set, a cached `unsat` only for a superset of the cached
+/// set. It answers repeated checks on one path-owned warm session; it cannot
+/// share across paths, which is what `GLAURUNG_ENGINE_CONSTRAINT_CACHE`
+/// (Glaurung's own process-wide text-keyed cache) does.
+pub(crate) const CANONICAL_CACHE_ENV: &str = "GLAURUNG_AXEYUM_CANONICAL_CACHE";
 pub(crate) const REPLAY_SAT_CACHE_ENV: &str = "GLAURUNG_AXEYUM_REPLAY_SAT_CACHE";
 const WARM_MAX_LIVE_PATHS_ENV: &str = "GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS";
 const WARM_MAX_ASSERTIONS_PER_PATH_ENV: &str = "GLAURUNG_AXEYUM_WARM_MAX_ASSERTIONS_PER_PATH";
@@ -164,6 +179,11 @@ static WARM_SERIAL_PEAK_REFERENCES: AtomicU64 = AtomicU64::new(0);
 static WARM_REUSE_LIMITS: OnceLock<WarmReuseLimits> = OnceLock::new();
 static REPLAY_SAT_CACHE_POLICY: OnceLock<Option<ReplayCheckedSatCachePolicy>> = OnceLock::new();
 static MODEL_PREFERENCE: OnceLock<Option<ModelPreference>> = OnceLock::new();
+static CANONICAL_CACHE: OnceLock<Option<bool>> = OnceLock::new();
+static CANONICAL_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
+static CANONICAL_CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
+static CANONICAL_CACHE_REPLAY_REJECTIONS: AtomicU64 = AtomicU64::new(0);
+static CANONICAL_CACHE_SUPERSET_HITS: AtomicU64 = AtomicU64::new(0);
 static REPLAY_SAT_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 static REPLAY_SAT_CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
 static REPLAY_SAT_CACHE_INSERTIONS: AtomicU64 = AtomicU64::new(0);
@@ -399,6 +419,18 @@ impl IncrementalAxeyumSolver {
 
     fn new_path_owned(profiling: bool) -> Self {
         Self::with_cache_policy(replay_sat_cache_policy(), profiling)
+    }
+
+    /// A session over an explicit `SolverConfig` and no replay-SAT cache, so a
+    /// test can attribute a repeated check's hit to the canonical constraint
+    /// cache alone without touching the process environment.
+    #[cfg(test)]
+    fn with_solver_config_for_test(solver_config: SolverConfig) -> Self {
+        Self {
+            arena: TermArena::new(),
+            solver: IncrementalBvSolver::with_config(solver_config.with_preprocess(false)),
+            symbol_frames: vec![Vec::new()],
+        }
     }
 
     fn with_cache_policy(policy: Option<ReplayCheckedSatCachePolicy>, profiling: bool) -> Self {
@@ -1012,7 +1044,7 @@ mod tests {
     fn model_preference_reaches_the_solver_config() {
         let budgets = SolverWorkBudgets::default();
         assert_eq!(
-            build_config(budgets, None).model_preference,
+            build_config(budgets, None, None).model_preference,
             SolverConfig::new().model_preference,
             "unset keeps Axeyum's own default"
         );
@@ -1021,7 +1053,7 @@ mod tests {
             ModelPreference::PreferZero,
             ModelPreference::LeastUnsigned,
         ] {
-            let config = build_config(budgets, Some(preference));
+            let config = build_config(budgets, Some(preference), None);
             assert_eq!(config.model_preference, preference);
             // The preference joins the other levers; it does not replace them.
             assert_eq!(config.timeout, Some(check_timeout()));
@@ -1129,7 +1161,7 @@ mod tests {
         let any = match one_shot_check(
             &p,
             &asserts,
-            build_config(budgets, Some(ModelPreference::Any)),
+            build_config(budgets, Some(ModelPreference::Any), None),
         ) {
             SolveResult::Sat(m) => m,
             other => panic!("expected sat under Any, got {other:?}"),
@@ -1137,7 +1169,7 @@ mod tests {
         let zero = match one_shot_check(
             &p,
             &asserts,
-            build_config(budgets, Some(ModelPreference::PreferZero)),
+            build_config(budgets, Some(ModelPreference::PreferZero), None),
         ) {
             SolveResult::Sat(m) => m,
             other => panic!("expected sat under PreferZero, got {other:?}"),
@@ -1182,6 +1214,179 @@ mod tests {
         assert!(
             matches!(solve_native(&p, &pinned), SolveResult::Sat(_)),
             "the PreferZero model does not replay through the plain search"
+        );
+    }
+
+    // ---- GLAURUNG_AXEYUM_CANONICAL_CACHE (improvement-list item 5) ---------
+
+    #[test]
+    fn canonical_cache_parses_on_and_off_and_refuses_the_rest() {
+        assert_eq!(parse_canonical_cache(None), Ok(None));
+        assert_eq!(parse_canonical_cache(Some("on")), Ok(Some(true)));
+        assert_eq!(parse_canonical_cache(Some(" OFF\n")), Ok(Some(false)));
+        for malformed in ["1", "true", "yes", "", "sideways"] {
+            let error = parse_canonical_cache(Some(malformed)).unwrap_err();
+            assert!(
+                error.contains(CANONICAL_CACHE_ENV) && error.contains(malformed),
+                "a malformed value must name the variable and the value: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_cache_reaches_the_solver_config() {
+        let budgets = SolverWorkBudgets::default();
+        assert_eq!(
+            build_config(budgets, None, None).canonical_constraint_cache,
+            SolverConfig::new().canonical_constraint_cache,
+            "unset keeps Axeyum's own default"
+        );
+        for enabled in [true, false] {
+            let config = build_config(budgets, None, Some(enabled));
+            assert_eq!(config.canonical_constraint_cache, enabled);
+            // The lever joins the others; it does not replace them.
+            assert_eq!(config.timeout, Some(check_timeout()));
+            assert_eq!(
+                config.model_preference,
+                SolverConfig::new().model_preference
+            );
+        }
+        // The two levers are independent.
+        let both = build_config(budgets, Some(ModelPreference::PreferZero), Some(true));
+        assert!(both.canonical_constraint_cache);
+        assert_eq!(both.model_preference, ModelPreference::PreferZero);
+    }
+
+    /// The process lever, read in a CHILD process for the reason given on
+    /// `model_preference_env_is_read_once_and_a_malformed_value_is_refused`.
+    #[test]
+    fn canonical_cache_env_is_read_once_and_a_malformed_value_is_refused() {
+        let exe = std::env::current_exe().expect("test executable");
+        let run = |value: &str| -> bool {
+            std::process::Command::new(&exe)
+                .args([
+                    "--exact",
+                    "symbolic::solver::axeyum_backend::tests::canonical_cache_env_probe",
+                    "--quiet",
+                ])
+                .env(CANONICAL_CACHE_ENV, value)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .expect("spawn the probe")
+                .success()
+        };
+        assert!(run("on"), "{CANONICAL_CACHE_ENV}=on was not honored");
+        assert!(run("off"), "{CANONICAL_CACHE_ENV}=off was not honored");
+        assert!(
+            !run("1"),
+            "{CANONICAL_CACHE_ENV}=1 ran the default arm instead of refusing"
+        );
+    }
+
+    /// The child half: passes exactly when `config()` -- and so every session
+    /// this adapter creates -- carries the value the variable names, and the
+    /// process stats report the same.
+    #[test]
+    fn canonical_cache_env_probe() {
+        let Ok(value) = std::env::var(CANONICAL_CACHE_ENV) else {
+            return;
+        };
+        let expected = match value.as_str() {
+            "on" => true,
+            "off" => false,
+            other => panic!("{CANONICAL_CACHE_ENV}={other:?} is malformed"),
+        };
+        assert_eq!(config().canonical_constraint_cache, expected);
+        let stats = canonical_cache_stats();
+        assert_eq!(stats.configured, Some(expected));
+        assert_eq!(stats.enabled, expected);
+    }
+
+    /// `x + y = 10`, `x < 4`, `y > 5` over 8 bits on a retained session with
+    /// the canonical cache ON: the first check is a miss; the same set checked
+    /// again is a hit; the same set re-asserted after a pop in the OTHER order
+    /// is a hit too (the key is the set, not the ordered vector -- ADR-0303's
+    /// identity, which ADR-0190's replay-checked cache does not have). Every
+    /// served model replays by concrete evaluation of the original
+    /// expressions, and the served model is the cached one. The same session
+    /// with the cache OFF records no hit, so the hits are the cache's.
+    #[test]
+    fn a_repeated_check_under_the_canonical_cache_is_a_hit_whose_model_replays() {
+        let w = Width::W8;
+        let mut p = ExprPool::new();
+        let x = p.fresh_symbol(w);
+        let y = p.fresh_symbol(w);
+        let ten = c(&mut p, 10, w);
+        let four = c(&mut p, 4, w);
+        let five = c(&mut p, 5, w);
+        let sum = bin(&mut p, BinOp::Add, x, y, w);
+        let sum_is_10 = cmp(&mut p, CmpOp::Eq, sum, ten, w);
+        let x_lt_4 = cmp(&mut p, CmpOp::Ult, x, four, w);
+        let y_gt_5 = cmp(&mut p, CmpOp::Ult, five, y, w);
+        let forward: Vec<Assert> = vec![(sum_is_10, true), (x_lt_4, true), (y_gt_5, true)];
+        let reversed: Vec<Assert> = forward.iter().rev().copied().collect();
+        let sym = |id: ExprId| -> u32 {
+            match *p.get(id) {
+                Expr::Sym { id, .. } => id,
+                _ => unreachable!("not a symbol"),
+            }
+        };
+        let (xs, ys) = (sym(x), sym(y));
+        let replays = |model: &Model| {
+            let xv = model.values[&xs];
+            let yv = model.values[&ys];
+            (xv + yv) & 0xff == 10 && xv < 4 && yv > 5
+        };
+        let budgets = SolverWorkBudgets::default();
+
+        let run =
+            |cache_on: bool| -> (Vec<Model>, IncrementalBvStats) {
+                let mut session = IncrementalAxeyumSolver::with_solver_config_for_test(
+                    build_config(budgets, None, Some(cache_on)),
+                );
+                let mut models = Vec::new();
+                for asserts in [&forward, &forward, &reversed] {
+                    session.push().expect("push");
+                    for &assertion in asserts {
+                        session.assert(&p, assertion).expect("assert");
+                    }
+                    match session.check() {
+                        SolveResult::Sat(model) => models.push(model),
+                        other => panic!("expected sat, got {other:?}"),
+                    }
+                    assert!(session.pop(), "pop the scope");
+                }
+                (models, session.solver_stats())
+            };
+
+        let (on, on_stats) = run(true);
+        assert_eq!(on.len(), 3);
+        for model in &on {
+            assert!(replays(model), "a served model must replay: {model:?}");
+        }
+        assert_eq!(
+            (on_stats.cache_misses, on_stats.cache_hits),
+            (1, 2),
+            "first check a miss, the repeat and the reordered repeat hits: {on_stats:?}"
+        );
+        assert_eq!(on_stats.cache_replay_rejections, 0);
+        assert_eq!(on_stats.cache_superset_hits, 0);
+        assert_eq!(
+            on[1].values, on[0].values,
+            "an exact hit serves the cached model"
+        );
+        assert_eq!(on[2].values, on[0].values, "so does the reordered hit");
+
+        let (off, off_stats) = run(false);
+        assert_eq!(off.len(), 3);
+        for model in &off {
+            assert!(replays(model), "a fresh model must replay: {model:?}");
+        }
+        assert_eq!(
+            (off_stats.cache_hits, off_stats.cache_misses),
+            (0, 0),
+            "with the cache off nothing is counted: {off_stats:?}"
         );
     }
 

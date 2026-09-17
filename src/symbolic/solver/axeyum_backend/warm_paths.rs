@@ -185,8 +185,23 @@ impl DirectDeltaLineageAxeyumSolver {
 
         let added_before = self.stats.assertions_added;
         let popped_before = self.stats.assertions_popped;
+        let engine_before = self
+            .paths
+            .get(&path_id)
+            .expect("direct path was materialized before its check")
+            .solver
+            .solver_stats();
         let (mut result, metrics) =
             self.transition_and_check(path_id, pool, input, effective_retain, profiling);
+        // The path is still live here whatever the transition returned: an
+        // error closes it below, after this fold.
+        let engine_after = self
+            .paths
+            .get(&path_id)
+            .expect("direct path remains live until its check is folded")
+            .solver
+            .solver_stats();
+        record_canonical_cache_delta(&engine_before, &engine_after);
         let replay_cache_hit = profile_before.is_some_and(|(_, cache_before, _)| {
             self.paths
                 .get(&path_id)
@@ -550,6 +565,7 @@ impl LineageIncrementalAxeyumSolver {
         let session_create_nanos = create_started.map_or(0, |started| nanos(started.elapsed()));
         let before = solver.stats();
         let cache_before = solver.replay_sat_cache_stats();
+        let engine_before = solver.solver_stats();
         let result = solver.check_snapshot_for_path(
             pool,
             asserts,
@@ -557,6 +573,7 @@ impl LineageIncrementalAxeyumSolver {
             created,
             session_create_nanos,
         );
+        record_canonical_cache_delta(&engine_before, &solver.solver_stats());
         (
             result,
             before,
@@ -660,7 +677,9 @@ pub(super) fn check_warm_thread_local_selected(
             execution = AxeyumExecutionClass::WarmSnapshot;
             let mut solver = solver.borrow_mut();
             let before = solver.stats();
+            let engine_before = solver.solver_stats();
             let result = solver.check_snapshot(pool, asserts);
+            record_canonical_cache_delta(&engine_before, &solver.solver_stats());
             (result, before, solver.stats())
         }),
         policy @ (WarmReusePolicy::Lineage | WarmReusePolicy::Auto | WarmReusePolicy::Adaptive) => {

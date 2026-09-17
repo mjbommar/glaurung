@@ -410,6 +410,15 @@ PURPOSES: dict[str, str] = {
         "(`zero` plus the bounded magnitude ladder in the SMT-LIB front door). Forwarded to "
         "`SolverConfig::model_preference` (axeyum ADR-2140); a malformed value refuses to run."
     ),
+    "GLAURUNG_AXEYUM_CANONICAL_CACHE": (
+        "Whether every axeyum session this adapter creates keeps axeyum's canonical constraint "
+        "cache (axeyum ADR-2144): `on` | `off`, forwarded to `SolverConfig::canonical_constraint_cache`. "
+        "Unset keeps axeyum's own default (off unless the process carries `AXEYUM_CANONICAL_CACHE`). "
+        "Per solver, keyed by the sorted, duplicate-elided set of live assertion identities "
+        "(ADR-0303's key inside one arena); a cached `sat` is served only after its model replays "
+        "against the live set. Answers repeated checks on one path-owned warm session; cannot share "
+        "across paths, which is what `GLAURUNG_ENGINE_CONSTRAINT_CACHE` does. A malformed value refuses to run."
+    ),
     "GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS": "Cap the number of live warm axeyum paths kept.",
     "GLAURUNG_AXEYUM_WARM_MAX_ASSERTIONS_PER_PATH": "Cap assertions per warm axeyum path.",
     "GLAURUNG_ORDERED_TRACE_DIR": "Directory ordered symbolic traces are written to/read from.",
