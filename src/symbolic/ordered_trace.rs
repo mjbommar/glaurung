@@ -1119,19 +1119,61 @@ fn pretty_json_bytes(value: &Value) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+/// Environment override for the Glaurung revision a trace manifest records.
+///
+/// A `git archive` extraction, a source tarball, or a Docker build context has
+/// no `.git`, and `git rev-parse HEAD` fails there. Setting this to the
+/// 40-hex commit the tree came from lets such a checkout still publish a
+/// trace; the manifest then says `"revision_source": "GLAURUNG_TRACE_GIT_REV"`
+/// and carries `null` for the working-tree `dirty`/`status_sha256` fields it
+/// cannot measure, so a reader can tell the two provenances apart.
+pub(crate) const TRACE_GIT_REV_ENV: &str = "GLAURUNG_TRACE_GIT_REV";
+
 fn source_identity() -> Result<Value, String> {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let revision = git_output(repo, &["rev-parse", "HEAD"])?;
-    if revision.len() != 40 || !revision.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    let override_revision = std::env::var(TRACE_GIT_REV_ENV).ok();
+    source_identity_from(repo, override_revision.as_deref())
+}
+
+/// [`source_identity`] with its two inputs explicit, so both routes are
+/// testable without mutating the process environment.
+fn source_identity_from(repo: &Path, override_revision: Option<&str>) -> Result<Value, String> {
+    if let Some(revision) = override_revision {
+        let revision = revision.trim();
+        if !is_full_git_revision(revision) {
+            return Err(format!(
+                "{TRACE_GIT_REV_ENV} must be a 40-character lowercase hex commit, got {revision:?}"
+            ));
+        }
+        return Ok(json!({
+            "repository": repo.display().to_string(),
+            "revision": revision,
+            "revision_source": TRACE_GIT_REV_ENV,
+            "dirty": Value::Null,
+            "status_sha256": Value::Null,
+        }));
+    }
+    let revision = git_output(repo, &["rev-parse", "HEAD"]).map_err(|error| {
+        format!("{error} (not a git checkout? set {TRACE_GIT_REV_ENV} to the source commit)")
+    })?;
+    if !is_full_git_revision(&revision) {
         return Err(format!("invalid Glaurung revision from git: {revision:?}"));
     }
     let status = git_output(repo, &["status", "--porcelain=v1", "--untracked-files=all"])?;
     Ok(json!({
         "repository": repo.display().to_string(),
         "revision": revision,
+        "revision_source": "git",
         "dirty": !status.is_empty(),
         "status_sha256": sha256(status.as_bytes()),
     }))
+}
+
+fn is_full_git_revision(revision: &str) -> bool {
+    revision.len() == 40
+        && revision
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn git_output(repo: &Path, args: &[&str]) -> Result<String, String> {
@@ -1244,6 +1286,71 @@ mod tests {
         SolverWorkBudgets, WarmAssertionPrefix, Z3ExecutionClass,
     };
 
+    /// The six publish tests below end in `finish()`, which records
+    /// `source_identity()` in the manifest. In a checkout without `.git` (a
+    /// `git archive` extraction) and without `GLAURUNG_TRACE_GIT_REV` set, that
+    /// cannot succeed, so they skip with the reason printed instead of failing
+    /// on the host's layout. Rust has no skip outcome; the line is visible
+    /// under `--nocapture`. With the variable set they run in full.
+    fn source_identity_or_skip(test: &str) -> bool {
+        match source_identity() {
+            Ok(_) => true,
+            Err(reason) => {
+                eprintln!("skipping {test}: {reason}");
+                false
+            }
+        }
+    }
+
+    const FIXTURE_REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    #[test]
+    fn source_identity_override_records_its_provenance_and_no_dirty_state() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let source = source_identity_from(repo, Some(&format!(" {FIXTURE_REVISION}\n")))
+            .expect("a well-formed override is accepted");
+        assert_eq!(source["revision"], FIXTURE_REVISION);
+        assert_eq!(source["revision_source"], TRACE_GIT_REV_ENV);
+        assert!(source["dirty"].is_null());
+        assert!(source["status_sha256"].is_null());
+    }
+
+    #[test]
+    fn source_identity_override_rejects_anything_but_a_full_lowercase_commit() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+        for bad in [
+            "",
+            "abc123",
+            "0123456789ABCDEF0123456789ABCDEF01234567",
+            "HEAD",
+        ] {
+            let error = source_identity_from(repo, Some(bad))
+                .expect_err("a malformed override must not become a manifest revision");
+            assert!(error.contains(TRACE_GIT_REV_ENV), "{error}");
+        }
+    }
+
+    #[test]
+    fn source_identity_without_git_names_the_override_in_its_error() {
+        let not_a_repo = tempfile::tempdir().expect("scratch dir");
+        let error = source_identity_from(not_a_repo.path(), None)
+            .expect_err("a directory with no .git has no revision");
+        assert!(error.contains("rev-parse"), "{error}");
+        assert!(error.contains(TRACE_GIT_REV_ENV), "{error}");
+    }
+
+    #[test]
+    fn source_identity_from_git_reports_a_full_revision_and_its_provenance() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let Ok(source) = source_identity_from(repo, None) else {
+            eprintln!("skipping source_identity_from_git: not a git checkout");
+            return;
+        };
+        assert_eq!(source["revision_source"], "git");
+        assert!(is_full_git_revision(source["revision"].as_str().unwrap()));
+        assert!(source["dirty"].is_boolean());
+    }
+
     #[test]
     fn work_bounded_measurement_schema_requires_all_six_named_limits() {
         let partial = SolverWorkBudgets {
@@ -1307,6 +1414,9 @@ mod tests {
 
     #[test]
     fn fair_shadow_timing_names_all_four_cells() {
+        if !source_identity_or_skip("fair_shadow_timing_names_all_four_cells") {
+            return;
+        }
         let timing = SolveTiming {
             total_nanos: 100,
             z3_nanos: Some(11),
@@ -1553,6 +1663,9 @@ mod tests {
 
     #[test]
     fn publishes_source_owner_serial_lease_replay_inputs() {
+        if !source_identity_or_skip("publishes_source_owner_serial_lease_replay_inputs") {
+            return;
+        }
         let output = tempfile::tempdir().expect("trace output");
         let guard =
             begin(output.path(), Path::new("fixture-driver.sys"), b"driver").expect("start trace");
@@ -1625,6 +1738,11 @@ mod tests {
 
     #[test]
     fn publishes_lineage_scopes_repeated_checks_model_choice_and_unsat() {
+        if !source_identity_or_skip(
+            "publishes_lineage_scopes_repeated_checks_model_choice_and_unsat",
+        ) {
+            return;
+        }
         let output = tempfile::tempdir().expect("trace output");
         let guard =
             begin(output.path(), Path::new("fixture-driver.sys"), b"driver").expect("start trace");
@@ -1775,6 +1893,9 @@ mod tests {
 
     #[test]
     fn validator_rejects_tampered_check_measurement_class() {
+        if !source_identity_or_skip("validator_rejects_tampered_check_measurement_class") {
+            return;
+        }
         let output = tempfile::tempdir().expect("trace output");
         let guard =
             begin(output.path(), Path::new("fixture-driver.sys"), b"driver").expect("start trace");
@@ -1831,6 +1952,9 @@ mod tests {
 
     #[test]
     fn publishes_width_safe_truthiness_for_wide_assertion() {
+        if !source_identity_or_skip("publishes_width_safe_truthiness_for_wide_assertion") {
+            return;
+        }
         let output = tempfile::tempdir().expect("trace output");
         let guard =
             begin(output.path(), Path::new("wide-driver.sys"), b"driver").expect("start trace");
@@ -1879,6 +2003,10 @@ mod tests {
 
     #[test]
     fn publishes_shared_expression_dags_without_recursive_expansion() {
+        if !source_identity_or_skip("publishes_shared_expression_dags_without_recursive_expansion")
+        {
+            return;
+        }
         let output = tempfile::tempdir().expect("trace output");
         let guard =
             begin(output.path(), Path::new("shared-driver.sys"), b"driver").expect("start trace");

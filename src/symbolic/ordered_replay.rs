@@ -213,7 +213,17 @@ pub fn replay_to_report(
         "native replay topology",
     )?;
     if manifest["source"]["dirty"] != false {
-        return Err("native replay requires a trace captured from a clean Glaurung tree".into());
+        // A trace whose revision came from `GLAURUNG_TRACE_GIT_REV` records
+        // `null` here: it cannot prove the tree was clean, so it is refused
+        // the same way a dirty one is.
+        return Err(format!(
+            "native replay requires a trace captured from a clean Glaurung tree \
+             (source.dirty = {}, revision_source = {})",
+            manifest["source"]["dirty"],
+            manifest["source"]["revision_source"]
+                .as_str()
+                .unwrap_or("git")
+        ));
     }
     let trace_revision = string(&manifest["source"]["revision"], "source revision")?;
     let replay_revision = git_revision()?;
