@@ -38,9 +38,10 @@ wall time; July's processes finished in 6–52 s with identical work. The
 budget is hit because warm Axeyum's summed time per process is 37.6 / 54.3 /
 36.8 / 40.7 s against cold Axeyum's 2.1 / 31.9 / 14.8 / 26.4 s and warm Z3's
 0.2 / 3.7 / 2.6 / 2.9 s: retained topology now costs Axeyum more than it
-saves, and its per-check latency grows with the retained session's age (p90
-0.1 ms in a session's first 50 checks, 178 ms past 500, on queries that
-solve cold in ~2 ms). The exploratory common-prefix ratios (the analyzer's own
+saves, and its per-check latency grows with the retained session's age: on
+DptfDevGen p90 is 0.1 ms in a session's first 50 checks and 178 ms past 500,
+on queries that solve cold in ~2 ms; on the other three drivers warm p90
+reaches cold p90 (7–15 ms) by 600 checks of age, where most checks sit. The exploratory common-prefix ratios (the analyzer's own
 functions over the work all five repetitions share; optimistic for Axeyum by
 construction) put warm Z3/Axeyum at 0.17 / 0.09 / 0.31 / 1.22 against July's
 0.84 / 1.05 / 2.23 / 2.28, and cold Z3/Axeyum at 1.18 / 0.65 / 1.41 / 1.92

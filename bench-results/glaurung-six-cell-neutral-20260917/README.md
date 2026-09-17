@@ -57,7 +57,12 @@ drivers. The mechanism is visible in the per-check latencies: warm Axeyum
 grows with the age of the retained session. On DptfDevGen (rep 1), p90 warm
 Axeyum latency is 0.1 ms in the first 50 checks after a session is created,
 2.6 ms at 50–100, 22.7 ms at 250–300, and 178 ms past 500 — while the same
-queries solved cold take ~2 ms at p50. July's pin had a warm Axeyum p99 of
+queries solved cold take ~2 ms at p50. On the other three drivers the growth
+is milder but the same shape: warm p90 rises from 0.1–0.4 ms in a session's
+first 100 checks to 6.9 / 7.7 / 14.8 ms past 600 (vwififlt / IntcSST /
+SurfacePen), where cold p90 on the same queries is 4.6 / 5.1 / 14.3 ms — the
+retained session's advantage is gone by then, and most checks sit past that
+point (9,115 of 17,411 on vwififlt). July's pin had a warm Axeyum p99 of
 0.4–2.4 ms on every driver; this pin's is 73–173 ms.
 
 ## Exploratory ratios over the common prefix (NOT preregistered)
