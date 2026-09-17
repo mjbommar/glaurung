@@ -204,8 +204,14 @@ else
 fi
 
 printf '\n'
-summary=$(cat "$out/gate2.log" "$out/gate1.log" 2>/dev/null | grep '^new rows:' | head -n 1)
-echo "shadow-capture: ${summary:-new rows: not counted (no gate ran)}"
+# Gate 1 counts the NEW rows (they enter as `unmeasured`); gate 2 counts the
+# ones the replay PROMOTED into the floor. Both lines, or the reason neither ran.
+if [ -f "$out/gate1.log" ]; then
+  echo "shadow-capture: gate 1: $(grep '^new rows:' "$out/gate1.log" | head -n 1)"
+fi
+if [ -f "$out/gate2.log" ]; then
+  echo "shadow-capture: gate 2: $(grep '^new rows:' "$out/gate2.log" | head -n 1)"
+fi
 if [ "$fail" -ne 0 ]; then
   echo "SHADOW CAPTURE: FAILED (${#findings[@]} finding(s)); commit nothing"
   exit 1

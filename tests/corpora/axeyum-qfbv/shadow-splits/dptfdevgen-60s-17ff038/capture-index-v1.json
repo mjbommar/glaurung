@@ -1,0 +1,198 @@
+{
+  "version": 1,
+  "name": "glaurung-dptfdevgen-shadow-splits-v1",
+  "source": "Glaurung 17ff038; Axeyum 8df8532; fair shadow (cold z3 vs warm Axeyum), 60 seconds per function; scripts/shadow-capture.sh (solver-034); expected is the only backend-decided class",
+  "logic": "QF_BV",
+  "files": [
+    {
+      "path": "04f16a898c68763608be6f1ca34ff56a198daaabfa4ff78f7df53ba35c711b4d.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "path": "06da0886d04aed6a61d4042080616abcc66fde36982845b99a2cb6b3818029bf.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "path": "1e9da96f683cee02e01bdbc5e294a2817bef598e744c2b11d590fbcb47dd60b7.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "path": "1f0530fdff81ff817a068d06647d2622b16d59077dd9e24882441d660546eaeb.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "path": "423213175c5fef8077a52b453e1923f0b28c3c45b9daa0f50adfc3ac5a77ded5.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "path": "437eca661f76544f51685f8f8e375aaf517d3c05ecceffd71383b4b54807219d.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "path": "63072ea3f7fe94080361e6f32c755036aec7bc036694c67065743c368bd3ee09.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "path": "7813abdc36bcffe42d6c81377f1820cbcedfeb62d2d57b3ede3b2f4ad0483985.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided",
+        "representative"
+      ]
+    },
+    {
+      "path": "78b7d7165dba7c0b90dbc0d13ea5c1d605d5f38ae6f1a089e1d226f2f160dcd9.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "path": "882b7a536299bb9e1094fbaa0bc5db359d99b42d8a9734efe369e7be1135faca.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "path": "916415e1565f6d636b669a3ce8efc77aff9979dcb00bef064355544269e2eaa3.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "path": "a94af17f94e2ee230a7051b8f8eceaf4b54602d8713fe41c45a77551f1a7421c.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "path": "ab6f0f863437d3a725051bcdd1ddad568e4cef30221fbd0a7951333acd93a5de.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "path": "abf2c0f68876999500528eae0a28bbb4736a9761d73af8c4fefc7c6b651972b1.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "path": "afc22e1a0191803598d09292aaeff632c512fd2192435b8feac1165ba3255023.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "path": "b8000b4344304346aea819b67a393de58f4dbf74675175c7d5c72cc44845daf1.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "path": "bb8a6664255a5138063efd43c6f0f1d5e666681a951246139d10a0bd47f81f87.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "path": "c4ca95549d99376955a3e07c510d0dcd3ecf5230c456121e05678adc87f9d91b.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "path": "c69e43244aedb181dcb6d3912198e88cb694fb762c455f3ecad03abf25effa7c.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "path": "dd92e47dc442a016c899376d903d17aac78749f6fedf445465eac8405f819893.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    },
+    {
+      "path": "dfaa603b615ff4a143ced45c6bca1ee857de36a2e197776a0570f2e76639e663.smt2",
+      "expected": "sat",
+      "family": "shadow-z3-decided",
+      "tiers": [
+        "diagnostic",
+        "z3-decided"
+      ]
+    }
+  ]
+}
