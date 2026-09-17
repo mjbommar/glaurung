@@ -10,10 +10,15 @@ use object::read::Object;
 /// Currently supports ELF x86_64 `.plt`, `.plt.sec`, and `.plt.got` sections,
 /// plus decoded ARM32 PLT stubs.
 pub fn elf_plt_map(data: &[u8]) -> Vec<(u64, String)> {
-    let mut out: Vec<(u64, String)> = Vec::new();
     let Ok(obj) = crate::decompile::profile::parse_object(data) else {
-        return out;
+        return Vec::new();
     };
+    elf_plt_map_from_object(data, &obj)
+}
+
+/// Extract the durable PLT index from an already parsed object.
+pub(crate) fn elf_plt_map_from_object(data: &[u8], obj: &object::File<'_>) -> Vec<(u64, String)> {
+    let mut out: Vec<(u64, String)> = Vec::new();
     if obj.format() != object::BinaryFormat::Elf {
         return out;
     }
@@ -233,7 +238,7 @@ pub fn elf_plt_map(data: &[u8]) -> Vec<(u64, String)> {
     let arch = obj.architecture();
     // ARM32 stubs are decoded, never counted. See `arm_plt_map`.
     if arch == object::Architecture::Arm {
-        let mut arm = arm_plt_map(data, &obj, &got_slots);
+        let mut arm = arm_plt_map(data, obj, &got_slots);
         if !arm.is_empty() {
             arm.sort_by_key(|(va, _)| *va);
             arm.dedup_by_key(|(va, _)| *va);
@@ -241,7 +246,7 @@ pub fn elf_plt_map(data: &[u8]) -> Vec<(u64, String)> {
         }
     }
     if arch == object::Architecture::X86_64 {
-        out.extend(x86_64_plt_got_map(data, &obj, &got_slots));
+        out.extend(x86_64_plt_got_map(data, obj, &got_slots));
     }
     let mut emit = |start: u64, size: u64, reserved: u64| {
         let count = imported.len() as u64;
