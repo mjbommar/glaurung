@@ -81,6 +81,34 @@ rerun is therefore **four cells**: `{Z3, Axeyum} × {cold, warm}`. The column
 `solver-002` reads is warm Z3/Axeyum (with cold Z3/Axeyum beside it); the
 July `Axeyum/Bitwuzla` column has no counterpart here and is not re-measured.
 
+## Preflight finding: the producer at master could not publish a valid trace
+
+The first smoke run (one DptfDevGen process at `11b68faf`, outside the
+campaign, before registration) exited 0 and published a v2 trace, and
+`tools/axeyum/validate_ordered_trace.py` rejected it:
+`per-backend timing exceeds total timing for check-0`. The cause is
+`replace_axeyum_timing` in `src/symbolic/solver/mod.rs`, added by the engine
+constraint cache (`2c999b67`, 2026-07-20 — one day after the July campaign):
+with the cache policy `Off` it still overwrote the legacy `axeyum_nanos` alias
+with the wrapper time (the whole four-cell rotation) while `z3_nanos` stayed
+the cold-Z3 cell, so `z3_nanos + axeyum_nanos > total_nanos` on every
+fair-shadow check. The four measured cell fields
+(`z3_cold_nanos`, `z3_warm_nanos`, `axeyum_cold_nanos`, `axeyum_warm_nanos`)
+were correct; only the compatibility aliases were wrong. This means **no
+`solver-z3,solver-axeyum` fair-shadow trace produced since 2026-07-20 could
+have passed the producer validator**, which is consistent with nobody having
+run the campaign since.
+
+Fixed on this branch (`b1f420ab`): the aliases `solve()` set survive the
+wrapper whenever Z3 was timed; a unit test
+(`fair_shadow_aliases_survive_the_engine_cache_wrapper`, needs
+`--features solver-z3,solver-axeyum`) pins the validator's invariant on a real
+fair-shadow solve and fails on the old code. ADR-0272 allows exactly this
+class of repair without a new preregistration ("a pure runner/schema defect
+that occurs before a timing row is observed"); the registered producer
+revision is therefore this branch's head, which differs from master
+`11b68faf` by that one fix plus documentation.
+
 ## Host
 
 - Host s4, `12th Gen Intel(R) Core(TM) i5-12600K` (the same CPU model as the
