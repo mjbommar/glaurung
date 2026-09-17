@@ -102,6 +102,9 @@ pub mod testing;
 
 pub mod program;
 
+/// Captured process state and observed events, kept separate from static images.
+pub mod runtime_analysis;
+
 /// Python bindings module
 #[cfg(feature = "python-ext")]
 pub mod python_bindings;

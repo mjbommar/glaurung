@@ -87,6 +87,10 @@ pub enum DwarfStackBase {
 /// One fixed-size source object resident in a function's stack frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DwarfStackObject {
+    /// Canonical declaration DIE offset in the immutable image's `.debug_info`.
+    pub declaration_debug_info_offset: Option<u64>,
+    /// Referenced type DIE offset in the immutable image's `.debug_info`.
+    pub type_debug_info_offset: Option<u64>,
     pub base: DwarfStackBase,
     pub offset: i64,
     pub byte_size: u16,
@@ -110,6 +114,8 @@ pub struct DwarfRegisterLocation {
 /// An optimized source local described by a DWARF location list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DwarfRegisterLocal {
+    pub declaration_debug_info_offset: Option<u64>,
+    pub type_debug_info_offset: Option<u64>,
     pub source_name: String,
     pub c_type: String,
     pub locations: Vec<DwarfRegisterLocation>,
@@ -118,6 +124,8 @@ pub struct DwarfRegisterLocal {
 /// One source variable with static storage and function lexical scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DwarfStaticLocal {
+    pub declaration_debug_info_offset: Option<u64>,
+    pub type_debug_info_offset: Option<u64>,
     pub address: u64,
     pub byte_size: u16,
     pub source_name: String,
@@ -485,6 +493,42 @@ fn inherited_attr_value<'a>(
     None
 }
 
+/// Resolve the declaration/origin DIE that owns a variable's source identity.
+fn inherited_declaration_offset(
+    unit: &Unit<'_>,
+    entry: &gimli::DebuggingInformationEntry<Slice<'_>, usize>,
+) -> Option<u64> {
+    let mut offset = entry.offset();
+    for _ in 0..16 {
+        let current = unit.entry(offset).ok()?;
+        let reference = current
+            .attr_value(gimli::DW_AT_abstract_origin)
+            .or_else(|| current.attr_value(gimli::DW_AT_specification));
+        let Some(gimli::AttributeValue::UnitRef(next)) = reference else {
+            return offset
+                .to_debug_info_offset(&unit.header)
+                .map(|offset| offset.0 as u64);
+        };
+        if next == offset {
+            return None;
+        }
+        offset = next;
+    }
+    None
+}
+
+fn type_debug_info_offset(
+    unit: &Unit<'_>,
+    attribute: gimli::AttributeValue<Slice<'_>, usize>,
+) -> Option<u64> {
+    let gimli::AttributeValue::UnitRef(offset) = attribute else {
+        return None;
+    };
+    offset
+        .to_debug_info_offset(&unit.header)
+        .map(|offset| offset.0 as u64)
+}
+
 /// Test whether a subprogram or its same-unit origin/specification owns a
 /// marker child such as `DW_TAG_unspecified_parameters`.
 ///
@@ -563,6 +607,12 @@ fn referenced_type_info_at<'a>(
     let direct_size = _byte_size_of(&entry);
     if direct_size != 0 {
         return Some((direct_size, aggregate));
+    }
+    if matches!(
+        entry.tag(),
+        gimli::DW_TAG_pointer_type | gimli::DW_TAG_reference_type
+    ) {
+        return Some((u64::from(unit.encoding().address_size), false));
     }
 
     let gimli::AttributeValue::UnitRef(element_or_wrapped) =
@@ -665,6 +715,8 @@ fn dwarf_stack_objects_for_subprogram<'a>(
             let (byte_size, aggregate) = referenced_type_info(unit, type_attr)?;
             let byte_size = u16::try_from(byte_size).ok().filter(|size| *size != 0)?;
             Some(DwarfStackObject {
+                declaration_debug_info_offset: inherited_declaration_offset(unit, &variable),
+                type_debug_info_offset: type_debug_info_offset(unit, type_attr),
                 base,
                 offset,
                 byte_size,
@@ -688,6 +740,12 @@ fn dwarf_stack_objects_for_subprogram<'a>(
             }
             if existing.c_type != object.c_type {
                 existing.c_type = None;
+            }
+            if existing.declaration_debug_info_offset != object.declaration_debug_info_offset {
+                existing.declaration_debug_info_offset = None;
+            }
+            if existing.type_debug_info_offset != object.type_debug_info_offset {
+                existing.type_debug_info_offset = None;
             }
         } else {
             merged.push(object);
@@ -714,6 +772,8 @@ fn dwarf_static_locals_for_subprogram<'a>(
             let type_attr = inherited_attr_value(unit, &variable, gimli::DW_AT_type)?;
             let (byte_size, _) = referenced_type_info(unit, type_attr)?;
             Some(DwarfStaticLocal {
+                declaration_debug_info_offset: inherited_declaration_offset(unit, &variable),
+                type_debug_info_offset: type_debug_info_offset(unit, type_attr),
                 address,
                 byte_size: u16::try_from(byte_size).ok().filter(|size| *size != 0)?,
                 source_name: inherited_name_of(dwarf, unit, &variable)?,
@@ -788,6 +848,8 @@ fn dwarf_register_locals_for_subprogram<'a>(
         locations.sort_by_key(|location| (location.start, location.end, location.register));
         locations.dedup();
         locals.push(DwarfRegisterLocal {
+            declaration_debug_info_offset: inherited_declaration_offset(unit, &variable),
+            type_debug_info_offset: type_debug_info_offset(unit, type_attr),
             source_name,
             c_type,
             locations,
@@ -1709,14 +1771,18 @@ mod tests {
 
     #[test]
     fn extracts_function_local_static_address_and_source_contract() {
-        for (path, address) in [
+        for (path, address, declaration_offset, type_offset) in [
             (
                 "samples/binaries/platforms/linux/amd64/export/native/gcc/debug/hello-c-gcc-debug",
                 0x4018,
+                249,
+                100,
             ),
             (
                 "samples/binaries/platforms/linux/amd64/export/native/clang/debug/hello-c-clang-debug",
                 0x4040,
+                61,
+                46,
             ),
         ] {
             let bytes = match std::fs::read(path) {
@@ -1731,6 +1797,8 @@ mod tests {
             assert_eq!(
                 function.static_locals,
                 [DwarfStaticLocal {
+                    declaration_debug_info_offset: Some(declaration_offset),
+                    type_debug_info_offset: Some(type_offset),
                     address,
                     byte_size: 4,
                     source_name: "static_var".to_string(),

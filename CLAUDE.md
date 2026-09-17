@@ -15,7 +15,8 @@ via PyO3, with an LLM agent (`pydantic-ai`) in the pipeline rather than bolted o
   (x86/x64, ARM/ARM64, MIPS, PPC, RISC-V), `formats` (ELF/PE/Mach-O), `program`
   (image/session/symbol ownership), `triage`, `symbols`, `debug` (DWARF),
   `demangle`, `flirt`, `strings`, `similarity`, `entropy`, `unpack`, `exec`
-  (concrete emulator), `symbolic` (symbolic execution + SMT, own feature). The
+  (concrete emulator), `symbolic` (symbolic execution + authoritative Axeyum,
+  included by the default feature set). The
   decompiler lifts x86/x86-64 and ARM/ARM64; the rest is disassembly-only.
 - **Python package** (`python/glaurung/`): the PyO3 extension (`_native…so`),
   the `glaurung` CLI (`cli/commands/`), and the `llm/` agent subsystem — whose
@@ -44,6 +45,17 @@ API, `gh`, git, or any other tool. Stop at the upstream boundary and hand the
 evidence to the human. A user request to perform the upstream action does not
 override the upstream project's contribution rule.
 
+## Solver authority — Axeyum always
+
+All SAT/SMT decisions in Glaurung use the native Axeyum backend. This applies
+to symbolic execution, counterfactual analysis, tests, fixtures, benchmarks,
+and production builds. Z3 is never an authoritative solver or fallback. It may
+run only in an explicitly labelled differential/comparison lane beside Axeyum;
+the Axeyum result remains authoritative. A passing Z3-only test is not evidence
+for a Glaurung SAT/SMT capability. During local Axeyum development, test the
+current sibling checkout at `../axeyum`; committed dependencies remain pinned
+for reproducible standalone builds.
+
 ## Commands
 
 ```bash
@@ -63,7 +75,8 @@ uv run glaurung kickoff <binary>        # full analysis → .glaurung KB
 
 cargo test --features python-ext        # THE Rust command; bare `cargo test`
                                         # does not build src/python_bindings/
-cargo test --features symbolic          # src/symbolic/, which the above skips
+cargo test --no-default-features --features symbolic  # solver-independent engine
+cargo test --features solver-axeyum     # authoritative SAT/SMT backend
 uv run pytest python/tests/             # Python suite
 uv run pytest python/tests/test_x.py -xvs
 uv run pytest python/tests/ -m core     # the tier needing nothing but the .so
@@ -96,12 +109,12 @@ uv run python tools/gen_native_stub.py --check    # exit 1 if stale
 | Gate | Command | Protects | In CI? |
 |---|---|---|---|
 | Rust + bindings | `cargo test --features python-ext` | `src/` and `src/python_bindings/`, the real pipeline entry point | yes — `test-suite.yml` job `rust` |
-| Symbolic | `cargo test --features symbolic` | `src/symbolic/`, which the other Rust builds never compile | yes — job `symbolic` |
+| Symbolic | `cargo test --no-default-features --features symbolic` | solver-independent `src/symbolic/`; the ordinary default/Python lane also compiles it through `solver-axeyum` | yes — job `symbolic` |
 | S5 equivalence scorecard | `( ulimit -v 12000000; cargo test --release --features symbolic --lib -- --test-threads=1 csource::equiv )` | `src/csource/equiv/` — the one oracle here that is not a proxy. Its corpus is **generated and gitignored**: run `uv run python tools/equiv_mutants.py` first or it skips | **no** — by hand |
 | Python suite | `uv run pytest python/tests/` | everything Python-visible, incl. the structural gates | yes, tiered — jobs `python-core` (`-m core`) and `python-extended` |
 | Lint / format | `uvx ruff format --check python/`, `uvx ruff check python/` | Python style | yes — job `lint` |
 | Types | `uvx ty check python/` | Python types, incl. a lying `.pyi` | **no** — developer-only |
-| Feature build gate | `scripts/feature-build-gate.sh` | 12 lanes: every feature configuration, incl. solvers and the separate `fuzz/` crate | yes — `feature-build-gate.yml` |
+| Feature build gate | `scripts/feature-build-gate.sh` | 13 lanes: every feature configuration, incl. solvers and the separate `fuzz/` crate | yes — `feature-build-gate.yml` |
 | Fixture matrix + structural | `pytest -m slow test_decompiler_fixture_{matrix,structural}.py` | `baseline.json`, `structural_baseline.json` | yes — `decompiler-fixtures.yml` |
 | Cross-arch round trip | `tools/dectest.py @o0 @o2 --arch i386 --arch armv7 --arch aarch64 --arch x86_64_gcc15` | `arch_baseline.json` | **no** — by hand |
 | Def-use census | `pytest python/tests/test_decompiler_defuse_census.py -q` | `defuse_baseline.json` | **no** — by hand |

@@ -1,6 +1,6 @@
 //! Native, in-process SMT backend via the `z3` crate (links libz3).
 //!
-//! This is the preferred solver path: the bit-vector [`Expr`](crate::symbolic::Expr)
+//! This is a comparison-only solver path: the bit-vector [`Expr`](crate::symbolic::Expr)
 //! IR is translated directly into z3 AST in-process — no subprocess, no external
 //! protocol, results returned as Rust values. Enabled by the `solver-z3`
 //! feature.

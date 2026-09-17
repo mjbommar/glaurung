@@ -1,6 +1,9 @@
-//! Fallback SMT-LIB2 pipe backend — spawns a solver *binary* and speaks
-//! SMT-LIB2 over stdin/stdout. Adds no build dependency; used when the native
-//! [`z3_backend`](super::z3_backend) is not compiled in. Prefers (in order) a
+//! SMT-LIB2 renderer plus an explicitly feature-gated subprocess oracle.
+//!
+//! `build_script` and `assertion_line` are pure renderers used by trace and
+//! diagnostic code. The `solver-pipe-oracle` feature additionally compiles a
+//! solver *binary* transport that speaks SMT-LIB2 over stdin/stdout. It is
+//! never a production fallback. The oracle prefers (in order) a
 //! `GLAURUNG_SMT_SOLVER` override, then `bitwuzla`, `z3`, `cvc5` on `PATH`.
 //!
 //! The subprocess honours the same per-check wall as the in-process backends
@@ -9,23 +12,31 @@
 //! [`SolveUnknownReason::WallTimeout`](super::SolveUnknownReason::WallTimeout).
 
 use std::collections::BTreeMap;
+#[cfg(feature = "solver-pipe-oracle")]
 use std::io::{Read, Write};
+#[cfg(feature = "solver-pipe-oracle")]
 use std::process::{Child, Command, Stdio};
+#[cfg(feature = "solver-pipe-oracle")]
 use std::time::{Duration, Instant};
 
 use crate::symbolic::expr::ExprPool;
-use crate::symbolic::solver::{check_timeout, Assert, Model, SolveResult, Solver};
+use crate::symbolic::solver::Assert;
+#[cfg(feature = "solver-pipe-oracle")]
+use crate::symbolic::solver::{check_timeout, Model, SolveResult, Solver};
 
 /// The subprocess SMT-LIB2 backend.
+#[cfg(feature = "solver-pipe-oracle")]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PipeSolver;
 
+#[cfg(feature = "solver-pipe-oracle")]
 impl PipeSolver {
     pub fn new() -> Self {
         Self
     }
 }
 
+#[cfg(feature = "solver-pipe-oracle")]
 impl Solver for PipeSolver {
     fn check(&mut self, pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
         let (script, names) = build_script(pool, asserts);
@@ -35,8 +46,10 @@ impl Solver for PipeSolver {
 
 /// Longest nap between deadline checks. Small enough that the wall is accurate
 /// to a few milliseconds, large enough that a long solve is not a spin loop.
+#[cfg(feature = "solver-pipe-oracle")]
 const POLL_CEILING: Duration = Duration::from_millis(5);
 /// First nap after spawn, so the common sub-millisecond solve is not delayed.
+#[cfg(feature = "solver-pipe-oracle")]
 const POLL_FLOOR: Duration = Duration::from_micros(200);
 
 /// Try each candidate solver in turn, returning the first real verdict.
@@ -47,6 +60,7 @@ const POLL_FLOOR: Duration = Duration::from_micros(200);
 /// unrecognized flag makes a solver exit non-zero -- silently converting every
 /// solve into a failure, which is a far worse regression than an unbounded
 /// solve. Killing the child is solver-agnostic and needs no flag knowledge.
+#[cfg(feature = "solver-pipe-oracle")]
 fn run_candidates(
     script: &str,
     names: &[(u32, String)],
@@ -129,6 +143,7 @@ fn run_candidates(
 ///
 /// Returns `true` when the deadline was enforced. Every exit path reaps the
 /// child, so a killed solver leaves neither an orphan nor a zombie.
+#[cfg(feature = "solver-pipe-oracle")]
 fn wait_until(child: &mut Child, deadline: Instant) -> bool {
     let mut nap = POLL_FLOOR;
     loop {
@@ -156,6 +171,7 @@ fn wait_until(child: &mut Child, deadline: Instant) -> bool {
     }
 }
 
+#[cfg(feature = "solver-pipe-oracle")]
 fn candidate_solvers() -> Vec<(String, Vec<String>)> {
     let mut v = Vec::new();
     if let Ok(custom) = std::env::var("GLAURUNG_SMT_SOLVER") {
@@ -214,6 +230,7 @@ pub(crate) fn assertion_line(pool: &ExprPool, assertion: Assert) -> String {
     }
 }
 
+#[cfg(feature = "solver-pipe-oracle")]
 fn parse_bv_literal(s: &str) -> Option<u128> {
     let s = s.trim();
     if let Some(hex) = s.strip_prefix("#x") {
@@ -229,6 +246,7 @@ fn parse_bv_literal(s: &str) -> Option<u128> {
     None
 }
 
+#[cfg(feature = "solver-pipe-oracle")]
 fn parse_model(out: &str, names: &[(u32, String)]) -> Model {
     let mut values = BTreeMap::new();
     for (id, name) in names {
@@ -326,20 +344,9 @@ mod tests {
             "shared DAG expanded: {} bytes",
             script.len()
         );
-
-        match PipeSolver::new().check(&pool, &[(shared, true)]) {
-            SolveResult::Unsat => {}
-            SolveResult::NoSolver => eprintln!("no solver binary on PATH - skipping"),
-            // The per-check wall now binds on the subprocess too. On a trivial
-            // query that only fires when the machine is too loaded to answer at
-            // all, which is an environment skip, not a semantic failure.
-            SolveResult::Unknown(crate::symbolic::solver::SolveUnknownReason::WallTimeout) => {
-                eprintln!("solver exceeded the per-check wall - skipping")
-            }
-            other => panic!("expected repeated self-xor to be unsat, got {other:?}"),
-        }
     }
 
+    #[cfg(feature = "solver-pipe-oracle")]
     #[test]
     fn pipe_solves_or_skips() {
         let (p, eq) = add1_eq_256_32();
@@ -353,6 +360,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "solver-pipe-oracle")]
     #[test]
     fn pipe_wide_truthiness_matches_native_semantics_or_skips() {
         let mut pool = ExprPool::new();
@@ -390,13 +398,13 @@ mod tests {
     //
     // These drive `run_candidates` -- the whole of `Solver::check` except the
     // PATH probe -- with fake solver binaries, rather than pointing
-    // `GLAURUNG_SMT_SOLVER` at them. That env var is process-global: setting it
-    // here would silently redirect every *other* test that reaches
-    // `PipeSolver` through `symbolic::solve` whenever the suite runs with more
-    // than one test thread (CI's `cargo test --features symbolic` does).
+    // `GLAURUNG_SMT_SOLVER` at them. That env var is process-global, so tests
+    // exercise the legacy pipe API directly and never alter another test's
+    // subprocess environment. The authoritative `symbolic::solve` entry point
+    // does not select `PipeSolver`.
     // ---------------------------------------------------------------------
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "solver-pipe-oracle"))]
     mod subprocess {
         use super::*;
         use std::sync::atomic::{AtomicU32, Ordering};
@@ -560,6 +568,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "solver-pipe-oracle")]
     #[test]
     fn bv_literal_parsing() {
         assert_eq!(parse_bv_literal("#x00ff"), Some(0xff));
@@ -568,6 +577,7 @@ mod tests {
         assert_eq!(parse_bv_literal("nonsense"), None);
     }
 
+    #[cfg(feature = "solver-pipe-oracle")]
     #[test]
     fn model_parsing_from_getvalue_output() {
         let out = "sat\n((sym0_64 #x00000000000000ff))\n";

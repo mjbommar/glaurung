@@ -23,6 +23,7 @@ directory is not scheduled by being here.
 
 | file | what it proposes |
 |---|---|
+| [hybrid-analysis-data-model/](hybrid-analysis-data-model/README.md) | the boundary between decompiler/static semantics and runtime state: a Ghidra architecture comparison, the proposed shared semantic kernel, explicit non-reuse rules, correlation relations, and the first crash-to-evidence vertical slice |
 | [open-questions.md](open-questions.md) | six unimplemented ideas and measured negative results — goto sinking, the two loop passes that never fire, the stack-bias affine index, the four-workstream structuring/dispatch redesign, KB schema migration, and `FunctionFacts` — each with the experiment that would decide it |
 | [function-facts-and-call-facts.md](function-facts-and-call-facts.md) | an interprocedural fact store keyed by stable function and call-site IDs. Nothing in it is implemented; its §6 is the measurement that rules out founding it on the existing `CallGraph` |
 | [signature-tiers.md](signature-tiers.md) | a three-tier signature system — compiled patterns, Aho-Corasick runtime patterns, sandboxed WASM script logic — balancing match cost against expressiveness. Unbuilt |

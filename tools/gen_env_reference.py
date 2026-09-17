@@ -293,6 +293,7 @@ def collect() -> Findings:
 # finds that is NOT a key here renders as undocumented -- that gap is the
 # point, not a bug to silence by adding a vague entry.
 PURPOSES: dict[str, str] = {
+    "STRIP_LEDGER": "Append verified stripped-input preparation receipts for the local DecBench replay tool to this JSON-lines file.",
     # --- Python: LLM / analyst surface ---------------------------------
     "GLAURUNG_CACHE_DIR": "Override the on-disk cache directory used by LLM/type-sync tooling.",
     "GLAURUNG_INPUT_TOKENS_LIMIT": "Cap input tokens per LLM request.",

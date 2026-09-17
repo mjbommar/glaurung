@@ -902,6 +902,8 @@ mod tests {
         use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
 
         let local = DwarfRegisterLocal {
+            declaration_debug_info_offset: None,
+            type_debug_info_offset: None,
             source_name: "counter".to_string(),
             c_type: "int".to_string(),
             locations: vec![DwarfRegisterLocation {
@@ -993,6 +995,8 @@ mod tests {
         use crate::ir::types::{LlirBlock, LlirFunction, LlirInstr, Op, VReg, Value};
 
         let local = DwarfRegisterLocal {
+            declaration_debug_info_offset: None,
+            type_debug_info_offset: None,
             source_name: "counter".to_string(),
             c_type: "int".to_string(),
             locations: vec![DwarfRegisterLocation {

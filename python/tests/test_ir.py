@@ -425,6 +425,8 @@ def test_decompile_all_returns_readable_functions():
                 "stack_offset",
                 "size",
                 "addresses",
+                "static_variable",
+                "static_type",
             }
             assert variable["kind"] in ("arg", "stack")
             # Every reported name must be a real identifier the render emitted.
@@ -437,6 +439,38 @@ def test_decompile_all_returns_readable_functions():
             assert isinstance(addresses, list)
             assert addresses == sorted(set(addresses))
             assert all(isinstance(a, int) and a > 0 for a in addresses)
+            static_variable = variable["static_variable"]
+            if static_variable is not None:
+                assert static_variable["id"].startswith("static-variable-")
+                assert static_variable["function_id"].startswith("static-function-")
+                assert len(static_variable["image_sha256"]) == 64
+                assert static_variable["source_name"] == variable["name"]
+                assert static_variable["origin"]["kind"] in {
+                    "abi_argument",
+                    "frame_storage",
+                }
+            static_type = variable["static_type"]
+            if static_type is not None:
+                assert variable["kind"] == "arg"
+                assert static_variable is not None
+                assert static_variable["type_id"] == static_type["id"]
+                assert static_type["id"].startswith("static-type-")
+                assert static_type["image_sha256"] == static_variable["image_sha256"]
+                assert static_type["c_type"] == variable["type"]
+                assert static_type["type_debug_info_offset"] is None
+                assert static_type["origin"]["kind"] == "recovered"
+                assert static_type["origin"]["recovery_profile"] == (
+                    "glaurung-recovered-type-v1"
+                )
+                assert static_type["origin"]["shape"]["kind"] in {
+                    "integer",
+                    "float",
+                    "data_pointer",
+                    "bool_like",
+                    "code_pointer",
+                }
+            elif static_variable is not None:
+                assert static_variable["type_id"] is None
             if variable["kind"] == "arg":
                 assert addresses == [], (
                     "a register's live range is not a storage coordinate; "

@@ -57,7 +57,7 @@ Verified with `find src/exec src/symbolic -name '*.rs' | xargs wc -l`.
 | `solver/axeyum_backend.rs` (+6 files) | 5,084 | native pure-Rust axeyum (`solver-axeyum`), with warm paths and snapshots. |
 | `solver/bitwuzla_backend.rs` | 1,355 | benchmark-only Bitwuzla 0.9.1 C-API cell (`solver-bitwuzla`). |
 | `solver/constraint_cache.rs` | 1,089 | bounded result caching above the backends. |
-| `solver/pipe.rs` | 289 | the SMT-LIB2 subprocess fallback. |
+| `solver/pipe.rs` | 289 | comparison-only SMT-LIB2 rendering and, behind `solver-pipe-oracle`, subprocess transport; never a production fallback. |
 | `mod.rs` | 52 | the re-exports. |
 
 ## The `Domain` trait
@@ -257,39 +257,54 @@ Three modules exist only to make solver behaviour independently checkable:
   terminal and every repeated decided query agrees.
 - **`native_trace.rs`** — deterministic typed expression-DAG packs beside the
   SMT-LIB payload, so a replay can drive the production native adapter without
-  reparsing text or weakening sort checks. SMT-LIB stays the authoritative,
-  cross-tool identity.
+  reparsing text or weakening sort checks. The same dense-topological native
+  representation supplies process-independent constraint-cache identity; the
+  production cache does not render SMT-LIB to key a query.
 - **`ordered_replay.rs`** (`solver-axeyum`) — replays a published trace through
   the production `solve_for_path_delta` adapter in observation order,
   reconstructing source-prefix identity and serial owner leases.
 
 `solver/constraint_cache.rs` is the bounded result cache above the backends
-(`GLAURUNG_ENGINE_CONSTRAINT_CACHE`).
+(`GLAURUNG_ENGINE_CONSTRAINT_CACHE`). SAT hits are model-replayed before use;
+unknown and error results are not cached. Runtime counterfactuals additionally
+use a fixed-policy, bounded per-worker exact cache. A pointer-sized thread-local
+slot owns a heap-allocated cache bundle; embedding the cache itself in static
+TLS exceeded the Python extension's load budget during the integration test.
+On a cache miss, related runtime counterfactuals use a separate direct-delta
+Axeyum session per capture-scoped exploration lineage. Prior observed branch
+conditions remain persistent, the selected negation is temporary, and exact
+typed native prefix identity survives reconstruction in a new `ExprPool`.
+These sessions do not share the ordinary explorer's numeric path-ID domain and
+are closed as a bounded group when runtime candidate selection ends.
+Their arena-local semantic-term cache maps exact typed Glaurung structure to
+existing Axeyum `TermId`s. It replaces pool-local child IDs with structural IDs,
+so equivalent expressions rebuilt in another pool neither reconstruct terms nor
+grow the Axeyum arena; the cache lifetime is exactly the solver/arena lifetime.
 
 ## Feature gates: which build compiles what
 
 ```
-default              = ["triage-core"]
+default              = ["triage-core", "solver-axeyum"]
 python-ext           = ["pyo3", "pyo3/extension-module", "exec"]
 exec                 = []                              # pure Rust
 symbolic             = ["exec"]                        # pure Rust
 dev-oracle           = ["exec", "dep:unicorn-engine"]  # links system libunicorn
-solver-z3            = ["symbolic", "dep:z3"]
+solver-z3            = ["solver-axeyum", "dep:z3"]
 solver-axeyum        = ["symbolic", "dep:axeyum-solver", "dep:axeyum-ir"]
 solver-bitwuzla      = ["symbolic"]                    # BITWUZLA_LIB_DIR via build.rs
 solver-axeyum-text   = ["solver-axeyum", "axeyum-solver/full"]
+solver-pipe-oracle   = ["symbolic"]                    # comparison only
 ```
 
 `src/lib.rs:75` gates `exec`, `:80` gates `symbolic`, `:93` gates
 `python_bindings`. Two consequences worth stating plainly:
 
-- **The wheel ships the emulator and no solver.** `python-ext` pulls `exec`, so
-  `glaurung.engine` exists in an ordinary wheel; `symbolic` is in neither
-  `default` nor `python-ext`, so neither the `Expr` IR nor any backend is
-  compiled into the extension module.
-- **`cargo test --features python-ext` compiles none of `src/symbolic`.** Those
-  21,459 lines need `--features symbolic` (or a `solver-*` feature) to be built
-  at all, which is why the CI lane and the feature gate below exist.
+- **The ordinary wheel carries the emulator, symbolic engine, and Axeyum.**
+  `python-ext` pulls `exec` directly and the default `solver-axeyum` feature
+  pulls `symbolic`; all of this remains pure Rust.
+- **`--no-default-features` is the meaningful exclusion.** The separate
+  `symbolic` lane still proves the solver-independent engine, while the ordinary
+  `cargo test --features python-ext` lane compiles the authoritative Axeyum path.
 
 Verified with `sed -n '/^\[features\]/,/^\[/p' Cargo.toml` and
 `rg -n 'cfg\(feature' src/lib.rs`.
@@ -322,7 +337,7 @@ There is **no CLI command** for the engine: `glaurung emulate` and
 | `#[test]` in `src/symbolic/` | 195 |
 | Python tests | 6 in `python/tests/test_exec_engine.py` |
 | CI lane | `cargo test --features symbolic` (`.github/workflows/test-suite.yml`), with a guard step that fails the job if fewer than a floor of `symbolic::` tests are even *listed* |
-| Feature type-check | `scripts/feature-build-gate.sh` — 12 `cargo check --all-targets` lanes including `exec`, `symbolic`, `solver-z3`, `solver-axeyum`, `solver-axeyum-text`, `solver-bitwuzla`, `solver-z3,solver-axeyum`, and `--all-features` |
+| Feature type-check | `scripts/feature-build-gate.sh` — 13 `cargo check --all-targets` lanes including `exec`, `symbolic`, `solver-z3`, `solver-axeyum`, `solver-axeyum-text`, `solver-pipe-oracle`, `solver-bitwuzla`, `solver-z3,solver-axeyum`, and `--all-features` |
 | Differential oracle | `cargo test --features dev-oracle` — `src/exec/oracle.rs` runs real x86-64 bytes through both our decode→lift→`run_block` path and Unicorn and reports disagreeing GPRs. Flags are deliberately not compared: we model condition-code registers, not raw EFLAGS. **Unicorn is not ground truth** — it is known to diverge from ARM silicon — so a divergence is a question, not a verdict. |
 
 Counted with `rg -c '#\[test\]' -g '*.rs' src/exec src/symbolic`.

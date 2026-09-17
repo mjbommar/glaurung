@@ -148,6 +148,32 @@ has which gate to run before pushing what.
 - [`persistent-project.md`](persistent-project.md) — the `.glaurung` file:
   sessions, lifecycle, schema compatibility, function identity across builds.
 - [`data-model.md`](data-model.md) — the representation at each boundary.
+- [`runtime-process-capsule.md`](runtime-process-capsule.md) — captured process
+  metadata, sparse-page payload references, completeness, validation, budgets,
+  and the boundary that keeps runtime evidence out of static images.
+- [`runtime-memory-view.md`](runtime-memory-view.md) — process-scoped bounded
+  reads over verified sparse page payloads with typed incompleteness.
+- [`runtime-crash-report.md`](runtime-crash-report.md) — the first evidence-backed
+  core-to-crash-report vertical and its observed/inferred/unknown claim boundary.
+- [`runtime-object-changes.md`](runtime-object-changes.md) — time-scoped,
+  object-relative before/after byte changes and the explicit attribution gap.
+- [`runtime-stack-writes.md`](runtime-stack-writes.md) — same-execution input
+  writes related to DWARF stack objects, fields, and exact LLIR occurrences.
+- [`runtime-instruction-trace.md`](runtime-instruction-trace.md) — bounded
+  owned-child instruction steps, sensitive byte-change payloads, and exact
+  LLIR store occurrences.
+- [`runtime-mapping-behavior.md`](runtime-mapping-behavior.md) — normalized
+  mapping lifetimes, initial RWX mappings, and W-to-X transitions.
+- [`runtime-evidence-packet.md`](runtime-evidence-packet.md) — deterministic
+  redacted export and the explicit sensitive-artifact authorization boundary.
+- [`runtime-file-behavior.md`](runtime-file-behavior.md) — redacted-by-default
+  file-open resources, descriptors, errno results, and event completeness.
+- [`runtime-process-behavior.md`](runtime-process-behavior.md) — bounded process
+  creation and parent-side reap evidence without invented child snapshots.
+- [`runtime-descriptor-behavior.md`](runtime-descriptor-behavior.md) —
+  non-file descriptor resources, endpoint roles, transfers, and closure.
+- [`runtime-static-correlation.md`](runtime-static-correlation.md) — exact
+  artifact/mapping/file-offset address relations with explicit byte origin.
 - [`../reference/provenance.md`](../reference/provenance.md) — the `set_by`
   ladder, generated from the code that enforces it.
 

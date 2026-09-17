@@ -55,7 +55,7 @@ sections, not their decision paragraphs alone:
 
 ## Solver integration
 
-Thirty-one decisions from the 2026-07 integration of the pure-Rust `axeyum`
+Thirty-two decisions from the integration of the pure-Rust `axeyum`
 solver, previously one 1,160-line log. Subject:
 [`architecture/solver-backends.md`](../architecture/solver-backends.md) and
 [`architecture/solver/`](../architecture/solver/).
@@ -93,10 +93,11 @@ solver, previously one 1,160-line log. Subject:
 | `solver-029` | [Separate WDM SystemBuffer address ownership from content taint](solver-029-systembuffer-address-versus-content.md) | held | 2026-07-18 |
 | `solver-030` | [Require structural stack origin before stack-overflow classification](solver-030-structural-stack-origin.md) | held | 2026-07-18 |
 | `solver-031` | [Add a pinned in-process Bitwuzla neutral measurement cell](solver-031-pinned-bitwuzla-measurement-cell.md) | held | 2026-07-19 |
+| `solver-032` | [Axeyum is authoritative for every SAT/SMT decision](solver-032-axeyum-is-always-authoritative.md) | held | 2026-09-17 |
 
-`solver-002` is the one superseded record: axeyum was never made a default
-feature, and the shipped configuration is `default = ["triage-core"]` with every
-solver opt-in. `solver-004` and `solver-005` are marked amended because the
+`solver-002` is superseded by `solver-032`: Axeyum is now the default and sole
+authoritative solver, while all other solver backends are comparison-only.
+`solver-004` and `solver-005` are marked amended because the
 SMT-LIB text bridge became the secondary path behind a native term translator
 (`solver-axeyum-text` still builds it), and the one-shot `Solver` trait gained
 the separate `IncrementalSolver` companion the ADR deferred.

@@ -22,6 +22,8 @@ fn one_owned_image_answers_target_entry_and_address_queries_without_reparsing() 
     assert_eq!(image.defined_symbol_name_at(0x2549), Some("main"));
     assert_eq!(image.va_to_code_file_offset(0x2549), Some(0x2549));
     assert_eq!(image.va_to_file_offset(0x2549), Some(0x2549));
+    assert_eq!(image.file_offset_to_va(0x2549), Some(0x2549));
+    assert_eq!(image.image_base(), Some(0));
     assert!(image
         .executable_ranges()
         .any(|range| range.contains(&0x2549)));
@@ -86,6 +88,7 @@ fn unmapped_addresses_do_not_wrap_or_alias_file_offsets() {
 
     assert_eq!(image.va_to_file_offset(u64::MAX), None);
     assert_eq!(image.va_to_code_file_offset(u64::MAX), None);
+    assert_eq!(image.file_offset_to_va(u64::MAX), None);
 }
 
 #[test]

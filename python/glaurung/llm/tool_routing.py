@@ -13,6 +13,8 @@ or escape with ``--all-tools``.
 
 Intents:
 
+* ``runtime_project`` -- persisted, redacted runtime summary and observed
+                         operation identities only.
 * ``vuln_discovery``  -- "find a bug", "what's vulnerable", CWE family
                          keywords. Includes imports, strings, decompile,
                          CFG, xrefs, fact bundles.
@@ -95,6 +97,19 @@ _VULN_FACT_TOOLS: tuple[str, ...] = (
 
 
 _INTENTS: tuple[Intent, ...] = (
+    Intent(
+        name="runtime_project",
+        tools=("runtime_project_summary",),
+        keywords=(
+            "runtime project",
+            "runtime capture",
+            "live capture",
+            "core capture",
+            "observed operations",
+            "observed xrefs",
+            "runtime summary",
+        ),
+    ),
     Intent(
         name="vuln_discovery",
         tools=(
@@ -225,7 +240,7 @@ def route_for_question(question: str) -> Intent:
 
     Resolution order: the first intent in :data:`_INTENTS` whose keyword
     list contains a token present in ``question`` wins. Ties resolve in
-    declaration order (vuln_discovery > triage_summary > function_walk
+    declaration order (runtime_project > vuln_discovery > triage_summary > function_walk
     > …). Falls back to ``broad_discovery``.
     """
     q = _normalize(question)

@@ -2,13 +2,10 @@
 
 > **Kind:** decision · **Status:** maintained
 
-> **Superseded.** Axeyum was never made a default feature. The shipped
-> configuration is `default = ["triage-core"]` with every solver opt-in, and
-> `solve()`'s cascade is z3 > axeyum > pipe only among the backends a build
-> explicitly enables (`src/symbolic/solver/mod.rs`, `Cargo.toml` `[features]`).
-> The perf gate this ADR made the default conditional on never closed; see
-> [solver-014](solver-014-source-prefix-production-win.md) and
-> [solver-021](solver-021-defer-wider-direct-delta-default.md).
+> **Superseded by [solver-032](solver-032-axeyum-is-always-authoritative.md).**
+> Axeyum is now the default and sole authoritative SAT/SMT backend; builds
+> without it abstain. The cascade and performance rationale below record the
+> historical decision rather than current policy.
 
 **ADR status:** Proposed.
 **Context:** Axeyum is pure-Rust, wheel-shippable, proof-carrying, but not

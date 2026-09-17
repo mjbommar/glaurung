@@ -8,6 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::ir::types::{BinOp, CmpOp, UnOp, Width};
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
@@ -15,6 +16,24 @@ use crate::symbolic::solver::Assert;
 
 const SCHEMA: &str = "glaurung-native-assertion-pack-v1";
 const VERSION: u64 = 1;
+
+/// Content identity for one typed native assertion without rendering SMT-LIB.
+///
+/// The pack is independent of process-local [`ExprId`] allocation: child
+/// references are rewritten to dense topological ordinals before hashing.
+/// This is the identity used by the in-process solver result cache.
+pub(crate) fn assertion_hash(pool: &ExprPool, assertion: Assert) -> Result<[u8; 32], String> {
+    let bytes = assertion_identity(pool, assertion)?;
+    Ok(Sha256::digest(bytes).into())
+}
+
+/// Exact typed bytes for one assertion, independent of local [`ExprId`] values.
+///
+/// Unlike [`assertion_hash`], callers retaining solver state can compare these
+/// bytes directly rather than treating a digest collision as source ancestry.
+pub(crate) fn assertion_identity(pool: &ExprPool, assertion: Assert) -> Result<Vec<u8>, String> {
+    NativeAssertionPack::capture(pool, assertion)?.to_bytes()
+}
 
 /// One self-contained, topologically ordered native assertion DAG.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

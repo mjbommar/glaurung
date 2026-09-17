@@ -1,2 +1,16 @@
 #include "runtime_sample.h"
-int main(int argc,char **argv){volatile unsigned char *p=malloc(16);p[0]=1;if(rs_bad(argc,argv)){free((void *)p);p[0]=9;return rs_result("stale",p[0]);}long v=p[0];free((void *)p);return rs_result("safe",v);}
+
+int main(int argc, char **argv) {
+    unsigned char *p = calloc(16, 1);
+    if (p == NULL)
+        return 2;
+    memset(p, 1, 1);
+    if (rs_bad(argc, argv)) {
+        free(p);
+        memset(p, 9, 1);
+        return rs_result("stale", p[0]);
+    }
+    long value = p[0];
+    free(p);
+    return rs_result("safe", value);
+}

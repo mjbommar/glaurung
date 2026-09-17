@@ -13,9 +13,10 @@
 #   --fast          skip the large Tier-3 drivers (tcpip, dxgkrnl)
 #   --full-drivers  additionally run the large drivers (minutes each)
 #
-# Every backend comparison uses GLAURUNG_SHADOW_DIFF=1 so Z3 stays the
-# authoritative exploration path and axeyum is timed on the IDENTICAL query
-# stream. Results (JSONL + tables + a provenance stamp) land in results/.
+# Every backend comparison uses GLAURUNG_SHADOW_DIFF=1 so Axeyum stays the
+# authoritative exploration path and Z3 is timed only as an oracle on the
+# identical query stream. Results (JSONL + tables + a provenance stamp) land
+# in results/.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

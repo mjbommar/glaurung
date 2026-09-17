@@ -95,6 +95,7 @@ _REGISTRY: dict[str, tuple[str, str, str, str]] = {
         "",
         "TriageFormatter",
     ),
+    "runtime": ("runtime", "RuntimeCommand", "", "TriageFormatter"),
 }
 
 

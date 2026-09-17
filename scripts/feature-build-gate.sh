@@ -82,6 +82,7 @@ lanes=(
   "symbolic|none|--features symbolic"
   "solver-axeyum|none|--features solver-axeyum"
   "solver-axeyum-text|none|--features solver-axeyum-text"
+  "solver-pipe-oracle|none|--features solver-pipe-oracle"
   "solver-bitwuzla|none|--features solver-bitwuzla"
   "triage-parsers-extra|none|--features triage-parsers-extra"
   "solver-z3|z3|--features solver-z3"

@@ -43,6 +43,7 @@ pub struct SnapshotReuseStats {
 #[derive(Debug)]
 pub struct SnapshotIncrementalAxeyumSolver {
     arena: TermArena,
+    stable_terms: StableTermCache,
     solver: IncrementalBvSolver,
     active: Vec<TermId>,
     has_snapshot: bool,
@@ -105,6 +106,7 @@ impl SnapshotIncrementalAxeyumSolver {
         }
         Self {
             arena: TermArena::new(),
+            stable_terms: StableTermCache::default(),
             solver,
             active: Vec::new(),
             has_snapshot: false,
@@ -126,6 +128,7 @@ impl SnapshotIncrementalAxeyumSolver {
 
     fn reset_session(&mut self) {
         self.arena = TermArena::new();
+        self.stable_terms = StableTermCache::default();
         let solver_config = config().with_preprocess(self.preprocess);
         self.solver = if self.profiling {
             IncrementalBvSolver::with_config_and_profiling(solver_config)
@@ -159,23 +162,30 @@ impl SnapshotIncrementalAxeyumSolver {
         let mut profile =
             self.start_profile(pool, asserts, path_id, path_created, session_create_nanos);
         let translation_started = profile.as_ref().map(|_| Instant::now());
-        let translated = match translate_query(pool, asserts, &mut self.arena) {
-            Ok(translated) => translated,
-            Err(err) => {
-                if let (Some(profile), Some(started)) = (&mut profile, translation_started) {
-                    profile.profile.translation_nanos = nanos(started.elapsed());
+        let translated =
+            match translate_query_cached(pool, asserts, &mut self.arena, &mut self.stable_terms) {
+                Ok(translated) => translated,
+                Err(err) => {
+                    if let (Some(profile), Some(started)) = (&mut profile, translation_started) {
+                        profile.profile.translation_nanos = nanos(started.elapsed());
+                    }
+                    let solver_after = self.solver.stats();
+                    return self.finish_profile(
+                        profile,
+                        solver_after,
+                        SolveResult::Error(format!("axeyum translate: {err}")),
+                    );
                 }
-                let solver_after = self.solver.stats();
-                return self.finish_profile(
-                    profile,
-                    solver_after,
-                    SolveResult::Error(format!("axeyum translate: {err}")),
-                );
-            }
-        };
+            };
         if let (Some(profile), Some(started)) = (&mut profile, translation_started) {
             profile.profile.translation_nanos = nanos(started.elapsed());
             profile.profile.translated_exprs = count(translated.exprs);
+            profile.profile.stable_term_reuses = count(translated.stable_term_hits);
+            profile.profile.stable_assertion_reuses = count(translated.stable_assertion_hits);
+            let (identity_nodes, term_entries, assertion_entries) = self.stable_terms.stats();
+            profile.profile.stable_identity_nodes = count(identity_nodes);
+            profile.profile.stable_term_entries = count(term_entries);
+            profile.profile.stable_assertion_entries = count(assertion_entries);
             profile.profile.symbols = count(translated.sym_map.len());
         }
         let common = self

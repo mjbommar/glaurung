@@ -4,17 +4,32 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
-use sha2::{Digest, Sha256};
-
 use crate::exec::{Concrete, Domain};
 use crate::ir::types::Width;
 use crate::symbolic::expr::{Expr, ExprId, ExprPool};
-use crate::symbolic::solver::{pipe, Assert, Model, SolveResult};
+use crate::symbolic::native_trace;
+use crate::symbolic::solver::{Assert, Model, SolveResult};
 
 pub(crate) const ENGINE_CONSTRAINT_CACHE_ENV: &str = "GLAURUNG_ENGINE_CONSTRAINT_CACHE";
 
+struct ThreadCaches {
+    experimental: Option<EngineConstraintCache>,
+    #[cfg(not(feature = "solver-z3"))]
+    authoritative_exact: Option<EngineConstraintCache>,
+}
+
 thread_local! {
-    static PROCESS_CACHE: RefCell<Option<EngineConstraintCache>> = const { RefCell::new(None) };
+    // Keep only a pointer in static TLS. EngineConstraintCache is large enough
+    // that embedding another instance here can exceed Python's TLS load budget.
+    static THREAD_CACHES: RefCell<Option<Box<ThreadCaches>>> = const { RefCell::new(None) };
+}
+
+fn new_thread_caches() -> ThreadCaches {
+    ThreadCaches {
+        experimental: None,
+        #[cfg(not(feature = "solver-z3"))]
+        authoritative_exact: None,
+    }
 }
 
 /// Cache behavior selected for one isolated replay process.
@@ -55,8 +70,10 @@ fn configured_policy() -> Result<EngineCachePolicy, String> {
 
 pub(crate) fn reset_process_cache() -> Result<EngineCachePolicy, String> {
     let policy = configured_policy()?;
-    PROCESS_CACHE.with(|slot| {
-        *slot.borrow_mut() = Some(EngineConstraintCache::new(
+    THREAD_CACHES.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let caches = slot.get_or_insert_with(|| Box::new(new_thread_caches()));
+        caches.experimental = Some(EngineConstraintCache::new(
             policy,
             EngineCacheLimits::PREREGISTERED,
         ));
@@ -66,8 +83,10 @@ pub(crate) fn reset_process_cache() -> Result<EngineCachePolicy, String> {
 
 #[cfg(test)]
 pub(crate) fn reset_process_cache_for_test(policy: EngineCachePolicy, limits: EngineCacheLimits) {
-    PROCESS_CACHE.with(|slot| {
-        *slot.borrow_mut() = Some(EngineConstraintCache::new(policy, limits));
+    THREAD_CACHES.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let caches = slot.get_or_insert_with(|| Box::new(new_thread_caches()));
+        caches.experimental = Some(EngineConstraintCache::new(policy, limits));
     });
 }
 
@@ -91,23 +110,65 @@ pub(crate) fn insert_process_cache(
     asserts: &[Assert],
     result: &SolveResult,
 ) -> Result<(), String> {
-    with_process_cache(|cache| cache.insert(pool, asserts, result))?;
-    Ok(())
+    with_process_cache(|cache| cache.insert(pool, asserts, result))?
+}
+
+/// Look up the fixed-policy cache used by ordinary authoritative one-shot calls.
+///
+/// Unlike the experimental engine cache, this cache is always exact and cannot
+/// be changed through the environment. SAT answers are still replayed by
+/// [`EngineConstraintCache::lookup`] before they are returned.
+#[cfg(not(feature = "solver-z3"))]
+pub(crate) fn lookup_authoritative_exact_cache(
+    pool: &ExprPool,
+    asserts: &[Assert],
+) -> Result<CacheLookup, String> {
+    with_authoritative_exact_cache(|cache| cache.lookup(pool, asserts))?
+}
+
+#[cfg(not(feature = "solver-z3"))]
+pub(crate) fn authoritative_exact_cache_stats() -> Result<EngineCacheStats, String> {
+    with_authoritative_exact_cache(|cache| cache.stats())
+}
+
+#[cfg(not(feature = "solver-z3"))]
+pub(crate) fn insert_authoritative_exact_cache(
+    pool: &ExprPool,
+    asserts: &[Assert],
+    result: &SolveResult,
+) -> Result<(), String> {
+    with_authoritative_exact_cache(|cache| cache.insert(pool, asserts, result))?
+}
+
+#[cfg(not(feature = "solver-z3"))]
+fn with_authoritative_exact_cache<T>(
+    operation: impl FnOnce(&mut EngineConstraintCache) -> T,
+) -> Result<T, String> {
+    THREAD_CACHES.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let caches = slot.get_or_insert_with(|| Box::new(new_thread_caches()));
+        let cache = caches.authoritative_exact.get_or_insert_with(|| {
+            EngineConstraintCache::new(EngineCachePolicy::Exact, EngineCacheLimits::PREREGISTERED)
+        });
+        Ok(operation(cache))
+    })
 }
 
 fn with_process_cache<T>(
     operation: impl FnOnce(&mut EngineConstraintCache) -> T,
 ) -> Result<T, String> {
-    PROCESS_CACHE.with(|slot| {
-        if slot.borrow().is_none() {
+    THREAD_CACHES.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let caches = slot.get_or_insert_with(|| Box::new(new_thread_caches()));
+        if caches.experimental.is_none() {
             let policy = configured_policy()?;
-            *slot.borrow_mut() = Some(EngineConstraintCache::new(
+            caches.experimental = Some(EngineConstraintCache::new(
                 policy,
                 EngineCacheLimits::PREREGISTERED,
             ));
         }
-        let mut slot = slot.borrow_mut();
-        let cache = slot
+        let cache = caches
+            .experimental
             .as_mut()
             .ok_or_else(|| "engine cache initialization failed".to_string())?;
         Ok(operation(cache))
@@ -322,7 +383,7 @@ impl EngineConstraintCache {
             return Ok(self.record_miss());
         }
 
-        let query = query_key(pool, asserts);
+        let query = query_key(pool, asserts)?;
         if let Some(entry_id) = self.exact.get(&query).copied() {
             return self.answer_from_entry(pool, asserts, entry_id, true);
         }
@@ -343,28 +404,41 @@ impl EngineConstraintCache {
         }
     }
 
-    pub(crate) fn insert(&mut self, pool: &ExprPool, asserts: &[Assert], result: &SolveResult) {
+    pub(crate) fn insert(
+        &mut self,
+        pool: &ExprPool,
+        asserts: &[Assert],
+        result: &SolveResult,
+    ) -> Result<(), String> {
         let started = Instant::now();
         let eviction_before = self.stats.eviction_nanos;
-        self.insert_inner(pool, asserts, result);
+        self.insert_inner(pool, asserts, result)?;
         let elapsed = nanos(started);
         let eviction_elapsed = self.stats.eviction_nanos.saturating_sub(eviction_before);
         self.stats.index_update_nanos = self
             .stats
             .index_update_nanos
             .saturating_add(elapsed.saturating_sub(eviction_elapsed));
+        Ok(())
     }
 
-    fn insert_inner(&mut self, pool: &ExprPool, asserts: &[Assert], result: &SolveResult) {
+    fn insert_inner(
+        &mut self,
+        pool: &ExprPool,
+        asserts: &[Assert],
+        result: &SolveResult,
+    ) -> Result<(), String> {
         if self.policy == EngineCachePolicy::Off {
-            return;
+            return Ok(());
         }
         let cached = match result {
             SolveResult::Sat(model) => CachedResult::Sat(model.clone()),
             SolveResult::Unsat => CachedResult::Unsat,
-            SolveResult::Unknown(_) | SolveResult::NoSolver | SolveResult::Error(_) => return,
+            SolveResult::Unknown(_) | SolveResult::NoSolver | SolveResult::Error(_) => {
+                return Ok(())
+            }
         };
-        let query = query_key(pool, asserts);
+        let query = query_key(pool, asserts)?;
         let model_values = match &cached {
             CachedResult::Sat(model) => model.values.len(),
             CachedResult::Unsat => 0,
@@ -375,7 +449,7 @@ impl EngineConstraintCache {
             || model_values > self.limits.max_model_values_per_entry
         {
             self.stats.oversize_bypasses = self.stats.oversize_bypasses.saturating_add(1);
-            return;
+            return Ok(());
         }
 
         if let Some(existing) = self.exact.get(&query).copied() {
@@ -396,7 +470,7 @@ impl EngineConstraintCache {
         {
             let Some(victim) = self.lru_victim() else {
                 self.stats.oversize_bypasses = self.stats.oversize_bypasses.saturating_add(1);
-                return;
+                return Ok(());
             };
             self.remove_entry(victim, true);
         }
@@ -425,6 +499,7 @@ impl EngineConstraintCache {
         self.stats.assertion_refs = self.stats.assertion_refs.saturating_add(query.len() as u64);
         self.stats.model_values = self.stats.model_values.saturating_add(model_values as u64);
         self.refresh_peak_gauges();
+        Ok(())
     }
 
     fn answer_from_entry(
@@ -593,17 +668,14 @@ impl EngineConstraintCache {
     }
 }
 
-fn query_key(pool: &ExprPool, asserts: &[Assert]) -> QueryKey {
+fn query_key(pool: &ExprPool, asserts: &[Assert]) -> Result<QueryKey, String> {
     let mut keys = asserts
         .iter()
-        .map(|assertion| {
-            let digest = Sha256::digest(pipe::assertion_line(pool, *assertion).as_bytes());
-            AssertionKey(digest.into())
-        })
-        .collect::<Vec<_>>();
+        .map(|assertion| native_trace::assertion_hash(pool, *assertion).map(AssertionKey))
+        .collect::<Result<Vec<_>, _>>()?;
     keys.sort_unstable();
     keys.dedup();
-    keys
+    Ok(keys)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -760,8 +832,12 @@ mod tests {
         let unsat_query = [(x, false)];
         let mut cache = EngineConstraintCache::new(EngineCachePolicy::Exact, limits(8));
 
-        cache.insert(&pool, &sat_query, &SolveResult::Sat(model(&[(0, 7)])));
-        cache.insert(&pool, &unsat_query, &SolveResult::Unsat);
+        cache
+            .insert(&pool, &sat_query, &SolveResult::Sat(model(&[(0, 7)])))
+            .expect("native cache key");
+        cache
+            .insert(&pool, &unsat_query, &SolveResult::Unsat)
+            .expect("native cache key");
 
         assert_eq!(
             expect_hit(cache.lookup(&pool, &sat_query), CacheHitKind::ExactSat),
@@ -788,14 +864,18 @@ mod tests {
         let strong = [(x, true), (y, false)];
 
         let mut sat_cache = EngineConstraintCache::new(EngineCachePolicy::Structural, limits(8));
-        sat_cache.insert(&pool, &strong, &SolveResult::Sat(model(&[(0, 9), (1, 0)])));
+        sat_cache
+            .insert(&pool, &strong, &SolveResult::Sat(model(&[(0, 9), (1, 0)])))
+            .expect("native cache key");
         assert_eq!(
             expect_hit(sat_cache.lookup(&pool, &weak), CacheHitKind::SatSuperset),
             SolveResult::Sat(model(&[(0, 9), (1, 0)]))
         );
 
         let mut unsat_cache = EngineConstraintCache::new(EngineCachePolicy::Structural, limits(8));
-        unsat_cache.insert(&pool, &weak, &SolveResult::Unsat);
+        unsat_cache
+            .insert(&pool, &weak, &SolveResult::Unsat)
+            .expect("native cache key");
         assert_eq!(
             expect_hit(
                 unsat_cache.lookup(&pool, &strong),
@@ -805,11 +885,15 @@ mod tests {
         );
 
         let mut wrong_sat = EngineConstraintCache::new(EngineCachePolicy::Structural, limits(8));
-        wrong_sat.insert(&pool, &weak, &SolveResult::Sat(model(&[(0, 1), (1, 0)])));
+        wrong_sat
+            .insert(&pool, &weak, &SolveResult::Sat(model(&[(0, 1), (1, 0)])))
+            .expect("native cache key");
         assert_eq!(wrong_sat.lookup(&pool, &strong), Ok(CacheLookup::Miss));
 
         let mut wrong_unsat = EngineConstraintCache::new(EngineCachePolicy::Structural, limits(8));
-        wrong_unsat.insert(&pool, &strong, &SolveResult::Unsat);
+        wrong_unsat
+            .insert(&pool, &strong, &SolveResult::Unsat)
+            .expect("native cache key");
         assert_eq!(wrong_unsat.lookup(&pool, &weak), Ok(CacheLookup::Miss));
     }
 
@@ -820,7 +904,9 @@ mod tests {
         let query = [(x, true)];
 
         let mut missing = EngineConstraintCache::new(EngineCachePolicy::Exact, limits(8));
-        missing.insert(&pool, &query, &SolveResult::Sat(model(&[])));
+        missing
+            .insert(&pool, &query, &SolveResult::Sat(model(&[])))
+            .expect("native cache key");
         assert_eq!(missing.lookup(&pool, &query), Ok(CacheLookup::Miss));
         let missing_stats = missing.stats();
         assert_eq!(missing_stats.sat_replay_attempts, 1);
@@ -829,7 +915,9 @@ mod tests {
         assert_eq!(missing_stats.exact_sat_hits, 0);
 
         let mut false_model = EngineConstraintCache::new(EngineCachePolicy::Exact, limits(8));
-        false_model.insert(&pool, &query, &SolveResult::Sat(model(&[(0, 0)])));
+        false_model
+            .insert(&pool, &query, &SolveResult::Sat(model(&[(0, 0)])))
+            .expect("native cache key");
         assert_eq!(false_model.lookup(&pool, &query), Ok(CacheLookup::Miss));
         let false_stats = false_model.stats();
         assert_eq!(false_stats.sat_replay_attempts, 1);
@@ -846,13 +934,55 @@ mod tests {
         let inserted = [(x, true), (y, false), (x, true)];
         let reordered = [(y, false), (x, true)];
         let mut cache = EngineConstraintCache::new(EngineCachePolicy::Exact, limits(8));
-        cache.insert(&pool, &inserted, &SolveResult::Unsat);
+        cache
+            .insert(&pool, &inserted, &SolveResult::Unsat)
+            .expect("native cache key");
 
         assert_eq!(
             expect_hit(cache.lookup(&pool, &reordered), CacheHitKind::ExactUnsat),
             SolveResult::Unsat
         );
         assert_eq!(cache.stats().assertion_refs, 2);
+    }
+
+    #[test]
+    fn native_query_identity_ignores_process_local_expression_ids() {
+        let mut inserted_pool = ExprPool::new();
+        let inserted_x = inserted_pool.fresh_symbol(Width::W8);
+        let inserted_one = inserted_pool.constant(Width::W8, 1);
+        let inserted = inserted_pool.intern(Expr::Bin {
+            op: crate::ir::types::BinOp::Add,
+            a: inserted_x,
+            b: inserted_one,
+            width: Width::W8,
+        });
+
+        let mut lookup_pool = ExprPool::new();
+        let _unrelated = lookup_pool.constant(Width::W16, 0xbeef);
+        let lookup_x = lookup_pool.fresh_symbol(Width::W8);
+        let lookup_one = lookup_pool.constant(Width::W8, 1);
+        let lookup = lookup_pool.intern(Expr::Bin {
+            op: crate::ir::types::BinOp::Add,
+            a: lookup_x,
+            b: lookup_one,
+            width: Width::W8,
+        });
+
+        let mut cache = EngineConstraintCache::new(EngineCachePolicy::Exact, limits(8));
+        cache
+            .insert(
+                &inserted_pool,
+                &[(inserted, true)],
+                &SolveResult::Sat(model(&[(0, 7)])),
+            )
+            .expect("native cache key");
+        assert_eq!(
+            expect_hit(
+                cache.lookup(&lookup_pool, &[(lookup, true)]),
+                CacheHitKind::ExactSat,
+            ),
+            SolveResult::Sat(model(&[(0, 7)])),
+        );
     }
 
     #[test]
@@ -865,10 +995,16 @@ mod tests {
         let qy = [(y, true)];
         let qz = [(z, true)];
         let mut cache = EngineConstraintCache::new(EngineCachePolicy::Structural, limits(2));
-        cache.insert(&pool, &qx, &SolveResult::Unsat);
-        cache.insert(&pool, &qy, &SolveResult::Unsat);
+        cache
+            .insert(&pool, &qx, &SolveResult::Unsat)
+            .expect("native cache key");
+        cache
+            .insert(&pool, &qy, &SolveResult::Unsat)
+            .expect("native cache key");
         expect_hit(cache.lookup(&pool, &qx), CacheHitKind::ExactUnsat);
-        cache.insert(&pool, &qz, &SolveResult::Unsat);
+        cache
+            .insert(&pool, &qz, &SolveResult::Unsat)
+            .expect("native cache key");
 
         assert_eq!(cache.lookup(&pool, &qy), Ok(CacheLookup::Miss));
         expect_hit(cache.lookup(&pool, &qx), CacheHitKind::ExactUnsat);
@@ -893,7 +1029,9 @@ mod tests {
                 max_model_values_per_entry: 1,
             },
         );
-        cache.insert(&pool, &query, &SolveResult::Sat(model(&[(0, 1), (1, 2)])));
+        cache
+            .insert(&pool, &query, &SolveResult::Sat(model(&[(0, 1), (1, 2)])))
+            .expect("native cache key");
 
         assert_eq!(cache.lookup(&pool, &query), Ok(CacheLookup::Miss));
         let stats = cache.stats();
@@ -915,7 +1053,9 @@ mod tests {
             SolveResult::NoSolver,
             SolveResult::Error("declined".into()),
         ] {
-            cache.insert(&pool, &query, &result);
+            cache
+                .insert(&pool, &query, &result)
+                .expect("native cache key");
         }
 
         assert_eq!(cache.lookup(&pool, &query), Ok(CacheLookup::Miss));
@@ -939,8 +1079,12 @@ mod tests {
                 max_model_values_per_entry: 2,
             },
         );
-        cache.insert(&pool, &qx, &SolveResult::Sat(model(&[(0, 1)])));
-        cache.insert(&pool, &qyz, &SolveResult::Sat(model(&[(1, 1), (2, 0)])));
+        cache
+            .insert(&pool, &qx, &SolveResult::Sat(model(&[(0, 1)])))
+            .expect("native cache key");
+        cache
+            .insert(&pool, &qyz, &SolveResult::Sat(model(&[(1, 1), (2, 0)])))
+            .expect("native cache key");
 
         assert_eq!(cache.lookup(&pool, &qx), Ok(CacheLookup::Miss));
         expect_hit(cache.lookup(&pool, &qyz), CacheHitKind::ExactSat);
@@ -961,13 +1105,21 @@ mod tests {
         let unrelated = [(y, false)];
 
         let mut sat_cache = EngineConstraintCache::new(EngineCachePolicy::Structural, limits(1));
-        sat_cache.insert(&pool, &strong, &SolveResult::Sat(model(&[(0, 1), (1, 1)])));
-        sat_cache.insert(&pool, &unrelated, &SolveResult::Unsat);
+        sat_cache
+            .insert(&pool, &strong, &SolveResult::Sat(model(&[(0, 1), (1, 1)])))
+            .expect("native cache key");
+        sat_cache
+            .insert(&pool, &unrelated, &SolveResult::Unsat)
+            .expect("native cache key");
         assert_eq!(sat_cache.lookup(&pool, &weak), Ok(CacheLookup::Miss));
 
         let mut unsat_cache = EngineConstraintCache::new(EngineCachePolicy::Structural, limits(1));
-        unsat_cache.insert(&pool, &weak, &SolveResult::Unsat);
-        unsat_cache.insert(&pool, &unrelated, &SolveResult::Sat(model(&[(1, 0)])));
+        unsat_cache
+            .insert(&pool, &weak, &SolveResult::Unsat)
+            .expect("native cache key");
+        unsat_cache
+            .insert(&pool, &unrelated, &SolveResult::Sat(model(&[(1, 0)])))
+            .expect("native cache key");
         assert_eq!(unsat_cache.lookup(&pool, &strong), Ok(CacheLookup::Miss));
     }
 
@@ -981,12 +1133,16 @@ mod tests {
         let middle = [(x, true), (y, false)];
         let sat_superset = [(x, true), (y, false), (z, true)];
         let mut cache = EngineConstraintCache::new(EngineCachePolicy::Structural, limits(8));
-        cache.insert(&pool, &unsat_subset, &SolveResult::Unsat);
-        cache.insert(
-            &pool,
-            &sat_superset,
-            &SolveResult::Sat(model(&[(0, 1), (1, 0), (2, 1)])),
-        );
+        cache
+            .insert(&pool, &unsat_subset, &SolveResult::Unsat)
+            .expect("native cache key");
+        cache
+            .insert(
+                &pool,
+                &sat_superset,
+                &SolveResult::Sat(model(&[(0, 1), (1, 0), (2, 1)])),
+            )
+            .expect("native cache key");
 
         let error = cache
             .lookup(&pool, &middle)
@@ -1056,7 +1212,9 @@ mod tests {
         });
         let query = [(selected, true)];
         let mut cache = EngineConstraintCache::new(EngineCachePolicy::Exact, limits(8));
-        cache.insert(&pool, &query, &SolveResult::Sat(model(&[(0, 0x81)])));
+        cache
+            .insert(&pool, &query, &SolveResult::Sat(model(&[(0, 0x81)])))
+            .expect("native cache key");
 
         assert_eq!(
             expect_hit(cache.lookup(&pool, &query), CacheHitKind::ExactSat),

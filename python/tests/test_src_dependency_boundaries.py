@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -509,3 +510,71 @@ def test_no_allowlist_entry_is_categorized_as_a_semantic_gate():
         f"unrecognized category(ies) in ENV_VAR_ALLOWLIST: "
         f"{used_categories - allowed_categories}"
     )
+
+
+def test_production_solver_feature_closure_is_native_axeyum_only():
+    """The ordinary build must not acquire an external solver transport.
+
+    This checks the Cargo reachability boundary rather than trusting comments:
+    Axeyum is in the default closure, while every comparison/text/pipe backend
+    remains unreachable. Z3 is allowed only as a comparison feature and must
+    pull in Axeyum so it can never replace the authoritative result.
+    """
+    manifest = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
+    features: dict[str, list[str]] = manifest["features"]
+
+    def closure(roots: list[str]) -> set[str]:
+        reached: set[str] = set()
+        pending = list(roots)
+        while pending:
+            feature = pending.pop()
+            if feature in reached:
+                continue
+            reached.add(feature)
+            pending.extend(
+                dependency
+                for dependency in features.get(feature, [])
+                if dependency in features
+            )
+        return reached
+
+    production = closure(features["default"])
+    assert "solver-axeyum" in production
+    assert production.isdisjoint(
+        {
+            "solver-z3",
+            "solver-bitwuzla",
+            "solver-axeyum-text",
+            "solver-pipe-oracle",
+        }
+    )
+    assert "solver-axeyum" in closure(["solver-z3"])
+
+
+def test_authoritative_solve_has_no_pipe_or_text_dispatch():
+    """Keep subprocess and SMT-LIB code outside the authoritative seam."""
+    source = _product_text("symbolic/solver/mod.rs", drop_comment_lines=True)
+    solve_body = source.split("pub fn solve(", 1)[1].split(
+        "pub(crate) fn solve_for_path_delta(", 1
+    )[0]
+    forbidden = {
+        "PipeSolver": "subprocess solver",
+        "build_script": "SMT-LIB rendering",
+        "GLAURUNG_SMT_SOLVER": "PATH-selected solver",
+        "Command::new": "process spawning",
+    }
+    hits = [description for token, description in forbidden.items() if token in solve_body]
+    assert hits == [], f"authoritative solve dispatch acquired: {', '.join(hits)}"
+
+    cache_source = _product_text(
+        "symbolic/solver/constraint_cache.rs", drop_comment_lines=True
+    )
+    assert "solver::pipe" not in cache_source
+    assert "assertion_line" not in cache_source
+
+    runtime_source = _product_text(
+        "runtime_analysis/instruction_trace.rs", drop_comment_lines=True
+    )
+    assert "solver::solve_runtime_for_path_delta" in runtime_source
+    assert "solver::solve_exact_cached" not in runtime_source
+    assert "crate::symbolic::solve(&machine.dom.pool, &assertions)" not in runtime_source

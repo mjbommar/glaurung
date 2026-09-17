@@ -20,8 +20,9 @@ The 2026-06 survey recommended a **pipe-first** design with `easy-smt` speaking
 to a Bitwuzla binary. That was reversed the same month: a native Rust engine
 should not shell out, and "lean base build" is achieved by feature-gating, not by
 refusing native bindings. `easy-smt` was never taken as a dependency
-(`rg 'easy-smt' Cargo.lock` finds nothing); the pipe fallback is a hand-rolled
-`std::process::Command` in `src/symbolic/solver/pipe.rs`.
+(`rg 'easy-smt' Cargo.lock` finds nothing). The surviving hand-rolled
+`std::process::Command` transport in `src/symbolic/solver/pipe.rs` is compiled
+only by `solver-pipe-oracle`; it is a comparison tool, not a fallback.
 
 The survey's second miss is more interesting. It concluded that "there is no
 mature pure-Rust SMT solver competitive on QF_BV", which was true of the
@@ -32,7 +33,7 @@ went on to build one — see §axeyum below.
 
 ### Z3 — the `z3` crate, **0.12** (`z3-sys` 0.8), prove-rs/z3.rs
 
-Mature, safe, and the one we ship as the preferred backend (`solver-z3`). The
+Mature, safe, and retained only as a comparison backend (`solver-z3`). The
 Rust `Solver` exposes `push`/`pop`/`assert`/`check`/`check_assumptions(&[Bool])`/
 `get_model`/`reset`; `check_assumptions` is exactly the assumption-literal
 mechanism path-by-path exploration wants. Build story is best-in-class —
@@ -112,13 +113,15 @@ Yices2 is not thread-safe and has weak array ergonomics.
 | How | render a script, spawn a binary, parse `sat`/`unsat`/`unknown` | link a library, or link pure Rust |
 | Pros | zero build dependency; solver-agnostic — swap by changing the spawn command; trivial to log and replay a query | lowest latency; retained incremental state; rich model API; no PATH dependence |
 | Cons | per-query process spawn and text serialization; must locate a solver **binary** at run time; no incrementality across queries | heavy C/C++ build (unless pure Rust); platform and static-link pain; thread-safety constraints |
-| Ours | `pipe::PipeSolver`, tried last | `solver-z3`, `solver-axeyum`, `solver-bitwuzla` |
+| Ours | `pipe::PipeSolver`, explicit comparison feature only | authoritative `solver-axeyum`; comparison-only `solver-z3` and `solver-bitwuzla` |
 
 The decisive datum is that binary symbolic execution issues **very many small
 queries**, so a per-call fixed floor — process spawn, or FFI plus context
 construction plus marshalling — dominates the actual solving on most of the
-distribution. That is why the pipe is a fallback rather than the design, and it
-is also the mechanism behind axeyum's cold-path advantage on small formulas.
+distribution. That is why the pipe is not part of production at all. Native
+Axeyum still needs cold/warm measurements because arena construction,
+translation, assertion import, and model extraction can dominate small queries
+even without process or text-protocol overhead.
 
 ## Cross-cutting
 
@@ -139,10 +142,10 @@ is also the mechanism behind axeyum's cold-path advantage on small formulas.
   with the path condition — lives in the explorer, not in a backend.
 - **Thread safety.** No mainstream solver shares a context across threads. Design
   for one instance per worker from the start; retrofitting it is painful.
-- **Distribution.** Keep every solver behind a Cargo feature. Our `default` is
-  `["triage-core"]` and carries no solver; `python-ext` adds the emulator and
-  still no solver. A pure-Rust backend is the only one that can change that
-  without changing what a wheel has to link.
+- **Distribution.** Keep comparison solvers behind Cargo features. The default
+  feature set includes `solver-axeyum`, and ordinary Python-extension builds
+  therefore carry the in-process pure-Rust authoritative solver without adding
+  a native library or external executable requirement.
 - **Grade against construction-truth, not against the other solver.** If a case's
   verdict is known by construction — a SAT case with an explicit witness, an
   UNSAT case built as `t == v ∧ t == v^1` — then a wrong answer from *either*

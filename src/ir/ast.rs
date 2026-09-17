@@ -1814,6 +1814,8 @@ fn inferred_function_static_local(
             .ok()
             .filter(|width| [1, 2, 4, 8].contains(width))?;
         Some(crate::debug::dwarf::DwarfStaticLocal {
+            declaration_debug_info_offset: None,
+            type_debug_info_offset: None,
             address,
             byte_size: u16::from(width),
             source_name: names.function_static_name_for(address, function)?,
@@ -4193,6 +4195,8 @@ function f @ 0x1000 {
         symbols.set_initial_scalar_for_test(0x4024, 4, 100);
         install_dec_global_names(symbols);
         install_dec_function_static_locals([crate::debug::dwarf::DwarfStaticLocal {
+            declaration_debug_info_offset: None,
+            type_debug_info_offset: None,
             address: 0x4024,
             byte_size: 4,
             source_name: "value".to_string(),

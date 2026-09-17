@@ -53,6 +53,11 @@ use crate::ir::types_recover::RecoveredPrototype;
 /// One recovered local or parameter, as a consumer sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveredVariable {
+    /// Immutable semantic-graph identity when storage evidence is unambiguous.
+    pub static_variable: Option<crate::ir::function_ir::StaticVariable>,
+    /// Immutable structural type identity when recovery retained typed
+    /// provenance rather than only rendered C text.
+    pub static_type: Option<crate::ir::function_ir::StaticType>,
     /// The identifier as it appears in the rendered C.
     pub name: String,
     /// The declared C type, or `"long"` when only the width is known.
@@ -144,6 +149,91 @@ pub fn recovered_variables_from_llir(
     recovered_variables_with_addresses(text, prototype, facts, pointer_width, &addresses)
 }
 
+/// [`recovered_variables_from_llir`] with graph-owned storage identities.
+pub fn recovered_variables_from_llir_with_identity(
+    text: &str,
+    prototype: Option<&RecoveredPrototype>,
+    facts: &StackLocalFacts,
+    pointer_width: u8,
+    lf: &crate::ir::types::LlirFunction,
+    image_sha256: &str,
+    lift_profile: &str,
+) -> Vec<RecoveredVariable> {
+    let mut variables = recovered_variables_from_llir(text, prototype, facts, pointer_width, lf);
+    let function_id = crate::ir::function_ir::function_id(image_sha256, lift_profile, lf.entry_va);
+    for variable in &mut variables {
+        let static_type = match (variable.kind, variable.arg_index) {
+            ("arg", Some(position)) => prototype
+                .and_then(|prototype| prototype.parameter(position))
+                .and_then(|parameter| parameter.hint)
+                .map(|hint| {
+                    use crate::ir::function_ir::RecoveredTypeShape;
+                    use crate::ir::types_recover::TypeHint;
+                    let shape = match hint {
+                        TypeHint::Pointer { pointee_width } => RecoveredTypeShape::DataPointer {
+                            pointee_width,
+                            pointer_width,
+                        },
+                        TypeHint::Int { signed, width } => {
+                            RecoveredTypeShape::Integer { signed, width }
+                        }
+                        TypeHint::Float { width } => RecoveredTypeShape::Float { width },
+                        TypeHint::BoolLike => RecoveredTypeShape::BoolLike,
+                        TypeHint::CodePointer => RecoveredTypeShape::CodePointer { pointer_width },
+                    };
+                    crate::ir::function_ir::recovered_static_type(
+                        image_sha256,
+                        shape,
+                        &variable.ctype,
+                        "glaurung-recovered-type-v1",
+                    )
+                }),
+            _ => None,
+        };
+        let origin = match variable.kind {
+            "arg" => variable.arg_index.map(|position| {
+                crate::ir::function_ir::StaticVariableOrigin::AbiArgument {
+                    position,
+                    recovery_profile: "glaurung-recovered-variable-v1".to_string(),
+                }
+            }),
+            "stack" => {
+                let candidates = facts
+                    .frame_coordinates
+                    .iter()
+                    .filter(|(promoted_name, _)| {
+                        promoted_name.as_str() == variable.name
+                            || facts.source_names.get(*promoted_name) == Some(&variable.name)
+                    })
+                    .map(|(_, coordinate)| coordinate)
+                    .collect::<Vec<_>>();
+                match candidates.as_slice() {
+                    [(base, displacement)] => {
+                        Some(crate::ir::function_ir::StaticVariableOrigin::FrameStorage {
+                            base: (*base).clone(),
+                            displacement: *displacement,
+                            recovery_profile: "glaurung-recovered-variable-v1".to_string(),
+                        })
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        variable.static_variable = origin.map(|origin| {
+            crate::ir::function_ir::recovered_static_variable(
+                image_sha256,
+                &function_id,
+                &variable.name,
+                static_type.as_ref().map(|node| node.id.as_str()),
+                origin,
+            )
+        });
+        variable.static_type = static_type;
+    }
+    variables
+}
+
 /// [`recovered_variables`], with machine addresses joined in by promoted name.
 ///
 /// `addresses` comes from [`crate::ir::variable_addresses::stack_slot_addresses`],
@@ -182,6 +272,8 @@ pub fn recovered_variables_with_addresses(
                 })
                 .unwrap_or_else(|| "long".to_string());
             out.push(RecoveredVariable {
+                static_variable: None,
+                static_type: None,
                 name,
                 ctype,
                 kind: "arg",
@@ -222,6 +314,8 @@ pub fn recovered_variables_with_addresses(
             continue;
         };
         out.push(RecoveredVariable {
+            static_variable: None,
+            static_type: None,
             name: rendered.to_string(),
             ctype: facts
                 .source_types
@@ -276,6 +370,92 @@ mod tests {
         assert_eq!(v.stack_offset, Some(-24));
         assert_eq!(v.size, Some(4));
         assert_eq!(v.arg_index, None);
+    }
+
+    #[test]
+    fn recovered_identity_uses_frame_coordinate_not_rendered_name() {
+        let lf = crate::ir::types::LlirFunction {
+            entry_va: 0x401000,
+            blocks: Vec::new(),
+        };
+        let image_sha256 = "ab".repeat(32);
+        let first = recovered_variables_from_llir_with_identity(
+            "long f(void) { int local_18; return local_18; }",
+            None,
+            &facts(),
+            8,
+            &lf,
+            &image_sha256,
+            "glaurung-raw-llir-v1",
+        );
+        let mut renamed_facts = facts();
+        renamed_facts
+            .source_names
+            .insert("local_18".to_string(), "count".to_string());
+        let renamed = recovered_variables_from_llir_with_identity(
+            "long f(void) { int count; return count; }",
+            None,
+            &renamed_facts,
+            8,
+            &lf,
+            &image_sha256,
+            "glaurung-raw-llir-v1",
+        );
+        assert_eq!(first.len(), 1);
+        assert_eq!(renamed.len(), 1);
+        assert_eq!(
+            first[0].static_variable.as_ref().unwrap().id,
+            renamed[0].static_variable.as_ref().unwrap().id
+        );
+        assert_ne!(first[0].name, renamed[0].name);
+    }
+
+    #[test]
+    fn recovered_parameter_uses_structural_type_identity() {
+        let mut prototype = RecoveredPrototype::default();
+        prototype.apply_locked_parameters(
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &[Some(crate::ir::types_recover::TypeHint::Int {
+                signed: false,
+                width: 4,
+            })],
+        );
+        let lf = crate::ir::types::LlirFunction {
+            entry_va: 0x401000,
+            blocks: Vec::new(),
+        };
+        let variables = recovered_variables_from_llir_with_identity(
+            "unsigned int f(unsigned int arg0) { return arg0; }",
+            Some(&prototype),
+            &StackLocalFacts::default(),
+            8,
+            &lf,
+            &"ab".repeat(32),
+            "glaurung-raw-llir-v1",
+        );
+        let variable = variables.first().expect("one recovered parameter");
+        let static_variable = variable
+            .static_variable
+            .as_ref()
+            .expect("parameter storage identity");
+        let static_type = variable
+            .static_type
+            .as_ref()
+            .expect("structured recovered type");
+        assert_eq!(
+            static_variable.type_id.as_deref(),
+            Some(static_type.id.as_str())
+        );
+        assert!(matches!(
+            static_type.origin,
+            crate::ir::function_ir::StaticTypeOrigin::Recovered {
+                shape: crate::ir::function_ir::RecoveredTypeShape::Integer {
+                    signed: false,
+                    width: 4,
+                },
+                ..
+            }
+        ));
     }
 
     /// The render happens after ~77 rewrite passes, several of which DELETE

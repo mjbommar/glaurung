@@ -18,6 +18,7 @@ from glaurung.llm.tool_routing import (
 def test_at_least_six_intents_in_catalog():
     names = {it.name for it in list_intents()}
     assert {
+        "runtime_project",
         "vuln_discovery",
         "triage_summary",
         "function_walk",
@@ -51,6 +52,9 @@ def test_every_intent_includes_at_least_one_triage_tool():
         "list_functions",
     }
     for it in list_intents():
+        if it.name == "runtime_project":
+            assert it.tools == ("runtime_project_summary",)
+            continue
         assert light & set(it.tools), (
             f"intent {it.name} has none of {light} -- agent can't even orient itself."
         )
@@ -85,6 +89,20 @@ def test_vuln_questions_route_to_vuln_intent(question, expected_intent):
 )
 def test_triage_questions_route_to_triage(question):
     assert route_for_question(question).name == "triage_summary"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Summarize this runtime capture",
+        "Show the observed operations in the live capture",
+        "What observed xrefs are in this runtime project?",
+    ],
+)
+def test_runtime_questions_route_only_to_persisted_redacted_tool(question):
+    intent = route_for_question(question)
+    assert intent.name == "runtime_project"
+    assert intent.tools == ("runtime_project_summary",)
 
 
 @pytest.mark.parametrize(
@@ -168,3 +186,21 @@ def test_tool_filter_silently_ignores_unknown_names():
     toolset = agent._function_toolset
     tools = getattr(toolset, "_tools", None) or getattr(toolset, "tools", {})
     assert tools == {}
+
+
+def test_runtime_filter_registers_only_redacted_persisted_summary_tool():
+    pytest.importorskip("pydantic_ai")
+
+    from glaurung.llm.agents.memory_foundation import create_foundation_agent
+    from glaurung.llm.agents.memory_agent import register_analysis_tools
+
+    agent = create_foundation_agent(model="test")
+    register_analysis_tools(
+        agent,
+        model_name="test",
+        tool_filter={"runtime_project_summary"},
+    )
+    tools = getattr(agent._function_toolset, "_tools", None) or getattr(
+        agent._function_toolset, "tools", {}
+    )
+    assert set(tools) == {"runtime_project_summary"}
