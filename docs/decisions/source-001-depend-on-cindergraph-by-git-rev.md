@@ -2,7 +2,9 @@
 
 > **Kind:** decision · **Status:** maintained
 
-**ADR status:** Accepted and implemented 2026-09-17. First record of the
+**ADR status:** Accepted and implemented 2026-09-17; re-pinned the same day
+to `8bd2051` once the four parity corrections landed upstream (the record at
+the end of this file). First record of the
 `source-` series: the C source-analysis stack had no decision series of its
 own (the `exec-` and `solver-` series are the execution engine and the SMT
 integration), and this decision is about a dependency boundary, not a solver.
@@ -24,12 +26,13 @@ version of cinder". The sizing — both divergence lists and the plan — is
 **Decision:**
 
 1. *One dependency line, unconditional:*
-   `cindergraph = { git = "https://github.com/mjbommar/cindergraph.git", rev = "ed5e55eb8fb7855b7675ac9ae3f7afbb4941a825" }`
+   `cindergraph = { git = "https://github.com/mjbommar/cindergraph.git", rev = "<40-hex>" }`
    — the same form as the `axeyum-*` pins ([`solver-001`](solver-001-depend-on-axeyum-by-git-rev.md)):
    the GitHub URL and a full revision, never a `path` to a sibling checkout
-   and never a branch. `ed5e55e` is cindergraph's `origin/main` on 2026-09-15
-   ("Document design and evaluation references", the 0.1.0 release
-   preparation). Unconditional because every consumer is: the
+   and never a branch. The first pin was `ed5e55e`, cindergraph's
+   `origin/main` on 2026-09-15 ("Document design and evaluation references",
+   the 0.1.0 release preparation); the current pin is in the re-pin record
+   below. Unconditional because every consumer is: the
    `source_metrics` / `source_cfg` / `metrics` PyO3 modules build in the
    default `python-ext` wheel, `src/metrics/` is default, and
    `src/csource/lower/` is default. The crate is pure Rust with one
@@ -62,7 +65,9 @@ version of cinder". The sizing — both divergence lists and the plan — is
    `tests/source_cfg_ged.rs` never moved and stay as integration tests of the
    dependency. Tests of the lowering and of Glaurung's consumers stay.
 
-**The finding — four Glaurung-side parity corrections cindergraph does not have.**
+**The finding — four Glaurung-side parity corrections cindergraph did not have
+at `ed5e55e`** (closed by the re-pin below; kept as written because it is why
+the pin moved).
 After the extraction base, four commits on 2026-09-13 changed
 `src/csource/joern/{chains,nodes}.rs` for DecBench parity, each measured over
 the 85,645-cell oracle in
@@ -115,11 +120,12 @@ ten tests to carry across:
   while the bindings shrink — but that is a second change with its own
   measurement (two extension modules in one wheel, one PyO3 version each) and
   is not made here.
-- Nothing here waits on cindergraph's unpushed 19 commits (`repr="ops"`, loop
-  metadata, the external-facts contract, export attributes, `__version__`);
-  they are additions. Improvement-list item 10's *pipeline* (decompiled C →
-  cindergraph → Axeyum) does want `ops` and the resolved types, so the next
-  re-pin should follow their push.
+- At `ed5e55e` nothing waited on cindergraph's then-unpushed 19 commits
+  (`repr="ops"`, loop metadata, the external-facts contract, export
+  attributes, `__version__`); they were additions. They are on GitHub now and
+  the re-pin below consumes them, so improvement-list item 10's *pipeline*
+  (decompiled C → cindergraph → Axeyum) has `ops` and the resolved types
+  available at the pin.
 - `tests/substrate_pipeline.rs` and `tests/source_cfg_ged.rs` test the crate,
   not Glaurung; they belong upstream and should move with the parity port.
 
@@ -164,6 +170,33 @@ name is the migration note's verification section):
   rule needs a decision, not a merge.
 - *The crates.io release*: cindergraph 0.1.0 is prepared but the registry
   identity is not yet verified; Milestone H step 5 moves to it once it is.
+
+**Re-pin record.**
+
+- *2026-09-17, `ed5e55e` → `8bd20512158d19d4cf632caba4bbed629271a3e5`* (branch
+  `gl-cinder2-2026-09-17`). cindergraph's `origin/main` moved 27 commits: the
+  `op`/`type`/`line`/`column`/declarator/parameter attributes on exported AST
+  nodes, `expr_internal` CFG marks (`FunctionCfg::expression_internal`),
+  `__version__`, path-argument errors, `repr="ops"`, loop metadata, the
+  single-parse session, the external-facts contract
+  (`// @cindergraph capacity(p) = v`, `AnalysisSession(..., facts=)`), a
+  defect conformance corpus, and **the port of the four parity corrections
+  above** (cindergraph
+  `docs/benchmarks/glaurung-parity-corrections-2026-09-17.md`: `3461022`
+  dedup, `657aed4` constant-true loop, `339e19b` literal `if`, `5c21383`
+  ternary loop test, with the ten named tests and a mutation control per
+  correction). The `for (;;)` conflict was decided by the recorded Joern
+  data: `elide_empty_for_headers` stays for the clause-less `for`, and the
+  ported constant-true rule fires only on a literal condition
+  (`while (1)`, `do … while (1)`, `for (…; 1; …)`), so the two rules never
+  both fire; the stated residual is `while (1) {}` (two nodes, a self-cycle)
+  against `for (;;) {}` (one node). The finding above is therefore closed:
+  Glaurung's parity projection at the crate no longer differs from
+  `af9f826d`'s on those four shapes, and nothing owed remains upstream.
+  Verification is in the migration note's re-pin section: no consumer
+  changed (the compiler at every feature lane), the test counts, the Python
+  selections, and the projection over the 930 in-repo functions at
+  `ed5e55e` against `8bd2051`.
 
 ---
 
