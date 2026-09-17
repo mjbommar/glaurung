@@ -43,7 +43,7 @@ Glaurung's embedded copy, measured at `af9f826d`:
 
 55 files and 32,872 lines go; 583 embedded unit tests go with them. Of those
 583 test names, 571 exist under the same name in cindergraph at `ed5e55e`
-(which has 816 unit tests in the crate), two exist under a changed name
+(which has 816 `#[test]` attributes under `crates/cindergraph/src`), two exist under a changed name
 (`a_struct_body_is_one_opaque_node_and_declares_no_locals` was rewritten when
 struct bodies started parsing members; `the_corpus_recovers_a_type_for_almost_every_binding`
 is `..._declared_binding`, and it reads Glaurung's own
@@ -213,7 +213,29 @@ memory in static TLS block" — 6,928 bytes of static TLS against `master`'s
 so this is the solver feature, not the migration, and
 `GLIBC_TUNABLES=glibc.rtld.optional_static_tls=1048576` loads it).
 `uv run pytest python/tests -k axeyum`: 55 passed.
-`uv run pytest python/tests -k "source or metrics or cfg"`: PYTEST_SOURCE_COUNT.
+`uv run pytest python/tests -k "source or metrics or cfg"` (temp files on the
+idle disk — on `/data0` at 92 % utilisation the SQLite lock test sat in
+`jbd2_log_wait_commit` for 56 minutes with 11 s of CPU): **466 passed, 753
+skipped, 25 failed, 11 errors** across 10 test ids. Eight of the ten ids fail
+identically on `master` with its own extension (`test_build_configuration_invariants`,
+`test_cli_annotate`, `test_decompiler_emission_invariants`,
+`test_decompiler_fixture_structural`, `test_gen_pass_reference`; run as one
+selection there, same 34 instances). The other two need the gitignored
+`tests/decompiler_fixtures/build/` corpus, which a fresh worktree lacks; with
+`master`'s 1,676 built files copied in, both pass. The first run of this
+selection had one more branch-only failure,
+`test_source_dataflow.py::test_the_corpus_types_every_binding_and_declares_nothing_it_does_not_use`
+— the Python twin of the corpus gate, failing for the same reason (568
+unresolved bindings now carry `type` None). That is the **one public Python
+behaviour the crate changed**: `glaurung.source.data_flow` now lists a name it
+could not tie to a declaration in `bindings`. It is kept and documented rather
+than hidden: the binding exposes the crate's `unresolved_bindings` index list
+beside `unused_bindings`, the facade docstring says so, the corpus gate is
+restated over declared bindings with the one unused value binding pinned by
+name, and `test_an_unresolved_name_is_a_typeless_binding_that_is_listed_as_such`
+pins the behaviour on a two-line input. `test_native_stub_current.py` passes
+(the `_native` stubs are unchanged, so the surface is the same set of
+functions).
 `python/tests/test_src_dependency_boundaries.py`: the four new guards pass and
 each was killed by exactly one mutant; `test_every_env_var_read_in_src_is_a_reviewed_allowlist_entry`
 fails on `master` too (three env reads other lanes added on 2026-09-17:
@@ -222,5 +244,6 @@ fails on `master` too (three env reads other lanes added on 2026-09-17:
 **Did not run:** the DecBench corpus runs (`tests/source_cfg_ged.rs` over
 `GLAURUNG_DECBENCH_TREE`, `tools/decbench_matrix.py`, the parity aggregate)
 — the corpus and the DecBench fork are not on this host; the `python-ext`
-wheel with `solver-axeyum` under pytest (the TLS trap above). `cargo doc --no-deps --features solver-axeyum` ran: 162 warnings, none naming a `cindergraph::` path (`master`'s count was not measured).
+wheel with `solver-axeyum` under pytest (the TLS trap above); the full
+`python/tests` suite (only the two selections above). `cargo doc --no-deps --features solver-axeyum` ran: 162 warnings, none naming a `cindergraph::` path (`master`'s count was not measured).
 

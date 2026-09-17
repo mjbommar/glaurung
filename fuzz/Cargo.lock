@@ -198,6 +198,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cindergraph"
+version = "0.1.0"
+source = "git+https://github.com/mjbommar/cindergraph.git?rev=ed5e55eb8fb7855b7675ac9ae3f7afbb4941a825#ed5e55eb8fb7855b7675ac9ae3f7afbb4941a825"
+dependencies = [
+ "regex",
+]
+
+[[package]]
 name = "cobs"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -421,10 +429,12 @@ dependencies = [
  "bytes",
  "capstone",
  "chrono",
+ "cindergraph",
  "cpp_demangle",
  "encoding_rs",
  "flate2",
  "gimli",
+ "glaurung-disasm",
  "hex",
  "iced-x86",
  "infer",
@@ -456,6 +466,10 @@ dependencies = [
  "windows-metadata",
  "xorf",
 ]
+
+[[package]]
+name = "glaurung-disasm"
+version = "0.1.0"
 
 [[package]]
 name = "glaurung-fuzz"

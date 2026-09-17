@@ -54,7 +54,7 @@ version of cinder". The sizing — both divergence lists and the plan — is
    by exactly one mutant before landing.
 4. *Tests moved with the code are deleted here by name.* Of the 583 embedded
    unit tests, 571 exist under the same name in cindergraph at `ed5e55e`
-   (816 unit tests in the crate), two under a changed name, and ten do not
+   (816 `#[test]` attributes under `crates/cindergraph/src` at that revision), two under a changed name, and ten do not
    exist there at all (below). The one that reads Glaurung's own corpus,
    `the_corpus_recovers_a_type_for_almost_every_binding`, is kept as
    `tests/source_dataflow_corpus.rs` over the crate; `tests/substrate_pipeline.rs`
@@ -123,15 +123,32 @@ ten tests to carry across:
 - `tests/substrate_pipeline.rs` and `tests/source_cfg_ged.rs` test the crate,
   not Glaurung; they belong upstream and should move with the parity port.
 
-**Verification** (branch `gl-cinder-2026-09-17`, filled in from the runs):
+**Verification** (branch `gl-cinder-2026-09-17`; the full record with every
+name is the migration note's verification section):
 
-- `cargo test --features solver-axeyum --no-fail-fast` before and after, every
-  difference by name: see the migration note's verification section.
-- `scripts/feature-build-gate.sh`: every lane `cargo check --all-targets`;
-  `benches/ir_dataflow.rs` fails as it did on `master` (`recover_types` was
-  renamed under it; unrelated).
-- `cargo fmt --all -- --check` clean.
-- `uv run pytest python/tests -k "source or metrics or cfg"` and `-k axeyum`.
+- `cargo test --features solver-axeyum --no-fail-fast`: `master` lists 5,283
+  tests over 36 binaries; the branch runs 4,701 over 37 — **4,682 passed /
+  1 failed / 18 ignored**. 5,283 − 583 (moved to cindergraph, one of them
+  `#[ignore]`) + 1 (the corpus gate kept as an integration test) = 4,701; the
+  one failure is `master`'s pre-existing `ir::ast` decompiler test.
+- The parity projection, measured directly since no in-repo fixture pins it:
+  930 functions over the in-repo C corpora, `master`'s extension against the
+  branch's — 42 differ, all with the crate smaller (41 short-circuit loop
+  headers the crate elides, one computed-`goto` dispatch it models as a
+  fan-out); none of the four missing Glaurung corrections fires on this
+  corpus. `tools/source_cfg_projection_dump.py` repeats it.
+- `scripts/feature-build-gate.sh`: every lane `cargo check --all-targets`,
+  re-run per lane with `--keep-going`; the only errors are the two
+  pre-existing `recover_types` E0425s in `benches/ir_dataflow.rs`, on
+  `master` too. The fuzz crate checks clean (its lockfile gains the crate).
+- `cargo fmt --all -- --check` clean; clippy and rustdoc show nothing new in
+  a touched file.
+- Python: `-k axeyum` 55 passed; `-k "source or metrics or cfg"` 466 passed,
+  753 skipped, 36 failing instances over 10 ids, of which 8 ids fail
+  identically on `master` and 2 need the gitignored fixture corpus (they pass
+  with it copied in). One public Python behaviour changed and is pinned by a
+  regression test: `data_flow` lists unresolved names as typeless bindings
+  and now also returns `unresolved_bindings`.
 
 **Alternatives rejected:**
 
