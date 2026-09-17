@@ -335,6 +335,7 @@ PURPOSES: dict[str, str] = {
     "GLAURUNG_PARSER_RECOVERY_DEMAND": "Fail (instead of skip) every parser-recovery test whose optional parser or corpus is missing.",
     "GLAURUNG_SIGS_NETWORK_TEST": "Opt in to the signature-publisher test that reads the on-disk harvest cache at `~/.cache/glaurung/system-libs`; skipped when unset.",
     "GLAURUNG_REDECOMP_FORCE": "Force re-decompilation even when cached output looks current.",
+    "GLAURUNG_TRACE_GIT_REV": "The 40-hex Glaurung commit an ordered-trace manifest records when the checkout has no `.git` (a `git archive` extraction); the manifest then says `revision_source: GLAURUNG_TRACE_GIT_REV` with `dirty: null`, which the native replay refuses as unproven-clean. Unset, `git rev-parse HEAD` is used.",
     "GLAURUNG_TRACE_ORACLE_VERSION": "Runtime version tag recorded into ordered-trace oracle output.",
     # --- Python: decbench (opt-in evaluation harness) -------------------
     "DECBENCH_DIR": "Path to the out-of-tree DecBench checkout.",

@@ -2,6 +2,17 @@
 
 > **Kind:** record · **Date:** 2026-07-28
 
+> **Frozen 2026-09-16.** The timings in this log — the 1.7–3.2× one-shot gap,
+> the 0.5× cold / 2.3× warm regime figures — were measured between 2026-07-13
+> and 2026-07-28 at Axeyum `c38a9515e` or earlier. The pin moved to
+> `8df853252` on 2026-09-16
+> ([`solver-032`](../../decisions/solver-032-axeyum-pin-bump-and-shadow-corpus-prune.md))
+> and none of them has been re-measured since. Do not quote these figures as
+> current. The refresh is the
+> six-cell campaign (Axeyum ADR-0272's harness), item 3 of
+> [`development/improvement-list-2026-09-16.md`](../../development/improvement-list-2026-09-16.md).
+> The entries below are left exactly as written.
+
 > **Status: historical append-oriented integration evidence log.** Individual
 > findings and timings are revision-bound. Later decisions may supersede an
 > earlier diagnosis without erasing it.

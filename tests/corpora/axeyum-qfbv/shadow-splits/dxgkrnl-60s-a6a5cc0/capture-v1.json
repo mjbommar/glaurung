@@ -41,5 +41,12 @@
   "validated_summary": "summary-v1.json",
   "split_index": "shadow-splits.tsv",
   "capture_index": "capture-index-v1.json",
-  "axeyum_manifest": "manifest-v1.json"
+  "axeyum_manifest": "manifest-v1.json",
+  "pruned": {
+    "date": "2026-09-16",
+    "malformed_scripts": 2,
+    "moved_to": "malformed-exports-pre-solver-016/dxgkrnl-60s-a6a5cc0",
+    "reason": "z3 rejects the pre-solver-016 concat export; see solver-032",
+    "tool": "tools/axeyum/split_verdicts.py --prune-to"
+  }
 }

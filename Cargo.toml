@@ -51,11 +51,15 @@ xorf = { version = "0.13.0", default-features = false, features = ["binary-fuse"
 
 # Native in-process SMT solver (feature `solver-z3`); links libz3. Optional.
 z3 = { version = "0.12", optional = true }
+# The raw libz3 bindings the `z3` crate links, for the shadow-split capture's
+# z3-parses-it check (`Z3_solver_from_string` + `Z3_get_error_msg`); the crate
+# hides its context pointer and swallows parse errors (solver-032).
+z3-sys = { version = "0.8", optional = true }
 # Pure-Rust in-process SMT solver (feature `solver-axeyum`); no C dependency.
 # The exact git revision keeps recall builds independent of a machine-local
 # sibling checkout while preserving the minimal QF_BV consumer profile.
-axeyum-solver = { git = "https://github.com/mjbommar/axeyum.git", rev = "c38a9515e68e7427b1a41a7598805cf60686bd58", optional = true, default-features = false, features = ["qfbv"] }
-axeyum-ir = { git = "https://github.com/mjbommar/axeyum.git", rev = "c38a9515e68e7427b1a41a7598805cf60686bd58", optional = true }
+axeyum-solver = { git = "https://github.com/mjbommar/axeyum.git", rev = "8df853252cdf49c9a27ba71c6ce62fdd1c485dfc", optional = true, default-features = false, features = ["qfbv"] }
+axeyum-ir = { git = "https://github.com/mjbommar/axeyum.git", rev = "8df853252cdf49c9a27ba71c6ce62fdd1c485dfc", optional = true }
 
 # DEV-ONLY differential-test oracle (feature `dev-oracle`); links the system
 # Unicorn engine via pkg-config (libunicorn-dev). Never shipped in the wheel.
@@ -128,7 +132,7 @@ dev-oracle = ["exec", "dep:unicorn-engine"]
 # Native, in-process SMT backend via the `z3` crate (Rust API, links libz3).
 # This is the preferred solver path — keeps the engine self-contained rather
 # than shelling out to a binary. Optional; the base build needs no solver.
-solver-z3 = ["symbolic", "dep:z3"]
+solver-z3 = ["symbolic", "dep:z3", "dep:z3-sys"]
 # Native, in-process, pure-Rust SMT backend via the `axeyum` solver. No C
 # dependency, wheel-shippable. Opt-in; the "default once validated" target was
 # retired -- see docs/decisions/solver-002-axeyum-as-default-backend.md.

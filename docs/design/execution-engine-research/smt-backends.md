@@ -66,7 +66,7 @@ Its C dependency is precisely what a shippable engine is trying to avoid.
 
 The backend the survey said did not exist. `axeyum-solver` (with
 `default-features = false, features = ["qfbv"]`) and `axeyum-ir`, both from
-`github.com/mjbommar/axeyum` at rev `c38a9515`, bit-blast QF_BV to a pure-Rust
+`github.com/mjbommar/axeyum` at rev `8df853252` (bumped 2026-09-16 from `c38a9515`), bit-blast QF_BV to a pure-Rust
 SAT core and emit **DRAT-checked unsat proofs**. No libz3, no C, no subprocess,
 so a wheel *could* carry it — which is the entire point.
 

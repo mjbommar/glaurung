@@ -77,7 +77,7 @@ no symbolic engine at all.
 axeyum is [`github.com/mjbommar/axeyum`](https://github.com/mjbommar/axeyum), a
 pure-Rust QF_BV solver by the same author, consumed as two crates
 (`axeyum-solver` with `default-features = false, features = ["qfbv"]`, and
-`axeyum-ir`) pinned by git rev `c38a9515e68e7427b1a41a7598805cf60686bd58`.
+`axeyum-ir`) pinned by git rev `8df853252cdf49c9a27ba71c6ce62fdd1c485dfc` (bumped 2026-09-16 from `c38a9515e`, see [`solver-032`](../decisions/solver-032-axeyum-pin-bump-and-shadow-corpus-prune.md)).
 Production stays on that minimal QF_BV surface deliberately — see
 [`solver-025`](../decisions/solver-025-explicit-qfbv-profile.md); only the text
 bridge opts into the full profile.
@@ -125,8 +125,12 @@ Unknown and error counts are tracked per backend on purpose: a backend that gets
 `<sha256>.smt2` and appends `<sha256>\t<verdict>` to `index.tsv`. Bytes are
 published collision-safely before the index observation, so a partially written
 capture is detectable. The sibling `GLAURUNG_DUMP_SHADOW_SPLITS=<dir>` captures
-only the occurrences where exactly one backend decided. This is how
-`tests/corpora/axeyum-qfbv/` was built; the procedure is in
+only the occurrences where exactly one backend decided, and (since 2026-09-16)
+parses every such script with the linked libz3 first: a script z3 rejects is
+published under `malformed/` and indexed in `malformed.tsv` with z3's error
+text, never in `shadow-splits.tsv`
+([`solver-032`](../decisions/solver-032-axeyum-pin-bump-and-shadow-corpus-prune.md)).
+This is how `tests/corpora/axeyum-qfbv/` was built; the procedure is in
 [`tests/corpora/axeyum-qfbv/README.md`](../../tests/corpora/axeyum-qfbv/README.md).
 
 Verified with `rg -n 'GLAURUNG_SHADOW_DIFF|GLAURUNG_FAIR_SHADOW|GLAURUNG_DUMP_QUERIES|GLAURUNG_DUMP_SHADOW_SPLITS|DEFAULT_SOLVER_BUDGET|DEFAULT_CHECK_TIMEOUT_MS' src/symbolic/solver/mod.rs`.
@@ -160,7 +164,7 @@ files beside it, and they predate the current axeyum pin.
   [`solver-028`](../decisions/solver-028-finding-confidence-partition.md)).
 - **The engine that produces the queries:**
   [`execution-engine.md`](execution-engine.md).
-- **All 31 solver decisions with their rejected alternatives:**
+- **All 32 solver decisions with their rejected alternatives:**
   [`decisions/`](../decisions/README.md).
 
 ## Examples and gates

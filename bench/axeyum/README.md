@@ -97,7 +97,7 @@ rustc:        <version string>
 ## The checked-in results are a snapshot, and they have drifted
 
 `results/` holds an immutable run whose `provenance.txt` records
-`axeyum_rev: 1cc19181`. **`Cargo.toml` now pins axeyum at `c38a9515`**, so the
+`axeyum_rev: 1cc19181`. **`Cargo.toml` now pins axeyum at `8df853252`** (bumped 2026-09-16 from `c38a9515`), so the
 checked-in numbers predate the current solver. That run also predates the
 wide-constant fix in the z3 adapter (`4ae96cfd`), which means its head-to-head
 timing was scoped to ≤64-bit widths; the current harness treats both backends as
