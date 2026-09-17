@@ -177,32 +177,50 @@ def test_at_least_one_target_file_exists():
     assert any((SRC / relative).is_file() for relative in TARGET_FILES)
 
 
-# --- the parsing substrate stays language-neutral -----------------------------
+# --- the source-analysis stack is the cindergraph crate, not a copy ----------
 
-# `src/syntax/` is the language-neutral parsing substrate; `src/csource/` is the
-# C front end built on it. Three rules from
-# `docs/design/source-front-ends/substrate.md` section 1, checked here because
-# they are cheap to enforce now and expensive to restore after something has
-# crossed them:
+# `src/syntax/` (the language-neutral parsing substrate) and the reusable half
+# of `src/csource/` (lexer, parser, CFG, dataflow, metrics, export, the parity
+# projection) were extracted to the `cindergraph` crate at `0892552` and, since
+# 2026-09-17, are consumed from GitHub by Git revision
+# (`docs/decisions/source-001-depend-on-cindergraph-by-git-rev.md`). The
+# substrate-neutrality rules those modules carried are now cindergraph's own
+# tests. What Glaurung has to hold is the migration's exit criterion: the
+# embedded duplicate is gone and cannot silently drift back into use. Three
+# checks, each with a positive control so none can pass over nothing:
 #
-#   1. `syntax` must not import any language module.
-#   2. `csource::cfg` must not import `csource::joern` -- the Joern-parity layer
-#      reproduces another tool's artifacts, and if those leak into the general
-#      CFG then the lowering to LLIR inherits a graph shaped by a JVM program's
-#      expression granularity.
-#   3. `syntax::cfg` must not know what a C statement is; it consumes events.
+#   1. the manifest names the crate by GitHub URL and full revision;
+#   2. `src/syntax/` does not exist and `src/csource/` holds only what the
+#      extraction deliberately left here (`lower/`, `equiv/`, `feasibility.rs`);
+#   3. no product file reaches the removed paths (`crate::syntax`,
+#      `crate::csource::parse`, ...) -- every consumer imports `cindergraph::`.
 #
-# Rules 2 and 3 guard modules that do not exist yet. That is deliberate: a
-# boundary written before the first crossing costs one regex, and after it costs
-# a refactor. Each check skips cleanly while its files are absent, and
-# `test_the_substrate_boundary_checks_are_not_vacuous` fails if *every* one of
-# them is skipping, so the whole block cannot quietly become a no-op.
+# And one boundary that stays Glaurung's: the C-to-LLIR lowering must not read
+# the parity projection. `parity` reproduces another tool's expression
+# granularity for a metric; if `lower/` consumed it, every LLIR built from
+# decompiled C would inherit a graph shaped by a JVM program's quirks
+# (docs/design/static-c-analysis/architecture.md section 1).
 
 SYNTAX_DIR = SRC / "syntax"
 CSOURCE_DIR = SRC / "csource"
 
-#: Any language front end the substrate must not reach into.
-LANGUAGE_MODULE_RE = re.compile(r"\bcrate::(csource|ir|disasm|analysis|formats)\b")
+#: What `src/csource/` may contain: the modules cindergraph's EXTRACTION.md
+#: excludes because they need Glaurung's LLIR, symbolic engine or solver seam.
+CSOURCE_KEPT = {"mod.rs", "lower", "equiv", "feasibility.rs"}
+
+#: A path into the removed copy. `crate::csource::{lower,equiv,feasibility}`
+#: are the kept modules and are deliberately not in this alternation.
+REMOVED_MODULE_RE = re.compile(
+    r"\bcrate::syntax\b"
+    r"|\bcrate::csource::(cfg|dataflow|export|lex|metrics|normalize|parse|joern|parity|semantic|eval)\b"
+    r"|\bsuper::(joern|parity)\b"
+)
+
+CINDERGRAPH_DEP_RE = re.compile(
+    r'^cindergraph\s*=\s*\{[^}]*git\s*=\s*"https://github\.com/mjbommar/cindergraph(\.git)?"'
+    r'[^}]*rev\s*=\s*"[0-9a-f]{40}"[^}]*\}\s*$',
+    re.MULTILINE,
+)
 
 
 def _rust_files(directory: Path) -> list[str]:
@@ -217,70 +235,73 @@ def _rust_files(directory: Path) -> list[str]:
     return found
 
 
-def test_the_substrate_does_not_import_a_language_front_end():
-    """`REQ-SYN-1`: nothing in `src/syntax/` names a specific language.
-
-    The substrate supplies mechanics -- spans, interning, a token buffer, an
-    event stream, a CFG builder over control-flow events. Token kinds and node
-    tags are opaque `u16` values a language supplies. The moment the substrate
-    imports a language module it stops being reusable and the second front end
-    pays for it.
-    """
-    for relative in _rust_files(SYNTAX_DIR):
-        text = _product_text(relative, drop_comment_lines=True)
-        hit = LANGUAGE_MODULE_RE.search(text)
-        assert hit is None, (
-            f"{relative} imports {hit.group(0)!r}; src/syntax/ is the "
-            "language-neutral substrate and must not depend on a language front "
-            "end (REQ-SYN-1). If this is deliberate, move the code into the "
-            "language module rather than widening this check"
-        )
-
-
-def test_the_general_c_cfg_does_not_import_the_joern_parity_layer():
-    """The parity layer reproduces another tool's quirks; it must stay above.
-
-    `csource/cfg/` builds the graph a person would draw. `csource/joern/`
-    reproduces expression-granular nodes, a method-return node deleted only when
-    it stayed a singleton, and entry/exit as derived flags. Those are metric
-    artifacts. If they leak downward, `lower/` lowers a distorted graph to LLIR
-    and every consumer of the general CFG inherits the distortion.
-    """
-    for relative in _rust_files(CSOURCE_DIR / "cfg"):
-        text = _product_text(relative, drop_comment_lines=True)
-        hit = re.search(r"\bcrate::csource::joern\b|\bsuper::joern\b", text)
-        assert hit is None, (
-            f"{relative} references {hit.group(0)!r}; the general CFG must not "
-            "depend on the Joern-parity layer (docs/design/static-c-analysis/"
-            "architecture.md section 1)"
-        )
-
-
-def test_the_substrate_cfg_builder_is_language_blind():
-    """`REQ-SYN-8`: the CFG builder consumes control-flow events, not syntax.
-
-    It never sees a token, a node tag or a keyword -- which is what makes it the
-    one component a second language front end reuses unchanged.
-    """
-    for relative in _rust_files(SYNTAX_DIR / "cfg") + (
-        ["syntax/cfg.rs"] if (SYNTAX_DIR / "cfg.rs").is_file() else []
-    ):
-        text = _product_text(relative, drop_comment_lines=True)
-        hit = LANGUAGE_MODULE_RE.search(text)
-        assert hit is None, (
-            f"{relative} imports {hit.group(0)!r}; the CFG builder consumes "
-            "control-flow events and must stay language-blind (REQ-SYN-8)"
-        )
-
-
-def test_the_substrate_boundary_checks_are_not_vacuous():
-    """At least the substrate itself must exist, or the block above proves
-    nothing. This is the same guard `test_at_least_one_target_file_exists`
-    provides for the target-layer checks."""
-    assert _rust_files(SYNTAX_DIR), (
-        "src/syntax/ has no product .rs files; the substrate boundary checks "
-        "above would pass vacuously"
+def test_the_manifest_depends_on_cindergraph_from_github_by_revision():
+    """A path dependency would resolve to whatever a sibling checkout holds; a
+    branch would move under a rebuild. The pin is a full 40-hex revision on the
+    GitHub URL, the same form the `axeyum-*` dependencies use."""
+    manifest = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
+    assert CINDERGRAPH_DEP_RE.search(manifest), (
+        "Cargo.toml must declare `cindergraph = { git = "
+        '"https://github.com/mjbommar/cindergraph.git", rev = "<40 hex>" }`'
     )
+    assert "path" not in (CINDERGRAPH_DEP_RE.search(manifest).group(0)), (
+        "the cindergraph dependency must not carry a `path`; the migration "
+        "exists so Glaurung cannot compile a machine-local copy"
+    )
+
+
+def test_the_embedded_source_analysis_copy_is_gone():
+    """`src/syntax/` is deleted outright; `src/csource/` keeps only the three
+    modules the extraction excluded. A new directory or file beside them is
+    the copy drifting back."""
+    assert not SYNTAX_DIR.exists(), (
+        "src/syntax/ exists again; the substrate is cindergraph::syntax"
+    )
+    present = {entry.name for entry in CSOURCE_DIR.iterdir()}
+    stray = sorted(present - CSOURCE_KEPT)
+    assert not stray, (
+        f"src/csource/ carries {stray}; only {sorted(CSOURCE_KEPT)} stay in "
+        "Glaurung, everything else is the cindergraph crate"
+    )
+    # Positive control: the kept modules are really there, so an empty
+    # directory could not satisfy the check above by accident.
+    assert {"lower", "mod.rs"} <= present, f"src/csource/ holds {sorted(present)}"
+
+
+def test_no_product_file_reaches_the_removed_modules():
+    """Every consumer names `cindergraph::...`; a `crate::syntax` or
+    `crate::csource::parse` path would only compile if the copy were back."""
+    consumers = 0
+    for path in sorted(SRC.rglob("*.rs")):
+        relative = str(path.relative_to(SRC))
+        text = _product_text(relative, drop_comment_lines=True)
+        hit = REMOVED_MODULE_RE.search(text)
+        assert hit is None, (
+            f"{relative} references {hit.group(0)!r}, a path into the removed "
+            "embedded copy; import it from `cindergraph::` instead"
+        )
+        if "cindergraph::" in text:
+            consumers += 1
+    # Positive control: the consumers exist, so the loop above walked real
+    # imports rather than an empty tree.
+    assert consumers >= 5, (
+        f"only {consumers} product files import cindergraph::; the bindings, "
+        "src/metrics and src/csource/lower all do"
+    )
+
+
+def test_the_lowering_does_not_import_the_parity_projection():
+    """`lower/` lowers the general syntax tree, never the parity view."""
+    files = _rust_files(CSOURCE_DIR / "lower")
+    assert files, "src/csource/lower/ has no product .rs files"
+    for relative in files:
+        text = _product_text(relative, drop_comment_lines=True)
+        hit = re.search(r"\bcindergraph::(csource::)?parity\b", text)
+        assert hit is None, (
+            f"{relative} references {hit.group(0)!r}; the C-to-LLIR lowering "
+            "must not depend on the parity projection "
+            "(docs/design/static-c-analysis/architecture.md section 1)"
+        )
 
 
 # --- correctness cannot depend on environment variables ----------------------

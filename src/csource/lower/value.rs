@@ -14,9 +14,9 @@
 //! the value came from. [`canonicalize`] is what establishes that, and every
 //! operator here re-establishes it on its result.
 
-use crate::csource::lex::TokenKind;
 use crate::ir::types::{BinOp, CmpOp, Op, UnOp, VReg, Value, Width};
-use crate::syntax::ids::NodeId;
+use cindergraph::csource::lex::TokenKind;
+use cindergraph::syntax::ids::NodeId;
 
 use super::ctype::IntType;
 use super::func::{Local, Lowerer};

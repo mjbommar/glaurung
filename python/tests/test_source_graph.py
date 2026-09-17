@@ -1,6 +1,6 @@
 """Graph export for C source, through `glaurung.source` and the CLI.
 
-The Rust unit tests in `src/syntax/graph_export.rs` and `src/csource/export.rs`
+The Rust unit tests in cindergraph's `syntax/graph_export.rs` and `csource/export.rs`
 pin the escaping, the totality and the shape of each writer against hand-written
 strings. What is here is what only Python can check:
 

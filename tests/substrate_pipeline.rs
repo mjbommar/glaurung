@@ -1,6 +1,6 @@
 //! The substrate's layers, exercised end to end as one pipeline.
 //!
-//! Every component of `src/syntax/` has its own unit tests, and each was
+//! Every component of the substrate (now `cindergraph::syntax`) has its own unit tests, and each was
 //! written against its own specification. That is exactly the arrangement in
 //! which the pieces pass individually and do not compose: an interface agreed
 //! on paper is not an interface until two layers actually meet across it.
@@ -23,15 +23,15 @@
 //! with a C front end defect. The token kinds and node tags below are opaque
 //! `u16`s, which is precisely what a real front end supplies.
 
-use glaurung::syntax::cfg::{Cfg, CfgBuilder, Flow, LoopKind};
-use glaurung::syntax::diag::Diagnostics;
-use glaurung::syntax::event::{drive, Events, TagCensus};
-use glaurung::syntax::ged::{ged, GedGraph, GedNode};
-use glaurung::syntax::ids::{Span, TokenId};
-use glaurung::syntax::intern::SymbolTable;
-use glaurung::syntax::source::SourceFile;
-use glaurung::syntax::token::{Tokens, TokensBuilder};
-use glaurung::syntax::tree;
+use cindergraph::syntax::cfg::{Cfg, CfgBuilder, Flow, LoopKind};
+use cindergraph::syntax::diag::Diagnostics;
+use cindergraph::syntax::event::{drive, Events, TagCensus};
+use cindergraph::syntax::ged::{ged, GedGraph, GedNode};
+use cindergraph::syntax::ids::{Span, TokenId};
+use cindergraph::syntax::intern::SymbolTable;
+use cindergraph::syntax::source::SourceFile;
+use cindergraph::syntax::token::{Tokens, TokensBuilder};
+use cindergraph::syntax::tree;
 
 /// Token kinds for the toy language. Opaque to the substrate, dense from zero.
 mod kind {
@@ -207,8 +207,8 @@ fn to_ged(cfg: &Cfg) -> GedGraph {
 }
 
 /// The `NodeId` of the `i`th node, however the CFG chooses to number them.
-fn cfg_node_id(_cfg: &Cfg, i: usize) -> glaurung::syntax::ids::NodeId {
-    glaurung::syntax::ids::NodeId::new(i as u32)
+fn cfg_node_id(_cfg: &Cfg, i: usize) -> cindergraph::syntax::ids::NodeId {
+    cindergraph::syntax::ids::NodeId::new(i as u32)
 }
 
 #[test]

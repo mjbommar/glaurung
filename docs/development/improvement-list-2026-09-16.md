@@ -93,7 +93,7 @@ nobody re-checked. Dormant, not broken.
 | 7 continuous shadow-split capture | **done** | `17ff0387`: `scripts/shadow-capture.sh`, `tools/axeyum/shadow_capture.py`, `.github/workflows/shadow-capture-weekly.yml`, the regression floor in `split_verdicts.py` and the Rust replay; [`solver-034`](../decisions/solver-034-continuous-shadow-split-capture-tier.md) |
 | 8 tests that shell out to `git rev-parse` | **done** | `3a95df4f`: a checkout without `.git` publishes a trace; the six git-bound tests skip with the reason named |
 | 9 label the July notes as frozen | **done** | `4544067f`: dated banner on `PAPER-NOTES.md` and `FEEDBACK-LOG.md`, pointing at item 3's rerun; no number edited |
-| 10 decompiled C → cindergraph → Axeyum | **Milestone H** | cindergraph's roadmap (Glaurung on the cindergraph crate, not an embedded copy), plus its items 1–3; not started here |
+| 10 decompiled C → cindergraph → Axeyum | **Milestone H done; the pipeline not started** | Glaurung is on the cindergraph crate: `cindergraph = { git = "https://github.com/mjbommar/cindergraph.git", rev = "ed5e55eb8fb7855b7675ac9ae3f7afbb4941a825" }`, the embedded `src/syntax/` and reusable `src/csource/` deleted (54 files, 32,872 lines, 583 unit tests that cindergraph carries), every consumer importing `cindergraph::`, and a no-drift-back test with four mutation-checked guards; [`source-001`](../decisions/source-001-depend-on-cindergraph-by-git-rev.md), sizing in [`cindergraph-migration-2026-09-17.md`](cindergraph-migration-2026-09-17.md). **Caveat:** four 2026-09-13 DecBench parity corrections (`828a41a9`, `0266715f`, `68b39f18`, `f9a5cbaa`) exist nowhere in cindergraph and cannot be shimmed over the crate; they need porting upstream (ten named tests), after which Glaurung re-pins. The pipeline itself still wants cindergraph's items 1–3 (`repr="ops"`, resolved types), which are in cindergraph's unpushed commits past `ed5e55e` |
 
-Items 1–9 are done as of `solver-036`; item 10 waits on cindergraph's
-Milestone H.
+Items 1–9 are done as of `solver-036`; item 10's Milestone H is done as of
+`source-001`, with the parity port and the pipeline outstanding.

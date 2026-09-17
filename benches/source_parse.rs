@@ -70,7 +70,7 @@
 //! time, only to count — so it runs once as plain setup (inside
 //! `bench_memory_footprint`, first in the group list below) and prints to
 //! stdout. It measures the struct-of-arrays token buffer
-//! (`glaurung::syntax::token::Tokens`: a `Vec<u16>` of kinds parallel to a
+//! (`cindergraph::syntax::token::Tokens`: a `Vec<u16>` of kinds parallel to a
 //! `Vec<u32>` of starts) against the array-of-structs control the module doc
 //! on `Tokens` argues from — `size_of::<(u16, u32)>()` — over the whole
 //! fixture corpus. Per this repo's reporting rule, the number is measured
@@ -92,7 +92,7 @@ use std::fs;
 use std::hint::black_box;
 use std::path::{Path, PathBuf};
 
-use glaurung::csource::lex::tokenize;
+use cindergraph::csource::lex::tokenize;
 
 /// The crate root, resolved at compile time so these benchmarks find the
 /// fixture corpus regardless of `cargo bench`'s working directory.
@@ -579,7 +579,7 @@ fn fixture_corpus_dirs() -> [PathBuf; 2] {
 ///
 /// `Tokens` (`src/syntax/token.rs`) keeps `kinds: Vec<u16>` parallel to
 /// `starts: Vec<u32>` rather than one `Vec<(u16, u32)>`, both fields private.
-/// [`glaurung::syntax::token::Tokens::len`] is public and excludes the
+/// [`cindergraph::syntax::token::Tokens::len`] is public and excludes the
 /// sentinel the buffer always carries, so the entry count used here is
 /// `len() + 1` per file -- reconstructing exactly `kinds.len()` (== `starts.
 /// len()`) without needing access to the private fields themselves.

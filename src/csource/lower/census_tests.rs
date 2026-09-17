@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::csource::lower::{lower_function, LowerError};
-use crate::csource::parse::parse;
+use cindergraph::csource::parse::parse;
 
 /// The fixture source directory, or `None` when the corpus is not present.
 fn fixture_src() -> Option<PathBuf> {

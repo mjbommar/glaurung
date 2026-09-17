@@ -49,7 +49,7 @@
 //! order, each consuming what it matches, and within a bucket "prefer a
 //! type-matching candidate, otherwise consume the first and score a false
 //! positive". Replacing that with the optimal assignment --- which is the
-//! obvious improvement, and for which `crate::syntax::ged::solve_assignment`
+//! obvious improvement, and for which `cindergraph::syntax::ged::solve_assignment`
 //! is already sitting right there --- produces different `(tp, fp, fn)`
 //! triples and therefore different scores. The point of this module is to reproduce the
 //! reference's number, not to improve on it.
