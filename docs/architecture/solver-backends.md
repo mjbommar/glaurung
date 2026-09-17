@@ -77,7 +77,7 @@ no symbolic engine at all.
 axeyum is [`github.com/mjbommar/axeyum`](https://github.com/mjbommar/axeyum), a
 pure-Rust QF_BV solver by the same author, consumed as two crates
 (`axeyum-solver` with `default-features = false, features = ["qfbv"]`, and
-`axeyum-ir`) pinned by git rev `c38a9515e68e7427b1a41a7598805cf60686bd58`.
+`axeyum-ir`) pinned by git rev `8df853252cdf49c9a27ba71c6ce62fdd1c485dfc` (bumped 2026-09-16 from `c38a9515e`, see [`solver-032`](../decisions/solver-032-axeyum-pin-bump-and-shadow-corpus-prune.md)).
 Production stays on that minimal QF_BV surface deliberately — see
 [`solver-025`](../decisions/solver-025-explicit-qfbv-profile.md); only the text
 bridge opts into the full profile.

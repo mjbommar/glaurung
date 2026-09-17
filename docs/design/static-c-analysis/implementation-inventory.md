@@ -293,7 +293,7 @@ Genuinely new, in descending order of risk:
 
 ## 11. Precedent in the sibling crate (`axeyum`)
 
-Glaurung already depends on `axeyum` — pinned at rev `c38a9515`, optional,
+Glaurung already depends on `axeyum` — pinned at rev `8df853252` (bumped 2026-09-16 from `c38a9515`), optional,
 behind the `solver-axeyum` feature — so its conventions are a sibling's, not a
 stranger's. Nothing there is directly reusable for these metrics: **there is no
 assignment solver, no min-cost flow, no diff, no graph edit distance and no C
