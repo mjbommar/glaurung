@@ -20,6 +20,16 @@
 > exploratory: the preregistered analyzer refused all four drivers because the
 > warm cells pushed every process into the frozen 60 s solve budget and the
 > work was no longer fixed. The default stays as it is.
+>
+> **Re-measured 2026-09-17 at the `11b895a35` pin
+> ([solver-035](solver-035-warm-fix-repin-and-model-preference.md)):** the
+> session-age growth is fixed upstream (Axeyum ADR-2142) and three of the
+> four drivers no longer hit the 60 s budget, so ADR-0272's fixed-work
+> campaign can be re-registered; the gate is still **not met** — on
+> DptfDevGen's real session warm Axeyum sums to 1.51 s against warm Z3's
+> 0.20 s (unpreregistered, one driver, loaded host), with a residual linear
+> growth in session age that Axeyum names as its follow-up. The default
+> stays as it is.
 
 **ADR status:** Proposed.
 **Context:** Axeyum is pure-Rust, wheel-shippable, proof-carrying, but not

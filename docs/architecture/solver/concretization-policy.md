@@ -61,6 +61,21 @@ selects `any-model`. The preregistered experiment variable
 historical `1`, `true`, and empty-string aliases for minimum unsigned. Setting
 both variables is a precise configuration error rather than an ambiguous run.
 
+The policies above are backend-agnostic: `min-unsigned` is a checked probe
+ladder the explorer runs through whichever backend is active. Since the
+2026-09-17 pin the Axeyum backend also has a *backend-side* knob,
+`GLAURUNG_AXEYUM_MODEL_PREFERENCE` (`any` | `zero` | `least-unsigned`,
+Axeyum ADR-2140, forwarded to `SolverConfig::model_preference` by
+`axeyum_backend/config.rs`), which changes which model a `sat` returns before
+the explorer ever evaluates it: `zero` finishes every `sat` with Axeyum's
+replay-checked bit-clearing pass, so under `any-model` the value the explorer
+binds is a local unsigned minimum of the search's own model, and under
+`min-unsigned` the probe ladder starts from one. It is not a substitute for a
+policy: it does not change the concretization policy ID a trace records, and
+the exact minimum still comes only from the ladder. Unset is `any`, the
+search exactly as shipped; the decision record is
+[`solver-035`](../../decisions/solver-035-warm-fix-repin-and-model-preference.md).
+
 ## Compatibility gate
 
 A0 must preserve the default explorer behavior. The contract tests pin:
