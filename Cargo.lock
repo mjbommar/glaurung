@@ -98,12 +98,12 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 [[package]]
 name = "axeyum-aig"
 version = "0.1.0"
-source = "git+https://github.com/mjbommar/axeyum.git?rev=11b895a35dc583ea593f1dd6cd2412b8ef9387fa#11b895a35dc583ea593f1dd6cd2412b8ef9387fa"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=43f1e0f9038de389d7b1a88b9d3b507ed3c6255d#43f1e0f9038de389d7b1a88b9d3b507ed3c6255d"
 
 [[package]]
 name = "axeyum-arith"
 version = "0.1.0"
-source = "git+https://github.com/mjbommar/axeyum.git?rev=11b895a35dc583ea593f1dd6cd2412b8ef9387fa#11b895a35dc583ea593f1dd6cd2412b8ef9387fa"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=43f1e0f9038de389d7b1a88b9d3b507ed3c6255d#43f1e0f9038de389d7b1a88b9d3b507ed3c6255d"
 dependencies = [
  "num-bigint",
  "num-integer",
@@ -114,7 +114,7 @@ dependencies = [
 [[package]]
 name = "axeyum-bv"
 version = "0.1.0"
-source = "git+https://github.com/mjbommar/axeyum.git?rev=11b895a35dc583ea593f1dd6cd2412b8ef9387fa#11b895a35dc583ea593f1dd6cd2412b8ef9387fa"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=43f1e0f9038de389d7b1a88b9d3b507ed3c6255d#43f1e0f9038de389d7b1a88b9d3b507ed3c6255d"
 dependencies = [
  "axeyum-aig",
  "axeyum-ir",
@@ -124,7 +124,7 @@ dependencies = [
 [[package]]
 name = "axeyum-cas"
 version = "0.1.0"
-source = "git+https://github.com/mjbommar/axeyum.git?rev=11b895a35dc583ea593f1dd6cd2412b8ef9387fa#11b895a35dc583ea593f1dd6cd2412b8ef9387fa"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=43f1e0f9038de389d7b1a88b9d3b507ed3c6255d#43f1e0f9038de389d7b1a88b9d3b507ed3c6255d"
 dependencies = [
  "axeyum-arith",
  "axeyum-ir",
@@ -139,7 +139,7 @@ dependencies = [
 [[package]]
 name = "axeyum-cnf"
 version = "0.1.0"
-source = "git+https://github.com/mjbommar/axeyum.git?rev=11b895a35dc583ea593f1dd6cd2412b8ef9387fa#11b895a35dc583ea593f1dd6cd2412b8ef9387fa"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=43f1e0f9038de389d7b1a88b9d3b507ed3c6255d#43f1e0f9038de389d7b1a88b9d3b507ed3c6255d"
 dependencies = [
  "axeyum-aig",
  "rustix",
@@ -149,7 +149,7 @@ dependencies = [
 [[package]]
 name = "axeyum-egraph"
 version = "0.1.0"
-source = "git+https://github.com/mjbommar/axeyum.git?rev=11b895a35dc583ea593f1dd6cd2412b8ef9387fa#11b895a35dc583ea593f1dd6cd2412b8ef9387fa"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=43f1e0f9038de389d7b1a88b9d3b507ed3c6255d#43f1e0f9038de389d7b1a88b9d3b507ed3c6255d"
 dependencies = [
  "rustc-hash 2.1.2",
 ]
@@ -157,7 +157,7 @@ dependencies = [
 [[package]]
 name = "axeyum-fp"
 version = "0.1.0"
-source = "git+https://github.com/mjbommar/axeyum.git?rev=11b895a35dc583ea593f1dd6cd2412b8ef9387fa#11b895a35dc583ea593f1dd6cd2412b8ef9387fa"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=43f1e0f9038de389d7b1a88b9d3b507ed3c6255d#43f1e0f9038de389d7b1a88b9d3b507ed3c6255d"
 dependencies = [
  "axeyum-arith",
  "axeyum-ir",
@@ -166,7 +166,7 @@ dependencies = [
 [[package]]
 name = "axeyum-ir"
 version = "0.1.0"
-source = "git+https://github.com/mjbommar/axeyum.git?rev=11b895a35dc583ea593f1dd6cd2412b8ef9387fa#11b895a35dc583ea593f1dd6cd2412b8ef9387fa"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=43f1e0f9038de389d7b1a88b9d3b507ed3c6255d#43f1e0f9038de389d7b1a88b9d3b507ed3c6255d"
 dependencies = [
  "axeyum-arith",
  "rustc-hash 2.1.2",
@@ -175,7 +175,7 @@ dependencies = [
 [[package]]
 name = "axeyum-lean-kernel"
 version = "0.1.0"
-source = "git+https://github.com/mjbommar/axeyum.git?rev=11b895a35dc583ea593f1dd6cd2412b8ef9387fa#11b895a35dc583ea593f1dd6cd2412b8ef9387fa"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=43f1e0f9038de389d7b1a88b9d3b507ed3c6255d#43f1e0f9038de389d7b1a88b9d3b507ed3c6255d"
 dependencies = [
  "num-bigint",
 ]
@@ -183,7 +183,7 @@ dependencies = [
 [[package]]
 name = "axeyum-query"
 version = "0.1.0"
-source = "git+https://github.com/mjbommar/axeyum.git?rev=11b895a35dc583ea593f1dd6cd2412b8ef9387fa#11b895a35dc583ea593f1dd6cd2412b8ef9387fa"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=43f1e0f9038de389d7b1a88b9d3b507ed3c6255d#43f1e0f9038de389d7b1a88b9d3b507ed3c6255d"
 dependencies = [
  "axeyum-ir",
 ]
@@ -191,7 +191,7 @@ dependencies = [
 [[package]]
 name = "axeyum-rewrite"
 version = "0.1.0"
-source = "git+https://github.com/mjbommar/axeyum.git?rev=11b895a35dc583ea593f1dd6cd2412b8ef9387fa#11b895a35dc583ea593f1dd6cd2412b8ef9387fa"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=43f1e0f9038de389d7b1a88b9d3b507ed3c6255d#43f1e0f9038de389d7b1a88b9d3b507ed3c6255d"
 dependencies = [
  "axeyum-ir",
 ]
@@ -199,7 +199,7 @@ dependencies = [
 [[package]]
 name = "axeyum-smtlib"
 version = "0.1.0"
-source = "git+https://github.com/mjbommar/axeyum.git?rev=11b895a35dc583ea593f1dd6cd2412b8ef9387fa#11b895a35dc583ea593f1dd6cd2412b8ef9387fa"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=43f1e0f9038de389d7b1a88b9d3b507ed3c6255d#43f1e0f9038de389d7b1a88b9d3b507ed3c6255d"
 dependencies = [
  "axeyum-fp",
  "axeyum-ir",
@@ -209,7 +209,7 @@ dependencies = [
 [[package]]
 name = "axeyum-solver"
 version = "0.1.0"
-source = "git+https://github.com/mjbommar/axeyum.git?rev=11b895a35dc583ea593f1dd6cd2412b8ef9387fa#11b895a35dc583ea593f1dd6cd2412b8ef9387fa"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=43f1e0f9038de389d7b1a88b9d3b507ed3c6255d#43f1e0f9038de389d7b1a88b9d3b507ed3c6255d"
 dependencies = [
  "axeyum-aig",
  "axeyum-arith",
@@ -230,7 +230,7 @@ dependencies = [
 [[package]]
 name = "axeyum-strings"
 version = "0.1.0"
-source = "git+https://github.com/mjbommar/axeyum.git?rev=11b895a35dc583ea593f1dd6cd2412b8ef9387fa#11b895a35dc583ea593f1dd6cd2412b8ef9387fa"
+source = "git+https://github.com/mjbommar/axeyum.git?rev=43f1e0f9038de389d7b1a88b9d3b507ed3c6255d#43f1e0f9038de389d7b1a88b9d3b507ed3c6255d"
 dependencies = [
  "axeyum-ir",
 ]
@@ -730,7 +730,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "778e2ac28f6c47af28e4907f13ffd1e1ddbd400980a9abd7c8df189bf578a5ad"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1531,7 +1531,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1762,7 +1762,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2127,7 +2127,7 @@ version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0978bf7171b3d90bac376700cb56d606feb40f251a475a5d6634613564460b22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
