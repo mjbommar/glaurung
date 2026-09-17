@@ -200,7 +200,7 @@ dependencies = [
 [[package]]
 name = "cindergraph"
 version = "0.1.0"
-source = "git+https://github.com/mjbommar/cindergraph.git?rev=ed5e55eb8fb7855b7675ac9ae3f7afbb4941a825#ed5e55eb8fb7855b7675ac9ae3f7afbb4941a825"
+source = "git+https://github.com/mjbommar/cindergraph.git?rev=8bd20512158d19d4cf632caba4bbed629271a3e5#8bd20512158d19d4cf632caba4bbed629271a3e5"
 dependencies = [
  "regex",
 ]
