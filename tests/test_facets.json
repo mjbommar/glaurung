@@ -1,7 +1,7 @@
 {
  "note": "Test files classified by what they NEED. Applied as pytest markers by python/tests/conftest.py. Regenerate with tools/gen_test_facets.py; do not hand-edit.",
  "counts": {
-  "core": 331,
+  "core": 332,
   "lfs": 114,
   "fixtures": 38,
   "toolchain": 38,
@@ -56,6 +56,9 @@
    "core"
   ],
   "test_axeyum_lineage_gate.py": [
+   "core"
+  ],
+  "test_axeyum_shadow_capture.py": [
    "core"
   ],
   "test_axeyum_shard_corpus.py": [

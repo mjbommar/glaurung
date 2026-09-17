@@ -174,6 +174,57 @@ class SplitVerdictsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("z3 sat but axeyum unsat", result.stderr)
 
+    def test_a_pinned_decided_row_measured_undecided_is_a_regression(self) -> None:
+        self.make_capture("drv-60s-abc", [(GOOD_SAT, "unknown", "sat"), (GOOD_UNSAT, "unsat", "unknown")])
+        sat_hash = hashlib.sha256(GOOD_SAT).hexdigest()
+        unsat_hash = hashlib.sha256(GOOD_UNSAT).hexdigest()
+        results = self.root / "axeyum.tsv"
+        results.write_text(f"drv-60s-abc\t{sat_hash}\tsat\t12\ndrv-60s-abc\t{unsat_hash}\tunsat\t3\n")
+        self.assertEqual(self.run_tool("--axeyum-results", str(results)).returncode, 0)
+        # The floor is the committed decided column; losing one is a failure.
+        results.write_text(
+            f"drv-60s-abc\t{sat_hash}\tsat\t12\ndrv-60s-abc\t{unsat_hash}\tunknown:WallTimeout\t30000\n"
+        )
+        result = self.run_tool("--axeyum-results", str(results))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(f"drv-60s-abc/{unsat_hash}: REGRESSION pinned axeyum unsat (z3 unsat), now unknown:WallTimeout", result.stderr)
+        # The regressed verdict is recorded, so the file names what was measured.
+        rows = {row[1]: row[3] for row in self.rows(self.splits / "verdicts.tsv")}
+        self.assertEqual(rows[unsat_hash], "unknown:WallTimeout")
+
+    def test_a_new_undecided_row_is_reported_not_failed_and_a_decided_one_is_promoted(self) -> None:
+        self.make_capture("drv-60s-abc", [(GOOD_SAT, "unknown", "sat")])
+        sat_hash = hashlib.sha256(GOOD_SAT).hexdigest()
+        results = self.root / "axeyum.tsv"
+        results.write_text(f"drv-60s-abc\t{sat_hash}\tsat\t12\n")
+        self.assertEqual(self.run_tool("--axeyum-results", str(results)).returncode, 0)
+        # A second capture lands a script with no committed row.
+        self.make_capture("drv-60s-def", [(GOOD_UNSAT, "unsat", "unknown")])
+        unsat_hash = hashlib.sha256(GOOD_UNSAT).hexdigest()
+        results.write_text(
+            f"drv-60s-abc\t{sat_hash}\tsat\t12\ndrv-60s-def\t{unsat_hash}\tunknown:WallTimeout\t30000\n"
+        )
+        result = self.run_tool("--axeyum-results", str(results))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"NEW: drv-60s-def/{unsat_hash}\tz3 unsat\taxeyum unknown:WallTimeout", result.stdout)
+        self.assertIn("new rows: 1 (1 axeyum undecided: capability gaps, not failures)", result.stdout)
+        # Not in the floor: a later run that still cannot decide it is not a regression...
+        result = self.run_tool("--axeyum-results", str(results))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("new rows: 0", result.stdout)
+        # ...and one that decides it promotes it into the floor.
+        results.write_text(f"drv-60s-abc\t{sat_hash}\tsat\t12\ndrv-60s-def\t{unsat_hash}\tunsat\t40\n")
+        result = self.run_tool("--axeyum-results", str(results))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"PROMOTED: drv-60s-def/{unsat_hash}\tz3 unsat\taxeyum unsat (was unknown:WallTimeout)", result.stdout)
+        rows = {row[1]: row[3] for row in self.rows(self.splits / "verdicts.tsv")}
+        self.assertEqual(rows[unsat_hash], "unsat")
+        # Now it IS in the floor.
+        results.write_text(f"drv-60s-abc\t{sat_hash}\tsat\t12\ndrv-60s-def\t{unsat_hash}\tunknown:Other\t40\n")
+        result = self.run_tool("--axeyum-results", str(results))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("REGRESSION", result.stderr)
+
     def test_check_mode_detects_drift_and_writes_nothing(self) -> None:
         self.make_capture("drv-60s-abc", [(GOOD_SAT, "unknown", "sat")])
         self.assertEqual(self.run_tool().returncode, 0)

@@ -130,8 +130,19 @@ parses every such script with the linked libz3 first: a script z3 rejects is
 published under `malformed/` and indexed in `malformed.tsv` with z3's error
 text, never in `shadow-splits.tsv`
 ([`solver-032`](../decisions/solver-032-axeyum-pin-bump-and-shadow-corpus-prune.md)).
-This is how `tests/corpora/axeyum-qfbv/` was built; the procedure is in
-[`tests/corpora/axeyum-qfbv/README.md`](../../tests/corpora/axeyum-qfbv/README.md).
+Since 2026-09-17 the same directory also gets `nondecisions.tsv` (the
+nondecided backend's stable reason class per split: `wall-timeout`,
+`resource-limit`, `other`, `error` -- never the error text) and, when both
+backends decide *differently*, the bytes under `disagreements/` with a
+`disagreements.tsv` index. This is how `tests/corpora/axeyum-qfbv/` was
+built; the procedure is in
+[`tests/corpora/axeyum-qfbv/README.md`](../../tests/corpora/axeyum-qfbv/README.md),
+and since [`solver-034`](../decisions/solver-034-continuous-shadow-split-capture-tier.md)
+it is a tier -- `scripts/shadow-capture.sh`, weekly in
+`.github/workflows/shadow-capture-weekly.yml` -- rather than a command in a
+README: a new split z3 decides and Axeyum does not is a **finding reported by
+name**; a both-decided disagreement, a malformed export, or a pinned script
+Axeyum stops deciding is a **failure**.
 
 Verified with `rg -n 'GLAURUNG_SHADOW_DIFF|GLAURUNG_FAIR_SHADOW|GLAURUNG_DUMP_QUERIES|GLAURUNG_DUMP_SHADOW_SPLITS|DEFAULT_SOLVER_BUDGET|DEFAULT_CHECK_TIMEOUT_MS' src/symbolic/solver/mod.rs`.
 
@@ -164,7 +175,7 @@ files beside it, and they predate the current axeyum pin.
   [`solver-028`](../decisions/solver-028-finding-confidence-partition.md)).
 - **The engine that produces the queries:**
   [`execution-engine.md`](execution-engine.md).
-- **All 32 solver decisions with their rejected alternatives:**
+- **All 34 solver decisions with their rejected alternatives:**
   [`decisions/`](../decisions/README.md).
 
 ## Examples and gates

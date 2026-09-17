@@ -739,7 +739,20 @@ fn maybe_dump_shadow_split(
     // not a solver split, and goes to `malformed/` + `malformed.tsv` so no
     // sweep over `shadow-splits.tsv` can count it as a solver miss again.
     match publish_shadow_split_checked(dir, &hex, &script, z3_class, axeyum_class) {
-        Ok(ShadowSplitRoute::Indexed) => {}
+        Ok(ShadowSplitRoute::Indexed) => {
+            // The nondecided backend's stable reason class, beside the index
+            // and never in identity (solver-015): the capture tier's report
+            // histograms it, and `wall-timeout` versus `resource-limit`
+            // versus `error` is the attribution the next fix needs.
+            let (backend, reason) = if matches!(z3, SolveResult::Sat(_) | SolveResult::Unsat) {
+                ("axeyum", shadow_nondecision_reason(axeyum))
+            } else {
+                ("z3", shadow_nondecision_reason(z3))
+            };
+            if let Err(error) = append_shadow_nondecision_reason(dir, &hex, backend, reason) {
+                eprintln!("[glaurung-shadow-split] failed to record the reason for {hex}: {error}");
+            }
+        }
         Ok(ShadowSplitRoute::Malformed(error)) => {
             eprintln!("[glaurung-shadow-split] z3 rejects {hex}: {error}");
         }
@@ -749,6 +762,114 @@ fn maybe_dump_shadow_split(
         }
     }
     seen.insert(identity);
+}
+
+/// The stable nondecision class of a result that did not decide:
+/// `wall-timeout` / `resource-limit` / `other` for `Unknown`, `error` for
+/// `Error` (its text is deliberately not recorded: solver-015), and
+/// `no-solver` / `decided` for the remaining variants so a caller never has
+/// to special-case them.
+fn shadow_nondecision_reason(result: &SolveResult) -> &'static str {
+    match result {
+        SolveResult::Unknown(reason) => reason.as_str(),
+        SolveResult::Error(_) => "error",
+        SolveResult::NoSolver => "no-solver",
+        SolveResult::Sat(_) | SolveResult::Unsat => "decided",
+    }
+}
+
+/// Publish a both-decided disagreement -- z3 `sat` against Axeyum `unsat` or
+/// the reverse -- under `<dir>/disagreements/` and index it in
+/// `<dir>/disagreements.tsv` (`hash`, z3 class, axeyum class). A disagreement
+/// is a soundness finding on one side or the other, and until 2026-09-17 the
+/// only trace of one was a counter in the process summary: the bytes that
+/// reproduce it were never kept. Same gate as the split capture
+/// (`GLAURUNG_DUMP_SHADOW_SPLITS`), same per-process de-duplication, no cost
+/// when the backends agree.
+#[cfg(all(feature = "solver-z3", feature = "solver-axeyum"))]
+fn maybe_dump_shadow_disagreement(
+    pool: &ExprPool,
+    asserts: &[Assert],
+    z3: &SolveResult,
+    axeyum: &SolveResult,
+) {
+    use sha2::{Digest, Sha256};
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+
+    static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+    static SEEN: OnceLock<Mutex<HashSet<[u8; 32]>>> = OnceLock::new();
+
+    if !is_shadow_disagreement(z3, axeyum) {
+        return;
+    }
+    let dir =
+        DIR.get_or_init(|| std::env::var_os("GLAURUNG_DUMP_SHADOW_SPLITS").map(PathBuf::from));
+    let Some(dir) = dir.as_ref() else { return };
+
+    let (script, _names) = pipe::build_script(pool, asserts);
+    let hash: [u8; 32] = Sha256::digest(script.as_bytes()).into();
+    let seen = SEEN.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut seen = seen.lock().unwrap();
+    if seen.contains(&hash) {
+        return;
+    }
+    let hex: String = hash.iter().map(|byte| format!("{byte:02x}")).collect();
+    let z3_class = shadow_result_class(z3);
+    let axeyum_class = shadow_result_class(axeyum);
+    eprintln!("[glaurung-shadow-split] DISAGREEMENT {hex}: z3 {z3_class}, axeyum {axeyum_class}");
+    if let Err(error) =
+        publish_shadow_disagreement(dir, &hex, script.as_bytes(), z3_class, axeyum_class)
+    {
+        eprintln!("[glaurung-shadow-split] failed to publish disagreement {hex}: {error}");
+        return;
+    }
+    seen.insert(hash);
+}
+
+/// Both backends decided, and differently.
+fn is_shadow_disagreement(z3: &SolveResult, axeyum: &SolveResult) -> bool {
+    matches!(
+        (z3, axeyum),
+        (SolveResult::Sat(_), SolveResult::Unsat) | (SolveResult::Unsat, SolveResult::Sat(_))
+    )
+}
+
+#[cfg(feature = "solver-z3")]
+fn publish_shadow_disagreement(
+    dir: &std::path::Path,
+    hex: &str,
+    script: &[u8],
+    z3_class: &str,
+    axeyum_class: &str,
+) -> std::io::Result<()> {
+    use std::io::Write;
+
+    publish_query_file(&dir.join("disagreements"), hex, script)?;
+    let mut index = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("disagreements.tsv"))?;
+    writeln!(index, "{hex}\t{z3_class}\t{axeyum_class}")
+}
+
+/// `<dir>/nondecisions.tsv`: `hash`, the backend that did not decide, and its
+/// stable reason class -- one row per indexed split.
+#[cfg(feature = "solver-z3")]
+fn append_shadow_nondecision_reason(
+    dir: &std::path::Path,
+    hex: &str,
+    backend: &str,
+    reason: &str,
+) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let mut index = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("nondecisions.tsv"))?;
+    writeln!(index, "{hex}\t{backend}\t{reason}")
 }
 
 /// Where a shadow split went: `shadow-splits.tsv`, or `malformed.tsv` with
@@ -1201,6 +1322,7 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
             SHADOW_Z3_NANOS.fetch_add(z3_cold_nanos, Ordering::Relaxed);
             SHADOW_AX_NANOS.fetch_add(axeyum_warm_nanos, Ordering::Relaxed);
             maybe_dump_shadow_split(pool, asserts, &rz, &raw);
+            maybe_dump_shadow_disagreement(pool, asserts, &rz, &raw);
             LAST_SOLVE_TIMING.with(|timing| {
                 timing.set(SolveTiming {
                     total_nanos: total_started.elapsed().as_nanos() as u64,
@@ -1390,6 +1512,7 @@ pub fn solve(pool: &ExprPool, asserts: &[Assert]) -> SolveResult {
                 SHADOW_UNK_SPLIT.fetch_add(1, Ordering::Relaxed);
             }
             maybe_dump_shadow_split(pool, asserts, &rz, &ra);
+            maybe_dump_shadow_disagreement(pool, asserts, &rz, &ra);
             LAST_SOLVE_TIMING.with(|timing| {
                 timing.set(SolveTiming {
                     total_nanos: total_started.elapsed().as_nanos() as u64,
@@ -2078,10 +2201,83 @@ mod neutral_fair_shadow_tests {
 mod capture_tests {
     use super::z3_parse_check::z3_parse_error;
     use super::{
-        append_capture_index, publish_query_file, publish_shadow_split_bytes,
-        publish_shadow_split_checked, shadow_result_class, should_capture_shadow_split,
-        ShadowSplitRoute, SolveResult, SolveUnknownReason,
+        append_capture_index, append_shadow_nondecision_reason, is_shadow_disagreement,
+        publish_query_file, publish_shadow_disagreement, publish_shadow_split_bytes,
+        publish_shadow_split_checked, shadow_nondecision_reason, shadow_result_class,
+        should_capture_shadow_split, ShadowSplitRoute, SolveResult, SolveUnknownReason,
     };
+
+    #[test]
+    fn a_disagreement_is_both_decided_and_different() {
+        let sat = SolveResult::Sat(Default::default());
+        let unsat = SolveResult::Unsat;
+        let unknown = SolveResult::Unknown(SolveUnknownReason::WallTimeout);
+        let error = SolveResult::Error("x".into());
+        assert!(is_shadow_disagreement(&sat, &unsat));
+        assert!(is_shadow_disagreement(&unsat, &sat));
+        assert!(!is_shadow_disagreement(&sat, &sat));
+        assert!(!is_shadow_disagreement(&unsat, &unsat));
+        assert!(!is_shadow_disagreement(&sat, &unknown));
+        assert!(!is_shadow_disagreement(&error, &unsat));
+        // A split is never a disagreement and a disagreement is never a split.
+        assert!(!should_capture_shadow_split(&sat, &unsat));
+    }
+
+    #[test]
+    fn nondecision_reason_is_the_stable_class_never_the_error_text() {
+        assert_eq!(
+            shadow_nondecision_reason(&SolveResult::Unknown(SolveUnknownReason::WallTimeout)),
+            "wall-timeout"
+        );
+        assert_eq!(
+            shadow_nondecision_reason(&SolveResult::Unknown(SolveUnknownReason::ResourceLimit)),
+            "resource-limit"
+        );
+        assert_eq!(
+            shadow_nondecision_reason(&SolveResult::Error("/home/someone/secret.sys".into())),
+            "error"
+        );
+        assert_eq!(shadow_nondecision_reason(&SolveResult::Unsat), "decided");
+    }
+
+    #[test]
+    fn disagreement_publication_keeps_bytes_under_its_own_directory_and_index() {
+        let directory = tempfile::tempdir().unwrap();
+        let hash = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        let script = b"(set-logic QF_BV)\n(assert false)\n(check-sat)\n";
+
+        publish_shadow_disagreement(directory.path(), hash, script, "sat", "unsat").unwrap();
+
+        assert_eq!(
+            std::fs::read(
+                directory
+                    .path()
+                    .join("disagreements")
+                    .join(format!("{hash}.smt2"))
+            )
+            .unwrap(),
+            script
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("disagreements.tsv")).unwrap(),
+            format!("{hash}\tsat\tunsat\n")
+        );
+        // Never in the split index, and never at the capture root.
+        assert!(!directory.path().join("shadow-splits.tsv").exists());
+        assert!(!directory.path().join(format!("{hash}.smt2")).exists());
+    }
+
+    #[test]
+    fn nondecision_reasons_append_beside_the_split_index() {
+        let directory = tempfile::tempdir().unwrap();
+        let hash = "1111111111111111111111111111111111111111111111111111111111111111";
+        append_shadow_nondecision_reason(directory.path(), hash, "axeyum", "wall-timeout").unwrap();
+        append_shadow_nondecision_reason(directory.path(), hash, "z3", "other").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("nondecisions.tsv")).unwrap(),
+            format!("{hash}\taxeyum\twall-timeout\n{hash}\tz3\tother\n")
+        );
+    }
 
     #[test]
     fn query_publication_is_idempotent_and_collision_safe() {

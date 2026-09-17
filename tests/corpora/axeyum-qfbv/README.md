@@ -112,8 +112,8 @@ Gates: `uv run pytest python/tests/test_axeyum_build_corpus.py python/tests/test
 
 Captures only the occurrences where **exactly one** backend decided — the
 population that a verdict-agreement count is blind to. Requires both native
-backends and shadow-diff mode; `maybe_dump_shadow_split` is at
-`src/symbolic/solver/mod.rs:702`.
+backends and a shadow mode (`GLAURUNG_SHADOW_DIFF=1` or `GLAURUNG_FAIR_SHADOW=1`);
+`maybe_dump_shadow_split` is in `src/symbolic/solver/mod.rs`.
 
 ```sh
 cargo build --release --example ioctlance --features solver-z3,solver-axeyum
@@ -141,10 +141,33 @@ cargo test --features solver-axeyum-text --test axeyum_shadow_split_verdicts -- 
 ```
 
 The Rust test replays every row of `verdicts.tsv` through the pinned Axeyum and
-fails on a nondecision or a verdict that differs from z3's. With
-`GLAURUNG_SHADOW_SPLIT_AXEYUM_OUT=<file>` it writes the per-script Axeyum
-verdicts, which `split_verdicts.py --axeyum-results <file> --axeyum-note "..."`
-folds into the committed index.
+fails on a decided verdict that differs from z3's, and on any row whose
+committed Axeyum column is decided that the pinned solver no longer decides
+(the **regression floor**). A row whose committed column is undecided is an
+open capability gap: reported by name, never a failure, and promoted into the
+floor once Axeyum decides it. With `GLAURUNG_SHADOW_SPLIT_AXEYUM_OUT=<file>` it
+writes the per-script Axeyum verdicts, which
+`split_verdicts.py --axeyum-results <file> --axeyum-note "..."` folds into the
+committed index, printing `NEW:` and `PROMOTED:` rows by name.
+
+### The tier: `scripts/shadow-capture.sh` (solver-034)
+
+Everything above, in order, as one command -- build, capture over the four
+July drivers (`--driver TOKEN=PATH` to choose others, `--ceiling` for the
+per-function budget), sidecars, `split_verdicts.py`, the Rust replay, and the
+fold -- with one exit status: a new split z3 decides and Axeyum does not is a
+finding printed by name; a both-decided disagreement (bytes under
+`<capture>/disagreements/`), a malformed export (`<capture>/malformed.tsv`),
+a pinned script Axeyum stops deciding, or a driver that issued no checks
+fails. `.github/workflows/shadow-capture-weekly.yml` runs it every Tuesday
+and uploads the new captures and `verdicts.tsv` as an artifact; it commits
+nothing. Each capture also carries `nondecisions.tsv` (`sha256`, the backend
+that did not decide, its stable reason class), which the tier histograms.
+
+```sh
+scripts/shadow-capture.sh --ceiling 60 --out target/shadow-capture
+# then, on green: git add tests/corpora/axeyum-qfbv/shadow-splits/{<new captures>,verdicts.tsv}
+```
 
 ## 4. Ordered lineage/scope/model trace (`GLAURUNG_ORDERED_TRACE_DIR`)
 

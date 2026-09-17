@@ -20,7 +20,16 @@ happening again:
   the existing file, else ``unmeasured``;
 * the exit status depends on the finding: **1** if any malformed script is
   left under the live root, if any valid script has no z3 verdict
-  (``unknown``/``timeout``), or if a measured Axeyum verdict opposes z3's.
+  (``unknown``/``timeout``), if a measured Axeyum verdict opposes z3's, or if
+  a script whose committed Axeyum column was decided is measured undecided
+  (the **regression floor**, solver-034: the pinned solver may not lose a
+  script it once decided);
+* a script on disk with no committed row is a **new row** -- the capture tier
+  (``scripts/shadow-capture.sh``) found a fresh split -- and is reported by
+  name on stdout (``NEW: ...``) with z3's and Axeyum's verdicts.  A new row
+  Axeyum does not decide is a capability gap, which is a finding, not a
+  failure; a committed undecided row Axeyum now decides is reported as
+  ``PROMOTED`` and joins the floor.
 
 ``--prune-to DIR`` moves each malformed script out of its capture into
 ``DIR/<capture>/`` (with a ``shadow-splits.tsv`` of just those rows, so
@@ -309,14 +318,38 @@ def main() -> int:
                 problems.append(f"{key[0]}/{key[1]}: {VERDICTS} says z3 {committed[0]}, z3 now says {z3_now}")
     else:
         rows: dict[tuple[str, str], tuple[str, str]] = {}
-        for key, z3_class in fresh.items():
-            axeyum_class = measured.get(key) or (existing[key][1] if key in existing else "unmeasured")
+        new_rows: list[tuple[str, str]] = []
+        promoted: list[tuple[str, str]] = []
+        for key, z3_class in sorted(fresh.items()):
+            previous = existing.get(key)
+            measured_class = measured.get(key)
+            axeyum_class = measured_class or (previous[1] if previous else "unmeasured")
             rows[key] = (z3_class, axeyum_class)
+            if previous is None:
+                new_rows.append(key)
+            elif measured_class is not None and previous[1] in DECIDED and measured_class not in DECIDED:
+                problems.append(
+                    f"{key[0]}/{key[1]}: REGRESSION pinned axeyum {previous[1]} (z3 {z3_class}), "
+                    f"now {measured_class}"
+                )
+            elif measured_class in DECIDED and previous[1] not in DECIDED:
+                promoted.append(key)
         note = args.axeyum_note or (
             existing_note(verdicts_path) if not measured else "measured; no --axeyum-note given"
         )
         verdicts_path.write_text(render_verdicts(rows, z3_ident, args.timeout, note), encoding="utf-8")
         print(f"wrote {verdicts_path}: {len(rows)} rows")
+        for key in new_rows:
+            z3_class, axeyum_class = rows[key]
+            print(f"NEW: {key[0]}/{key[1]}\tz3 {z3_class}\taxeyum {axeyum_class}")
+        for key in promoted:
+            z3_class, axeyum_class = rows[key]
+            print(f"PROMOTED: {key[0]}/{key[1]}\tz3 {z3_class}\taxeyum {axeyum_class} (was {existing[key][1]})")
+        gaps = sum(1 for key in new_rows if rows[key][1] not in DECIDED)
+        print(
+            f"new rows: {len(new_rows)} ({gaps} axeyum undecided: capability gaps, not failures); "
+            f"promoted into the floor: {len(promoted)}"
+        )
         for key, (z3_class, axeyum_class) in rows.items():
             if axeyum_class in DECIDED and z3_class in DECIDED and axeyum_class != z3_class:
                 problems.append(f"{key[0]}/{key[1]}: z3 {z3_class} but axeyum {axeyum_class}")
