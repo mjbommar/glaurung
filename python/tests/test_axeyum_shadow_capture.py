@@ -122,31 +122,60 @@ class ShadowCaptureTierTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def capture(self, mode: str, *extra: str) -> subprocess.CompletedProcess[str]:
-        env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "GLAURUNG_SHADOW_DIFF": "1"}
+        env = {
+            **os.environ,
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "GLAURUNG_SHADOW_DIFF": "1",
+        }
         return subprocess.run(
             [
-                sys.executable, str(CAPTURE),
-                "--binary", str(self.binary),
-                "--root", str(self.root),
-                "--driver", str(self.driver),
-                "--ceiling", "60",
-                "--revision", "0123456789abcdef",
-                "--env", f"FAKE_MODE={mode}",
-                "--log-dir", str(self.top / "logs"),
-                "--report", str(self.top / "report.json"),
+                sys.executable,
+                str(CAPTURE),
+                "--binary",
+                str(self.binary),
+                "--root",
+                str(self.root),
+                "--driver",
+                str(self.driver),
+                "--ceiling",
+                "60",
+                "--revision",
+                "0123456789abcdef",
+                "--env",
+                f"FAKE_MODE={mode}",
+                "--log-dir",
+                str(self.top / "logs"),
+                "--report",
+                str(self.top / "report.json"),
                 *extra,
             ],
-            check=False, text=True, capture_output=True, env=env,
+            check=False,
+            text=True,
+            capture_output=True,
+            env=env,
         )
 
     def verdicts(self, *extra: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [sys.executable, str(VERDICTS), str(self.root), "--z3", str(self.z3), "--jobs", "2", *extra],
-            check=False, text=True, capture_output=True,
+            [
+                sys.executable,
+                str(VERDICTS),
+                str(self.root),
+                "--z3",
+                str(self.z3),
+                "--jobs",
+                "2",
+                *extra,
+            ],
+            check=False,
+            text=True,
+            capture_output=True,
             env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
         )
 
-    def test_a_split_z3_decides_and_axeyum_does_not_is_a_new_row_not_a_failure(self) -> None:
+    def test_a_split_z3_decides_and_axeyum_does_not_is_a_new_row_not_a_failure(
+        self,
+    ) -> None:
         result = self.capture("split")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         capture = self.root / "dptfdevgen-60s-0123456"
@@ -160,8 +189,13 @@ class ShadowCaptureTierTests(unittest.TestCase):
         meta = json.loads((capture / "capture-v1.json").read_text())
         self.assertEqual(meta["schema"], "glaurung-shadow-split-capture-v1")
         self.assertEqual(meta["producer"]["glaurung_revision"], "0123456789abcdef")
-        self.assertEqual(meta["producer"]["axeyum_revision"], "8df853252cdf49c9a27ba71c6ce62fdd1c485dfc")
-        self.assertEqual(meta["driver"]["sha256"], hashlib.sha256(b"MZ fake driver").hexdigest())
+        self.assertEqual(
+            meta["producer"]["axeyum_revision"],
+            "8df853252cdf49c9a27ba71c6ce62fdd1c485dfc",
+        )
+        self.assertEqual(
+            meta["driver"]["sha256"], hashlib.sha256(b"MZ fake driver").hexdigest()
+        )
         self.assertEqual(meta["policy"]["solver_seconds_per_function"], 60)
         self.assertEqual(meta["run"]["queries"], 10)
         self.assertEqual(meta["nondecision_reasons"], {"axeyum:wall-timeout": 1})
@@ -171,9 +205,16 @@ class ShadowCaptureTierTests(unittest.TestCase):
         # The gate then reports the new row by name and still exits 0.
         gate = self.verdicts()
         self.assertEqual(gate.returncode, 0, gate.stdout + gate.stderr)
-        self.assertIn(f"NEW: dptfdevgen-60s-0123456/{new_hash}\tz3 sat\taxeyum unmeasured", gate.stdout)
+        self.assertIn(
+            f"NEW: dptfdevgen-60s-0123456/{new_hash}\tz3 sat\taxeyum unmeasured",
+            gate.stdout,
+        )
         self.assertIn("new rows: 1 (1 axeyum undecided", gate.stdout)
-        rows = [l.split("\t") for l in (self.root / "verdicts.tsv").read_text().splitlines() if not l.startswith("#")]
+        rows = [
+            l.split("\t")
+            for l in (self.root / "verdicts.tsv").read_text().splitlines()
+            if not l.startswith("#")
+        ]
         self.assertEqual(len(rows), 2)
 
     def test_a_both_decided_disagreement_fails_and_names_the_bytes(self) -> None:
@@ -182,7 +223,11 @@ class ShadowCaptureTierTests(unittest.TestCase):
         self.assertIn("DISAGREEMENT", result.stderr)
         self.assertIn("z3 unsat, axeyum sat", result.stderr)
         bad = hashlib.sha256(GOOD_UNSAT).hexdigest()
-        self.assertTrue((self.root / "dptfdevgen-60s-0123456" / "disagreements" / f"{bad}.smt2").is_file())
+        self.assertTrue(
+            (
+                self.root / "dptfdevgen-60s-0123456" / "disagreements" / f"{bad}.smt2"
+            ).is_file()
+        )
 
     def test_a_malformed_export_fails_as_the_exporters_defect(self) -> None:
         result = self.capture("malformed")
@@ -191,7 +236,9 @@ class ShadowCaptureTierTests(unittest.TestCase):
         self.assertIn("invalid extract application", result.stderr)
         self.assertIn("solver-016", result.stderr)
 
-    def test_a_run_without_the_evidence_line_fails_whatever_its_exit_status(self) -> None:
+    def test_a_run_without_the_evidence_line_fails_whatever_its_exit_status(
+        self,
+    ) -> None:
         result = self.capture("silent")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("not evidence", result.stderr)
