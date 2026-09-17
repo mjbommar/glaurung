@@ -734,13 +734,148 @@ fn maybe_dump_shadow_split(
         return;
     }
     let hex: String = hash.iter().map(|byte| format!("{byte:02x}")).collect();
-    if let Err(error) =
-        publish_shadow_split_bytes(dir, &hex, script.as_bytes(), z3_class, axeyum_class)
-    {
-        eprintln!("[glaurung-shadow-split] failed to publish {hex}: {error}");
-        return;
+    // The z3-parses-it check (solver-032). The linked libz3 parses the exact
+    // bytes about to be published; a script it rejects is an exporter defect,
+    // not a solver split, and goes to `malformed/` + `malformed.tsv` so no
+    // sweep over `shadow-splits.tsv` can count it as a solver miss again.
+    match publish_shadow_split_checked(dir, &hex, &script, z3_class, axeyum_class) {
+        Ok(ShadowSplitRoute::Indexed) => {}
+        Ok(ShadowSplitRoute::Malformed(error)) => {
+            eprintln!("[glaurung-shadow-split] z3 rejects {hex}: {error}");
+        }
+        Err(error) => {
+            eprintln!("[glaurung-shadow-split] failed to publish {hex}: {error}");
+            return;
+        }
     }
     seen.insert(identity);
+}
+
+/// Where a shadow split went: `shadow-splits.tsv`, or `malformed.tsv` with
+/// z3's parse error.
+#[cfg(feature = "solver-z3")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ShadowSplitRoute {
+    Indexed,
+    Malformed(String),
+}
+
+/// Publish one split after the linked libz3 has parsed the exact bytes: a
+/// script z3 accepts goes to `shadow-splits.tsv`; one it rejects goes to
+/// `malformed/` + `malformed.tsv` and never to the split index.
+#[cfg(feature = "solver-z3")]
+fn publish_shadow_split_checked(
+    dir: &std::path::Path,
+    hex: &str,
+    script: &str,
+    z3_class: &str,
+    axeyum_class: &str,
+) -> std::io::Result<ShadowSplitRoute> {
+    match z3_parse_check::z3_parse_error(script) {
+        Ok(()) => {
+            publish_shadow_split_bytes(dir, hex, script.as_bytes(), z3_class, axeyum_class)?;
+            Ok(ShadowSplitRoute::Indexed)
+        }
+        Err(error) => {
+            publish_malformed_shadow_split(
+                dir,
+                hex,
+                script.as_bytes(),
+                z3_class,
+                axeyum_class,
+                &error,
+            )?;
+            Ok(ShadowSplitRoute::Malformed(error))
+        }
+    }
+}
+
+/// Ask the linked libz3 whether it parses a script, without solving it.
+///
+/// The `z3` crate's `Solver::from_string` swallows parse errors (it installs a
+/// null error handler and never reads the error code), and it hides the raw
+/// context, so this talks to `z3-sys` directly. `Z3_solver_from_string`
+/// ignores `check-sat`/`get-value`, so nothing here costs solver time.
+#[cfg(feature = "solver-z3")]
+mod z3_parse_check {
+    use std::ffi::{CStr, CString};
+
+    use z3_sys::{
+        ErrorCode, Z3_del_config, Z3_del_context, Z3_get_error_code, Z3_get_error_msg,
+        Z3_mk_config, Z3_mk_context, Z3_mk_solver, Z3_set_error_handler, Z3_solver_dec_ref,
+        Z3_solver_from_string, Z3_solver_inc_ref,
+    };
+
+    /// `Ok(())` when z3 accepts every command in `script`; `Err(text)` with
+    /// z3's own message (`line N column M: invalid extract application`, ...)
+    /// when it does not.
+    pub(super) fn z3_parse_error(script: &str) -> Result<(), String> {
+        let Ok(source) = CString::new(script) else {
+            return Err("script contains a NUL byte".to_string());
+        };
+        // SAFETY: a private config/context/solver triple is created, used and
+        // destroyed inside this function; the error handler is cleared so a
+        // parse failure sets the context's error code instead of aborting;
+        // every pointer read is a valid, live libz3 object of the right kind;
+        // the message returned by `Z3_get_error_msg` is copied before the
+        // context that owns it is deleted.
+        unsafe {
+            let config = Z3_mk_config();
+            let context = Z3_mk_context(config);
+            Z3_del_config(config);
+            Z3_set_error_handler(context, None);
+            let solver = Z3_mk_solver(context);
+            Z3_solver_inc_ref(context, solver);
+            Z3_solver_from_string(context, solver, source.as_ptr());
+            let code = Z3_get_error_code(context);
+            let outcome = if code == ErrorCode::OK {
+                Ok(())
+            } else {
+                let message = Z3_get_error_msg(context, code);
+                Err(if message.is_null() {
+                    format!("z3 error {code:?}")
+                } else {
+                    CStr::from_ptr(message).to_string_lossy().into_owned()
+                })
+            };
+            Z3_solver_dec_ref(context, solver);
+            Z3_del_context(context);
+            outcome
+        }
+    }
+}
+
+/// Publish a z3-rejected split under `<dir>/malformed/` and index it in
+/// `<dir>/malformed.tsv` (`hash`, z3 class, axeyum class, z3's error), never
+/// in `shadow-splits.tsv`. The bytes stay content-addressed so the exporter
+/// defect is reproducible; the error text is recorded, not part of identity.
+#[cfg(feature = "solver-z3")]
+fn publish_malformed_shadow_split(
+    dir: &std::path::Path,
+    hex: &str,
+    script: &[u8],
+    z3_class: &str,
+    axeyum_class: &str,
+    error: &str,
+) -> std::io::Result<()> {
+    use std::io::Write;
+
+    publish_query_file(&dir.join("malformed"), hex, script)?;
+    let one_line: String = error
+        .chars()
+        .map(|c| {
+            if c == '\t' || c == '\n' || c == '\r' {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    let mut index = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("malformed.tsv"))?;
+    writeln!(index, "{hex}\t{z3_class}\t{axeyum_class}\t{one_line}")
 }
 
 #[cfg(feature = "solver-z3")]
@@ -1856,9 +1991,11 @@ mod neutral_fair_shadow_tests {
 
 #[cfg(all(test, feature = "solver-z3"))]
 mod capture_tests {
+    use super::z3_parse_check::z3_parse_error;
     use super::{
-        append_capture_index, publish_query_file, publish_shadow_split_bytes, shadow_result_class,
-        should_capture_shadow_split, SolveResult, SolveUnknownReason,
+        append_capture_index, publish_query_file, publish_shadow_split_bytes,
+        publish_shadow_split_checked, shadow_result_class, should_capture_shadow_split,
+        ShadowSplitRoute, SolveResult, SolveUnknownReason,
     };
 
     #[test]
@@ -1930,6 +2067,95 @@ mod capture_tests {
         assert_eq!(
             std::fs::read_to_string(directory.path().join("shadow-splits.tsv")).unwrap(),
             format!("{hash}\tsat\tunknown\n")
+        );
+    }
+
+    /// The pre-solver-016 export shape: a 1-bit value declared as an 8-bit low
+    /// half makes the concat 57 bits wide, so the next `extract 63 8` is out of
+    /// range. z3's own parser rejects it; the in-process adapter of the day did
+    /// not, which is how 735 of these reached the corpus.
+    const BAD_EXTRACT: &str = "(set-logic QF_BV)\n\
+        (declare-const sym0_64 (_ BitVec 64))\n\
+        (assert (= ((_ extract 63 8) (concat ((_ extract 63 8) sym0_64) \
+        (ite (= sym0_64 #x0000000000000000) #b1 #b0))) ((_ extract 63 8) sym0_64)))\n\
+        (check-sat)\n(get-value (sym0_64))\n";
+
+    #[test]
+    fn z3_parse_check_accepts_a_rendered_query_and_names_a_bad_extract() {
+        use crate::ir::types::{CmpOp, Width};
+        use crate::symbolic::expr::{Expr, ExprPool};
+
+        let mut pool = ExprPool::new();
+        let x = pool.fresh_symbol(Width::W64);
+        let one = pool.constant(Width::W64, 1);
+        let equals = pool.intern(Expr::Cmp {
+            op: CmpOp::Eq,
+            a: x,
+            b: one,
+            width: Width::W64,
+        });
+        let (script, _names) = super::pipe::build_script(&pool, &[(equals, true)]);
+        assert!(
+            script.contains("(get-value"),
+            "the rendered script ends in get-value: {script}"
+        );
+        assert_eq!(z3_parse_error(&script), Ok(()));
+
+        let error = z3_parse_error(BAD_EXTRACT).unwrap_err();
+        assert!(
+            error.contains("invalid extract application"),
+            "z3 must name the malformed extract, got {error:?}"
+        );
+    }
+
+    #[test]
+    fn malformed_shadow_split_goes_to_malformed_tsv_never_the_split_index() {
+        let directory = tempfile::tempdir().unwrap();
+        let bad = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        let good = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        let well_formed = "(set-logic QF_BV)\n(declare-const x (_ BitVec 8))\n\
+            (assert (= x #x01))\n(check-sat)\n(get-value (x))\n";
+
+        let route =
+            publish_shadow_split_checked(directory.path(), bad, BAD_EXTRACT, "sat", "error")
+                .unwrap();
+        let ShadowSplitRoute::Malformed(error) = route else {
+            panic!("a z3-rejected script must be routed as malformed, got {route:?}");
+        };
+        assert!(error.contains("invalid extract application"), "{error}");
+        assert_eq!(
+            publish_shadow_split_checked(directory.path(), good, well_formed, "unknown", "sat")
+                .unwrap(),
+            ShadowSplitRoute::Indexed
+        );
+
+        // The malformed bytes are kept, content-addressed, under malformed/.
+        assert_eq!(
+            std::fs::read_to_string(
+                directory
+                    .path()
+                    .join("malformed")
+                    .join(format!("{bad}.smt2"))
+            )
+            .unwrap(),
+            BAD_EXTRACT
+        );
+        assert!(!directory.path().join(format!("{bad}.smt2")).exists());
+        // malformed.tsv carries the classes and z3's text; shadow-splits.tsv
+        // holds only the well-formed row.
+        let malformed = std::fs::read_to_string(directory.path().join("malformed.tsv")).unwrap();
+        assert!(
+            malformed.starts_with(&format!("{bad}\tsat\terror\t")),
+            "{malformed}"
+        );
+        assert!(
+            malformed.contains("invalid extract application"),
+            "{malformed}"
+        );
+        assert_eq!(malformed.lines().count(), 1);
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("shadow-splits.tsv")).unwrap(),
+            format!("{good}\tunknown\tsat\n")
         );
     }
 }

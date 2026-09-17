@@ -125,8 +125,12 @@ Unknown and error counts are tracked per backend on purpose: a backend that gets
 `<sha256>.smt2` and appends `<sha256>\t<verdict>` to `index.tsv`. Bytes are
 published collision-safely before the index observation, so a partially written
 capture is detectable. The sibling `GLAURUNG_DUMP_SHADOW_SPLITS=<dir>` captures
-only the occurrences where exactly one backend decided. This is how
-`tests/corpora/axeyum-qfbv/` was built; the procedure is in
+only the occurrences where exactly one backend decided, and (since 2026-09-16)
+parses every such script with the linked libz3 first: a script z3 rejects is
+published under `malformed/` and indexed in `malformed.tsv` with z3's error
+text, never in `shadow-splits.tsv`
+([`solver-032`](../decisions/solver-032-axeyum-pin-bump-and-shadow-corpus-prune.md)).
+This is how `tests/corpora/axeyum-qfbv/` was built; the procedure is in
 [`tests/corpora/axeyum-qfbv/README.md`](../../tests/corpora/axeyum-qfbv/README.md).
 
 Verified with `rg -n 'GLAURUNG_SHADOW_DIFF|GLAURUNG_FAIR_SHADOW|GLAURUNG_DUMP_QUERIES|GLAURUNG_DUMP_SHADOW_SPLITS|DEFAULT_SOLVER_BUDGET|DEFAULT_CHECK_TIMEOUT_MS' src/symbolic/solver/mod.rs`.

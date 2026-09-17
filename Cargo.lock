@@ -871,6 +871,7 @@ dependencies = [
  "windows-metadata",
  "xorf",
  "z3",
+ "z3-sys",
  "zstd",
 ]
 

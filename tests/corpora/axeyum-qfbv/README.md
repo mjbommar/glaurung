@@ -13,13 +13,16 @@ the live procedure is below.
 
 | Path | What it is |
 |---|---|
-| `shadow-splits/<driver>-<secs>-<rev>/` | Four shadow-split captures: exact `<sha256>.smt2` payloads for occurrences where exactly one of z3/axeyum decided, plus `shadow-splits.tsv` (sha256, z3 class, axeyum class), `summary-v1.json`, `capture-v1.json`, `capture-index-v1.json` and `manifest-v1.json`. Validated by `tools/axeyum/validate_shadow_splits.py`. |
+| `shadow-splits/<driver>-<secs>-<rev>/` | Four shadow-split captures: exact `<sha256>.smt2` payloads for occurrences where exactly one of z3/axeyum decided, plus `shadow-splits.tsv` (sha256, z3 class, axeyum class), `summary-v1.json`, `capture-v1.json`, `capture-index-v1.json` and `manifest-v1.json`. Validated by `tools/axeyum/validate_shadow_splits.py`. Since 2026-09-16 every script here is one z3 parses: 107 files, all decided. |
+| `shadow-splits/verdicts.tsv` | The regression set with known answers: one row per script under `shadow-splits/` (`capture`, `sha256`, z3 verdict, Axeyum verdict at the pinned rev). Written by `tools/axeyum/split_verdicts.py`; consumed by `tests/axeyum_shadow_split_verdicts.rs`. |
+| `malformed-exports-pre-solver-016/<capture>/` | The 735 scripts the pre-`solver-016` exporter rendered with a mis-sized `concat`, which z3 itself rejects. Kept as bug reproducers, never counted as solver results; see its [README](malformed-exports-pre-solver-016/README.md). |
 | `lineage-*.json` (13 files) | Committed `lineage-gate-v1.json` baselines and candidates, compared by `tools/axeyum/lineage_gate.py compare`. |
 | `manifest-representative-v1.json` | The manifest-v1 index for the representative pack built by `tools/axeyum/build_corpus.py`. |
 | `excluded-hashes.txt` | Query hashes held out of the representative selection. |
 
-`shadow-splits/**/*.smt2` are Git LFS objects (`.gitattributes:16`); a checkout
-without `lfs: true` sees pointer files. The TSV and JSON indexes are ordinary
+`shadow-splits/**/*.smt2` and `malformed-exports-pre-solver-016/**/*.smt2` are
+Git LFS objects (`.gitattributes`); a checkout without `lfs: true` sees pointer
+files. The TSV and JSON indexes are ordinary
 reviewable Git text.
 
 ## What the directory names encode
@@ -30,9 +33,9 @@ the same driver comparable:
 
 | Directory | Driver | `IOCTLANCE_SOLVE_SECS` | Glaurung revision |
 |---|---|---|---|
-| `tcpip-60s-a6a5cc0` | `tcpip.sys` | 60 | `a6a5cc02` "capture exact shadow unknown splits" |
+| `tcpip-60s-a6a5cc0` | `tcpip.sys` | 60 | `a6a5cc02` "capture exact shadow unknown splits" — 733 of its 784 scripts were malformed exports and now live under `malformed-exports-pre-solver-016/` |
 | `tcpip-60s-d60ed0f` | `tcpip.sys` | 60 | `d60ed0f5` "enforce declared concat widths" |
-| `dxgkrnl-60s-a6a5cc0` | `dxgkrnl.sys` | 60 | `a6a5cc02` |
+| `dxgkrnl-60s-a6a5cc0` | `dxgkrnl.sys` | 60 | `a6a5cc02` — 2 of its 4 scripts likewise moved |
 | `dxgkrnl-60s-d60ed0f` | `dxgkrnl.sys` | 60 | `d60ed0f5` |
 
 ---
@@ -124,6 +127,25 @@ python3 tools/axeyum/validate_shadow_splits.py <that directory>
 Name the directory `<driver>-<solve-seconds>-<short-rev>` so it stays comparable,
 and add the `.smt2` files under the existing LFS filter.
 
+In a `solver-z3` build the capture path parses every published script with the
+linked z3 before indexing it: a script z3 rejects is appended to `malformed.tsv`
+(`sha256`, error text) in the same directory and **never** to
+`shadow-splits.tsv`. That is the check `solver-016`'s 735 malformed exports
+would have failed. Then refresh the regression index and let its exit status
+say whether the capture is clean:
+
+```sh
+python3 tools/axeyum/split_verdicts.py tests/corpora/axeyum-qfbv/shadow-splits \
+  --z3 z3 --timeout 10                     # exit 1 on any z3-rejected or undecided script
+cargo test --features solver-axeyum-text --test axeyum_shadow_split_verdicts -- --nocapture
+```
+
+The Rust test replays every row of `verdicts.tsv` through the pinned Axeyum and
+fails on a nondecision or a verdict that differs from z3's. With
+`GLAURUNG_SHADOW_SPLIT_AXEYUM_OUT=<file>` it writes the per-script Axeyum
+verdicts, which `split_verdicts.py --axeyum-results <file> --axeyum-note "..."`
+folds into the committed index.
+
 ## 4. Ordered lineage/scope/model trace (`GLAURUNG_ORDERED_TRACE_DIR`)
 
 The deduplicated corpus above destroys path, scope, occurrence and model-choice
@@ -186,6 +208,6 @@ threshold after seeing a run — **a faster nondecision is not a result.**
 |---|---|
 | representative / full pack | `tools/axeyum/build_corpus.py`, then axeyum's own manifest generator hashes the bytes it will benchmark |
 | shards | `tools/axeyum/shard_corpus.py` + `shard-set-v1.json` digests |
-| shadow splits | `tools/axeyum/validate_shadow_splits.py` |
+| shadow splits | `tools/axeyum/validate_shadow_splits.py` per capture; `tools/axeyum/split_verdicts.py --check` (z3 parses and decides every script, `verdicts.tsv` is current); `cargo test --features solver-axeyum-text --test axeyum_shadow_split_verdicts` (the pinned Axeyum decides every row like z3) |
 | ordered trace | `tools/axeyum/validate_ordered_trace.py` (also run by `cargo test --features symbolic`) |
 | lineage packs | `tools/axeyum/lineage_gate.py compare` |
