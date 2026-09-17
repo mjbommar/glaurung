@@ -164,7 +164,7 @@ files beside it, and they predate the current axeyum pin.
   [`solver-028`](../decisions/solver-028-finding-confidence-partition.md)).
 - **The engine that produces the queries:**
   [`execution-engine.md`](execution-engine.md).
-- **All 31 solver decisions with their rejected alternatives:**
+- **All 32 solver decisions with their rejected alternatives:**
   [`decisions/`](../decisions/README.md).
 
 ## Examples and gates
