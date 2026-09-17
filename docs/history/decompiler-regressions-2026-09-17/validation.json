@@ -1,0 +1,154 @@
+{
+  "date": "2026-09-17",
+  "tested_source_commit": "e7fb91b3f0c33ed87ca9aa648a888303296a455c",
+  "baseline_commit": "8b02bd4bb36953edbf97408520f353e3e6a3c759",
+  "overall_validation_complete": false,
+  "whole_python": "running; terminal audit pending",
+  "rust": {
+    "commit": "e7fb91b3f0c33ed87ca9aa648a888303296a455c",
+    "terminal_exit_code": 0,
+    "command": [
+      "cargo",
+      "test",
+      "--features",
+      "python-ext",
+      "--",
+      "--test-threads=1"
+    ],
+    "completed_groups": 35,
+    "passed": 5113,
+    "failed": 0,
+    "ignored": 17,
+    "source_guard_receipt": "evidence/combined-full-rust-serial-result.json",
+    "parallel_run_limit": "Initial default-parallel run failed2discoverydeadline comparisons;focusedserialfinal/baselinepass andfocusedparallelbaselinepass. Parallel failurecause remainsunproven; no assertions weakened."
+  },
+  "performance": {
+    "commit": "e7fb91b3",
+    "terminal_exit_code": 1,
+    "untouched_baseline_exit_code": 1,
+    "baseline": {
+      "hello-rust-release": {
+        "instructions": 3384497847376,
+        "spread_percent": 5.7
+      },
+      "hello-go": {
+        "instructions": 667537961525,
+        "spread_percent": 20.7
+      },
+      "hello-rust-debug": {
+        "instructions": 2630368099085,
+        "spread_percent": 20.3
+      }
+    },
+    "optimized": {
+      "hello-rust-release": {
+        "instructions": 3234750496130,
+        "spread_percent": 8.1
+      },
+      "hello-go": {
+        "instructions": 700702084678,
+        "spread_percent": 9.2
+      },
+      "hello-rust-debug": {
+        "instructions": 2600351365091,
+        "spread_percent": 31.9
+      }
+    },
+    "prior_repair": {
+      "hello-rust-release": {
+        "instructions": 3290739090416,
+        "spread_percent": 12.7
+      },
+      "hello-go": {
+        "instructions": 965411945298,
+        "spread_percent": 10.3
+      },
+      "hello-rust-debug": {
+        "instructions": 2642271623011,
+        "spread_percent": 30.5
+      }
+    },
+    "deltas_from_untouched_percent": {
+      "hello-rust-release": -4.424507209011786,
+      "hello-go": 4.968125419749336,
+      "hello-rust-debug": -1.1411609654345178
+    },
+    "deltas_from_prior_repair_percent": {
+      "hello-rust-release": -1.7013987662851227,
+      "hello-go": -27.419368686005875,
+      "hello-rust-debug": -1.5865234124654348
+    },
+    "all_minima_within_5_percent_of_untouched": true,
+    "stored_baseline_gate_green": false,
+    "matched_inputs_and_release_native": "evidence/combined-performance-native-and-inputs.json",
+    "frozen_source_guard": "evidence/combined-perf-gate-result.json",
+    "scope": "Complete three-reference minimum-of-three performance comparison; instruction counts vary between runs. Additional Go cost reduced27.4percent from prior repair and falls within5percent of untouched minimum; no claim that older stored baseline has been restored."
+  },
+  "style": [
+    {
+      "name": "ruff",
+      "argv": [
+        "uvx",
+        "ruff",
+        "check",
+        "python/"
+      ],
+      "exit_code": 0
+    },
+    {
+      "name": "format",
+      "argv": [
+        "uvx",
+        "ruff",
+        "format",
+        "--check",
+        "python/"
+      ],
+      "exit_code": 1
+    },
+    {
+      "name": "ty",
+      "argv": [
+        "uvx",
+        "ty",
+        "check",
+        "python/"
+      ],
+      "exit_code": 1
+    },
+    {
+      "name": "stub",
+      "argv": [
+        "uv",
+        "run",
+        "python",
+        "tools/gen_native_stub.py",
+        "--check"
+      ],
+      "exit_code": 0
+    },
+    {
+      "name": "rustfmt",
+      "argv": [
+        "rustfmt",
+        "--edition",
+        "2021",
+        "--check",
+        "src/analysis/elf_plt.rs",
+        "src/program/image.rs",
+        "src/ir/interprocedural_return.rs",
+        "src/ir/value_number.rs",
+        "src/ir/value_number/keep_bare.rs"
+      ],
+      "exit_code": 0
+    }
+  ],
+  "architecture": {
+    "terminal_exit": 1,
+    "untouched_regressions": 209,
+    "final_regressions": 205,
+    "new_gate_key": "112_recursion_shapes:armv7_a32:O2:tail_countdown",
+    "followup": "Baseline/final22casespass;4concurrentfinalrepeatsallpass;matched-binaryCidentical"
+  },
+  "no_new_full_corpus_score": true
+}

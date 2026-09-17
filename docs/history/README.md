@@ -496,3 +496,9 @@ The plan and evidence for the September 2026 documentation rewrite that produced
 | [audit/EXECUTION-BRIEF.md](docs-rewrite-2026-09/audit/EXECUTION-BRIEF.md) | 2026-09-02 | ground rules and the seven decisions the executing agents worked under | — |
 | [audit/MOVE-MANIFEST.md](docs-rewrite-2026-09/audit/MOVE-MANIFEST.md) | 2026-09-02 | the old→new path for every file moved in Phase 2 | — |
 | [audit/contract-assertions.md](docs-rewrite-2026-09/audit/contract-assertions.md) | 2026-09-02 | behavioral doc contracts rescued from the deleted classification tests | python/tests/test_docs_contracts.py |
+
+## `decompiler-regressions-2026-09-17/`
+
+| file | date | what it recorded | superseded by / known-false claims |
+|---|---|---|---|
+| [regression-review.md](decompiler-regressions-2026-09-17/regression-review.md) | 2026-09-17 | Matched-input full-sample loss investigation, CFG/ABI/MRS repairs, parse indexing and measured cost; terminal gate limits | Final whole Python suite pending at publication; no new full-corpus score or all-green claim |
