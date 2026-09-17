@@ -26,7 +26,7 @@ use axeyum_ir::{IrError, Sort, SymbolId, TermArena, TermId, Value, WideUint};
 use axeyum_solver::{
     export_qf_bv_unsat_proof_within, AigConstructionStats, CheckResult, IncrementalBvSolver,
     IncrementalBvStats, IncrementalCnfStats, IncrementalLoweringStats, IncrementalModelLiftStats,
-    IncrementalSolver as AxeyumIncrementalSolver, ReplayCheckedSatCachePolicy,
+    IncrementalSolver as AxeyumIncrementalSolver, ModelPreference, ReplayCheckedSatCachePolicy,
     ReplayCheckedSatCacheStats, SolverConfig, UnknownKind, UnsatProof, UnsatProofOutcome,
 };
 #[cfg(feature = "solver-axeyum-text")]
@@ -89,9 +89,10 @@ use warm_stats::{record_replay_sat_cache_delta, subtract_replay_sat_cache_gauges
 // to match.
 #[cfg(test)]
 use config::{
-    config_with_work_budgets, parse_direct_delta, parse_replay_sat_cache_policy, parse_warm_limit,
-    parse_warm_owner_transfer, parse_warm_reuse_policy, parse_warm_serial_sibling_reuse,
-    parse_warm_timeout_cold_retry, parse_warm_timeout_continue,
+    build_config, config_with_work_budgets, parse_direct_delta, parse_model_preference,
+    parse_replay_sat_cache_policy, parse_warm_limit, parse_warm_owner_transfer,
+    parse_warm_reuse_policy, parse_warm_serial_sibling_reuse, parse_warm_timeout_cold_retry,
+    parse_warm_timeout_continue,
 };
 #[cfg(test)]
 use profile::{
@@ -112,6 +113,12 @@ pub(crate) const DIRECT_DELTA_ENV: &str = "GLAURUNG_AXEYUM_DIRECT_DELTA";
 pub(crate) const WARM_TIMEOUT_COLD_RETRY_ENV: &str = "GLAURUNG_AXEYUM_WARM_TIMEOUT_COLD_RETRY";
 pub(crate) const WARM_TIMEOUT_CONTINUE_ENV: &str = "GLAURUNG_AXEYUM_WARM_TIMEOUT_CONTINUE";
 const INTERNAL_AND_FLATTENING_ENV: &str = "GLAURUNG_AXEYUM_INTERNAL_AND_FLATTENING";
+/// Which model a `sat` returns (`any` | `zero` | `least-unsigned`), forwarded
+/// to `SolverConfig::model_preference` (Axeyum ADR-2140). Unset keeps Axeyum's
+/// default, `Any`. `zero` finishes every `sat` with Axeyum's replay-checked
+/// bit-clearing pass, so the concretization policy `LeastUnsigned` starts its
+/// probe ladder from a model that is already a local unsigned minimum.
+pub(crate) const MODEL_PREFERENCE_ENV: &str = "GLAURUNG_AXEYUM_MODEL_PREFERENCE";
 pub(crate) const REPLAY_SAT_CACHE_ENV: &str = "GLAURUNG_AXEYUM_REPLAY_SAT_CACHE";
 const WARM_MAX_LIVE_PATHS_ENV: &str = "GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS";
 const WARM_MAX_ASSERTIONS_PER_PATH_ENV: &str = "GLAURUNG_AXEYUM_WARM_MAX_ASSERTIONS_PER_PATH";
@@ -156,6 +163,7 @@ static WARM_SERIAL_REFERENCES: AtomicU64 = AtomicU64::new(0);
 static WARM_SERIAL_PEAK_REFERENCES: AtomicU64 = AtomicU64::new(0);
 static WARM_REUSE_LIMITS: OnceLock<WarmReuseLimits> = OnceLock::new();
 static REPLAY_SAT_CACHE_POLICY: OnceLock<Option<ReplayCheckedSatCachePolicy>> = OnceLock::new();
+static MODEL_PREFERENCE: OnceLock<Option<ModelPreference>> = OnceLock::new();
 static REPLAY_SAT_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 static REPLAY_SAT_CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
 static REPLAY_SAT_CACHE_INSERTIONS: AtomicU64 = AtomicU64::new(0);
@@ -333,27 +341,34 @@ impl Solver for AxeyumSolver {
             return profiled.result;
         }
 
-        let mut arena = TermArena::new();
-        let translated = match translate_query(pool, asserts, &mut arena) {
-            Ok(translated) => translated,
-            Err(err) => return SolveResult::Error(format!("axeyum translate: {err}")),
-        };
-
-        let mut solver = IncrementalBvSolver::with_config(config());
-        for t in &translated.assertions {
-            // Raw `assert` (no preprocessing) is fastest for this ONE-SHOT
-            // trait: axeyum's word-level preprocessing (`assert_configured`,
-            // added 2026-07-13) pays a per-query canonicalization cost that
-            // only amortizes across REUSED checks on the warm path. Measured:
-            // in one-shot mode `assert_configured` is ~1.3-2x SLOWER than
-            // `assert` on real drivers (no reuse to amortize). It becomes the
-            // right call once the incremental (warm) Solver trait lands (P5).
-            if let Err(err) = solver.assert(&arena, *t) {
-                return SolveResult::Error(format!("axeyum assert: {err}"));
-            }
-        }
-        map_check_result(solver.check(&arena), &translated.sym_map)
+        one_shot_check(pool, asserts, config())
     }
+}
+
+/// The unprofiled one-shot check: translate, assert raw, check, lift. Takes
+/// the `SolverConfig` so a test can hand it a model preference without
+/// touching the process environment; production passes [`config()`].
+fn one_shot_check(pool: &ExprPool, asserts: &[Assert], solver_config: SolverConfig) -> SolveResult {
+    let mut arena = TermArena::new();
+    let translated = match translate_query(pool, asserts, &mut arena) {
+        Ok(translated) => translated,
+        Err(err) => return SolveResult::Error(format!("axeyum translate: {err}")),
+    };
+
+    let mut solver = IncrementalBvSolver::with_config(solver_config);
+    for t in &translated.assertions {
+        // Raw `assert` (no preprocessing) is fastest for this ONE-SHOT
+        // trait: axeyum's word-level preprocessing (`assert_configured`,
+        // added 2026-07-13) pays a per-query canonicalization cost that
+        // only amortizes across REUSED checks on the warm path. Measured:
+        // in one-shot mode `assert_configured` is ~1.3-2x SLOWER than
+        // `assert` on real drivers (no reuse to amortize). It becomes the
+        // right call once the incremental (warm) Solver trait lands (P5).
+        if let Err(err) = solver.assert(&arena, *t) {
+            return SolveResult::Error(format!("axeyum assert: {err}"));
+        }
+    }
+    map_check_result(solver.check(&arena), &translated.sym_map)
 }
 
 /// A direct-delta Axeyum session for Glaurung's first-class incremental trait.
@@ -965,6 +980,209 @@ mod tests {
         });
 
         assert_eq!(config.resource_limit, Some(17));
+    }
+
+    // ---- GLAURUNG_AXEYUM_MODEL_PREFERENCE (improvement-list item 4) --------
+
+    #[test]
+    fn model_preference_parses_the_three_spellings_and_refuses_the_rest() {
+        assert_eq!(parse_model_preference(None), Ok(None));
+        assert_eq!(
+            parse_model_preference(Some("any")),
+            Ok(Some(ModelPreference::Any))
+        );
+        assert_eq!(
+            parse_model_preference(Some("zero")),
+            Ok(Some(ModelPreference::PreferZero))
+        );
+        assert_eq!(
+            parse_model_preference(Some(" Least-Unsigned\n")),
+            Ok(Some(ModelPreference::LeastUnsigned))
+        );
+        let error = parse_model_preference(Some("sideways")).unwrap_err();
+        assert!(
+            error.contains(MODEL_PREFERENCE_ENV) && error.contains("sideways"),
+            "a malformed value must name the variable and the value: {error}"
+        );
+        // An empty string is set, and it is not one of the three.
+        assert!(parse_model_preference(Some("")).is_err());
+    }
+
+    #[test]
+    fn model_preference_reaches_the_solver_config() {
+        let budgets = SolverWorkBudgets::default();
+        assert_eq!(
+            build_config(budgets, None).model_preference,
+            SolverConfig::new().model_preference,
+            "unset keeps Axeyum's own default"
+        );
+        for preference in [
+            ModelPreference::Any,
+            ModelPreference::PreferZero,
+            ModelPreference::LeastUnsigned,
+        ] {
+            let config = build_config(budgets, Some(preference));
+            assert_eq!(config.model_preference, preference);
+            // The preference joins the other levers; it does not replace them.
+            assert_eq!(config.timeout, Some(check_timeout()));
+        }
+    }
+
+    /// The process lever, read in a CHILD process because `config()` caches it
+    /// once per process and setting the environment in-process is `unsafe` in
+    /// edition 2024. `model_preference_env_probe` is the child: inert when the
+    /// variable is unset, an assertion about `config()` when it is set. A
+    /// malformed value must make the child FAIL -- a lever that quietly ran
+    /// the default arm is the failure the lever contract exists to prevent.
+    #[test]
+    fn model_preference_env_is_read_once_and_a_malformed_value_is_refused() {
+        let exe = std::env::current_exe().expect("test executable");
+        let run = |value: &str| -> bool {
+            std::process::Command::new(&exe)
+                .args([
+                    "--exact",
+                    "symbolic::solver::axeyum_backend::tests::model_preference_env_probe",
+                    "--quiet",
+                ])
+                .env(MODEL_PREFERENCE_ENV, value)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .expect("spawn the probe")
+                .success()
+        };
+        assert!(run("zero"), "{MODEL_PREFERENCE_ENV}=zero was not honored");
+        assert!(
+            run("least-unsigned"),
+            "{MODEL_PREFERENCE_ENV}=least-unsigned was not honored"
+        );
+        assert!(run("any"), "{MODEL_PREFERENCE_ENV}=any was not honored");
+        assert!(
+            !run("sideways"),
+            "{MODEL_PREFERENCE_ENV}=sideways ran the default arm instead of refusing"
+        );
+    }
+
+    /// The child half of the lever test above: passes exactly when `config()`
+    /// carries the preference the variable names.
+    #[test]
+    fn model_preference_env_probe() {
+        let Ok(value) = std::env::var(MODEL_PREFERENCE_ENV) else {
+            return;
+        };
+        let expected = ModelPreference::parse(&value)
+            .unwrap_or_else(|| panic!("{MODEL_PREFERENCE_ENV}={value:?} is malformed"));
+        assert_eq!(config().model_preference, expected);
+    }
+
+    /// Axeyum's three-witness shape (`corpus/regression/qf_bv/
+    /// sat_free_bits_model_choice.smt2`) built from Glaurung expressions: `x`
+    /// and `z` are forced, `y` has the witnesses 0xF4, 0xF5 and 0xF6. Under
+    /// `zero` the one-shot backend returns the least of them, and the lifted
+    /// model replays against the original Glaurung expressions -- both by
+    /// concrete evaluation and by re-solving with every symbol pinned.
+    #[test]
+    fn a_sat_model_under_zero_is_least_and_replays() {
+        let w = Width::W8;
+        let mut p = ExprPool::new();
+        let x = p.fresh_symbol(w);
+        let y = p.fresh_symbol(w);
+        let z = p.fresh_symbol(w);
+        let five = c(&mut p, 5, w);
+        let seven = c(&mut p, 7, w);
+        let x10 = c(&mut p, 0x10, w);
+        let xf0 = c(&mut p, 0xf0, w);
+        let three = c(&mut p, 3, w);
+        let x_is_5 = cmp(&mut p, CmpOp::Eq, x, five, w);
+        let z_is_7 = cmp(&mut p, CmpOp::Eq, z, seven, w);
+        let y_lt_10 = cmp(&mut p, CmpOp::Ult, y, x10, w);
+        let y_lt_f0 = cmp(&mut p, CmpOp::Ult, y, xf0, w);
+        let sum = bin(&mut p, BinOp::Add, x, y, w);
+        let sum = bin(&mut p, BinOp::Add, sum, z, w);
+        let sum_lt_3 = cmp(&mut p, CmpOp::Ult, sum, three, w);
+        // (x = 5 ∨ y < 0x10) ∧ (x = 5 ∨ y ≥ 0x10) ∧ (z = 7 ∨ y < 0xF0)
+        // ∧ (z = 7 ∨ y ≥ 0xF0) ∧ (x + y + z < 3), each disjunction as a
+        // pair of Glaurung 1-bit predicates OR-ed together.
+        let a1 = bin(&mut p, BinOp::Or, x_is_5, y_lt_10, Width::W1);
+        let not_y_lt_10 = p.intern(Expr::Un {
+            op: UnOp::Not,
+            a: y_lt_10,
+            width: Width::W1,
+        });
+        let a2 = bin(&mut p, BinOp::Or, x_is_5, not_y_lt_10, Width::W1);
+        let a3 = bin(&mut p, BinOp::Or, z_is_7, y_lt_f0, Width::W1);
+        let not_y_lt_f0 = p.intern(Expr::Un {
+            op: UnOp::Not,
+            a: y_lt_f0,
+            width: Width::W1,
+        });
+        let a4 = bin(&mut p, BinOp::Or, z_is_7, not_y_lt_f0, Width::W1);
+        let asserts: Vec<Assert> = vec![
+            (a1, true),
+            (a2, true),
+            (a3, true),
+            (a4, true),
+            (sum_lt_3, true),
+        ];
+
+        let budgets = SolverWorkBudgets::default();
+        let any = match one_shot_check(
+            &p,
+            &asserts,
+            build_config(budgets, Some(ModelPreference::Any)),
+        ) {
+            SolveResult::Sat(m) => m,
+            other => panic!("expected sat under Any, got {other:?}"),
+        };
+        let zero = match one_shot_check(
+            &p,
+            &asserts,
+            build_config(budgets, Some(ModelPreference::PreferZero)),
+        ) {
+            SolveResult::Sat(m) => m,
+            other => panic!("expected sat under PreferZero, got {other:?}"),
+        };
+        // Model values are keyed by SYMBOL id, not expression id.
+        let sym = |id: ExprId| -> u32 {
+            match *p.get(id) {
+                Expr::Sym { id, .. } => id,
+                _ => unreachable!("not a symbol"),
+            }
+        };
+        let (xs, ys, zs) = (sym(x), sym(y), sym(z));
+        for model in [&any, &zero] {
+            assert_eq!(model.values.get(&xs).copied(), Some(5));
+            assert_eq!(model.values.get(&zs).copied(), Some(7));
+        }
+        let y_any = any.values[&ys];
+        let y_zero = zero.values[&ys];
+        assert!(
+            matches!(y_any, 0xf4 | 0xf5 | 0xf6),
+            "y under Any: {y_any:#x}"
+        );
+        assert_eq!(y_zero, 0xf4, "PreferZero returns the least witness");
+        assert!(y_zero <= y_any);
+
+        // Replay 1: concrete evaluation of every assertion in the lifted model.
+        let (xv, yv, zv) = (zero.values[&xs], y_zero, zero.values[&zs]);
+        assert!(xv == 5 || yv < 0x10);
+        assert!(xv == 5 || yv >= 0x10);
+        assert!(zv == 7 || yv < 0xf0);
+        assert!(zv == 7 || yv >= 0xf0);
+        assert!((xv + yv + zv) & 0xff < 3);
+
+        // Replay 2: the same query with every symbol pinned to the lifted
+        // value is still sat for the plain search.
+        let mut pinned = asserts.clone();
+        for (sym, value) in [(x, xv), (y, yv), (z, zv)] {
+            let k = c(&mut p, value, w);
+            let eq = cmp(&mut p, CmpOp::Eq, sym, k, w);
+            pinned.push((eq, true));
+        }
+        assert!(
+            matches!(solve_native(&p, &pinned), SolveResult::Sat(_)),
+            "the PreferZero model does not replay through the plain search"
+        );
     }
 
     // ---- helpers ----------------------------------------------------------

@@ -1,7 +1,7 @@
 # Shadow-split regression set: every z3-valid script under this directory,
 # with the verdict z3 gives it and the verdict the pinned Axeyum gave it.
 # z3: Z3 version 4.13.3 - 64 bit, -T:10; classified by tools/axeyum/split_verdicts.py.
-# axeyum: axeyum-solver 8df853252cdf49c9a27ba71c6ce62fdd1c485dfc via tests/axeyum_shadow_split_verdicts.rs (solve_smtlib, 30 s wall), 2026-09-17, debug build, scripts/shadow-capture.sh (solver-034)
+# axeyum: axeyum-solver 11b895a35dc583ea593f1dd6cd2412b8ef9387fa via tests/axeyum_shadow_split_verdicts.rs (solve_smtlib, 30 s wall), 2026-09-17, debug build, scripts/shadow-capture.sh
 # columns: capture	sha256	z3	axeyum
 dptfdevgen-60s-17ff038	04f16a898c68763608be6f1ca34ff56a198daaabfa4ff78f7df53ba35c711b4d	sat	sat
 dptfdevgen-60s-17ff038	06da0886d04aed6a61d4042080616abcc66fde36982845b99a2cb6b3818029bf	sat	sat
@@ -34,6 +34,7 @@ intcsst-60s-17ff038	a7e230cc10752a5951c6a9de2963828c08e110b2c0743a98e7f2b648f938
 intcsst-60s-17ff038	bb0570c8e92400f7c219460d4ee0dc5d4d671bafbda1d61be45a10bf29bdc6f5	sat	sat
 intcsst-60s-17ff038	e8cf72586b76c8c498c7d299fb6c61d03116d296c2e63feb406a9549d4728aa3	sat	sat
 surfacepen-60s-17ff038	4d9952c994dad4ffffc2ceb9ae243552c55077391ccd60d2a68fd2550b87cc2b	sat	sat
+surfacepen-60s-46799b9	4d9952c994dad4ffffc2ceb9ae243552c55077391ccd60d2a68fd2550b87cc2b	sat	sat
 tcpip-60s-a6a5cc0	0aadf044f2b40bc734a49e798d64181cbaea216c105573681280ac98be441c39	unsat	unsat
 tcpip-60s-a6a5cc0	0b29650c3316173f92cba59f514cc56258cee7996b3041fbabbe2f7a6b1fdbd7	sat	sat
 tcpip-60s-a6a5cc0	0bba551dde7a60adee0465e813872a9ae0ba662b124404be905b625138944e12	sat	sat

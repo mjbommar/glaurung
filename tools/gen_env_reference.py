@@ -399,6 +399,17 @@ PURPOSES: dict[str, str] = {
     "GLAURUNG_AXEYUM_WARM_TIMEOUT_CONTINUE": "Toggle continuing on a warm axeyum path timeout instead of failing.",
     "GLAURUNG_AXEYUM_INTERNAL_AND_FLATTENING": "Toggle axeyum's internal AND-flattening optimization.",
     "GLAURUNG_AXEYUM_REPLAY_SAT_CACHE": "Cache policy for axeyum replay SAT results.",
+    "FAKE_MODE": (
+        "Test-only: selects what the scripted `ioctlance` stand-in in "
+        "`python/tests/test_axeyum_shadow_capture.py` publishes (`split`, `disagreement`, "
+        "`malformed`, `silent`, ...); read by no shipped code."
+    ),
+    "GLAURUNG_AXEYUM_MODEL_PREFERENCE": (
+        "Which model a `sat` returns from the axeyum backend: `any` (default, the search as shipped), "
+        "`zero` (axeyum's replay-checked bit-clearing pass on the lifted model) or `least-unsigned` "
+        "(`zero` plus the bounded magnitude ladder in the SMT-LIB front door). Forwarded to "
+        "`SolverConfig::model_preference` (axeyum ADR-2140); a malformed value refuses to run."
+    ),
     "GLAURUNG_AXEYUM_WARM_MAX_LIVE_PATHS": "Cap the number of live warm axeyum paths kept.",
     "GLAURUNG_AXEYUM_WARM_MAX_ASSERTIONS_PER_PATH": "Cap assertions per warm axeyum path.",
     "GLAURUNG_ORDERED_TRACE_DIR": "Directory ordered symbolic traces are written to/read from.",
