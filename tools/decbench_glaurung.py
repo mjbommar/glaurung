@@ -25,10 +25,13 @@ from decbench.models.decompilation import (
     DecompilationResult,
     DecompilerMetadata,
     FunctionDecompilation,
+    LineMapping,
+    VariableInfo,
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from decbench_evidence import shape_evidence  # noqa: E402
 from decbench_limits import function_timeout_ms  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -145,7 +148,7 @@ class GlaurungDecompiler(Decompiler):
         records = self._run_batch(binary_path, requested_addresses or None)
         text_range = common.elf_text_range(binary_path)
         requested = set(functions or [])
-        enumerated: list[tuple[str, int, str]] = []
+        enumerated: list[tuple[str, int, str, dict[str, Any]]] = []
         for record in records:
             name = record.get("name")
             address = record.get("entry_va")
@@ -168,9 +171,9 @@ class GlaurungDecompiler(Decompiler):
                 continue
             if requested and (name, address) not in requested:
                 continue
-            enumerated.append((name, address, code))
+            enumerated.append((name, address, code, record))
 
-        candidates = [(name, address) for name, address, _code in enumerated]
+        candidates = [(name, address) for name, address, _code, _rec in enumerated]
         if requested_addresses:
             narrowed = common.narrow_to_source(
                 candidates,
@@ -203,16 +206,23 @@ class GlaurungDecompiler(Decompiler):
                 extra=extra,
             )
 
-        for name, address, code in enumerated:
+        for name, address, code, record in enumerated:
             if (name, address) not in allowed:
                 continue
+            line_count = code.count("\n") + 1
+            # Glaurung has emitted both arrays since `db2e7735`; forwarding them
+            # moves type_match off its parse-the-C-text fallback onto structured
+            # variable correspondence.
+            raw_mappings, raw_variables = shape_evidence(
+                record, file_addr=address, line_count=line_count
+            )
             decompiled[name] = FunctionDecompilation(
                 name=name,
                 address=address,
                 decompiled_code=code,
-                line_count=code.count("\n") + 1,
-                variables=[],
-                line_mappings=[],
+                line_count=line_count,
+                variables=[VariableInfo(**item) for item in raw_variables],
+                line_mappings=[LineMapping(**item) for item in raw_mappings],
                 metadata=common.extract_metrics(code),
             )
             if progress_path is not None:
