@@ -19,6 +19,18 @@ target function's address from that binary's symbol table, strips a COPY into
 `$TMPDIR`, and decompiles the copy at those VAs. It never modifies the tree's
 binaries.
 
+BUDGETS. DecBench standardised 600s per function and 3600s per binary
+(upstream `5818d67`). Those are the defaults here, because a run at a tighter
+budget fails functions the published board would have scored and is therefore
+not comparable to any other column. `tools/decbench_limits.py` owns the
+resolution and the override names; set `BUDGET_RECEIPT=<path>` to write the
+resolved budgets beside the run. For cheap local iteration:
+
+    DECBENCH_GLAURUNG_TIMEOUT_MS=20000 DECBENCH_DECOMPILE_TIMEOUT=600 \
+        python3 tools/decbench_redecompile_tree.py "$(git rev-parse --short=7 HEAD)"
+
+...which prints `-- OVERRIDDEN {...}` and must not be published as a score.
+
     python3 tools/decbench_redecompile_tree.py "$(git rev-parse --short=7 HEAD)"
     python3 tools/decbench_redecompile_tree.py "$(git rev-parse --short=7 HEAD)" coreutils
 
@@ -45,6 +57,8 @@ import os
 import re
 
 from decbench_inputs import find_binary, normalise_address, strip_copy
+from decbench_limits import binary_timeout_seconds, budget_receipt, function_timeout_ms
+from decbench_tree_writer import render_result_toml, write_timeout_result
 
 TREE = pathlib.Path(
     os.environ.get(
@@ -63,6 +77,25 @@ NAME = os.environ.get("DECBENCH_COLUMN", f"glaurung-{SHA}")
 FORCE = os.environ.get("GLAURUNG_REDECOMP_FORCE") == "1"
 TMP = pathlib.Path(os.environ["TMPDIR"]) / "redecomp"
 TMP.mkdir(parents=True, exist_ok=True)
+
+# Budgets default to DecBench's published standard; see tools/decbench_limits.py.
+# A run at a tighter budget is not comparable to the published board, so the
+# receipt is printed and written beside the run rather than left implicit.
+BUDGETS = budget_receipt()
+FUNCTION_TIMEOUT_MS = function_timeout_ms()
+BINARY_TIMEOUT_S = binary_timeout_seconds()
+print(
+    f"budgets: {FUNCTION_TIMEOUT_MS}ms/function, {BINARY_TIMEOUT_S}s/binary"
+    + (
+        ""
+        if BUDGETS["matches_published_standard"]
+        else f" -- OVERRIDDEN {BUDGETS['overrides']}"
+    ),
+    flush=True,
+)
+_budget_receipt_path = os.environ.get("BUDGET_RECEIPT")
+if _budget_receipt_path:
+    pathlib.Path(_budget_receipt_path).write_text(json.dumps(BUDGETS, indent=2))
 
 man = json.loads((TREE / "sample_set_manifest.json").read_text())["functions"]
 want = collections.defaultdict(list)
@@ -164,13 +197,26 @@ for opt, proj, binstem in keys:
         "--format",
         "json",
         "--timeout-ms",
-        "20000",
+        str(FUNCTION_TIMEOUT_MS),
     ]
     t1 = time.time()
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        r = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=BINARY_TIMEOUT_S
+        )
     except subprocess.TimeoutExpired:
+        # Declare the failure. Dropping the binary silently made a budget we
+        # chose ourselves surface as `evaluated binary set mismatch` in the
+        # audit, which reads as a corrupt tree rather than as a timeout.
         stats["timeout"] += 1
+        write_timeout_result(
+            directory=d / "decompiled",
+            binary=binstem,
+            decompiler=NAME,
+            version=SHA,
+            total_time=time.time() - t1,
+            budget_seconds=BINARY_TIMEOUT_S,
+        )
         continue
     if r.returncode != 0:
         stats["nonzero"] += 1
@@ -202,26 +248,16 @@ for opt, proj, binstem in keys:
     (d / "decompiled").mkdir(parents=True, exist_ok=True)
     out_c = d / "decompiled" / f"{NAME}_{binstem}.c"
     out_c.write_text("\n".join(parts))
-    lines = [
-        f'binary = "{binstem}"',
-        f'decompiler = "{NAME}"',
-        f'version = "{SHA}"',
-        f"total_time = {time.time() - t1:.3f}",
-        "timeout = false",
-        f"function_count = {len(meta)}",
-        "failed_functions = [" + ", ".join(f'"{f}"' for f in failed) + "]",
-        "",
-    ]
-    for nm, (a, lc, gt) in meta.items():
-        lines += [
-            f'["functions.{nm}"]',
-            f'address = "{a}"',
-            f"line_count = {lc}",
-            f"gotos = {gt}",
-            "bools = 0",
-            "",
-        ]
-    (d / "decompiled" / f"{NAME}_{binstem}.toml").write_text("\n".join(lines))
+    (d / "decompiled" / f"{NAME}_{binstem}.toml").write_text(
+        render_result_toml(
+            binary=binstem,
+            decompiler=NAME,
+            version=SHA,
+            total_time=time.time() - t1,
+            functions=meta,
+            failed_functions=failed,
+        )
+    )
     stats["binaries"] += 1
     if stats["binaries"] % 25 == 0:
         print(

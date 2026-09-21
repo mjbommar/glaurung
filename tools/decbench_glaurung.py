@@ -27,6 +27,10 @@ from decbench.models.decompilation import (
     FunctionDecompilation,
 )
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from decbench_limits import function_timeout_ms  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -91,6 +95,11 @@ class GlaurungDecompiler(Decompiler):
                 "decbench",
                 "--format",
                 "json",
+                # Upstream's own Glaurung backend always passes this; without
+                # it a single pathological function can consume the whole
+                # per-binary budget and fail every other function with it.
+                "--timeout-ms",
+                str(function_timeout_ms()),
             ],
             capture_output=True,
             text=True,

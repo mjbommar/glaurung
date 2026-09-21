@@ -1,10 +1,10 @@
 {
  "note": "Test files classified by what they NEED. Applied as pytest markers by python/tests/conftest.py. Regenerate with tools/gen_test_facets.py; do not hand-edit.",
  "counts": {
-  "core": 332,
+  "core": 336,
   "lfs": 114,
+  "toolchain": 39,
   "fixtures": 38,
-  "toolchain": 38,
   "docker": 20,
   "llm": 5,
   "decbench": 5
@@ -213,16 +213,25 @@
    "toolchain",
    "decbench"
   ],
+  "test_decbench_limits.py": [
+   "core"
+  ],
   "test_decbench_matrix_ratchet.py": [
    "core"
   ],
   "test_decbench_merge_shards.py": [
    "core"
   ],
+  "test_decbench_replay_inputs.py": [
+   "toolchain"
+  ],
   "test_decbench_score_ledger.py": [
    "core"
   ],
   "test_decbench_symbol_resolution.py": [
+   "core"
+  ],
+  "test_decbench_tree_writer.py": [
    "core"
   ],
   "test_decbench_type_defect_corpus.py": [
@@ -970,11 +979,17 @@
   "test_roundtrip_review.py": [
    "core"
   ],
+  "test_runtime_axeyum_profile_report.py": [
+   "core"
+  ],
   "test_runtime_classifier.py": [
    "core"
   ],
   "test_runtime_sample_harness.py": [
    "toolchain"
+  ],
+  "test_runtime_solver_authority_docs.py": [
+   "core"
   ],
   "test_rust_sysroot_harvest.py": [
    "toolchain"

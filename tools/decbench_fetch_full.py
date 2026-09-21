@@ -24,7 +24,7 @@ LAYOUT. Writes the tree `decbench evaluate-tree` expects, which is also what
 `decbench evaluate-tree` writes `evaluated/` plus the scoreboard.
 
 Usage:
-    tools/decbench_fetch_full.py <tree>                  # full config, 803 binaries
+    tools/decbench_fetch_full.py <tree>                  # full config, 770 binaries
     tools/decbench_fetch_full.py <tree> --config sample-set
     tools/decbench_fetch_full.py <tree> --jobs 8
 """
@@ -42,7 +42,16 @@ import urllib.request
 
 REPO = "noelo-lab/decbench-dataset"
 # Pinned. See REPRODUCIBILITY above before changing.
-REVISION = "e5eb576d66ee36793b800a4dd45e291e0add4472"
+#
+# 2026-09-21: moved from `e5eb576d` (94,575 functions / 803 binaries,
+# 2026-08-19) to the revision behind the published 19-09-2026 board. The corpus
+# was recompiled, not merely extended: `dash` was added (+863 functions), the
+# 33 hardlinked coreutils multi-call binaries and crazyflie CMSIS_DAP were
+# removed (-351), retained binaries churned (+1,005, mostly u-boot), and EVERY
+# retained binary has a new sha256. A tree fetched at the old revision cannot
+# be resumed into at this one -- `decbench_redecompile_tree.py`'s resume-skip
+# would reuse `.c` written against different bytes. Fetch into a fresh tree.
+REVISION = "71899ca98d1c2ed70200fc7e3f8575fa0d48a983"
 BASE = "https://huggingface.co/datasets/{repo}/resolve/{rev}/{path}"
 
 
@@ -163,8 +172,9 @@ def main() -> int:
         work.append(
             (entry["binary_path"], root / "compiled" / entry["binary"], entry["sha256"])
         )
-        # 3 of 803 binaries have no published source CFG; GED simply has no
-        # ground truth for those and the metric skips them.
+        # At `e5eb576d` 3 of 803 binaries had no published source CFG; at
+        # `71899ca9` every one of the 770 does. Kept conditional because the
+        # field is optional in the manifest schema, not because it is unused.
         if entry.get("source_cfg_path"):
             work.append(
                 (entry["source_cfg_path"], root / "source_cfgs" / f"{stem}.json", None)
