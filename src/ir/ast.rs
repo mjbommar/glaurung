@@ -92,6 +92,11 @@ pub use origin::OriginSet;
 pub(crate) fn take_decbench_line_mappings() -> Vec<(usize, OriginSet)> {
     dec_render::take_line_mappings()
 }
+
+/// The identifier the last DecBench render gave each ABI parameter.
+pub(crate) fn take_decbench_parameter_names() -> Vec<Option<String>> {
+    dec_render::take_parameter_names()
+}
 #[cfg(test)]
 pub(crate) use prepare::prepare_for_decbench_with_output_and_protected_locals;
 pub(crate) use prepare::{

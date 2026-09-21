@@ -149,6 +149,28 @@ pub fn recovered_variables_from_llir(
     recovered_variables_with_addresses(text, prototype, facts, pointer_width, &addresses)
 }
 
+/// [`recovered_variables_from_llir`], told what the renderer named each ABI
+/// parameter. See [`recovered_variables_with_addresses_and_names`].
+pub fn recovered_variables_from_llir_named(
+    text: &str,
+    prototype: Option<&RecoveredPrototype>,
+    facts: &StackLocalFacts,
+    pointer_width: u8,
+    lf: &crate::ir::types::LlirFunction,
+    declared_parameter_names: &[Option<String>],
+) -> Vec<RecoveredVariable> {
+    let addresses =
+        crate::ir::variable_addresses::stack_slot_addresses(lf, &facts.frame_coordinates);
+    recovered_variables_with_addresses_and_names(
+        text,
+        prototype,
+        facts,
+        pointer_width,
+        &addresses,
+        declared_parameter_names,
+    )
+}
+
 /// [`recovered_variables_from_llir`] with graph-owned storage identities.
 pub fn recovered_variables_from_llir_with_identity(
     text: &str,
@@ -158,8 +180,16 @@ pub fn recovered_variables_from_llir_with_identity(
     lf: &crate::ir::types::LlirFunction,
     image_sha256: &str,
     lift_profile: &str,
+    declared_parameter_names: &[Option<String>],
 ) -> Vec<RecoveredVariable> {
-    let mut variables = recovered_variables_from_llir(text, prototype, facts, pointer_width, lf);
+    let mut variables = recovered_variables_from_llir_named(
+        text,
+        prototype,
+        facts,
+        pointer_width,
+        lf,
+        declared_parameter_names,
+    );
     let function_id = crate::ir::function_ir::function_id(image_sha256, lift_profile, lf.entry_va);
     for variable in &mut variables {
         let static_type = match (variable.kind, variable.arg_index) {
@@ -246,21 +276,58 @@ pub fn recovered_variables_with_addresses(
     pointer_width: u8,
     addresses: &HashMap<String, Vec<u64>>,
 ) -> Vec<RecoveredVariable> {
+    recovered_variables_with_addresses_and_names(
+        text,
+        prototype,
+        facts,
+        pointer_width,
+        addresses,
+        &[],
+    )
+}
+
+/// [`recovered_variables_with_addresses`], told what the renderer named each
+/// ABI parameter.
+///
+/// `declared_parameter_names[slot]` is the identifier the signature actually
+/// printed. It is empty when nothing declared one, in which case the `argN`
+/// spelling applies.
+pub fn recovered_variables_with_addresses_and_names(
+    text: &str,
+    prototype: Option<&RecoveredPrototype>,
+    facts: &StackLocalFacts,
+    pointer_width: u8,
+    addresses: &HashMap<String, Vec<u64>>,
+    declared_parameter_names: &[Option<String>],
+) -> Vec<RecoveredVariable> {
     let mut out = Vec::new();
 
     // --- parameters -------------------------------------------------------
     //
     // `naming::apply_role_names` spells the Nth ABI parameter `argN`, and the
     // renderer prints the signature from this same prototype, so the name is
-    // not a guess. An authoritative DWARF name may have replaced it, in which
-    // case the `argN` spelling is absent from the text and the mention filter
-    // correctly drops it rather than reporting a name the C does not contain.
+    // not a guess. A declared name -- DWARF, an analyst prototype, or a known
+    // prototype such as `main`'s -- REPLACES that spelling in the rendered C,
+    // so ask for the declared one first.
+    //
+    // Only checking `argN` dropped every parameter of any function whose
+    // signature carried real names. On the DecBench corpus `grep`'s
+    // `int main(int argc, char **argv)` reported 26 locals and zero arguments,
+    // and a consumer that trusts this inventory then loses ABI-position
+    // matching entirely; with debug info present it was every function, not
+    // just `main`.
     if let Some(prototype) = prototype {
         for parameter in prototype.parameters() {
-            let name = format!("arg{}", parameter.slot);
-            if !mentions_identifier(text, &name) {
-                continue;
-            }
+            let declared = declared_parameter_names
+                .get(parameter.slot)
+                .and_then(Option::as_deref)
+                .filter(|name| !name.is_empty() && mentions_identifier(text, name));
+            let fallback = format!("arg{}", parameter.slot);
+            let name = match declared {
+                Some(name) => name.to_string(),
+                None if mentions_identifier(text, &fallback) => fallback,
+                None => continue,
+            };
             let ctype = parameter
                 .hint
                 .map(|hint| {
@@ -344,6 +411,86 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
+    fn empty_facts() -> StackLocalFacts {
+        StackLocalFacts {
+            sizes: HashMap::new(),
+            source_types: HashMap::new(),
+            source_names: HashMap::new(),
+            parameter_slots: HashMap::new(),
+            machine_saved_slots: Default::default(),
+            frame_coordinates: HashMap::new(),
+        }
+    }
+
+    fn one_parameter_prototype() -> RecoveredPrototype {
+        let mut prototype = RecoveredPrototype::default();
+        prototype.apply_locked_parameters(
+            crate::ir::call_args::CallConv::SysVAmd64,
+            &[Some(crate::ir::types_recover::TypeHint::Int {
+                signed: true,
+                width: 4,
+            })],
+        );
+        prototype
+    }
+
+    fn args_of(text: &str, names: &[Option<String>]) -> Vec<RecoveredVariable> {
+        recovered_variables_with_addresses_and_names(
+            text,
+            Some(&one_parameter_prototype()),
+            &empty_facts(),
+            8,
+            &HashMap::new(),
+            names,
+        )
+        .into_iter()
+        .filter(|variable| variable.kind == "arg")
+        .collect()
+    }
+
+    /// A declared name REPLACES the `argN` spelling in the rendered signature,
+    /// so looking only for `argN` dropped the parameter entirely. On the
+    /// DecBench corpus `int main(int argc, char **argv)` reported zero
+    /// arguments, and a consumer matching on ABI position then had nothing.
+    #[test]
+    fn a_declared_parameter_name_is_reported_rather_than_dropped() {
+        let args = args_of(
+            "int main(int argc) {\n    return argc;\n}",
+            &[Some("argc".to_string())],
+        );
+        assert_eq!(args.len(), 1, "{args:#?}");
+        assert_eq!(args[0].name, "argc");
+        assert_eq!(args[0].arg_index, Some(0));
+    }
+
+    #[test]
+    fn the_arg_n_spelling_still_applies_when_nothing_declared_a_name() {
+        let args = args_of("long f(long arg0) {\n    return arg0;\n}", &[]);
+        assert_eq!(args.len(), 1, "{args:#?}");
+        assert_eq!(args[0].name, "arg0");
+        assert_eq!(args[0].arg_index, Some(0));
+    }
+
+    /// Fail closed: a name the rendered C does not contain is not evidence.
+    #[test]
+    fn a_declared_name_absent_from_the_text_is_not_claimed() {
+        let args = args_of(
+            "long f(long arg0) {\n    return arg0;\n}",
+            &[Some("argc".to_string())],
+        );
+        assert_eq!(args.len(), 1, "{args:#?}");
+        assert_eq!(
+            args[0].name, "arg0",
+            "falls back to the spelling actually rendered"
+        );
+    }
+
+    #[test]
+    fn a_slot_with_no_declared_name_and_no_arg_n_mention_is_skipped() {
+        let args = args_of("long f(void) {\n    return 0;\n}", &[None]);
+        assert!(args.is_empty(), "{args:#?}");
+    }
+
     fn facts() -> StackLocalFacts {
         StackLocalFacts {
             sizes: HashMap::from([("local_18".to_string(), 4u8)]),
@@ -387,6 +534,7 @@ mod tests {
             &lf,
             &image_sha256,
             "glaurung-raw-llir-v1",
+            &[],
         );
         let mut renamed_facts = facts();
         renamed_facts
@@ -400,6 +548,7 @@ mod tests {
             &lf,
             &image_sha256,
             "glaurung-raw-llir-v1",
+            &[],
         );
         assert_eq!(first.len(), 1);
         assert_eq!(renamed.len(), 1);
@@ -432,6 +581,7 @@ mod tests {
             &lf,
             &"ab".repeat(32),
             "glaurung-raw-llir-v1",
+            &[],
         );
         let variable = variables.first().expect("one recovered parameter");
         let static_variable = variable

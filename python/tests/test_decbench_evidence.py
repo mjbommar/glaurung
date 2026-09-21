@@ -135,3 +135,69 @@ def test_a_missing_or_malformed_payload_yields_empty_lists_not_an_error() -> Non
         mappings, variables = EV.shape_evidence(record, file_addr=0x1000, line_count=3)
         assert mappings == []
         assert variables == []
+
+
+def _named(name: str, **kw: object) -> dict:
+    row = {
+        "name": name,
+        "type": "int",
+        "kind": "stack",
+        "arg_index": None,
+        "stack_offset": None,
+        "size": None,
+        "addresses": [],
+        "line_numbers": [],
+    }
+    row.update(kw)
+    return row
+
+
+def test_merge_never_drops_a_variable_the_parser_found() -> None:
+    """Supplying a subset suppresses DecBench's own parse and loses matches.
+
+    On `O0/grep/main` DecBench parses 84 declarations including `argc`/`argv`
+    with ABI positions; Glaurung emits 26 promoted stack slots and no args.
+    Handing over only ours took type_match from 0.3947 to 0.2105.
+    """
+    parsed = [_named("argc", kind="arg", arg_index=0), _named("local_140")]
+    ours = [_named("local_140", stack_offset=-320, addresses=[1, 2])]
+    merged = EV.merge_variables(parsed, ours)
+    assert {row["name"] for row in merged} == {"argc", "local_140"}
+    assert len(merged) == 2
+
+
+def test_merge_enriches_with_what_the_parser_cannot_know() -> None:
+    parsed = [_named("local_140", type="unsigned char")]
+    ours = [
+        _named("local_140", type="long", stack_offset=-320, size=8, addresses=[9, 7])
+    ]
+    merged = EV.merge_variables(parsed, ours)
+    row = merged[0]
+    assert row["stack_offset"] == -320
+    assert row["size"] == 8
+    assert row["addresses"] == [9, 7]
+    # The parser read the C we ourselves rendered, so its spelling of the type
+    # is our own; overriding it with a coarser recovered type only loses detail.
+    assert row["type"] == "unsigned char"
+
+
+def test_merge_appends_variables_the_parser_missed() -> None:
+    parsed = [_named("argc", kind="arg", arg_index=0)]
+    ours = [_named("local_18", stack_offset=-24)]
+    merged = EV.merge_variables(parsed, ours)
+    assert [row["name"] for row in merged] == ["argc", "local_18"]
+
+
+def test_merge_keeps_an_abi_position_the_parser_recovered() -> None:
+    """Stage 1 matches on arg_index alone; losing it costs the safest matches."""
+    parsed = [_named("argc", kind="arg", arg_index=0)]
+    ours = [_named("argc", kind="stack", arg_index=None, stack_offset=-8)]
+    merged = EV.merge_variables(parsed, ours)
+    assert merged[0]["kind"] == "arg"
+    assert merged[0]["arg_index"] == 0
+    assert merged[0]["stack_offset"] == -8
+
+
+def test_merge_with_nothing_of_ours_is_the_parser_verbatim() -> None:
+    parsed = [_named("a"), _named("b")]
+    assert EV.merge_variables(parsed, []) == parsed

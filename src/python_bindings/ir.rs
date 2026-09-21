@@ -1072,6 +1072,7 @@ fn decompile_all_py(
             &output.raw,
             &hex::encode(Sha256::digest(image.bytes())),
             "glaurung-raw-llir-v1",
+            &output.rendered.parameter_names,
         );
         let variables = variables_to_py(py, &variables)?;
         if include_line_mappings {
@@ -1336,6 +1337,7 @@ fn decompile_many_py(
             &output.raw,
             &hex::encode(Sha256::digest(image.bytes())),
             "glaurung-raw-llir-v1",
+            &output.rendered.parameter_names,
         );
         let variables = variables_to_py(py, &variables)?;
         if include_line_mappings {
@@ -1438,10 +1440,7 @@ fn variables_to_py(
             node.set_item("id", &static_type.id)?;
             node.set_item("image_sha256", &static_type.image_sha256)?;
             node.set_item("c_type", &static_type.c_type)?;
-            node.set_item(
-                "type_debug_info_offset",
-                static_type.type_debug_info_offset,
-            )?;
+            node.set_item("type_debug_info_offset", static_type.type_debug_info_offset)?;
             let origin = PyDict::new(py);
             match &static_type.origin {
                 crate::ir::function_ir::StaticTypeOrigin::Dwarf {
@@ -1458,10 +1457,7 @@ fn variables_to_py(
                     origin.set_item("recovery_profile", recovery_profile)?;
                     let shape_dict = PyDict::new(py);
                     match shape {
-                        crate::ir::function_ir::RecoveredTypeShape::Integer {
-                            signed,
-                            width,
-                        } => {
+                        crate::ir::function_ir::RecoveredTypeShape::Integer { signed, width } => {
                             shape_dict.set_item("kind", "integer")?;
                             shape_dict.set_item("signed", signed)?;
                             shape_dict.set_item("width", width)?;

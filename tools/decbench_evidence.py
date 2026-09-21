@@ -161,3 +161,53 @@ def shape_evidence(
                 shaped["line_numbers"] = []
             variables.append(shaped)
     return rows, variables
+
+
+#: What our recovery knows that a parse of the emitted C cannot: where the slot
+#: lives, how big it is, and which instructions touch it. Everything else --
+#: the spelling of the type, the ABI position, the kind -- the parser reads out
+#: of the C text we ourselves rendered, so it is already our answer.
+ENRICHED_FIELDS = ("stack_offset", "size", "addresses", "line_numbers")
+
+
+def merge_variables(
+    parsed: Sequence[Mapping[str, Any]], ours: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
+    """Enrich DecBench's own parse with our evidence, never replacing it.
+
+    `type_match` runs `parse_c_variables` ONLY when `variables` is empty, so
+    handing it a partial inventory silently suppresses its own. Measured on
+    `O0/grep/main` against upstream `8cfc2165`: DecBench parses 84 declarations
+    including `argc`/`argv` with ABI positions, Glaurung emits 26 promoted
+    stack slots and no arguments at all, and substituting ours took type_match
+    from 0.3947 to 0.2105. Merging restores 0.3947 exactly while keeping our
+    offsets and addresses attached.
+
+    Args:
+        parsed: DecBench's inventory, as mappings.
+        ours: Glaurung's structured variables, as mappings.
+
+    Returns:
+        The parser's inventory in order, each row overlaid with any of
+        `ENRICHED_FIELDS` we supply, followed by names only we reported. Never
+        smaller than `parsed`.
+    """
+    merged: dict[str, dict[str, Any]] = {
+        str(row.get("name", "")): dict(row) for row in parsed if row.get("name")
+    }
+    for row in ours:
+        name = str(row.get("name", ""))
+        if not name:
+            continue
+        existing = merged.get(name)
+        if existing is None:
+            merged[name] = dict(row)
+            continue
+        for field in ENRICHED_FIELDS:
+            value = row.get(field)
+            if value is None:
+                continue
+            if isinstance(value, (list, tuple)) and not value and existing.get(field):
+                continue
+            existing[field] = value
+    return list(merged.values())

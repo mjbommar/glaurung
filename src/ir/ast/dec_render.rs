@@ -110,6 +110,27 @@ pub(super) fn record_line_mapping(rendered: &str, origins: &OriginSet) {
     });
 }
 
+thread_local! {
+    /// The identifier the rendered signature gave each ABI parameter.
+    ///
+    /// The renderer may substitute names the caller never declared -- a
+    /// conventional `main` becomes `(int argc, char **argv)` with no DWARF at
+    /// all -- so the caller cannot reconstruct them from its own inputs. The
+    /// recovered-variable inventory needs the spelling that was actually
+    /// printed, or it reports no arguments for the function.
+    static DEC_PARAMETER_NAMES: std::cell::RefCell<Vec<Option<String>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+pub(super) fn record_parameter_names(names: &[Option<String>]) {
+    DEC_PARAMETER_NAMES.with(|slot| {
+        *slot.borrow_mut() = names.to_vec();
+    });
+}
+
+pub(crate) fn take_parameter_names() -> Vec<Option<String>> {
+    DEC_PARAMETER_NAMES.with(|slot| std::mem::take(&mut *slot.borrow_mut()))
+}
+
 pub(crate) fn take_line_mappings() -> Vec<(usize, OriginSet)> {
     DEC_LINE_MAPPINGS.with(|slot| {
         slot.borrow_mut()

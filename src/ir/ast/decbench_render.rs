@@ -464,6 +464,7 @@ pub(crate) fn render_decbench_typed_with_output_and_prototype_and_dwarf_types_an
     });
     let declared_prototype = declared_prototype.or(conventional_main.as_ref());
     let declared_parameter_names = declared_parameter_names.or(conventional_main_names.as_deref());
+    super::dec_render::record_parameter_names(declared_parameter_names.unwrap_or(&[]));
     let declared_prototype = declared_prototype.filter(|prototype| {
         prototype.parameter_types.len() == arg_count
             && (dwarf_prototype_type_is_renderable(&prototype.return_type, true, &dwarf_type_env)

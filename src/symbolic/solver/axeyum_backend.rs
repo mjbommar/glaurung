@@ -444,6 +444,7 @@ impl IncrementalAxeyumSolver {
             arena: TermArena::new(),
             solver: IncrementalBvSolver::with_config(solver_config.with_preprocess(false)),
             symbol_frames: vec![Vec::new()],
+            stable_terms: StableTermCache::default(),
         }
     }
 

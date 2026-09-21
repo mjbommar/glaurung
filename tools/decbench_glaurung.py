@@ -29,12 +29,26 @@ from decbench.models.decompilation import (
     VariableInfo,
 )
 
+try:  # pragma: no cover - availability differs across pinned DecBench revisions
+    from decbench.metrics.type_match import parse_c_variables
+except ImportError:  # pragma: no cover
+    parse_c_variables = None
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from decbench_evidence import shape_evidence  # noqa: E402
+from decbench_evidence import merge_variables, shape_evidence  # noqa: E402
 from decbench_limits import function_timeout_ms  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
+
+#: A line map flips type_match onto the address-correspondence path
+#: (`has_line_address_evidence`), which matches decompiler addresses against
+#: SOURCE addresses. Those come from preprocessed `.i` units, and the published
+#: dataset ships none -- only `binary_path` and `source_cfg_path`. Until a run
+#: supplies them the address path has nothing to match against, so forwarding
+#: the map can only cost us the legacy fallback. Off by default, on with
+#: GLAURUNG_DECBENCH_LINE_MAPPINGS=1 for a run that does have `.i` sources.
+_FORWARD_LINE_MAPPINGS = os.environ.get("GLAURUNG_DECBENCH_LINE_MAPPINGS") == "1"
 
 
 @register_decompiler("glaurung")
@@ -210,19 +224,29 @@ class GlaurungDecompiler(Decompiler):
             if (name, address) not in allowed:
                 continue
             line_count = code.count("\n") + 1
-            # Glaurung has emitted both arrays since `db2e7735`; forwarding them
-            # moves type_match off its parse-the-C-text fallback onto structured
-            # variable correspondence.
             raw_mappings, raw_variables = shape_evidence(
                 record, file_addr=address, line_count=line_count
             )
+            # type_match parses the C itself ONLY when `variables` is empty, so
+            # handing it ours alone SUPPRESSES its inventory. Ours is a strict
+            # subset -- promoted stack slots, no ABI arguments -- and measured
+            # on O0/grep/main that took type_match from 0.3947 to 0.2105.
+            # Merge instead: its inventory, enriched with our offsets and
+            # addresses, is never smaller than what it would have found.
+            if parse_c_variables is not None:
+                parsed = [item.model_dump() for item in parse_c_variables(code, name)]
+                raw_variables = merge_variables(parsed, raw_variables)
             decompiled[name] = FunctionDecompilation(
                 name=name,
                 address=address,
                 decompiled_code=code,
                 line_count=line_count,
                 variables=[VariableInfo(**item) for item in raw_variables],
-                line_mappings=[LineMapping(**item) for item in raw_mappings],
+                line_mappings=(
+                    [LineMapping(**item) for item in raw_mappings]
+                    if _FORWARD_LINE_MAPPINGS
+                    else []
+                ),
                 metadata=common.extract_metrics(code),
             )
             if progress_path is not None:

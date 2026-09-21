@@ -981,6 +981,9 @@ pub(super) struct RenderedAst {
     pub(super) text: String,
     pub(super) provenance: Vec<&'static str>,
     pub(super) line_mappings: Vec<(usize, crate::ir::ast::OriginSet)>,
+    /// What the signature actually named each ABI parameter. Empty when
+    /// nothing declared a name and the `argN` spelling stands.
+    pub(super) parameter_names: Vec<Option<String>>,
 }
 
 pub(super) struct FunctionPipelineContext<'a> {
@@ -1333,6 +1336,9 @@ pub(super) fn render_prepared_ast(
         crate::ir::naming::role_named_render_view(&prepared.function, &prepared.role_names)
     });
 
+    // Carried out of the `decbench` branch so the recovered-variable inventory
+    // can report an ABI parameter under the name the signature actually used.
+    let mut rendered_parameter_names: Vec<Option<String>> = Vec::new();
     let text = if render_options.style == "decbench" {
         let maps = render_options.types.then(|| {
             super::type_maps::decbench_type_maps(
@@ -1394,6 +1400,11 @@ pub(super) fn render_prepared_ast(
             } else {
                 debug_contract.map(|contract| contract.parameter_names.as_slice())
             };
+        // NOT `declared_parameter_names`: the renderer may substitute names the
+        // caller never declared (a conventional `main` becomes
+        // `(int argc, char **argv)` with no DWARF at all), and the inventory
+        // needs the spelling actually printed. Drained after the render below.
+
         if render_options.analyst_prototype.is_some() {
             super::record_prototype_conflict_with_candidate(
                 &render_function.name,
@@ -1468,6 +1479,11 @@ pub(super) fn render_prepared_ast(
             .profiler
             .measure("render", || crate::ir::ast::render(&render_function))
     };
+    rendered_parameter_names = if render_options.style == "decbench" {
+        crate::ir::ast::take_decbench_parameter_names()
+    } else {
+        Vec::new()
+    };
     let mut line_mappings = if render_options.style == "decbench" {
         crate::ir::ast::take_decbench_line_mappings()
     } else {
@@ -1486,6 +1502,7 @@ pub(super) fn render_prepared_ast(
         text,
         provenance,
         line_mappings,
+        parameter_names: rendered_parameter_names,
     }
 }
 
