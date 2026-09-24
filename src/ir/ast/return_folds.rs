@@ -39,7 +39,17 @@ pub(super) fn fold_returns_with_identities(
     identities: &crate::ir::value_number::ValueIdentities,
 ) {
     fold_returns_where(body, &|value| {
-        crate::ir::direct_output::is_exact_return_storage(value)
+        // Numbered values are opaque keys (`value7`) since 8f5285b9, so the
+        // machine result storage is an identity fact, not a spelling: the old
+        // `rax#7` form told `is_exact_return_storage` what `value7` no longer
+        // can. Without this, `list_find`'s shared `rax = 0; return rax;` tail
+        // stayed an assignment to the loop cursor and the sentinel-search
+        // loop was no longer recognisable.
+        let exact_storage = crate::ir::direct_output::is_exact_return_storage(value)
+            || identities
+                .unambiguous_physical_base(value)
+                .is_some_and(crate::ir::abi::result_projection::is_projected_result_storage);
+        exact_storage
             && (!matches!(value, VReg::Phys(name) if name == "ret")
                 || identities.is_result_role(value))
     });
@@ -621,6 +631,52 @@ mod tests {
         );
 
         assert_eq!(body.len(), 2);
+    }
+
+    /// Opaque numbered keys (`value7`) carry their machine storage in the
+    /// identity sidecar, not in the spelling. A value whose storage is `rax`
+    /// folds exactly as `rax#7` did; one whose storage is `rbx` does not.
+    #[test]
+    fn return_fold_reads_result_storage_from_opaque_value_identity() {
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            VReg::phys("value7"),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 7,
+            },
+        );
+        identities.record(
+            VReg::phys("value8"),
+            SsaValue {
+                base: VReg::phys("rbx"),
+                version: 2,
+            },
+        );
+        let returns = |name: &str| {
+            vec![
+                Stmt::Assign {
+                    dst: VReg::phys(name),
+                    src: Expr::Const(0),
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(VReg::phys(name))),
+                },
+            ]
+        };
+        let mut result = returns("value7");
+        let mut callee_saved = returns("value8");
+
+        fold_returns_with_identities(&mut result, &identities);
+        fold_returns_with_identities(&mut callee_saved, &identities);
+
+        assert_eq!(
+            result,
+            vec![Stmt::Return {
+                value: Some(Expr::Const(0)),
+            }]
+        );
+        assert_eq!(callee_saved, returns("value8"));
     }
 
     #[test]
