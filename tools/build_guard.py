@@ -39,6 +39,7 @@ import hashlib
 import os
 import shutil
 import sys
+import sysconfig
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -53,10 +54,24 @@ BUILD_INPUTS = [ROOT / "src", ROOT / "Cargo.toml", ROOT / "build.rs"]
 BUILD_CMD = "VIRTUAL_ENV=.venv uvx maturin develop --release"
 
 
-def native_so() -> Path | None:
-    """The built extension, or None if it has never been built."""
-    matches = sorted(NATIVE_GLOB.parent.glob(NATIVE_GLOB.name))
-    return matches[0] if matches else None
+def native_so(directory: Path | None = None) -> Path | None:
+    """The built extension this interpreter would load, or None if never built.
+
+    A checkout used under two interpreters holds one `_native*.so` per ABI tag
+    (`cpython-312`, `cpython-314`, ...). Prefer the one whose suffix is this
+    interpreter's `EXT_SUFFIX` -- the file `import glaurung._native` actually
+    loads -- and otherwise the most recently built one, never merely the first
+    in sort order, which fingerprinted a stale build as the gate's binary.
+    """
+    directory = NATIVE_GLOB.parent if directory is None else directory
+    matches = sorted(directory.glob(NATIVE_GLOB.name))
+    if not matches:
+        return None
+    suffix = sysconfig.get_config_var("EXT_SUFFIX")
+    for match in matches:
+        if suffix and match.name == f"_native{suffix}":
+            return match
+    return max(matches, key=lambda path: path.stat().st_mtime)
 
 
 def native_fingerprint(so: Path | None = None) -> str | None:

@@ -99,3 +99,28 @@ def test_build_guard_reports_the_native_binary_fingerprint():
     )
     assert len(fingerprint) == 64
     assert set(fingerprint) <= set("0123456789abcdef")
+
+
+def test_build_guard_fingerprints_the_extension_this_interpreter_loads(
+    tmp_path: Path,
+):
+    """Two interpreters leave two `_native*.so` beside each other.
+
+    The guard used to take whichever sorted first, so on a checkout holding a
+    stale `cpython-312` build beside the live `cpython-314` one it reported the
+    stale file as STALE and fingerprinted it as the gate's binary.
+    """
+    import importlib.util
+    import sysconfig
+
+    spec = importlib.util.spec_from_file_location("build_guard", BUILD_GUARD)
+    assert spec is not None and spec.loader is not None
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+
+    live = tmp_path / f"_native{sysconfig.get_config_var('EXT_SUFFIX')}"
+    other = tmp_path / "_native.cpython-30-x86_64-linux-gnu.so"
+    live.write_bytes(b"live")
+    other.write_bytes(b"other")
+    assert sorted([other, live])[0] == other  # the old choice was the wrong one
+    assert guard.native_so(tmp_path) == live
