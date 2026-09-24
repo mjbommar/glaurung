@@ -164,11 +164,21 @@ knowingly accepted.
 
 - **Before, on the first commit of this work (`0f45b614` tree):** 108 failed,
   8 errors, 4858 passed, 480 skipped, 696 xfailed.
-- **After, on `c67edcb6`:** the run had not finished when this record was
-  committed. It had sat at 95% for more than ten minutes on slow Rust-fixture
-  decompiles. Its progress markers at that point were 4711 passed, 42 failed,
-  4 errors, 314 skipped and 831 xfailed.
+- **After, on `c67edcb6`:** 46 failed, 8 errors, 4943 passed, 314 skipped,
+  854 xfailed, in 59:42.
 
-The remaining failures are the decompiler cells and lanes listed under Open.
-These counts are from progress markers, not a terminal summary. Read the final
-line of `~/.cache/glaurung/tmp/fullsuite-final.log` before relying on them.
+Every remaining failure is in the decompiler lanes listed under Open:
+
+| File | Failures and errors |
+|---|---|
+| `test_known_decompiler_failures.py` | 18 |
+| `test_decompiler_fixture_structural.py` | 9 (the `11_call_shapes` const_fold panic) |
+| `test_fixture_structure_census.py` | 5 |
+| `test_decompiler_defuse_census.py` | 5 |
+| `test_variadic_abi_invariants.py` | 3 |
+| `test_decompiler_fixture_matrix.py` | 3 |
+| stripped lane, metamorphic | 2 each |
+| vector memory, profile, packet parser, control-flow semantics, arch round trip, dectest equivalence | 1 each |
+
+The exception is `test_identity_retrieval_protocol.py` (1). It has a 200 ms
+wall-clock extraction limit and has tripped before when the machine was loaded.
