@@ -114,10 +114,7 @@ fn main() {
     ax_warm /= reps as f64;
 
     println!("Path-condition depth K={K}, {reps} reps. Cost to explore to depth K (ms/run):");
-    println!(
-        "  z3 one-shot     : {:>8.3} ms   (comparison oracle)",
-        z3
-    );
+    println!("  z3 one-shot     : {:>8.3} ms   (comparison oracle)", z3);
     println!(
         "  axeyum one-shot : {:>8.3} ms   ({:.2}x vs z3)",
         ax_os,
