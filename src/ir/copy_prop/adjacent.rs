@@ -92,7 +92,11 @@ fn count_statement_reads(
 #[cfg(test)]
 pub fn propagate_adjacent_promoted_values(f: &mut Function) {
     loop {
-        if !fold_one_adjacent_promoted_value(&mut f.body, None, IdentityAuthority::LegacySpelling) {
+        if !fold_one_adjacent_promoted_value_in_function(
+            &mut f.body,
+            None,
+            IdentityAuthority::LegacySpelling,
+        ) {
             break;
         }
     }
@@ -104,7 +108,7 @@ pub fn propagate_adjacent_promoted_values_with_identities(
     identities: &crate::ir::value_number::ValueIdentities,
 ) {
     loop {
-        if !fold_one_adjacent_promoted_value(
+        if !fold_one_adjacent_promoted_value_in_function(
             &mut f.body,
             None,
             IdentityAuthority::Exact(identities),
@@ -126,7 +130,7 @@ pub fn propagate_adjacent_promoted_values_with_identities(
 #[cfg(test)]
 pub fn propagate_adjacent_typed_promoted_values(f: &mut Function, types: &TypeMap) {
     loop {
-        if !fold_one_adjacent_promoted_value(
+        if !fold_one_adjacent_promoted_value_in_function(
             &mut f.body,
             Some(types),
             IdentityAuthority::LegacySpelling,
@@ -143,7 +147,7 @@ pub fn propagate_adjacent_typed_promoted_values_with_identities(
     identities: &crate::ir::value_number::ValueIdentities,
 ) {
     loop {
-        if !fold_one_adjacent_promoted_value(
+        if !fold_one_adjacent_promoted_value_in_function(
             &mut f.body,
             Some(types),
             IdentityAuthority::Exact(identities),
@@ -534,10 +538,60 @@ fn fold_one_adjacent_guard_value(
     false
 }
 
+/// One adjacent promoted-value fold anywhere in a function body.
+///
+/// The same-run check in [`fold_one_adjacent_promoted_value`] proves the value
+/// dead only for the statement list it sits in. A definition inside a loop body
+/// or a branch arm can also reach a read AFTER the enclosing construct (or, in a
+/// loop, the next iteration's reads before it), and those reads live in a
+/// different `Vec`. `121_dense_expression:gcc:O0:dense_fold` is that shape:
+/// `b = (a << 1) ^ i; a ^= b;` in the loop step, with `b` read again after the
+/// loop -- folding deleted the only in-loop update of `b`. Nested runs therefore
+/// require the consumer to be the definition's only read in the WHOLE function;
+/// so does the top level when a `goto` can re-enter it.
+fn fold_one_adjacent_promoted_value_in_function(
+    body: &mut Vec<Stmt>,
+    types: Option<&TypeMap>,
+    identities: IdentityAuthority<'_>,
+) -> bool {
+    let mut whole = RegMap::default();
+    count_body_reads(body, &mut whole, identities);
+    let top_level = if contains_goto(body) {
+        Some(&whole)
+    } else {
+        None
+    };
+    fold_one_adjacent_promoted_value(body, types, identities, top_level, &whole)
+}
+
+fn contains_goto(body: &[Stmt]) -> bool {
+    body.iter().any(|statement| match statement.semantic() {
+        Stmt::Goto { .. } => true,
+        Stmt::If {
+            then_body,
+            else_body,
+            ..
+        } => contains_goto(then_body) || else_body.as_deref().is_some_and(contains_goto),
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+            contains_goto(body)
+        }
+        Stmt::Switch { cases, default, .. } => {
+            cases.iter().any(|(_, body)| contains_goto(body))
+                || default.as_deref().is_some_and(contains_goto)
+        }
+        Stmt::TryCatch { try_body, catches } => {
+            contains_goto(try_body) || catches.iter().any(|catch| contains_goto(&catch.body))
+        }
+        _ => false,
+    })
+}
+
 fn fold_one_adjacent_promoted_value(
     body: &mut Vec<Stmt>,
     types: Option<&TypeMap>,
     identities: IdentityAuthority<'_>,
+    function_reads: Option<&RegMap<usize>>,
+    whole: &RegMap<usize>,
 ) -> bool {
     let promoted = |value: &crate::ir::types::VReg| identities.is_promoted_stack_object(value);
     for index in 0..body.len().saturating_sub(1) {
@@ -588,6 +642,11 @@ fn fold_one_adjacent_promoted_value(
             // block an exact local def-use fold.
             continue;
         }
+        if function_reads.is_some_and(|reads| reads.get(&dst).copied().unwrap_or(0) != 1) {
+            // A read outside this run (after the enclosing loop/branch, or on
+            // a loop's next iteration) still observes the definition.
+            continue;
+        }
 
         let substituted = match body[next_index].semantic_mut() {
             Stmt::Assign { src, .. } | Stmt::Store { src, .. } => {
@@ -619,26 +678,37 @@ fn fold_one_adjacent_promoted_value(
                 else_body,
                 ..
             } => {
-                fold_one_adjacent_promoted_value(then_body, types, identities)
+                fold_one_adjacent_promoted_value(then_body, types, identities, Some(whole), whole)
                     || else_body.as_mut().is_some_and(|body| {
-                        fold_one_adjacent_promoted_value(body, types, identities)
+                        fold_one_adjacent_promoted_value(
+                            body,
+                            types,
+                            identities,
+                            Some(whole),
+                            whole,
+                        )
                     })
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
-                fold_one_adjacent_promoted_value(body, types, identities)
+                fold_one_adjacent_promoted_value(body, types, identities, Some(whole), whole)
             }
             Stmt::Switch { cases, default, .. } => {
-                cases
-                    .iter_mut()
-                    .any(|(_, body)| fold_one_adjacent_promoted_value(body, types, identities))
-                    || default.as_mut().is_some_and(|body| {
-                        fold_one_adjacent_promoted_value(body, types, identities)
-                    })
+                cases.iter_mut().any(|(_, body)| {
+                    fold_one_adjacent_promoted_value(body, types, identities, Some(whole), whole)
+                }) || default.as_mut().is_some_and(|body| {
+                    fold_one_adjacent_promoted_value(body, types, identities, Some(whole), whole)
+                })
             }
             Stmt::TryCatch { try_body, catches } => {
-                fold_one_adjacent_promoted_value(try_body, types, identities)
+                fold_one_adjacent_promoted_value(try_body, types, identities, Some(whole), whole)
                     || catches.iter_mut().any(|catch| {
-                        fold_one_adjacent_promoted_value(&mut catch.body, types, identities)
+                        fold_one_adjacent_promoted_value(
+                            &mut catch.body,
+                            types,
+                            identities,
+                            Some(whole),
+                            whole,
+                        )
                     })
             }
             _ => false,
@@ -1117,6 +1187,113 @@ mod tests {
         propagate_adjacent_typed_promoted_values(&mut function, &types);
 
         assert_eq!(function, expected);
+    }
+
+    fn int_types(names: &[&str]) -> crate::ir::types_recover::TypeMap {
+        let mut types = crate::ir::types_recover::TypeMap::default();
+        for name in names {
+            types.upsert_public(
+                reg(name),
+                crate::ir::types_recover::TypeHint::Int {
+                    signed: true,
+                    width: 4,
+                },
+            );
+        }
+        types
+    }
+
+    /// `dense_fold`'s loop step, `a ^= (b = (a << 1) ^ i)`, with `b` read again
+    /// after the loop. The in-loop store's only reader in the loop BODY is the
+    /// next statement, but the definition is live out of the loop; deleting it
+    /// left `b` at its pre-loop value (`121_dense_expression:gcc:O0:dense_fold`).
+    #[test]
+    fn loop_body_store_live_after_the_loop_is_not_folded() {
+        let update = Expr::Bin {
+            op: BinOp::Xor,
+            lhs: Box::new(Expr::Reg(reg("local_8"))),
+            rhs: Box::new(Expr::Reg(reg("local_c"))),
+        };
+        let mut function = Function {
+            name: "dense_fold".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::While {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Slt,
+                        lhs: Box::new(Expr::Reg(reg("local_c"))),
+                        rhs: Box::new(Expr::Reg(reg("count"))),
+                    },
+                    body: vec![
+                        Stmt::Store {
+                            addr: Expr::Reg(reg("local_4")),
+                            src: update,
+                            size: 4,
+                        },
+                        Stmt::Store {
+                            addr: Expr::Reg(reg("local_8")),
+                            src: Expr::Bin {
+                                op: BinOp::Xor,
+                                lhs: Box::new(Expr::Reg(reg("local_8"))),
+                                rhs: Box::new(Expr::Reg(reg("local_4"))),
+                            },
+                            size: 4,
+                        },
+                    ],
+                },
+                Stmt::Return {
+                    value: Some(Expr::Reg(reg("local_4"))),
+                },
+            ],
+        };
+        let expected = function.clone();
+
+        propagate_adjacent_typed_promoted_values(
+            &mut function,
+            &int_types(&["local_4", "local_8", "local_c"]),
+        );
+
+        assert_eq!(function, expected);
+    }
+
+    /// The counterpart: a loop-body temporary with no reader outside its
+    /// adjacent consumer still folds.
+    #[test]
+    fn loop_body_store_read_only_by_its_neighbour_still_folds() {
+        let update = Expr::Bin {
+            op: BinOp::Xor,
+            lhs: Box::new(Expr::Reg(reg("local_8"))),
+            rhs: Box::new(Expr::Const(3)),
+        };
+        let mut function = Function {
+            name: "step".into(),
+            entry_va: 0,
+            body: vec![Stmt::While {
+                cond: Expr::Reg(reg("more")),
+                body: vec![
+                    Stmt::Store {
+                        addr: Expr::Reg(reg("local_4")),
+                        src: update.clone(),
+                        size: 4,
+                    },
+                    Stmt::Store {
+                        addr: Expr::Reg(reg("local_8")),
+                        src: Expr::Reg(reg("local_4")),
+                        size: 4,
+                    },
+                ],
+            }],
+        };
+
+        propagate_adjacent_typed_promoted_values(
+            &mut function,
+            &int_types(&["local_4", "local_8"]),
+        );
+
+        let Stmt::While { body, .. } = &function.body[0] else {
+            panic!("loop vanished: {function:#?}");
+        };
+        assert_eq!(body.len(), 1, "{function:#?}");
     }
 
     #[test]
