@@ -290,6 +290,41 @@ fn architectural_query_ops(bits: u32, name: &str, inputs: &[&str], outputs: &[&s
     ops
 }
 
+/// The value of register operand `name` for a swap, captured into `temp`
+/// BEFORE either destination is written. A bit-preserving partial view is
+/// extracted from its canonical parent; any other register is copied whole.
+fn xchg_read_register(name: &str, temp: VReg, ops: &mut Vec<Op>) -> Value {
+    match partial_gp_view(name) {
+        Some(view) => ops.extend(read_view_ops(view, temp.clone())),
+        None => ops.push(Op::Assign {
+            dst: temp.clone(),
+            src: Value::Reg(VReg::phys(name)),
+        }),
+    }
+    Value::Reg(temp)
+}
+
+/// Write `value` to register operand `name` of a swap with `mov`'s view rules:
+/// 8-/16-bit views preserve the parent's other bits, a 32-bit view on x86-64
+/// zero-extends into its parent, and everything else is a whole assignment.
+fn xchg_write_register(name: &str, value: Value, bits: u32) -> Vec<Op> {
+    if let Some(view) = partial_gp_view(name) {
+        return partial_write_ops(view, value);
+    }
+    if let Some(view) = zero_extending_gp_view(name, bits) {
+        return vec![Op::ZExt {
+            dst: VReg::phys(view.parent),
+            src: value,
+            from: Width::W32,
+            to: Width::W64,
+        }];
+    }
+    vec![Op::Assign {
+        dst: VReg::phys(name),
+        src: value,
+    }]
+}
+
 /// Read a bit-preserving partial view out of its canonical parent into `dst`:
 /// `dst = (parent >> offset) & value_mask`.
 ///
@@ -2088,64 +2123,65 @@ fn lift_one_inner(instr: &iced_x86::Instruction, bits: u32) -> Vec<Op> {
             }]
         }
         Mnemonic::Xchg => {
+            // Every register operand is read and written THROUGH its canonical
+            // parent: an 8-/16-bit view is a bit-preserving read-modify-write,
+            // a 32-bit view zero-extends, exactly as `mov` lifts them. Naming
+            // the view directly (`al = old`) writes a register SSA never merges
+            // into `rax` (see `regview::ssa_parent`), so the next read of `eax`
+            // saw the value from before the swap.
             if instr.op_count() == 2 {
                 match (instr.op_kind(0), instr.op_kind(1)) {
                     (OpKind::Register, OpKind::Register) => {
-                        let left = VReg::phys(reg_name(instr.op_register(0)));
-                        let right = VReg::phys(reg_name(instr.op_register(1)));
-                        let tmp = VReg::Temp(0);
-                        return vec![
-                            Op::Assign {
-                                dst: tmp.clone(),
-                                src: Value::Reg(left.clone()),
-                            },
-                            Op::Assign {
-                                dst: left,
-                                src: Value::Reg(right.clone()),
-                            },
-                            Op::Assign {
-                                dst: right,
-                                src: Value::Reg(tmp),
-                            },
-                        ];
+                        let left = reg_name(instr.op_register(0));
+                        let right = reg_name(instr.op_register(1));
+                        let whole = |name: &str| {
+                            partial_gp_view(name).is_none()
+                                && zero_extending_gp_view(name, bits).is_none()
+                        };
+                        if whole(&left) && whole(&right) {
+                            let (left, right) = (VReg::phys(left), VReg::phys(right));
+                            let tmp = VReg::Temp(0);
+                            return vec![
+                                Op::Assign {
+                                    dst: tmp.clone(),
+                                    src: Value::Reg(left.clone()),
+                                },
+                                Op::Assign {
+                                    dst: left,
+                                    src: Value::Reg(right.clone()),
+                                },
+                                Op::Assign {
+                                    dst: right,
+                                    src: Value::Reg(tmp),
+                                },
+                            ];
+                        }
+                        // `partial_write_ops` stages its value in `Temp(0)`, so
+                        // both captured operands live in other temps.
+                        let mut ops = Vec::new();
+                        let left_value = xchg_read_register(&left, VReg::Temp(1), &mut ops);
+                        let right_value = xchg_read_register(&right, VReg::Temp(2), &mut ops);
+                        ops.extend(xchg_write_register(&left, right_value, bits));
+                        ops.extend(xchg_write_register(&right, left_value, bits));
+                        return ops;
                     }
-                    (OpKind::Memory, OpKind::Register) => {
+                    (OpKind::Memory, OpKind::Register) | (OpKind::Register, OpKind::Memory) => {
+                        let reg_index = if instr.op_kind(0) == OpKind::Register {
+                            0
+                        } else {
+                            1
+                        };
                         let addr = mem_op_of(instr);
-                        let reg = VReg::phys(reg_name(instr.op_register(1)));
+                        let reg = reg_name(instr.op_register(reg_index));
                         let tmp = VReg::Temp(0);
-                        return vec![
-                            Op::Load {
-                                dst: tmp.clone(),
-                                addr: addr.clone(),
-                            },
-                            Op::Store {
-                                addr,
-                                src: Value::Reg(reg.clone()),
-                            },
-                            Op::Assign {
-                                dst: reg,
-                                src: Value::Reg(tmp),
-                            },
-                        ];
-                    }
-                    (OpKind::Register, OpKind::Memory) => {
-                        let reg = VReg::phys(reg_name(instr.op_register(0)));
-                        let addr = mem_op_of(instr);
-                        let tmp = VReg::Temp(0);
-                        return vec![
-                            Op::Load {
-                                dst: tmp.clone(),
-                                addr: addr.clone(),
-                            },
-                            Op::Store {
-                                addr,
-                                src: Value::Reg(reg.clone()),
-                            },
-                            Op::Assign {
-                                dst: reg,
-                                src: Value::Reg(tmp),
-                            },
-                        ];
+                        let mut ops = vec![Op::Load {
+                            dst: tmp.clone(),
+                            addr: addr.clone(),
+                        }];
+                        let stored = xchg_read_register(&reg, VReg::Temp(1), &mut ops);
+                        ops.push(Op::Store { addr, src: stored });
+                        ops.extend(xchg_write_register(&reg, Value::Reg(tmp), bits));
+                        return ops;
                     }
                     _ => {}
                 }
@@ -4218,6 +4254,72 @@ mod tests {
                 src: Value::Reg(VReg::Temp(0)),
             } if *dst == VReg::phys("rbx")
         ));
+    }
+
+    /// `atomic_flag_test_and_set` at gcc/clang -O0 is `mov $1,%eax; xchg
+    /// %al,-0x11(%rbp); movzbl %al,%eax`. The swap's register write is a
+    /// bit-preserving byte view of `rax`; lifting it as `al = old` wrote a
+    /// name SSA never merges into `rax`, so the following `movzbl` (which
+    /// reads `rax & 255`) saw the constant 1 instead of the flag's old value
+    /// (`141_atomics:*:O0:atomic_flag_round_trip`).
+    #[test]
+    fn xchg_low_byte_with_memory_updates_the_canonical_parent() {
+        // xchg %al,-0x11(%rbp)  (86 45 ef)
+        let ops = lift64(&[0x86, 0x45, 0xef]);
+        assert!(matches!(&ops[0].op, Op::Load { .. }), "got {ops:#?}");
+        assert!(
+            ops.iter().any(|ins| matches!(
+                &ins.op,
+                Op::Store {
+                    src: Value::Reg(VReg::Temp(_)),
+                    ..
+                }
+            )),
+            "the stored byte is read out of rax, got {ops:#?}"
+        );
+        assert!(ops.iter().any(|ins| matches!(
+            &ins.op,
+            Op::Bin {
+                dst: VReg::Phys(parent),
+                op: BinOp::Or,
+                ..
+            } if parent == "rax"
+        )));
+        for ins in &ops {
+            let (def, uses) = crate::ir::use_def::def_uses(&ins.op);
+            assert!(
+                !matches!(def, Some(VReg::Phys(name)) if name == "al"),
+                "al is written as an independent name: {ops:#?}"
+            );
+            assert!(
+                !uses
+                    .iter()
+                    .any(|v| matches!(v, VReg::Phys(name) if name == "al")),
+                "al is read as an independent name: {ops:#?}"
+            );
+        }
+    }
+
+    /// A 32-bit swap zero-extends both destinations, exactly like `mov`.
+    #[test]
+    fn xchg_dword_registers_zero_extend_their_parents() {
+        // xchg %edx,%eax  (92)  -- iced reports it as xchg eax, edx
+        let ops = lift64(&[0x87, 0xd0]);
+        let zext_parents: Vec<_> = ops
+            .iter()
+            .filter_map(|ins| match &ins.op {
+                Op::ZExt {
+                    dst: VReg::Phys(parent),
+                    from: Width::W32,
+                    to: Width::W64,
+                    ..
+                } => Some(parent.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(zext_parents.len(), 2, "got {ops:#?}");
+        assert!(zext_parents.iter().any(|p| p == "rax"), "got {ops:#?}");
+        assert!(zext_parents.iter().any(|p| p == "rdx"), "got {ops:#?}");
     }
 
     #[test]
