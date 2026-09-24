@@ -51,6 +51,37 @@ _PROVENANCE = frozenset({"captured", "RECONSTRUCTION"})
 #: the assertion. The reproduction bodies are minimal by design; the realistic
 #: captured text for each lives in the fixture file named in the comment.
 KNOWN_GAPS: dict[str, str] = {
+    # The one binja decline named in a98f3af4's measurement over DecBench's
+    # 4,385 cells: a C++ symbol whose qualifier is a parenthesised phrase.
+    # Joern's C front end loses it too.
+    "parenthesised-qualifier": "int (static initializer)::GTM::f(void)\n{\n  return 0;\n}\n",
+    # Corpus B (decompiler-dialects.md section 4): C++/Rust *template* paths in
+    # the declarator. A plain `A::b` now parses; a `<...>` qualifier does not.
+    "template-qualified-name": "int Vec<u8>::len(void)\n{\n  return 0;\n}\n",
+}
+
+#: Constructs that DO parse today and must keep parsing. Several were gaps until
+#: the lexer/parser calling-convention work landed; they are regression cases now.
+RECOVERED_CONSTRUCTS: dict[str, str] = {
+    "msvc-cdecl": "int __cdecl f(char *fmt, ...)\n{\n  return 0;\n}\n",
+    "msvc-stdcall": "long __stdcall f(void)\n{\n  return 0;\n}\n",
+    "msvc-fastcall": "__int64 __fastcall f(__int64 a1)\n{\n  return a1;\n}\n",
+    "ida-usercall-register-slots": "int __usercall f@<eax>(int a@<ecx>)\n{\n  return a;\n}\n",
+    "binja-register-annotation": "long long f(long long a @ rax)\n{\n  return a;\n}\n",
+    "ida-int128": "__int128 f(int a)\n{\n  return a;\n}\n",
+    "ghidra-undefined-types": "undefined8 f(undefined8 *p)\n{\n  return *p;\n}\n",
+    "ghidra-code-pointer": "void f(void)\n{\n  code *p;\n  p = (code *)0x0;\n  (*p)();\n  return;\n}\n",
+    "gnu-computed-goto": "int f(int a)\n{\n  void *p = &&L;\n  goto *p;\nL:\n  return a;\n}\n",
+    "unbalanced-body": "int f(int a) { if (a) { return 1; }",
+    "garbage-tail": "int f(int a) { return a; }  ###!!! not c at all",
+    "dewolf-doubled-return-type": "void void f(void)\n{\n  return;\n}\n",
+    "angr-aggregate-return": "unsigned long long [4] f(void)\n{\n  return 0;\n}\n",
+    # Promoted from KNOWN_GAPS on 2026-09-24. All ten were closed by a98f3af4
+    # (2026-09-04, "csource: parse the dialects real decompilers emit"), which
+    # made the declarator-specifier rule structural and added the trailing-
+    # attribute recovery, but left the ledger red. Each was checked before the
+    # move: with an `if`/`else` plus a `while` body, every form below yields the
+    # same 6-node, 7-edge CFG as the same body under a plain `int f(int a)`.
     # ghidra.c :: _start -- Ghidra's own calling-convention name, not an MSVC one.
     "ghidra-processEntry": "void processEntry _start(undefined8 p1)\n{\n  g(p1);\n  return;\n}\n",
     # ghidra.c :: FUN_00108540 -- quirk 1 of DecBench's sanitize_decompiled_c.
@@ -74,22 +105,12 @@ KNOWN_GAPS: dict[str, str] = {
     "implicit-int-definition": "f(int a, int b)\n{\n  return a;\n}\n",
 }
 
-#: Constructs that DO parse today and must keep parsing. Several were gaps until
-#: the lexer/parser calling-convention work landed; they are regression cases now.
-RECOVERED_CONSTRUCTS: dict[str, str] = {
-    "msvc-cdecl": "int __cdecl f(char *fmt, ...)\n{\n  return 0;\n}\n",
-    "msvc-stdcall": "long __stdcall f(void)\n{\n  return 0;\n}\n",
-    "msvc-fastcall": "__int64 __fastcall f(__int64 a1)\n{\n  return a1;\n}\n",
-    "ida-usercall-register-slots": "int __usercall f@<eax>(int a@<ecx>)\n{\n  return a;\n}\n",
-    "binja-register-annotation": "long long f(long long a @ rax)\n{\n  return a;\n}\n",
-    "ida-int128": "__int128 f(int a)\n{\n  return a;\n}\n",
-    "ghidra-undefined-types": "undefined8 f(undefined8 *p)\n{\n  return *p;\n}\n",
-    "ghidra-code-pointer": "void f(void)\n{\n  code *p;\n  p = (code *)0x0;\n  (*p)();\n  return;\n}\n",
-    "gnu-computed-goto": "int f(int a)\n{\n  void *p = &&L;\n  goto *p;\nL:\n  return a;\n}\n",
-    "unbalanced-body": "int f(int a) { if (a) { return 1; }",
-    "garbage-tail": "int f(int a) { return a; }  ###!!! not c at all",
-    "dewolf-doubled-return-type": "void void f(void)\n{\n  return;\n}\n",
-    "angr-aggregate-return": "unsigned long long [4] f(void)\n{\n  return 0;\n}\n",
+
+#: The recovered name for a supported construct whose function is not ``f``.
+_RECOVERED_NAME: dict[str, str] = {
+    "ghidra-processEntry": "_start",
+    "ghidra-thiscall": "C::f",
+    "qualified-name": "A::b",
 }
 
 
@@ -323,7 +344,8 @@ def test_a_supported_dialect_construct_stays_supported(name: str) -> None:
     recovery that keeps a truncated decompiler dump scoreable at all.
     """
     recovered = sorted(csource.parity_cfgs(RECOVERED_CONSTRUCTS[name]))
-    assert recovered == ["f"], f"{name} regressed: recovered {recovered}"
+    expected = [_RECOVERED_NAME.get(name, "f")]
+    assert recovered == expected, f"{name} regressed: recovered {recovered}"
 
 
 def test_parsing_a_dialect_fixture_is_deterministic() -> None:

@@ -41,8 +41,12 @@
 /* case: usage
  * provenance: captured
  * source: shadow / newgidmap
- * expect: -
- * gap: trailing function attribute after the parameter list (__noreturn)
+ * expect: usage
+ * note: RECOVERED since a98f3af4 (2026-09-04, 'parse the dialects real
+ * note: decompilers emit'); ledger updated 2026-09-24. Former gap:
+ * note: trailing function attribute after the parameter list (__noreturn). Its CFG is identical (nodes and edges) to the same
+ * note: body under a plain 'int X()' header, so the recovery is not a
+ * note: mis-parse. The notes below describe the text, and why it was a gap.
  * note: 'void usage() __noreturn' is not C in any dialect: __noreturn is an
  * note: identifier where C expects '{', ';' or a K&R declaration list.
  * note: DecBench's sanitize_decompiled_c does NOT rewrite it -- Joern's CDT
@@ -64,8 +68,12 @@
 /* case: bi_reverse
  * provenance: captured
  * source: gzip / gzip
- * expect: -
- * gap: trailing function attribute after the parameter list (__pure)
+ * expect: bi_reverse
+ * note: RECOVERED since a98f3af4 (2026-09-04, 'parse the dialects real
+ * note: decompilers emit'); ledger updated 2026-09-24. Former gap:
+ * note: trailing function attribute after the parameter list (__pure). Its CFG is identical (nodes and edges) to the same
+ * note: body under a plain 'int X()' header, so the recovery is not a
+ * note: mis-parse. The notes below describe the text, and why it was a gap.
  * note: Same shape as __noreturn, different attribute. Binary Ninja emits
  * note: __noreturn, __pure and __const this way.
  */
@@ -91,8 +99,12 @@
 /* case: handler
  * provenance: captured
  * source: sysvinit / wall
- * expect: -
- * gap: trailing function attribute after the parameter list (__noreturn)
+ * expect: handler
+ * note: RECOVERED since a98f3af4 (2026-09-04, 'parse the dialects real
+ * note: decompilers emit'); ledger updated 2026-09-24. Former gap:
+ * note: trailing function attribute after the parameter list (__noreturn). Its CFG is identical (nodes and edges) to the same
+ * note: body under a plain 'int X()' header, so the recovery is not a
+ * note: mis-parse. The notes below describe the text, and why it was a gap.
  * note: The smallest instance: a single call and a '/* no return */' comment.
  */
   void handler() __noreturn

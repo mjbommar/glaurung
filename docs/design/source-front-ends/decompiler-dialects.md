@@ -115,6 +115,18 @@ ordinary C parses. §3 covers what Hex-Rays actually prints.
 
 ## 3. Per-dialect: what is not standard C, and what we do with it
 
+> **2026-09-24 update.** Every construct this section marks "parses since
+> `a98f3af4`" was a gap when the section was written. Glaurung `a98f3af4`
+> (2026-09-04, "csource: parse the dialects real decompilers emit"; the code now
+> lives in the `cindergraph` crate, [source-001](../../decisions/source-001-depend-on-cindergraph-by-git-rev.md))
+> closed them and recorded 4,045 -> 4,339 of DecBench's 4,385 cells, with
+> `lost=0 shape-changed=0` on a per-cell CFG fingerprint (the commit message
+> holds the table and the method). The fixture cases and `KNOWN_GAPS` were
+> updated on 2026-09-24. The check made before promoting them: each recovered
+> case CFG is identical, nodes and edges, to the same body under a plain
+> `int X()` header. §2 and §4 predate the fix and were not re-measured here.
+> Their tables are the historical baseline, not current rates.
+
 ### 3.1 Ghidra
 
 Ghidra's C output is the best-behaved of the seven. Fixture:
@@ -126,9 +138,9 @@ Ghidra's C output is the best-behaved of the seven. Fixture:
 | `/* WARNING: ... */` inline analyzer comments | `/* WARNING: Subroutine does not return */` | parses | comments |
 | `in_FS_OFFSET`, `stack0x00000008`, `DAT_`/`PTR_`/`FUN_` symbols | `*(long *)(in_FS_OFFSET + 0x28)` | parses | ordinary identifiers |
 | `halt_baddata()` | `halt_baddata();` | parses | ordinary call |
-| **calling convention in the declarator** | `void processEntry _start(...)` | **gap** | §5.1 |
-| **aggregate/array return** | `undefined1 [16] FUN_00108540(void)` | **gap** | layer-2 quirk 1 |
-| **`::` in the function name** | `switchD_001011b2::caseD_0(...)` | **gap** | jump-table stubs; Joern's C frontend also fails |
+| **calling convention in the declarator** | `void processEntry _start(...)` | parses since `a98f3af4` | §5.1 |
+| **aggregate/array return** | `undefined1 [16] FUN_00108540(void)` | parses since `a98f3af4` | layer-2 quirk 1 |
+| **`::` in the function name** | `switchD_001011b2::caseD_0(...)` | parses since `a98f3af4`, under the qualified name | jump-table stubs; Joern's C frontend also fails; a template qualifier (`Vec<u8>::len`) is still a gap |
 | `__stdcall`, `__cdecl`, `__fastcall` | `HRESULT __stdcall DllCanUnloadNow(void)` | parses | was a gap until the in-flight lexer work landed |
 
 `processEntry` is the one to notice. It is Ghidra's *own* calling-convention
@@ -149,7 +161,7 @@ reconstructions**, labelled as such in the file.
 | `__fastcall`, `__cdecl`, `__stdcall` | parses | landed with the in-flight lexer work |
 | `__usercall f@<eax>(int a@<ecx>)` | parses | landed with the same work |
 | `LODWORD(x)` / `HIDWORD(x)` | parses | ordinary calls |
-| **`__spoils<R1,R2,R3,R12,LR>`** | **gap** | §5.2 |
+| **`__spoils<R1,R2,R3,R12,LR>`** | parses since `a98f3af4` | §5.1 |
 
 `__spoils` is the only IDA-ism DecBench's layer 1 does not delete, so it is the
 only one that actually reaches Joern. It is the single `ida` cell of 500 we lose
@@ -174,7 +186,7 @@ cases are captured from Corpus A.
 | `u>>=` unsigned-shift operator spelling | `var_14 u>>= 1;` | parses |
 | `label_1:` plus `goto label_1;` | | parses |
 | ` @ rax` register annotation | `int64_t f(int64_t arg1 @ rax)` | parses (layer-2 quirk 2 unnecessary) |
-| **trailing function attribute** | `void usage() __noreturn` then `{ ... }` | **gap** |
+| **trailing function attribute** | `void usage() __noreturn` then `{ ... }` | parses since `a98f3af4` |
 
 The trailing attribute is **the largest single Joern-versus-us gap in this
 whole study**: 33 of our 34 binja losses in Corpus A are `__noreturn` (25) or
@@ -223,8 +235,8 @@ more: 15.0% against Joern's 23.3%.
 | construct | example | us |
 |---|---|---|
 | doubled return type | `void void usage()` | parses |
-| **doubled parameter list** | `long int64_t f(void* a)(void * a){...}` | **gap** |
-| **trailing attribute taking a parameter list** | `void void usage() __noreturn(){...}` | **gap** |
+| **doubled parameter list** | `long int64_t f(void* a)(void * a){...}` | parses since `a98f3af4` |
+| **trailing attribute taking a parameter list** | `void void usage() __noreturn(){...}` | parses since `a98f3af4` |
 | `/* param */` inline argument-name comments | `dcgettext(/* domainname */ 0UL, ...)` | parses |
 | `Failed to decompile ... due to ...` prose cells | | not recoverable |
 

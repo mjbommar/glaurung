@@ -16,8 +16,12 @@
 /* case: history_def_last
  * provenance: captured
  * source: libedit / libedit.so.0.0
- * expect: -
- * gap: doubled return type and doubled parameter list in the definition
+ * expect: history_def_last
+ * note: RECOVERED since a98f3af4 (2026-09-04, 'parse the dialects real
+ * note: decompilers emit'); ledger updated 2026-09-24. Former gap:
+ * note: doubled return type and doubled parameter list in the definition. Its CFG is identical (nodes and edges) to the same
+ * note: body under a plain 'int X()' header, so the recovery is not a
+ * note: mis-parse. The notes below describe the text, and why it was a gap.
  * note: 'long int64_t f(void* arg1, int128_t* arg2)(void * arg1, int128_t * arg2)'
  * note: -- dewolf prints its Binary Ninja signature and then a C signature, so
  * note: the declarator has two parameter lists. This is the dominant dewolf
@@ -36,8 +40,12 @@ return 0xffffffff;}
 /* case: usage
  * provenance: captured
  * source: shadow / newgidmap
- * expect: -
- * gap: doubled return type plus a trailing __noreturn taking a parameter list
+ * expect: usage
+ * note: RECOVERED since a98f3af4 (2026-09-04, 'parse the dialects real
+ * note: decompilers emit'); ledger updated 2026-09-24. Former gap:
+ * note: doubled return type plus a trailing __noreturn taking a parameter list. Its CFG is identical (nodes and edges) to the same
+ * note: body under a plain 'int X()' header, so the recovery is not a
+ * note: mis-parse. The notes below describe the text, and why it was a gap.
  * note: 'void void usage() __noreturn(){...}'. 'void void' alone parses; the
  * note: '__noreturn()' between the parameter list and the body does not.
  * note: Joern recovers this one, so it is a real Joern-versus-us gap.
@@ -59,8 +67,12 @@ exit(/* status */ 1);}
 /* case: bi_reverse
  * provenance: captured
  * source: gzip / gzip
- * expect: -
- * gap: doubled return type plus a trailing __pure with a parameter list
+ * expect: bi_reverse
+ * note: RECOVERED since a98f3af4 (2026-09-04, 'parse the dialects real
+ * note: decompilers emit'); ledger updated 2026-09-24. Former gap:
+ * note: doubled return type plus a trailing __pure with a parameter list. Its CFG is identical (nodes and edges) to the same
+ * note: body under a plain 'int X()' header, so the recovery is not a
+ * note: mis-parse. The notes below describe the text, and why it was a gap.
  * note: Same shape as usage but with __pure. Joern loses this one as well.
  */
 unsigned long uint64_t bi_reverse(uint32_t arg1, int32_t arg2) __pure(unsigned int arg1, int arg2){unsigned int var_1;

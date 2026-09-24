@@ -58,8 +58,12 @@ void parse_record(uchar *input,size_t total_len)
 /* case: _start
  * provenance: captured
  * source: samples/binaries/platforms/linux/amd64/synthetic/vulnparse-c-gcc-O0
- * expect: -
- * gap: calling-convention keyword in the declarator (processEntry)
+ * expect: _start
+ * note: RECOVERED since a98f3af4 (2026-09-04, 'parse the dialects real
+ * note: decompilers emit'); ledger updated 2026-09-24. Former gap:
+ * note: calling-convention keyword in the declarator (processEntry). Its CFG is identical (nodes and edges) to the same
+ * note: body under a plain 'int X()' header, so the recovery is not a
+ * note: mis-parse. The notes below describe the text, and why it was a gap.
  * note: Ghidra prints the calling convention it assigned between the return
  * note: type and the name. 'processEntry' is Ghidra's own convention name, not
  * note: an MSVC keyword, so a fix that whitelists __cdecl/__stdcall/__fastcall/
@@ -80,8 +84,12 @@ void processEntry _start(undefined8 param_1,undefined8 param_2)
 /* case: switchD_001011b2::caseD_0
  * provenance: captured
  * source: samples/binaries/platforms/linux/amd64/synthetic/switchy-c-gcc-O2-stripped
- * expect: -
- * gap: '::' in the function name of a jump-table stub
+ * expect: switchD_001011b2::caseD_0
+ * note: RECOVERED since a98f3af4 (2026-09-04, 'parse the dialects real
+ * note: decompilers emit'); ledger updated 2026-09-24. Former gap:
+ * note: '::' in the function name of a jump-table stub. Its CFG is identical (nodes and edges) to the same
+ * note: body under a plain 'int X()' header, so the recovery is not a
+ * note: mis-parse. The notes below describe the text, and why it was a gap.
  * note: Ghidra names recovered switch stubs switchD_<addr>::caseD_<n> and
  * note: switchD_<addr>::default, so C output for any jump table carries a C++
  * note: qualified name. Joern's C frontend does not parse this either.
@@ -98,8 +106,12 @@ int switchD_001011b2::caseD_0(undefined8 param_1,undefined8 param_2,int param_3)
 /* case: FUN_00108540
  * provenance: captured
  * source: tests/decompiler_fixtures/build/219_rust_iterator_chains-rustc-O2strip.so
- * expect: -
- * gap: aggregate/array return type: undefined1 [16] name(void)
+ * expect: FUN_00108540
+ * note: RECOVERED since a98f3af4 (2026-09-04, 'parse the dialects real
+ * note: decompilers emit'); ledger updated 2026-09-24. Former gap:
+ * note: aggregate/array return type: undefined1 [16] name(void). Its CFG is identical (nodes and edges) to the same
+ * note: body under a plain 'int X()' header, so the recovery is not a
+ * note: mis-parse. The notes below describe the text, and why it was a gap.
  * note: This is quirk 1 of DecBench's sanitize_decompiled_c: Joern parses
  * note: nothing for such a function, so DecBench rewrites the signature to
  * note: 'undefined1 name(void)' before Joern sees it. We do not sanitize.
@@ -138,8 +150,12 @@ HRESULT __stdcall DllCanUnloadNow(void)
 /* case: Base::op
  * provenance: captured
  * source: tests/decompiler_fixtures/build/10_cpp_runtime_shapes-gcc-O2strip.so
- * expect: -
- * gap: __thiscall plus a '::' qualified name
+ * expect: Base::op
+ * note: RECOVERED since a98f3af4 (2026-09-04, 'parse the dialects real
+ * note: decompilers emit'); ledger updated 2026-09-24. Former gap:
+ * note: __thiscall plus a '::' qualified name. Its CFG is identical (nodes and edges) to the same
+ * note: body under a plain 'int X()' header, so the recovery is not a
+ * note: mis-parse. The notes below describe the text, and why it was a gap.
  * note: Ghidra emits __thiscall for C++ methods even in its C output. The two
  * note: quirks arrive together, so fixing only the keyword does not recover it.
  */

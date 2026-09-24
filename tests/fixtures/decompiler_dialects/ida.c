@@ -78,8 +78,12 @@ long long history_def_last(long long a1, long long a2)
 /* case: dis_func1
  * provenance: captured
  * source: chibios / ch
- * expect: -
- * gap: __spoils<R1,R2,R3,R12,LR> declaration specifier
+ * expect: dis_func1
+ * note: RECOVERED since a98f3af4 (2026-09-04, 'parse the dialects real
+ * note: decompilers emit'); ledger updated 2026-09-24. Former gap:
+ * note: __spoils<R1,R2,R3,R12,LR> declaration specifier. Its CFG is identical (nodes and edges) to the same
+ * note: body under a plain 'int X()' header, so the recovery is not a
+ * note: mis-parse. The notes below describe the text, and why it was a gap.
  * note: The single ida cell of 500 in the sample set that we do not recover.
  * note: __spoils is not in ida_raw.py's replacement table, so it is the one
  * note: IDA-ism that actually reaches Joern -- which parses it and we do not.
