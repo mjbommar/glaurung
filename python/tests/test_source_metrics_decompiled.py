@@ -26,14 +26,20 @@ _DECOMPILE_CANDIDATES = (
     ROOT / "samples/binaries/platforms/linux/amd64/export/native/gcc/O0/hello-gcc-O0",
 )
 
-#: Fixture objects when the fixture harness has run, else a committed sample.
-_DECOMPILE_CANDIDATES = (
-    ROOT / "tests" / "decompiler_fixtures" / "build" / "03_loop_shapes-gcc-O0.so",
-    ROOT / "samples/binaries/platforms/linux/amd64/export/native/gcc/O0/hello-gcc-O0",
-)
+
+def _is_elf(path: Path) -> bool:
+    """A real ELF, not a missing file or an un-pulled Git LFS pointer."""
+    try:
+        with path.open("rb") as stream:
+            return stream.read(4) == b"\x7fELF"
+    except OSError:
+        return False
 
 
-@pytest.mark.core
+# `lfs`, not `core`: the `python-core` runner has neither the fixture build
+# nor LFS objects, so there the sample is a 130-byte pointer and decompiling it
+# failed with "Unknown file magic". The extended job has LFS and runs it.
+@pytest.mark.lfs
 def test_our_own_decompiler_output_measures_cleanly():
     """The loop this module exists to close: decompile a real binary, measure
     the C that comes out, and read the structural cost.
@@ -47,7 +53,7 @@ def test_our_own_decompiler_output_measures_cleanly():
     structurer change, and pinning that here would make this a duplicate of the
     fixture matrix that fails for the wrong reasons.
     """
-    binary = next((p for p in _DECOMPILE_CANDIDATES if p.exists()), None)
+    binary = next((p for p in _DECOMPILE_CANDIDATES if _is_elf(p)), None)
     if binary is None:
         pytest.skip(
             "needs tests/decompiler_fixtures/build (run the fixture harness) "
