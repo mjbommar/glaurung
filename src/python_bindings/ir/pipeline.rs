@@ -1905,7 +1905,7 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
             crate::ir::structure_v2::render::adapt_tree(tracked.function(), report.tree.as_ref()?)
         })
         .flatten();
-    let (numbered, mut parameter_slots, value_identities) = if recover_semantic_prototype {
+    let (numbered, mut parameter_slots, mut value_identities) = if recover_semantic_prototype {
         let source_lifetimes = dwarf_source_register_lifetimes(declared, cc);
         let (numbered, _, parameter_slots, identities) =
             crate::ir::value_number::value_number_with_parameter_slots_lifetimes_and_identities(
@@ -1952,6 +1952,10 @@ pub(super) fn prepare_llir_for_lowering_with_shadow(
         }
     }
     lock_parameter_slots_from_prototype(prototype.as_ref(), &mut parameter_slots);
+    // The identity sidecar attached every live-in ABI slot during value
+    // numbering; it must agree with the locked set, or a variadic function's
+    // register-save-area spills reappear as fixed parameters.
+    value_identities.retain_abi_parameter_slots(&parameter_slots);
     PreparedLlir {
         ssa,
         region,

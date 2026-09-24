@@ -294,6 +294,20 @@ impl ValueIdentities {
         }
     }
 
+    /// Drop ABI slot rows that the pipeline's final parameter set excludes.
+    ///
+    /// [`Self::attach_abi_parameter_slots`] records every live-in argument
+    /// register. When a locked prototype narrows the parameter set (a variadic
+    /// function's register save area makes every ABI slot live on entry), the
+    /// sidecar must agree with it: `parameter_slot` is consulted as authority
+    /// by naming, declaration planning and dead-store pruning.
+    pub(crate) fn retain_abi_parameter_slots(&mut self, parameter_slots: &HashSet<usize>) {
+        self.parameter_slots_by_value.retain(|_, slots| {
+            slots.retain(|slot| parameter_slots.contains(slot));
+            !slots.is_empty()
+        });
+    }
+
     /// Clone this sidecar into the AST's presentation-name key space.
     ///
     /// `aliases` is the exact raw-name to role-name map returned by naming.
@@ -1339,6 +1353,49 @@ mod tests {
         assert_eq!(live_slots, HashSet::from([0]));
         assert_eq!(identities.parameter_slot(&VReg::phys("rdi")), Some(0));
         assert_eq!(identities.parameter_slot(&VReg::phys("rdi#1")), None);
+        assert_eq!(identities.parameter_slot(&VReg::phys("rsi")), None);
+    }
+
+    /// gcc -O2 `int sum(int count, ...)` spills `rsi`..`r9` into the register
+    /// save area, so all six ABI slots are live on entry, but the locked
+    /// prototype names only `count`. The live-in rows must not survive the
+    /// lock, or every consumer of `parameter_slot` renders the save-area
+    /// spills as five fixed parameters and the prototype loses its `...`
+    /// (`113_varargs:gcc:O2:variadic_none`).
+    #[test]
+    fn locked_parameter_slots_drop_live_in_abi_rows_outside_the_prototype() {
+        let function = mk(vec![
+            Op::Store {
+                addr: crate::ir::types::MemOp {
+                    base: Some(VReg::phys("rsp")),
+                    index: None,
+                    scale: 1,
+                    disp: 0x28,
+                    size: 8,
+                    segment: None,
+                    endian: crate::ir::types::Endian::Little,
+                },
+                src: Value::Reg(VReg::phys("rsi")),
+            },
+            Op::Assign {
+                dst: VReg::phys("rbx"),
+                src: Value::Reg(VReg::phys("rdi")),
+            },
+        ]);
+        let ssa = compute_ssa(&function);
+        let (_, _, live_slots, mut identities) =
+            value_number_with_parameter_slots_lifetimes_and_identities(
+                &function,
+                &ssa,
+                CallConv::SysVAmd64,
+                &[],
+            );
+        assert_eq!(live_slots, HashSet::from([0, 1]));
+        assert_eq!(identities.parameter_slot(&VReg::phys("rsi")), Some(1));
+
+        identities.retain_abi_parameter_slots(&HashSet::from([0]));
+
+        assert_eq!(identities.parameter_slot(&VReg::phys("rdi")), Some(0));
         assert_eq!(identities.parameter_slot(&VReg::phys("rsi")), None);
     }
 
