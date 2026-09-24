@@ -1,5 +1,7 @@
 # WP3 captured frame-definition identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Status: bounded production consumer migration landed at `d2518e37` on
 `agent/wp5-next-switch`.
 

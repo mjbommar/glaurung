@@ -1,5 +1,7 @@
 # WP3 copy-fixpoint identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `f273123e` repairs a dropped identity sidecar at the main AST
 copy/constant fixpoint.
 

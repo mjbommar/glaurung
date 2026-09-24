@@ -1,5 +1,7 @@
 # WP3 copy propagation preserves attributed indirect stores
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `7c60441e` closes an lvalue-category correctness hole in copy
 propagation. When a pointer scratch copied an attributed promoted-local value,
 the store-address substitution previously failed to recognize the semantic

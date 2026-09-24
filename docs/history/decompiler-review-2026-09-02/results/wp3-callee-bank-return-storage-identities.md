@@ -1,5 +1,7 @@
 # WP3 callee bank-return storage identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `858f8957` moves promoted-scalar classification in aggregate bank-return
 composition from display spelling to pipeline-owned `ValueIdentities`.
 

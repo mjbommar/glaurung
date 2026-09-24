@@ -1,5 +1,7 @@
 # WP3 indirect-result canonical bases
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `df62ee4c` stops indirect-result buffer tracking from reparsing an
 authoritative identity base as a display name.
 

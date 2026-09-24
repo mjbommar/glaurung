@@ -1,5 +1,7 @@
 # WP3 declaration-plan identity consumer
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commits `48cf15a0` and `6a7ec0b5` carry the role-projected opaque SSA identity sidecar into
 the immutable declaration plan that decides the C types emitted by the final
 renderer.

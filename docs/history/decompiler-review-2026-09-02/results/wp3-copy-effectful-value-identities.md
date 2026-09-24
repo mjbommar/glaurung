@@ -1,5 +1,7 @@
 # WP3 adjacent effectful-value identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `3e8cb088` gives the late adjacent effectful-value mover an
 identity-aware production entry point. This pass moves a one-use call
 expression into its immediately adjacent consumer, deleting the temporary so

@@ -1,5 +1,7 @@
 # WP3 multi-output SSA identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `8bc75c71` closes the first-output-only gap between SSA construction and
 value-numbered LLIR.
 

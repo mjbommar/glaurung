@@ -1,5 +1,7 @@
 # WP3 recovered throw values
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `716ccce5` extends the width-preserving promoted-value proof to recovered
 throws. Exception recovery creates `Throw` after the ordinary typed
 promoted-value pass has already run, so the renderer now reapplies that exact

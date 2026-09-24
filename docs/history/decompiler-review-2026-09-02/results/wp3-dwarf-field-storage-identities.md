@@ -1,5 +1,7 @@
 # WP3 DWARF field storage identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `696af8e1` moves all promoted-store classification inside DWARF field
 recovery to pipeline-owned `ValueIdentities`.
 

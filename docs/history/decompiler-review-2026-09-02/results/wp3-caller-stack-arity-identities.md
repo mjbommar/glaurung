@@ -1,5 +1,7 @@
 # WP3 caller stack-arity identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `ebcd6440` removes display-name classification from the separate
 caller-derived fixed-arity pipeline.
 

@@ -1,5 +1,7 @@
 # WP3 exception verifier coverage
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `c2e9e225` closes the pre-render verifier's inconsistent exception-region
 coverage. Its read census and flow walker already entered `TryCatch`, but the
 whole-function definition census did not. As a result, visibly assigned values

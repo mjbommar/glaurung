@@ -1,6 +1,6 @@
 # WP3/WP9 ARM32 definition identity
 
-Date: 2026-09-05
+> **Kind:** record · **Date:** 2026-09-05
 
 Behavioral commits: `a8ba1b87`, hardened by `dcdc99cc`
 

@@ -1,5 +1,7 @@
 # WP3 coalesced x86 storage identity
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Status: bounded production consumer migration landed at `1f58963c` on
 `master`.
 

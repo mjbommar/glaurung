@@ -1,5 +1,7 @@
 # WP3 tail-call expression origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `7e65572a` closes the expression-ownership layer deliberately left open
 by the earlier statement-origin tail-call migration.
 

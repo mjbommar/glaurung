@@ -1,5 +1,7 @@
 # WP3 coalesced packed-lane lowering
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Status: bounded WP3 output consumer migration landed at `27910f65` on
 `master`.
 

@@ -1,5 +1,7 @@
 # WP3 catch-local dead-copy cleanup
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Final commit `0d8b92c8` completes one bounded cleanup omission exposed after
 typed-handler recovery. Dead-copy counting previously used one whole-function
 read map, so a register spelling used on the normal path could falsely keep an

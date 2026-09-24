@@ -1,5 +1,7 @@
 # WP3 attributed catch values
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `d5d3b8dd` closes the two O0 execution failures exposed by the exception
 constant-fold checkpoint. The recovered catch body read the result of
 `__cxa_begin_catch` through an expression-origin carrier. Exception recovery

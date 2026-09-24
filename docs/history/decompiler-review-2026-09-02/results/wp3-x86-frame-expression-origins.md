@@ -1,6 +1,6 @@
 # WP3 x86 frame expression origins
 
-Date: 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Commit: `1412bdca`
 

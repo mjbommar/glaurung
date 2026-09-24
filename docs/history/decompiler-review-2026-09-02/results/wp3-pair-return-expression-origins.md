@@ -1,6 +1,6 @@
 # WP3 pair-return expression origins
 
-Date: 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Commit: `8acf4d08`
 

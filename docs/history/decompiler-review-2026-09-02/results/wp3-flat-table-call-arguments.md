@@ -1,5 +1,7 @@
 # WP3 flat-CFG function-table call arguments
 
+> **Kind:** record · **Date:** 2026-09-12
+
 Status: bounded production migration landed through `6bcff0c2` on `master`.
 
 ## Result

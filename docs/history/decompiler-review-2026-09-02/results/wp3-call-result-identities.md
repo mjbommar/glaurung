@@ -1,5 +1,7 @@
 # WP3 call-result identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Status: bounded production consumer migration landed at `11a96792` on
 `agent/wp5-next-switch`.
 

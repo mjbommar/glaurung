@@ -1,5 +1,7 @@
 # WP3 declaration expression origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `79bcb911` closes two output-facing expression-origin holes in the shared
 identifier census.
 

@@ -1,5 +1,7 @@
 # WP3 empty-identity call-argument closure
 
+> **Kind:** record · **Date:** 2026-09-12
+
 Commit `22b3eb99` repairs plain/register-style call argument reconstruction
 after the unified pipeline. That style deliberately keeps unnumbered LLIR, so
 `prepare_llir_for_lowering_with_shadow` publishes a globally empty

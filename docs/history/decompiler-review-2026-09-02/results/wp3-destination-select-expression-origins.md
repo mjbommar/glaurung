@@ -1,5 +1,7 @@
 # WP3 destination-select expression origins
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `80ec2b73` makes the destination-aware value renderer consume the
 semantic expression beneath an `Expr::Origin` carrier before choosing its
 select/cast conversion strategy. The origin set remains stored on the AST; it

@@ -1,6 +1,6 @@
 # WP3 canary numeric-conversion transparency
 
-Date: 2026-09-10
+> **Kind:** record · **Date:** 2026-09-10
 
 ## Defect and repair
 

@@ -1,5 +1,7 @@
 # WP3 rendered call-target origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `44338752` closes three adjacent output-facing expression-origin holes
 in the shared AST identifier and rendering boundary.
 

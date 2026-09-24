@@ -1,6 +1,6 @@
 # Full-rerun result verification
 
-> **Kind:** independent verification record · **Date:** 2026-09-14 · **Scope:** `glaurung-e170a2b4-exact-adapter`
+> **Kind:** record · **Date:** 2026-09-14 · **Scope:** `glaurung-e170a2b4-exact-adapter`
 
 ## Verdict
 

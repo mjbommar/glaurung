@@ -1,5 +1,7 @@
 # WP3 coalesced integer declaration types
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Status: bounded WP3 output consumer migration landed at `20364f46` on
 `master`.
 

@@ -1,6 +1,6 @@
 # WP3 stack-coordinate phase preservation
 
-Date: 2026-09-06
+> **Kind:** record · **Date:** 2026-09-06
 
 Behavioral commits: `4fa0b12f`, hardened by `dcdc99cc`
 

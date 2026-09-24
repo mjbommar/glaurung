@@ -1,5 +1,7 @@
 # WP3 frame-anchor identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `e4aaabf8` removes display-name classification from stack promotion's
 frame-anchor proof.
 

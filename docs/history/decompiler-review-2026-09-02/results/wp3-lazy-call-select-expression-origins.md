@@ -1,6 +1,6 @@
 # WP3 lazy-call select expression origins
 
-Date: 2026-09-09
+> **Kind:** record · **Date:** 2026-09-09
 
 Commit: `327b6734`
 

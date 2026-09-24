@@ -1,5 +1,7 @@
 # WP3 coalesced scalar-float storage identity
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Status: bounded production consumer migration landed at `51780adb` on
 `master`.
 

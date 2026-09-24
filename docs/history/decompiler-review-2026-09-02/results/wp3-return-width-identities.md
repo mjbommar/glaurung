@@ -1,5 +1,7 @@
 # WP3 return-width identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Status: bounded production consumer migration landed at `a86966f1` on
 `agent/wp5-next-switch`.
 

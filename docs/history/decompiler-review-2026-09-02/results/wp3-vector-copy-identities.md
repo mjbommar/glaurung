@@ -1,5 +1,7 @@
 # WP3 vector-copy identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Status: bounded production consumer migration landed at `9e43b52b` on
 `agent/wp5-next-switch`.
 

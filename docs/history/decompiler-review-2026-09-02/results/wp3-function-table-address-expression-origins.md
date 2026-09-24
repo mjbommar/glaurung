@@ -1,5 +1,7 @@
 # WP3 function-table address expression origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `5f26fa50` closes the complete address-proof ownership boundary in
 `function_tables`.
 

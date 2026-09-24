@@ -1,5 +1,7 @@
 # WP3 created-select return origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `7beb26f9` closes the adjacent expression-carrier boundary in
 `select_fold::fold_created_select_return`.
 

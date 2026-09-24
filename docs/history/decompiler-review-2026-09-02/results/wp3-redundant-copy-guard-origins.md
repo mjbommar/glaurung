@@ -1,5 +1,7 @@
 # WP3 redundant-copy guard expression origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `b58c5322` makes redundant reaching-copy guard fusion transparent to
 expression ownership. Two copies of the same register or constant value may
 now be recognized as semantically identical even when their source expressions

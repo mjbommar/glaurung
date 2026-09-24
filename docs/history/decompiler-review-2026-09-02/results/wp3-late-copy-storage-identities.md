@@ -1,5 +1,7 @@
 # WP3 late copy-cleanup storage identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `00943c69` gives the late production copy-propagation pass an identity-
 aware scratch/storage boundary. Dead-copy elimination, straight-line dead
 stores, counted single-use propagation, and closed scratch-dataflow pruning now

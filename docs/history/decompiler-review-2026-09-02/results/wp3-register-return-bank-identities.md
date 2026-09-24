@@ -1,5 +1,7 @@
 # WP3 register return-bank identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `4345efff` removes display-name classification from the register-resident
 multi-bank return materializer in `src/ir/callee_return_bank.rs`.
 

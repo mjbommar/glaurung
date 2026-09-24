@@ -1,5 +1,7 @@
 # WP3 unobserved object-store identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `ca6a4df7` moves unobserved promoted-object field-store cleanup from
 display-name inference to producer-owned stack-object identity. Production now
 deletes those stores only when `ValueIdentities` says the base is promoted

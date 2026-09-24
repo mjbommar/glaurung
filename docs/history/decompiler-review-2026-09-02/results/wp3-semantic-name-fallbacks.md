@@ -1,5 +1,7 @@
 # WP3 semantic display-name fallbacks
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commits `633df9f7` and `db6c4756` remove two production cases where installing
 the authoritative value-identity sidecar still permitted semantic decisions
 from a `varN` display spelling.

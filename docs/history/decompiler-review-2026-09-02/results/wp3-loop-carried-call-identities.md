@@ -1,5 +1,7 @@
 # WP3 loop-carried call identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Status: landed in `10325870` on `agent/wp5-next-switch`.
 
 ## Result

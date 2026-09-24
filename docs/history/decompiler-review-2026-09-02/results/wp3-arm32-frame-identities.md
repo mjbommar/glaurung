@@ -1,5 +1,7 @@
 # WP3 ARM32 frame identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Status: bounded production consumer migration landed at `5fdb7906` on
 `agent/wp5-next-switch`.
 

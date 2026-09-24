@@ -1,5 +1,7 @@
 # WP3 static glibc canary alias closure
 
+> **Kind:** record · **Date:** 2026-09-12
+
 Commit `73b8fbba` closes the undefined-local regression in statically linked
 glibc binaries whose stack-protector failure edge calls the hidden
 `__stack_chk_fail_local` alias. The canary pass already recognised the ordinary

@@ -1,5 +1,7 @@
 # WP3 callee pair-return identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `489622b4` removes display-name classification from callee-side
 two-register integer-result composition in `src/ir/callee_return_pair.rs`.
 

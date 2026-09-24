@@ -1,6 +1,6 @@
 # WP3 stack-address alias identities
 
-Date: 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Source commit: `6ac46be4`
 

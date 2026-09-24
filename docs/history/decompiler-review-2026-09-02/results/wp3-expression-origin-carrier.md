@@ -1,5 +1,7 @@
 # WP3 expression origin carrier
 
+> **Kind:** record · **Date:** 2026-09-07
+
 Commit `9b10f06e` introduces direct instruction ownership for C-like AST
 expressions. This is the model and consumer-transparency foundation for
 production expression attribution; it does not claim that lowering already

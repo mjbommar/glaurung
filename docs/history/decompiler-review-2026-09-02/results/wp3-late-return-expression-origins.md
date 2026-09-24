@@ -1,6 +1,6 @@
 # WP3 late return expression origins
 
-> **Kind:** result · **Date:** 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Commit `5b8909b3` makes the late redundant-return cleanup transparent to
 expression origin carriers.  An attributed constant assignment immediately

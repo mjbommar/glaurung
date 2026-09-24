@@ -1,5 +1,7 @@
 # WP3 switch-entry copy identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `7ea07705` gives late switch-entry copy propagation an identity-aware
 production entry point and keeps the same authority for the whole pass
 transaction.

@@ -1,5 +1,7 @@
 # WP3 memory-object storage identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `925bf81f` moves promoted-store classification in the prepared-AST
 memory-object adapter from display spelling to pipeline-owned identities.
 

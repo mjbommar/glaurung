@@ -1,5 +1,7 @@
 # WP3 final-verifier stack identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `bdb1e0eb` moves the final rendered-output verifier's stack-store
 classification from `local_` / `stack_` display spelling to producer-owned
 promoted-stack identity. The identity authority is threaded through the

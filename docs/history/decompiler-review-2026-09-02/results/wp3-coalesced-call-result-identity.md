@@ -1,5 +1,7 @@
 # WP3 coalesced call-result identity
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `81c33138` migrates call-result attribution from exact-single-candidate
 SSA lookup to the identity sidecar's unambiguous physical-storage fact. A
 rendered value may legitimately represent several non-interfering SSA versions

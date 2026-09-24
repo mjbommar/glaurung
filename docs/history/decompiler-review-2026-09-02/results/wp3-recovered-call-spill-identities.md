@@ -1,5 +1,7 @@
 # WP3 recovered-call spill identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `316697e7` moves the recovered-callee-layout spill resolver onto the
 pipeline-owned `ValueIdentities` sidecar.
 

@@ -1,6 +1,6 @@
 # WP3 copy wide-load refusal
 
-> **Kind:** result · **Date:** 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Commit `de1cd148` makes counted copy propagation's wide-load and unknown-value
 refusals inspect semantic expressions beneath origin carriers. A single-use

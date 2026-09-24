@@ -1,5 +1,7 @@
 # WP3 canonical split-string expression origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `7bee91ff` closes the outer-expression carrier boundary in
 `strings_fold`.
 

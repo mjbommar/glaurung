@@ -1,5 +1,7 @@
 # WP3 call-target layout expression origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `71123306` closes two call-layout proof boundaries that still inspected
 raw target expressions. Provenance on a direct named/address target could hide
 its recovered callee layout, while provenance on a relocation-proven function

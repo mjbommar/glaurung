@@ -1,5 +1,7 @@
 # WP3 typed promoted-value identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `f90a277c` moves the late typed adjacent promoted-value mover from
 display-name inference to producer-owned stack-object identity. A recovered
 scalar type remains necessary to distinguish a promoted-store assignment from

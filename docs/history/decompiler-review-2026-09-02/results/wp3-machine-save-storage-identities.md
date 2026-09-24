@@ -1,5 +1,7 @@
 # WP3 machine-save storage identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `00b7ebbc` removes the remaining production display-name shortcut from
 callee-save spill cleanup. A removable spill now requires two independent
 pipeline facts: the destination is producer-owned machine-save storage and the

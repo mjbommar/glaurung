@@ -1,5 +1,7 @@
 # WP3 frame-spill type identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Status: bounded production consumer migration landed at `5fcd345c` on
 `agent/wp5-next-switch`.
 

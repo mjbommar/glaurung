@@ -1,5 +1,7 @@
 # WP3 phi-copy coalescing identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `a4853187` removes production phi-copy coalescing's dependency on the
 serialized `register#version` spelling.
 

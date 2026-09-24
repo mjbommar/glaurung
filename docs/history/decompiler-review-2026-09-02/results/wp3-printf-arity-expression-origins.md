@@ -1,5 +1,7 @@
 # WP3 printf arity expression origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `6aa84209` closes one bounded expression-origin hole in variadic call
 recovery. The format-proven arity recognizer now inspects the semantic payload
 of an attributed call target and recursively unwraps attributed integer casts

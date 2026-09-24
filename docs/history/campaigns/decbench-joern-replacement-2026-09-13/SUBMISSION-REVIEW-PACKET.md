@@ -1,6 +1,6 @@
 # DecBench submission review packet
 
-> **Kind:** internal review record · **Date:** 2026-09-14 · **Upstream action:** none
+> **Kind:** record · **Date:** 2026-09-14 · **Upstream action:** none
 
 ## Decision
 

@@ -1,5 +1,7 @@
 # WP3 function-table index expression origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `3889f7e5` closes the scaled-index reconstruction boundary in
 `function_tables`.
 

@@ -1,5 +1,7 @@
 # WP3 promoted-store conversion preservation
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `57a6b936` removes a one-use promoted scalar temporary without deleting
 the assignment conversion that gave the value its source-language width. The
 typed adjacent-value proof now carries an explicit integer `Cast` when a store

@@ -1,5 +1,7 @@
 # WP3 coalesced return-storage type refinement
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Status: bounded WP3/WP6 consumer migration landed at `eed616e3` on
 `master`.
 

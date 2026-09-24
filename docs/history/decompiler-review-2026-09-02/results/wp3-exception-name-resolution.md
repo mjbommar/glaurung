@@ -1,5 +1,7 @@
 # WP3 exception name-resolution traversal
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `385a7635` closes the exception traversal omission in `name_resolve`.
 
 Known addresses are converted to readable symbol references before later

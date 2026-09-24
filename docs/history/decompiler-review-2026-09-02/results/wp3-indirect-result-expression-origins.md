@@ -1,6 +1,6 @@
 # WP3 indirect-result expression origins
 
-Date: 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Commit: `f93e8655`
 

@@ -1,5 +1,7 @@
 # WP2 checked pipeline profile
 
+> **Kind:** record · **Date:** 2026-09-06
+
 Revision under test: `a7797e28`
 
 ## Result

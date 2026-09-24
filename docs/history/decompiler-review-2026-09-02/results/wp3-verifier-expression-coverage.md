@@ -1,5 +1,7 @@
 # WP3 verifier expression coverage
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `ffb5d009` completes the dangerous frame-address verifier's recursive
 expression coverage. A frame register used as an address is unsafe in emitted C
 because the renderer declares it as an uninitialised local. The verifier already

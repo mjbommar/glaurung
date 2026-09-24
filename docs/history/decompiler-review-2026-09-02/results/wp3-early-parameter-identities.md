@@ -1,5 +1,7 @@
 # WP3 early parameter identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 ## Outcome
 
 Commit `079e26d5` makes value numbering attach source-parameter ownership

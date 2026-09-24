@@ -1,5 +1,7 @@
 # WP3 frame-slot typing matches complete identity sets
 
+> **Kind:** record · **Date:** 2026-09-12
+
 Status: bounded WP3 semantic-reader migration landed at `31f8c3a6` on
 `master`.
 

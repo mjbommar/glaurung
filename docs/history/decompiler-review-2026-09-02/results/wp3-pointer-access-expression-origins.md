@@ -1,5 +1,7 @@
 # WP3 pointer-access expression origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `5e2b7fff` closes the recursive pointer-access-width consumer in the
 scored-C ABI refinement pass.
 

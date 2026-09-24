@@ -1,6 +1,6 @@
 # WP3 preceding-call result identities
 
-Date: 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Source commit: `fba2ee95`
 

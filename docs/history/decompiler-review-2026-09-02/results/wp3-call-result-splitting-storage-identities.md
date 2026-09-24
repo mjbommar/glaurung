@@ -1,5 +1,7 @@
 # WP3 call-result splitting storage identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `37fb9aa7` removes production call-result lifetime splitting's dependency
 on serialized register names.
 

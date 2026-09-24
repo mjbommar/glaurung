@@ -1,5 +1,7 @@
 # WP3 AST role identity projection
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `ef444751` moves one production AST cleanup off presentation-name
 guessing and onto the opaque SSA identity sidecar.
 

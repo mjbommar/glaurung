@@ -1,5 +1,7 @@
 # WP3 exception expression reconstruction
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `34d25589` closes the exception-body boundary in `expr_reconstruct`.
 
 Expression reconstruction removes a lifter temporary only when its sole use is

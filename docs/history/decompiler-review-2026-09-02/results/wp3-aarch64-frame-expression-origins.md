@@ -1,6 +1,6 @@
 # WP3 AArch64 frame expression origins
 
-Date: 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Commit: `a66033bc`
 

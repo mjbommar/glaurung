@@ -1,5 +1,7 @@
 # WP3 prototype returns preserve the reaching SSA value
 
+> **Kind:** record · **Date:** 2026-09-12
+
 Status: bounded WP3 semantic-reader migration landed at `6993a984` on
 `master`.
 

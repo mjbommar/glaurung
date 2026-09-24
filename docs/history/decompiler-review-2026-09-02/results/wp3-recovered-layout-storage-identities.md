@@ -1,6 +1,6 @@
 # WP3 recovered-layout storage identities
 
-Date: 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Source commit: `5042ef6d`
 

@@ -1,5 +1,7 @@
 # WP3 reconstructed-expression origin attribution
 
+> **Kind:** record · **Date:** 2026-09-07
+
 Commit `3c5c74b9` is the first bounded production attachment of the
 expression-origin carrier introduced by `9b10f06e`. When expression
 reconstruction removes a single-use temporary definition and substitutes its

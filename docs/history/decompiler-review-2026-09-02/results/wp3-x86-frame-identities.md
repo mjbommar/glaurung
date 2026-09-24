@@ -1,5 +1,7 @@
 # WP3 x86 frame identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Status: bounded production consumer migration landed at `a7762f05` on
 `agent/wp5-next-switch`.
 

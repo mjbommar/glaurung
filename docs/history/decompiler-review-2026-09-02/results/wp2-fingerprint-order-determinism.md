@@ -1,5 +1,7 @@
 # WP2 fingerprint and request-order determinism
 
+> **Kind:** record · **Date:** 2026-09-06
+
 Revision under test: `c907121a`
 
 ## Result

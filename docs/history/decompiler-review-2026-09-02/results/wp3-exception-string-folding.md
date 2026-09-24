@@ -1,5 +1,7 @@
 # WP3 exception string-fold traversal
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `c75604a0` closes the exception traversal omission in `strings_fold`.
 
 After name resolution, the string pass converts proven addresses in readonly

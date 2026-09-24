@@ -1,5 +1,7 @@
 # WP3 loop-entry coalescing accepts same-storage identities
 
+> **Kind:** record · **Date:** 2026-09-12
+
 Status: bounded WP3 semantic-reader migration landed at `7e97c4c8` on
 `master`.
 

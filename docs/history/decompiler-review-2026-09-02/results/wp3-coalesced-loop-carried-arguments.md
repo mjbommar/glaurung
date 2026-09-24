@@ -1,5 +1,7 @@
 # WP3 coalesced loop-carried call arguments
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Status: bounded production consumer migration landed at `28e70130` on
 `master`.
 

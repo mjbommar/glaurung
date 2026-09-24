@@ -1,5 +1,7 @@
 # WP3 adjacent overwritten-value identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `1290c291` gives adjacent consumed-and-overwritten value folding an
 identity-aware production entry point. This pass recognizes shapes such as
 `result = predicate; result = table[result]` and substitutes the first value

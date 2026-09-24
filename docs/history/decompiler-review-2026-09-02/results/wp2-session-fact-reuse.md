@@ -1,5 +1,7 @@
 # WP2 reusable-session fact ownership
 
+> **Kind:** record · **Date:** 2026-09-06
+
 Revision under test: `357579c4`
 
 ## Result

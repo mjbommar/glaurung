@@ -1,5 +1,7 @@
 # WP3 copy-store lvalue identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `e4bd8cb4` makes copy propagation preserve an indirect store's lvalue
 category using the pipeline-owned promoted-stack identity sidecar. Previously,
 `subst_store_addr` accepted authoritative identities indirectly through its

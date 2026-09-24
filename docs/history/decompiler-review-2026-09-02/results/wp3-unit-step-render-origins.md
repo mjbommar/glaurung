@@ -1,5 +1,7 @@
 # WP3 unit-step render origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `e54bd1d7` closes a bounded output-readability hole in the scored-C
 renderer. Its integer-local unit-step recognizer now skips expression-origin
 carriers while peeling the existing width-cast chain and while checking the

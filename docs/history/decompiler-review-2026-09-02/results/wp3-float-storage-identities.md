@@ -1,5 +1,7 @@
 # WP3 float-storage identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `bde6dd82` makes production float-role projection retain semantic float
 width across out-of-SSA coalescing. A rendered role may represent several
 non-interfering SSA versions of the same VFP register, so requiring one exact

@@ -1,5 +1,7 @@
 # WP3 vtable-tail identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Status: landed in `c576b207` on `agent/wp5-next-switch`.
 
 ## Result

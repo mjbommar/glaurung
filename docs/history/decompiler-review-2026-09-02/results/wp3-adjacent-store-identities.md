@@ -1,5 +1,7 @@
 # WP3 adjacent overwritten-store identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `592ea81b` moves adjacent overwritten promoted-store cleanup from
 display-name inference to producer-owned stack-object identity. The production
 dead-store path now optimizes a slot only when `ValueIdentities` proves it is

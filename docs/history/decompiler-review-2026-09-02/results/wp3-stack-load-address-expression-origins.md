@@ -1,6 +1,6 @@
 # WP3 stack-load address expression origins
 
-Date: 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Commit: `9e3a75e9`
 

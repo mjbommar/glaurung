@@ -1,5 +1,7 @@
 # WP3 typed parameter-role metadata
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `7eeb84ca` extends `ValueIdentities` with source-parameter slot metadata.
 The common pipeline attaches its authoritative `parameter_slots` while
 projecting exact AST role aliases. A slot is recorded directly as a semantic

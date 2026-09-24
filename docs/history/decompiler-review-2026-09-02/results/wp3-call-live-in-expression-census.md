@@ -1,5 +1,7 @@
 # WP3 call live-in expression census
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `0678d3fb` closes a provenance-transparency hole in call live-in
 discovery. The register census used to inspect statement owners but silently
 skip an `Expr::Origin`, so attributing a live-in register could make that

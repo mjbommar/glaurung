@@ -1,5 +1,7 @@
 # WP3 zero-setup call-target expression origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `1366b33a` makes the convention-generic zero-setup forwarding proof
 transparent to expression-origin carriers on a direct callee. An attributed
 named target no longer makes a first value-producing call appear indirect and

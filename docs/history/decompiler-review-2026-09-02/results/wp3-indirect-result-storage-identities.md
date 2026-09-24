@@ -1,5 +1,7 @@
 # WP3 indirect-result storage identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `b71cdc92` removes display-name parsing from the production indirect
 aggregate-result consumer in `src/ir/aapcs64_indirect_result.rs`.
 

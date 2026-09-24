@@ -1,6 +1,6 @@
 # WP3: remove machine identity from numbered value keys
 
-Date: 2026-09-12
+> **Kind:** record · **Date:** 2026-09-12
 
 Code commit: `8f5285b9`
 

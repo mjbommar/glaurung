@@ -1,5 +1,7 @@
 # WP3 float-register identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `64eb116d` removes display-name classification from production scalar
 float gating and LLIR-to-AST lowering.
 

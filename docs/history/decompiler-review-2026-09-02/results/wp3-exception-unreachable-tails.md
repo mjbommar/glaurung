@@ -1,5 +1,7 @@
 # WP3 recovered exception unreachable tails
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `84771886` closes the late exception-region omission in the existing
 origin-transparent unreachable-tail pass. The pass already removed sequential
 text after an unconditional transfer, but it neither entered `TryCatch` bodies

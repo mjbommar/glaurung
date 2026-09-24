@@ -1,6 +1,6 @@
 # WP3 phi-width identities
 
-Date: 2026-09-09
+> **Kind:** record · **Date:** 2026-09-09
 
 Source commit: `d68b005f`
 

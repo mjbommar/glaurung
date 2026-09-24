@@ -1,6 +1,6 @@
 # WP3 stack-canary expression origins
 
-Date: 2026-09-09
+> **Kind:** record · **Date:** 2026-09-09
 
 Commit: `1e6f4743`
 

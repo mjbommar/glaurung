@@ -1,5 +1,7 @@
 # WP3 terminal-tail expression origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `2688c23e` makes matching terminal-guard recovery transparent to
 expression ownership on the duplicated return value. Semantically identical
 terminal tails can now recover from

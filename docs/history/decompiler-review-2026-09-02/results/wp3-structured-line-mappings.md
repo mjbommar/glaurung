@@ -1,5 +1,7 @@
 # WP3 structured line mappings
 
+> **Kind:** record · **Date:** 2026-09-07
+
 Commit `db2e7735` exposes the statement instruction origins already carried by
 the production AST as structured, one-based line mappings.
 

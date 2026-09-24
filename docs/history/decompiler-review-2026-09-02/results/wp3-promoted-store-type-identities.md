@@ -1,5 +1,7 @@
 # WP3 promoted-store type identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `84c33d9e` migrates two coupled presentation-name readers in typed output
 cleanup to producer-owned promoted-stack identity.
 

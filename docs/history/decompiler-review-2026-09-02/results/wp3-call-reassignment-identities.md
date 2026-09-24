@@ -1,6 +1,6 @@
 # WP3 call-reassignment identities
 
-Date: 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Source commit: `e0c5fc11`
 

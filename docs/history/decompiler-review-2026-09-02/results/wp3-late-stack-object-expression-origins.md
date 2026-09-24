@@ -1,6 +1,6 @@
 # WP3 late stack-object expression origins
 
-Date: 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Commit: `0b764bc8`
 

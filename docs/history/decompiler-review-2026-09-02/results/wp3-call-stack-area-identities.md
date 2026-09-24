@@ -1,5 +1,7 @@
 # WP3 call stack-area identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Status: landed in `79da282c` on `agent/wp5-next-switch`.
 
 ## Result

@@ -1,5 +1,7 @@
 # WP3 mixed-parameter source slots
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `02376480` repairs source-parameter identity after mixed ABI-bank
 projection. AAPCS hard-float can place source `arg0` in `s0` while placing
 source `arg1` in core register `r0`. SSA correctly records `r0` as core-bank

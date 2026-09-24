@@ -1,5 +1,7 @@
 # WP3 contextual-widening expression origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `3739f0e3` closes a semantic expression-carrier omission in
 `src/ir/widen.rs`.
 

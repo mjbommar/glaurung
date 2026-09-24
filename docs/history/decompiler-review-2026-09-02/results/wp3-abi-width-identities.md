@@ -1,5 +1,7 @@
 # WP3 ABI-width identity consumer
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `ee65638e` migrates prepared-AST definition-width refinement from the
 presentation-only `varN` convention to the role-projected opaque SSA identity
 sidecar.

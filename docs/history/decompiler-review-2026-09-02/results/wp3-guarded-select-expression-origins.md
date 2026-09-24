@@ -1,5 +1,7 @@
 # WP3 guarded-select-return expression origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `2d7f9e6a` closes the expression-carrier boundary in
 `select_fold::recover_guarded_select_returns`.
 

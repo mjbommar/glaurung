@@ -1,5 +1,7 @@
 # WP3 matching-return expression origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `f8433a3f` completes the adjacent single-guard matching-return origin
 boundary. An attributed exact predicate and independently attributed but
 semantically identical early/final return values no longer prevent recovery of

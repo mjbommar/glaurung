@@ -1,5 +1,7 @@
 # WP3 AAPCS proof expression origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `bf8718e9` closes two residual raw-expression readers in ARM/AAPCS call
 recovery: locked call targets and the exact outgoing stack-area address.
 

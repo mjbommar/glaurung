@@ -1,5 +1,7 @@
 # WP3 function-table target expression origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `48bf0ce5` closes the copied-call-target expression boundary in
 `function_tables`.
 

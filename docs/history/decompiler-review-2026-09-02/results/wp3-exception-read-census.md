@@ -1,5 +1,7 @@
 # WP3 exception read census
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `29b202a9` closes two omissions in copy propagation's authoritative read
 census. The structured walker treated both `TryCatch` and `Throw` as read-free
 statements even though the propagation walkers already entered their values and

@@ -1,6 +1,6 @@
 # WP3 stack-address expression origins
 
-Date: 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Commit: `e1e3784e`
 

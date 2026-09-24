@@ -1,6 +1,6 @@
 # WP3 bank-return expression origins
 
-Date: 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Commit: `1c37e83d`
 

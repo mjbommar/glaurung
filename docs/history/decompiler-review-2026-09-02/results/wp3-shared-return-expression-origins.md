@@ -1,6 +1,6 @@
 # WP3 shared return expression origins
 
-> **Kind:** result · **Date:** 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Commit `de7c13d1` makes exhaustive branch-return recovery transparent to an
 origin carrier on the shared return expression.  The pass now finds the root

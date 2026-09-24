@@ -1,6 +1,6 @@
 # WP3 parameter-home expression origins
 
-Date: 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Commit: `e8d09ce4`
 

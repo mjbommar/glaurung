@@ -1,5 +1,7 @@
 # WP2 nested-callee budget
 
+> **Kind:** record · **Date:** 2026-09-06
+
 Revisions under test: `e9518094`, `b3a6543a`, `dc303793`, `87edaeb6`
 
 ## Result

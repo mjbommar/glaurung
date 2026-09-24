@@ -1,5 +1,7 @@
 # WP3 structured-reaching expression origins
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `8b27c665` makes promoted-home reaching analysis classify store addresses
 and initializer sources through their semantic expression views. Both the
 structured fixed-point path and the conservative label/goto path now preserve

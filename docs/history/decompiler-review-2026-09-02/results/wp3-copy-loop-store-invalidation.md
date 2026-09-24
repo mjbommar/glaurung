@@ -1,6 +1,6 @@
 # WP3 copy loop-store invalidation
 
-> **Kind:** result · **Date:** 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Commit `ce55594e` makes copy propagation's loop write-set collection recognize
 an origin carrier around a register store target. A pre-loop alias whose source

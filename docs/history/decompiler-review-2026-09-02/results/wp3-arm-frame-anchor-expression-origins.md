@@ -1,6 +1,6 @@
 # WP3 ARM frame-anchor expression origins
 
-Date: 2026-09-09
+> **Kind:** record · **Date:** 2026-09-09
 
 Commit: `9393db47`
 

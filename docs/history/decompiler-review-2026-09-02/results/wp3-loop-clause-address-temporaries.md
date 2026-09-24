@@ -1,6 +1,6 @@
 # WP3 loop-clause address-temporary preservation
 
-Date: 2026-09-10
+> **Kind:** record · **Date:** 2026-09-10
 
 ## Correctness defect
 

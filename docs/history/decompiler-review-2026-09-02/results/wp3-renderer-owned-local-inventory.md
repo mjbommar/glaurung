@@ -1,5 +1,7 @@
 # WP3 renderer-owned local inventory
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `7d0095af` removes production definition verification's generic display-
 name classifier. The renderer now exports the identity-aware set of C locals
 it owns, excluding proven parameters and raw machine-register placeholders;

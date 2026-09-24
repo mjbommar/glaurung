@@ -1,5 +1,7 @@
 # WP3 typed-view identity consumer
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `05a524e8` migrates redundant unsigned machine-view cleanup from
 presentation-name heuristics to the pipeline-owned opaque SSA identity sidecar.
 

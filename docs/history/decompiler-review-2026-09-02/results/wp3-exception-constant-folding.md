@@ -1,5 +1,7 @@
 # WP3 exception constant folding
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `826571a8` extends the ordinary, purely syntactic constant-fold surface
 through `throw` values and every try/catch body. Arithmetic and condition
 expressions inside recovered exception control flow therefore no longer retain

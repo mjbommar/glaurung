@@ -1,5 +1,7 @@
 # WP3 float live-ins follow SSA paths
 
+> **Kind:** record · **Date:** 2026-09-12
+
 Status: bounded WP3 semantic-reader migration landed at `de12aebe` on
 `master`.
 

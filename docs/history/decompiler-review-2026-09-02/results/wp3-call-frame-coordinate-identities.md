@@ -1,5 +1,7 @@
 # WP3 call frame-coordinate identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Status: bounded production consumer migration landed at `42f9c5e0` on
 `agent/wp5-next-switch`.
 

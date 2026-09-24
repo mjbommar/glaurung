@@ -1,5 +1,7 @@
 # WP3 coalesced captured frame-base identity
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Status: bounded production consumer migration landed at `df7a9b46` on
 `master`.
 

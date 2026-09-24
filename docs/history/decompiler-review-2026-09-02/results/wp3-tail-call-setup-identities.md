@@ -1,5 +1,7 @@
 # WP3 tail-call setup identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Status: landed in `6ab43e01` on `agent/wp5-next-switch`.
 
 ## Result

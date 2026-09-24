@@ -1,5 +1,7 @@
 # WP3 contextual-widening identity consumer
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `17dff536` migrates contextual widening from presentation-name
 heuristics to the pipeline-owned opaque SSA identity sidecar.
 

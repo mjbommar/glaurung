@@ -1,6 +1,6 @@
 # WP3 dead-flag expression origins
 
-Date: 2026-09-10
+> **Kind:** record · **Date:** 2026-09-10
 
 ## Correctness defect
 

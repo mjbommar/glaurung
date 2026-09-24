@@ -1,5 +1,7 @@
 # WP3 canonical copy-substitution origin unions
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `e3b29fe3` makes the shared copy-substitution boundary preserve one
 canonical ownership carrier when an attributed register use is replaced by an
 attributed definition. The surviving expression receives the deterministic

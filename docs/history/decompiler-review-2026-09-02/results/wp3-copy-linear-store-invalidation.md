@@ -1,6 +1,6 @@
 # WP3 copy linear-store invalidation
 
-> **Kind:** result · **Date:** 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Commit `82d7f3db` makes both linear copy-propagation walkers invalidate aliases
 when a register store target is wrapped in expression provenance. This prevents

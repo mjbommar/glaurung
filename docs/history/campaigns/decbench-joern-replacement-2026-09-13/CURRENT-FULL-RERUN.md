@@ -1,6 +1,6 @@
 # Current-code full DecBench rerun
 
-> **Kind:** completed internal measurement record · **Run:** 2026-09-13–14 · **Status:** complete and independently audited
+> **Kind:** record · **Date:** 2026-09-14 · **Run:** 2026-09-13–14 · complete and independently audited
 
 ## Plain-English result
 

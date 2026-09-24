@@ -1,6 +1,6 @@
 # WP3 value-keyed use types
 
-Date: 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Source commit: `23a8ef7e`
 

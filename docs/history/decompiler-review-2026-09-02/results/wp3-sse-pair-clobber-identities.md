@@ -1,6 +1,6 @@
 # WP3 SSE-pair clobber identities
 
-Date: 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Source commit: `094c1055`
 

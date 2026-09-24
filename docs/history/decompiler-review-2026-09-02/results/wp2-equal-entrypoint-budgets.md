@@ -1,5 +1,7 @@
 # WP2 equal entry-point budgets
 
+> **Kind:** record · **Date:** 2026-09-06
+
 Revision under test: `c077ccca`
 
 ## Result

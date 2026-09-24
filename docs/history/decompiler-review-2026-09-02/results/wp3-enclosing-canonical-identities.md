@@ -1,5 +1,7 @@
 # WP3 enclosing canonical identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `20f0575c` prevents enclosing call-argument reaching state from
 reinterpreting an authoritative identity base as versioned display text.
 

@@ -1,6 +1,6 @@
 # WP3 call-argument slot identities
 
-Date: 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Source commit: `f79d7909`
 

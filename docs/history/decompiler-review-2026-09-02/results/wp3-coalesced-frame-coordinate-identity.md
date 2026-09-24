@@ -1,5 +1,7 @@
 # WP3 coalesced frame-coordinate identity
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Status: bounded production consumer migration landed at `3871bcad` on
 `master`.
 

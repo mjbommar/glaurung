@@ -1,5 +1,7 @@
 # WP3 coalesced frame-save identity closure
 
+> **Kind:** record · **Date:** 2026-09-12
+
 Commit `02c2fd19` closes the remaining non-LTO undefined-local failures in the
 build-configuration invariant. GCC's x86-64 frame-pointer code can save `rbp`
 before a delayed frame setup, and can place that save inside one structured

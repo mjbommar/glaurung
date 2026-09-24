@@ -1,5 +1,7 @@
 # WP3 cdecl stack identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Status: landed in `75c95f4b` on `agent/wp5-next-switch`.
 
 ## Result

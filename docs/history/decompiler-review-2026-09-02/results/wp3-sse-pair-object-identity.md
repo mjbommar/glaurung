@@ -1,5 +1,7 @@
 # WP3 SSE-pair object identity
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `e82617fd` removes one more display-name classification from canonical
 local naming.
 

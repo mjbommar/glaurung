@@ -1,5 +1,7 @@
 # WP3 typed-comparison identity consumer
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `49a78f31` migrates signed relational-comparison extension cleanup from
 presentation-name heuristics to the pipeline-owned opaque SSA identity sidecar.
 

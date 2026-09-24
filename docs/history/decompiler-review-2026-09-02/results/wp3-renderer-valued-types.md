@@ -1,6 +1,6 @@
 # WP3 renderer valued types
 
-Date: 2026-09-09
+> **Kind:** record · **Date:** 2026-09-09
 
 Source commit: `d4fe3568`
 

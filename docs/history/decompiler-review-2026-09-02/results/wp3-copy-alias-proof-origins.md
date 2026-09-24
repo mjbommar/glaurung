@@ -1,5 +1,7 @@
 # WP3 copy-propagation alias proofs through origins
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `b5cde5e3` makes the existing, fail-closed alias proofs transparent to
 `Expr::Origin` carriers. Constant-offset frame slots and image-address forms
 remain provable when provenance wraps the address or its constant operands;

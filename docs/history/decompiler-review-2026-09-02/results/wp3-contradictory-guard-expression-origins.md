@@ -1,5 +1,7 @@
 # WP3 contradictory-guard expression origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `b3343fd7` makes exact contradictory nested-guard pruning transparent to
 expression ownership on either comparison. A compiler-duplicated impossible
 inner test such as `x <= 5` followed on that path by `5 < x` no longer remains

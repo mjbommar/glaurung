@@ -1,5 +1,7 @@
 # WP3 pointer-copy recovery accepts coalesced identities
 
+> **Kind:** record · **Date:** 2026-09-12
+
 Status: bounded WP3 semantic-reader migration landed at `07b900ce` on
 `master`.
 

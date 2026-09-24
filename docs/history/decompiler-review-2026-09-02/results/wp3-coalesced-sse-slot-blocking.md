@@ -1,5 +1,7 @@
 # WP3 coalesced SSE argument-slot blocking
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Status: bounded production consumer migration landed at `a9e9b0ab` on
 `master`.
 

@@ -1,5 +1,7 @@
 # WP3 promoted-diamond expression origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `3e8bc8dc` closes the remaining expression-carrier boundary in
 `select_fold::select_from_diamond` for promoted stack locals.
 

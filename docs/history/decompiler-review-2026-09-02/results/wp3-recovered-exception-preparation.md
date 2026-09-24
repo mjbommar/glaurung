@@ -1,5 +1,7 @@
 # WP3 recovered exception preparation
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `15c9734c` connects three origin-transparent cleanup capabilities to the
 production point where typed exception bodies actually exist. Typed handlers
 are recovered late, after the ordinary expression pipeline. Although copy

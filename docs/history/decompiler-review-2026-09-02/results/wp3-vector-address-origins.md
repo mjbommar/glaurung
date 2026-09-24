@@ -1,6 +1,6 @@
 # WP3 vector-address origins
 
-Date: 2026-09-09
+> **Kind:** record · **Date:** 2026-09-09
 
 Source commit: `e709c0a0`
 

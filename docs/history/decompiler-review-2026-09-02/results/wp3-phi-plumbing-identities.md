@@ -1,5 +1,7 @@
 # WP3 phi-plumbing identities
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Status: bounded WP3 semantic-reader migration landed at `a957c94c` on
 `master`.
 

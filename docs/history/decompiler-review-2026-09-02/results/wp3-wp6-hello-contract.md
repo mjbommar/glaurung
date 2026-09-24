@@ -1,5 +1,7 @@
 # WP3/WP6 hosted Hello contract
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Two focused production fixes restore the canonical Hello World output across
 the four periodic canary cells.
 

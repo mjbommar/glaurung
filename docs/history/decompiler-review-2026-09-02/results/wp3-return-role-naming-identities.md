@@ -1,5 +1,7 @@
 # WP3 return-role naming identities
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `b6e1f92d` moves production return-role naming off value-numbered
 register spelling and onto `ValueIdentities`' producer-owned physical-storage
 fact.

@@ -1,5 +1,7 @@
 # WP3 authoritative pointer-use expression origins
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `1cf04dd8` makes high-variable pointer refinement inspect direct callee
 targets and forwarded register arguments through their semantic expression
 views. Independent `Expr::Origin` carriers no longer hide either a catalog

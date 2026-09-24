@@ -1,5 +1,7 @@
 # WP3 pointer-refinement identity consumer
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `697d6358` migrates pointer-value eligibility in `high_variables` from
 the presentation-only `varN` convention to the projected opaque SSA identity
 sidecar.

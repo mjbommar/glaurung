@@ -1,5 +1,7 @@
 # WP3 function-table call statement origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `a4d8598a` closes the statement-owner half of optimized function-table
 argument recovery. The prior target-reader repair proved all five callees had
 the same `(rdi, rsi)` layout, but `fold_one_table_call` installed the computed

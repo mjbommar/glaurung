@@ -1,5 +1,7 @@
 # WP3 exception landing-pad inputs
 
+> **Kind:** record · **Date:** 2026-09-12
+
 Commit `b0319768` closes the GCC O0 C++ cleanup-path definedness regression.
 The real `main` at `0x2549` ended its normal path with `return`, after which
 the generic unreachable-tail pass deleted the first LSDA landing-pad entry.

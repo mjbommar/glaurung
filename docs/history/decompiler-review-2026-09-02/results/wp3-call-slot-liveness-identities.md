@@ -1,5 +1,7 @@
 # WP3 call-slot liveness identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Status: bounded production consumer migration landed at `541a6e5b` on
 `agent/wp5-next-switch`.
 

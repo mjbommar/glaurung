@@ -1,5 +1,7 @@
 # WP3 adjacent guard-value identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `2b29137a` gives adjacent eager-guard propagation an identity-aware
 production entry point. This pass folds a physical scratch's sole immediately
 adjacent use into an `if` condition so later loop recovery sees the original

@@ -1,5 +1,7 @@
 # Decompiler roadmap current state — 2026-09-09
 
+> **Kind:** record · **Date:** 2026-09-09
+
 **Branch:** `master`
 
 **Implementation revision summarized:** `3bc525f5`

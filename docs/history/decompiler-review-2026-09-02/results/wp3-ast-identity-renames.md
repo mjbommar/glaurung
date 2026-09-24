@@ -1,5 +1,7 @@
 # WP3 AST-native identity renames
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commits `3afd711a`, `d8da5f13`, and `97f65ae6` establish the first three
 mutation-aware identity boundaries inside the prepared AST pipeline.
 

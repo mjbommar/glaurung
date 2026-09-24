@@ -1,6 +1,6 @@
 # WP3 return store target origins
 
-> **Kind:** result · **Date:** 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Commit `08f0f858` makes exhaustive branch-return recovery recognize an origin
 carrier around a promoted result-slot store target. When that store becomes a

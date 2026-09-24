@@ -1,5 +1,7 @@
 # WP3 AAPCS stack-area identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Status: landed in `06b6f429` on `agent/wp5-next-switch`.
 
 ## Result

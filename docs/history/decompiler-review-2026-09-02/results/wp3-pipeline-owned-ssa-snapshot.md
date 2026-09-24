@@ -1,6 +1,6 @@
 # WP3 pipeline-owned SSA snapshot
 
-Date: 2026-09-10
+> **Kind:** record · **Date:** 2026-09-10
 
 ## Result
 

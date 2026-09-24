@@ -1,5 +1,7 @@
 # WP3 function-table reaching-definition identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `33371b23` removes a production semantic dependency on value-numbered
 display spelling from `src/ir/function_tables.rs`.
 

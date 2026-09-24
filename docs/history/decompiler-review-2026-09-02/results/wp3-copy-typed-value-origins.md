@@ -1,5 +1,7 @@
 # WP3 attributed typed promoted-value folding
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `0e7aa4bb` makes the existing typed promoted-value width proof
 transparent to `Expr::Origin`. A width-proven attributed comparison stored to a
 one-use promoted local now folds directly into its return instead of leaving an

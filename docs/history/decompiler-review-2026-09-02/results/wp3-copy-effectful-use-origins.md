@@ -1,5 +1,7 @@
 # WP3 attributed adjacent effectful uses
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `129a5277` makes the adjacent effectful-value mover recognize an
 attributed direct register use. A one-use call temporary can therefore still
 move into its immediate assignment or promoted-local store consumer instead of

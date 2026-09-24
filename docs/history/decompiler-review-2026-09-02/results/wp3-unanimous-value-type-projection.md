@@ -1,5 +1,7 @@
 # WP3 coalesced values project unanimous type facts
 
+> **Kind:** record · **Date:** 2026-09-12
+
 Status: bounded WP3 semantic-reader migration landed at `1f48af39` on
 `master`.
 

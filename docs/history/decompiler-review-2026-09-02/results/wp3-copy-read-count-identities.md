@@ -1,5 +1,7 @@
 # WP3 copy read-count identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `face2852` makes the shared copy-propagation read walker distinguish a
 promoted-stack store destination from a pointer read using pipeline-owned
 `ValueIdentities`.

@@ -1,5 +1,7 @@
 # WP3 high-half expression origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `b3110f25` closes the high-half and wide-mask consumer in scored-C ABI
 width refinement.
 

@@ -1,5 +1,7 @@
 # WP3 unsigned-literal identity consumer
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `2ccd8ce1` migrates use-proven high-bit integer-literal refinement from a
 `varN` presentation-name gate to the pipeline-owned opaque SSA identity sidecar.
 

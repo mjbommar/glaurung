@@ -1,5 +1,7 @@
 # WP3 cdecl32 proof expression origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `e5fe6588` closes two residual raw-expression readers in the cdecl32
 argument folder: outgoing stack-slot classification and caller-cleanup proof.
 

@@ -1,6 +1,6 @@
 # WP3 copy store read counts
 
-> **Kind:** result · **Date:** 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Commit `13b1143a` makes copy propagation's shared read walker classify an
 origin-wrapped promoted-local store target as a destination, not a pointer

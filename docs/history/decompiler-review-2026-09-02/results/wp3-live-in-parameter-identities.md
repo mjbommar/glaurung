@@ -1,5 +1,7 @@
 # WP3 live-in parameter identities
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `0e824a04` removes `tag_phys` display spelling as the production
 authority for live-in parameter inference.
 

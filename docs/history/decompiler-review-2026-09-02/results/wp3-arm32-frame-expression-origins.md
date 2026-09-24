@@ -1,6 +1,6 @@
 # WP3 ARM32 frame expression origins
 
-Date: 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Commit: `4b748faa`
 

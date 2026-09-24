@@ -1,5 +1,7 @@
 # WP3 promoted-store address expression origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `b836edd9` closes the promoted-store address boundary in
 `typed_simplify`.
 

@@ -1,5 +1,7 @@
 # WP3 recovered register-width identities
 
+> **Kind:** record · **Date:** 2026-09-12
+
 Commit `630595f9` removes display spelling from production register-view width
 recovery when the pipeline-owned `ValueIdentities` sidecar is present.
 

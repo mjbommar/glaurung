@@ -1,5 +1,7 @@
 # WP3 spilled passthrough parameter recovery
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `c41c0b6b` lets function-level prototype refinement carry a recovered
 callee parameter type through an exact O0 stack spill/reload. The compiled
 forwarding wrapper now emits a pointer parameter and passes it to the local

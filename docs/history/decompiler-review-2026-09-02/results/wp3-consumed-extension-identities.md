@@ -1,5 +1,7 @@
 # WP3 consumed-extension identity consumer
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `403296e0` migrates typed consumed-extension cleanup from
 presentation-name heuristics to the pipeline-owned opaque SSA identity sidecar.
 

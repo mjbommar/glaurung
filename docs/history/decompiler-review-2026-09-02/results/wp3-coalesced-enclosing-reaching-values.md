@@ -1,5 +1,7 @@
 # WP3 coalesced enclosing reaching values
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Status: bounded production consumer migration landed at `b0ba8189` on
 `master`.
 

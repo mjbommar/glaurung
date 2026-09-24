@@ -1,5 +1,7 @@
 # WP3 canonical call identity bases
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `2a33f6a5` stops two call-recovery readers from reparsing authoritative
 identity bases as display names.
 

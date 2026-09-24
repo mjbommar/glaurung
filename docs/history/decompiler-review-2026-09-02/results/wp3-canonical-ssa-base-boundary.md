@@ -1,5 +1,7 @@
 # WP3 canonical SSA base boundary
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `d9e77a0a` centralizes the rule that an SSA identity exposes physical
 storage only when its base is canonical.
 

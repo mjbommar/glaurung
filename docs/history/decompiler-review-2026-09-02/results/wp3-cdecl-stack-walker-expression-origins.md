@@ -1,6 +1,6 @@
 # WP3 cdecl32 stack-walker expression origins
 
-Date: 2026-09-09
+> **Kind:** record · **Date:** 2026-09-09
 
 Commit: `da766b86`
 

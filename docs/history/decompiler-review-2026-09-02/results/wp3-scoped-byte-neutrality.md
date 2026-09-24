@@ -1,5 +1,7 @@
 # WP3 scoped byte-neutrality contract
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Status: focused WP3 test contract implemented on `master` after `6427fe45`.
 
 ## Result

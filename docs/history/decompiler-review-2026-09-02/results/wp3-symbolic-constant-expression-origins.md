@@ -1,5 +1,7 @@
 # WP3 symbolic-constant expression origins
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `ab265881` makes symbolic constant recovery inspect an expression's
 semantic view. Instruction provenance around a literal or one of its casts no
 longer hides security-relevant names from the DecBench renderer.

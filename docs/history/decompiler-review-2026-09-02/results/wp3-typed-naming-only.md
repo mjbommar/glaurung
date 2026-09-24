@@ -1,6 +1,6 @@
 # WP3: typed naming is the only production boundary
 
-Date: 2026-09-12
+> **Kind:** record · **Date:** 2026-09-12
 
 Code commit: `a1080d7d`
 

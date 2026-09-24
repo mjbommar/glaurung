@@ -1,5 +1,7 @@
 # WP3 canonical parameter authority
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `0d8a77cc` moves source-parameter role attachment behind WP3's shared
 canonical SSA-base boundary.
 

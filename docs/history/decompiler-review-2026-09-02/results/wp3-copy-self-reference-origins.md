@@ -1,6 +1,6 @@
 # WP3 copy self-reference origins
 
-> **Kind:** result · **Date:** 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Commit `be69b02b` makes copy propagation's self-reference predicate compare the
 semantic expression beneath an origin carrier. An attributed `x = x` is no

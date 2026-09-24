@@ -1,5 +1,7 @@
 # WP3 exact typed-local widths
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Commit `13fd396c` applies the pipeline-owned definition-width sidecar to every
 identity-owned numbered definition in production typed recovery, rather than
 using it only for the ABI return value.

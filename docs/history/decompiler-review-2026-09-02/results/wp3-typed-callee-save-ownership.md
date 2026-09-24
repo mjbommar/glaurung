@@ -1,5 +1,7 @@
 # WP3 typed callee-save ownership
 
+> **Kind:** record · **Date:** 2026-09-08
+
 Status: bounded production increment landed on `agent/wp5-next-switch` at
 `521d9524`; integration and broad release gates remain separate work.
 

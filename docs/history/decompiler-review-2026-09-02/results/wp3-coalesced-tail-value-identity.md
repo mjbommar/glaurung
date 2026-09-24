@@ -1,5 +1,7 @@
 # WP3 coalesced tail-value identity
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `4be3e995` migrates the value-equality proof used by proven vtable
 tail-call recovery from exact-single-candidate SSA objects to stable `ValueId`
 sets. Two rendered registers may each represent several non-interfering SSA

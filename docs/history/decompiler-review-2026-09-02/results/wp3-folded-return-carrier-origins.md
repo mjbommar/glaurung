@@ -1,6 +1,6 @@
 # WP3 folded return carrier origins
 
-> **Kind:** result · **Date:** 2026-09-08
+> **Kind:** record · **Date:** 2026-09-08
 
 Commit `767664db` makes the basic `result = E; return result;` fold recognize
 an origin carrier around the returned result register. The deleted definition

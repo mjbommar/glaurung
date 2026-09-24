@@ -1,5 +1,7 @@
 # WP3 MinGW runtime-target expression origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `4b03122e` makes MinGW's implicit `__main`/`___main` source-cleanup rule
 transparent to expression ownership on the direct callee. Provenance no longer
 causes the compiler-inserted runtime initialization call to leak into recovered

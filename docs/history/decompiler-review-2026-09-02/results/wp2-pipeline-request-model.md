@@ -1,6 +1,6 @@
 # WP2 pipeline-owned request model
 
-Date: 2026-09-06
+> **Kind:** record · **Date:** 2026-09-06
 
 Behavioral commits: `d6a65779`, `5a2d6c86`, `e19bd73b`, `41bd90a6`,
 `73a79d61`, `5ea45dca`, `15d044eb`, `e0588083`, `21f8b29a`, `2ef9c4eb`,

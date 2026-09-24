@@ -1,5 +1,7 @@
 # WP3 caller-arity target origins
 
+> **Kind:** record · **Date:** 2026-09-09
+
 Commit `ed4e1eee` closes a bounded expression-origin hole in caller-derived
 fixed-arity recovery. `stack_proven_direct_call_arities_with_identities` now
 classifies the semantic payload of a direct call target, so an `OriginSet`
