@@ -156,7 +156,14 @@ fn collapse_exit_check(body: &mut Vec<Stmt>, slot: &str) {
                 else_body: None,
             } if matches!(cond.semantic(), Expr::Cmp { op: crate::ir::types::CmpOp::Ne, .. })
                 && then_body.len() == 1
-                && is_stack_chk_fail_call(&then_body[0])
+                && (is_stack_chk_fail_call(&then_body[0])
+                    // A stripped static image has no name for its own
+                    // `__stack_chk_fail`. The slot is proven guard storage and
+                    // the comparison is against the guard itself, which is the
+                    // canary check and nothing else; its lone call is the
+                    // failure handler whatever it is called.
+                    || (matches!(then_body[0].semantic(), Stmt::Call { dst: None, .. })
+                        && expr_mentions_canary_marker(cond)))
                 && expr_mentions_slot(cond, slot)
         );
         if structured_failure {
@@ -314,7 +321,42 @@ fn is_stack_chk_fail_call(stmt: &Stmt) -> bool {
             .is_some_and(|base| base == "__stack_chk_fail" || base == "__stack_chk_fail_local"))
 }
 
+/// `(object, byte offset)` for the address of a byte range inside a promoted
+/// stack object: `&%local_58` or `(&%local_58 + 72)`.
+fn frame_object_slot(addr: &Expr) -> Option<(&crate::ir::types::VReg, i64)> {
+    match addr.semantic() {
+        Expr::StackAddr { object, .. } => Some((object, 0)),
+        Expr::Bin {
+            op: crate::ir::types::BinOp::Add,
+            lhs,
+            rhs,
+        } => match (lhs.semantic(), rhs.semantic()) {
+            (Expr::StackAddr { object, .. }, Expr::Const(offset))
+            | (Expr::Const(offset), Expr::StackAddr { object, .. }) => Some((object, *offset)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The slot key a frame-object canary is recorded under in the prologue
+/// comment. It contains `+`, so it can never collide with a register name.
+fn frame_slot_spelling(object: &crate::ir::types::VReg, offset: i64) -> Option<String> {
+    match object {
+        crate::ir::types::VReg::Phys(name) => Some(format!("{name}+{offset}")),
+        _ => None,
+    }
+}
+
 fn expr_mentions_slot(e: &Expr, slot: &str) -> bool {
+    if let Expr::Deref { addr, .. } = e.semantic() {
+        if frame_object_slot(addr)
+            .and_then(|(object, offset)| frame_slot_spelling(object, offset))
+            .is_some_and(|spelling| spelling == slot)
+        {
+            return true;
+        }
+    }
     match e.semantic() {
         Expr::Reg(crate::ir::types::VReg::Phys(name)) => name == slot,
         Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
@@ -505,6 +547,26 @@ fn collapse_body(body: &mut Vec<Stmt>, authority: IdentityAuthority<'_>) {
             continue;
         }
 
+        // The guard stored straight into a byte range of a promoted frame
+        // object: `store (&%local_58 + 72) = __stack_chk_guard;`. A frame whose
+        // address escapes is kept as ONE object, so its canary has no
+        // `%stack_N` of its own (gcc-13 `-fstack-protector-strong`).
+        let direct_frame_store = match body[i].semantic() {
+            Stmt::Store { addr, src, size: 8 } if matches!(src.semantic(), Expr::Named { name, .. } if name == CANARY_NAME) => {
+                frame_object_slot(addr)
+                    .filter(|(object, _)| promoted(object))
+                    .and_then(|(object, offset)| frame_slot_spelling(object, offset))
+            }
+            _ => None,
+        };
+        if let Some(slot) = direct_frame_store {
+            let origins = origins_in_tree(&body[i]);
+            body[i] =
+                comment_with_origins(&format!("stack canary: save guard to %{}", slot), origins);
+            i += 1;
+            continue;
+        }
+
         let load = matches!(
             body[i].semantic(),
             Stmt::Assign { dst: crate::ir::types::VReg::Phys(_), src }
@@ -527,6 +589,9 @@ fn collapse_body(body: &mut Vec<Stmt>, authority: IdentityAuthority<'_>) {
                 {
                     Some(slot_name.clone())
                 }
+                (frame_addr, Expr::Reg(src)) if src == &load_dst => frame_object_slot(frame_addr)
+                    .filter(|(object, _)| promoted(object))
+                    .and_then(|(object, offset)| frame_slot_spelling(object, offset)),
                 _ => None,
             },
             _ => None,
@@ -1800,5 +1865,171 @@ mod tests {
         } else {
             panic!("unexpected shape: {:?}", f.body[0]);
         }
+    }
+
+    /// `gcc-13 -O2 -fstack-protector-strong` on a function whose frame escapes
+    /// (`bc_buffer_and_scalars` in `invariants/link_configuration_shapes.c`,
+    /// stripped) keeps the whole 88-byte frame as ONE promoted object, so the
+    /// guard lives at `&local_58 + 72` rather than in its own `%stack_N`.
+    /// Unrecognised, the renderer printed the guard's TLS displacement as a
+    /// constant: `local = 0x28; ... if (local != 0x28) __stack_chk_fail();`,
+    /// which states that the canary IS the number 0x28.
+    #[test]
+    fn canary_saved_inside_a_promoted_frame_object_collapses_with_its_check() {
+        use crate::ir::types::{BinOp, CmpOp, VReg};
+        let object = VReg::phys("local_58");
+        let object_name = "local_58".to_string();
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object_name]);
+        let slot = || Expr::Bin {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::StackAddr {
+                object: object.clone(),
+                size: 88,
+            }),
+            rhs: Box::new(Expr::Const(72)),
+        };
+        let guard = || Expr::Named {
+            va: 0x28,
+            name: CANARY_NAME.into(),
+        };
+        let mut f = Function {
+            name: "sub_12c0".into(),
+            entry_va: 0x12c0,
+            body: vec![
+                Stmt::Store {
+                    addr: slot(),
+                    src: guard(),
+                    size: 8,
+                },
+                Stmt::Store {
+                    addr: Expr::StackAddr {
+                        object: object.clone(),
+                        size: 88,
+                    },
+                    src: Expr::Const(7),
+                    size: 1,
+                },
+                Stmt::If {
+                    cond: Expr::Cmp {
+                        op: CmpOp::Ne,
+                        lhs: Box::new(Expr::Deref {
+                            addr: Box::new(slot()),
+                            size: 8,
+                        }),
+                        rhs: Box::new(guard()),
+                    },
+                    then_body: vec![Stmt::Call {
+                        target: Expr::Named {
+                            va: 0x1070,
+                            name: "__stack_chk_fail@plt".into(),
+                        },
+                        args: vec![],
+                        dst: None,
+                        call_spec: None,
+                    }],
+                    else_body: None,
+                },
+                Stmt::Return {
+                    value: Some(Expr::Const(0)),
+                },
+            ],
+        };
+
+        collapse_canary_save_with_identities(&mut f, &identities);
+
+        assert_eq!(f.body.len(), 4, "got: {:?}", f.body);
+        assert!(
+            matches!(&f.body[0], Stmt::Comment(s) if s.starts_with("stack canary: save guard to %")),
+            "got: {:?}",
+            f.body[0]
+        );
+        // The unrelated byte store into the same object survives.
+        assert!(matches!(&f.body[1], Stmt::Store { size: 1, .. }));
+        assert!(matches!(&f.body[2], Stmt::Comment(s) if s == "stack-canary check"));
+        assert!(matches!(&f.body[3], Stmt::Return { .. }));
+    }
+
+    /// A stripped `-static` image has no symbol for its own `__stack_chk_fail`
+    /// (gcc-13 `-static -O2`, `bc_buffer_and_scalars`): the failure arm calls
+    /// `sub_412d80`. With the save proven, a comparison of the slot against the
+    /// guard is the check whatever the handler is called — and leaving it
+    /// behind after the save was erased would read a slot nothing wrote.
+    #[test]
+    fn proven_canary_check_collapses_when_the_failure_handler_is_unnamed() {
+        use crate::ir::types::{CmpOp, VReg};
+        let check = |rhs: Expr| Stmt::If {
+            cond: Expr::Cmp {
+                op: CmpOp::Ne,
+                lhs: Box::new(Expr::Reg(VReg::phys("stack_3"))),
+                rhs: Box::new(rhs),
+            },
+            then_body: vec![Stmt::Call {
+                target: Expr::Named {
+                    va: 0x412d80,
+                    name: "sub_412d80".into(),
+                },
+                args: vec![],
+                dst: None,
+                call_spec: None,
+            }],
+            else_body: None,
+        };
+        let mut f = Function {
+            name: "sub_4019a0".into(),
+            entry_va: 0x4019a0,
+            body: vec![
+                Stmt::Comment("stack canary: save guard to %stack_3".to_string()),
+                check(Expr::Named {
+                    va: 0x28,
+                    name: CANARY_NAME.into(),
+                }),
+                // Same slot, same shape, but compared against an ordinary value:
+                // not the canary check, so the call must survive.
+                check(Expr::Const(7)),
+            ],
+        };
+
+        collapse_canary_save(&mut f);
+
+        assert!(matches!(&f.body[1], Stmt::Comment(s) if s == "stack-canary check"));
+        assert!(
+            matches!(&f.body[2], Stmt::If { .. }),
+            "got: {:?}",
+            f.body[2]
+        );
+    }
+
+    /// The object must be proven frame storage. A pointer-shaped address that
+    /// merely LOOKS like `base + 72` is not a canary slot.
+    #[test]
+    fn canary_store_into_an_unowned_object_is_not_collapsed() {
+        use crate::ir::types::{BinOp, VReg};
+        let identities = crate::ir::value_number::ValueIdentities::default();
+        let mut f = Function {
+            name: "f".into(),
+            entry_va: 0,
+            body: vec![Stmt::Store {
+                addr: Expr::Bin {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::StackAddr {
+                        object: VReg::phys("local_58"),
+                        size: 88,
+                    }),
+                    rhs: Box::new(Expr::Const(72)),
+                },
+                src: Expr::Named {
+                    va: 0x28,
+                    name: CANARY_NAME.into(),
+                },
+                size: 8,
+            }],
+        };
+        collapse_canary_save_with_identities(&mut f, &identities);
+        assert!(
+            matches!(&f.body[0], Stmt::Store { .. }),
+            "got: {:?}",
+            f.body
+        );
     }
 }
