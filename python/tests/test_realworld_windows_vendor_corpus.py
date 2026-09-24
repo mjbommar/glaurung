@@ -104,8 +104,14 @@ def test_realworld_windows_vendor_corpus_triages_as_pe():
 
 def test_realworld_windows_vendor_default_function_discovery_is_not_preview_capped():
     for row in _fixtures():
+        # `timeout_ms=0` turns off the per-function wall clock. With the 100 ms
+        # default, whether the largest functions of `win10-webservices.dll` or
+        # `npu_d3d12_umd.dll` hit `hit_timeout` depends on machine load, so
+        # `truncated` flipped between runs of the same build. The block,
+        # instruction and function budgets this test is about stay at their
+        # defaults.
         funcs, _cg, stats = g.analysis.analyze_functions_path_with_stats(
-            str(CORPUS / row["file"])
+            str(CORPUS / row["file"]), timeout_ms=0
         )
         assert len(funcs) >= FUNCTION_COUNT_FLOORS[row["file"]], row["file"]
         assert len(funcs) != 16, row["file"]

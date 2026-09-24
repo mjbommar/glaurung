@@ -20,6 +20,13 @@ pub struct Budgets {
     /// name this has never bounded an analysis: `discover_function` restarts its
     /// clock per seed, so a binary with 20 000 functions can spend 20 000 times
     /// this and still be inside budget. Use `total_timeout_ms` to bound the run.
+    ///
+    /// `0` means no per-function clock: the walk is then bounded only by
+    /// `max_blocks` and `max_instructions`, which do not depend on how busy the
+    /// machine is. Under the default of 100 ms, whether a large function is
+    /// truncated varies from run to run (`win10-webservices.dll` hits it on one
+    /// run and not the next), so a caller that needs a reproducible answer
+    /// passes `0`. Before this, `0` tripped on the first check.
     pub timeout_ms: u64,
     /// Wall clock for the WHOLE analysis: every whole-binary discovery phase and
     /// every seed in the worklist, not just one function's walk. `0` means no
@@ -33,6 +40,14 @@ pub struct Budgets {
     /// explicitly, and `FunctionDiscoveryStats::hit_total_timeout` then says the
     /// result is a truncation rather than an answer.
     pub total_timeout_ms: u64,
+}
+
+impl Budgets {
+    /// Whether one function's walk, started at `started`, is out of its
+    /// per-function wall clock. Always `false` when `timeout_ms` is `0`.
+    pub fn function_clock_expired(&self, started: std::time::Instant) -> bool {
+        self.timeout_ms > 0 && started.elapsed().as_millis() as u64 > self.timeout_ms
+    }
 }
 
 impl Default for Budgets {
@@ -133,4 +148,34 @@ pub(super) fn scan_within<T: Default>(
         return T::default();
     }
     scan()
+}
+
+#[cfg(test)]
+mod function_clock_tests {
+    use super::Budgets;
+    use std::time::{Duration, Instant};
+
+    fn started_one_second_ago() -> Instant {
+        Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now)
+    }
+
+    #[test]
+    fn a_zero_per_function_timeout_disables_the_clock() {
+        let budgets = Budgets {
+            timeout_ms: 0,
+            ..Budgets::default()
+        };
+        assert!(!budgets.function_clock_expired(started_one_second_ago()));
+    }
+
+    #[test]
+    fn a_nonzero_per_function_timeout_still_expires() {
+        let budgets = Budgets {
+            timeout_ms: 1,
+            ..Budgets::default()
+        };
+        assert!(budgets.function_clock_expired(started_one_second_ago()));
+    }
 }

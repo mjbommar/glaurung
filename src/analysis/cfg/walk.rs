@@ -167,7 +167,7 @@ pub(super) fn discover_function(
             stats.hit_block_limit = true;
             break;
         }
-        if t0.elapsed().as_millis() as u64 > budgets.timeout_ms {
+        if budgets.function_clock_expired(t0) {
             stats.hit_timeout = true;
             break;
         }
@@ -213,7 +213,7 @@ pub(super) fn discover_function(
                 stats.hit_instruction_limit = true;
                 break 'block;
             }
-            if t0.elapsed().as_millis() as u64 > budgets.timeout_ms {
+            if budgets.function_clock_expired(t0) {
                 stats.hit_timeout = true;
                 break 'block;
             }
