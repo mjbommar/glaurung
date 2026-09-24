@@ -387,7 +387,8 @@ void f(void) { options[0] = 1; }
 
 def test_strip_extern_decls_handles_empty_body():
     assert _strip_extern_decls_for_local_statics("") == ""
-    assert _strip_extern_decls_for_local_statics(None) is None
+    # Deliberately passes None: the helper tolerates a missing body.
+    assert _strip_extern_decls_for_local_statics(None) is None  # ty: ignore[invalid-argument-type]
 
 
 def test_bug_w_pipeline_produces_compilable_main(tmp_path):
@@ -517,7 +518,8 @@ extern void *memcpy(void *dst, const void *src, size_t n);
 
 def test_wrap_runtime_externs_handles_empty():
     assert _wrap_cxx_runtime_externs_with_c_linkage("") == ""
-    assert _wrap_cxx_runtime_externs_with_c_linkage(None) is None
+    # Deliberately passes None: the helper tolerates a missing body.
+    assert _wrap_cxx_runtime_externs_with_c_linkage(None) is None  # ty: ignore[invalid-argument-type]
 
 
 def test_wrap_runtime_externs_compiles_clean(tmp_path):

@@ -61,7 +61,9 @@ class IterativeAgent:
     """Wrapper for agents that provides iterative refinement capabilities."""
 
     def __init__(
-        self, base_agent: Agent, strategy: Optional[RefinementStrategy] = None
+        self,
+        base_agent: Agent[MemoryContext, Any],
+        strategy: Optional[RefinementStrategy] = None,
     ):
         """Initialize iterative agent.
 

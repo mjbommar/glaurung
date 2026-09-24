@@ -11,7 +11,7 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 
-import roundtrip_review as review  # ty: ignore[unresolved-import]  # added above
+import roundtrip_review as review  # added above
 
 
 def test_source_of_prefers_definition_over_recursive_calls(tmp_path: Path) -> None:

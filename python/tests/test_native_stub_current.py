@@ -79,7 +79,7 @@ def test_the_comparison_is_not_vacuous() -> None:
     close for fixture verdicts. Report it rather than pass quietly.
     """
     sys.path.insert(0, str(ROOT / "tools"))
-    import build_guard  # ty: ignore[unresolved-import]
+    import build_guard
 
     reason = build_guard.stale_reason(build_guard.native_so())
     if reason is not None:

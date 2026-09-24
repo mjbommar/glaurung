@@ -110,7 +110,7 @@ def test_renderer_hir_does_not_reference_the_lifters():
         hit = LIFTER_REFERENCE_RE.search(text)
         assert hit is None, (
             f"{relative} (renderer/HIR) references a lifter module "
-            f"({hit.group(0) if hit else ''!r}); the renderer must consume the "
+            f"({hit.group(0)!r}); the renderer must consume the "
             "already-lifted IR, not lift bytes itself"
         )
 
@@ -129,7 +129,7 @@ def test_hir_does_not_parse_images():
         hit = IMAGE_PARSING_RE.search(text)
         assert hit is None, (
             f"{relative} (HIR) references image parsing "
-            f"({hit.group(0) if hit else ''!r}); HIR construction must receive "
+            f"({hit.group(0)!r}); HIR construction must receive "
             "already-lifted evidence, never parse a binary image itself"
         )
 
@@ -241,11 +241,12 @@ def test_the_manifest_depends_on_cindergraph_from_github_by_revision():
     branch would move under a rebuild. The pin is a full 40-hex revision on the
     GitHub URL, the same form the `axeyum-*` dependencies use."""
     manifest = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
-    assert CINDERGRAPH_DEP_RE.search(manifest), (
+    dep = CINDERGRAPH_DEP_RE.search(manifest)
+    assert dep, (
         "Cargo.toml must declare `cindergraph = { git = "
         '"https://github.com/mjbommar/cindergraph.git", rev = "<40 hex>" }`'
     )
-    assert "path" not in (CINDERGRAPH_DEP_RE.search(manifest).group(0)), (
+    assert "path" not in dep.group(0), (
         "the cindergraph dependency must not carry a `path`; the migration "
         "exists so Glaurung cannot compile a machine-local copy"
     )
@@ -595,7 +596,9 @@ def test_authoritative_solve_has_no_pipe_or_text_dispatch():
         "GLAURUNG_SMT_SOLVER": "PATH-selected solver",
         "Command::new": "process spawning",
     }
-    hits = [description for token, description in forbidden.items() if token in solve_body]
+    hits = [
+        description for token, description in forbidden.items() if token in solve_body
+    ]
     assert hits == [], f"authoritative solve dispatch acquired: {', '.join(hits)}"
 
     cache_source = _product_text(
@@ -609,4 +612,6 @@ def test_authoritative_solve_has_no_pipe_or_text_dispatch():
     )
     assert "solver::solve_runtime_for_path_delta" in runtime_source
     assert "solver::solve_exact_cached" not in runtime_source
-    assert "crate::symbolic::solve(&machine.dom.pool, &assertions)" not in runtime_source
+    assert (
+        "crate::symbolic::solve(&machine.dom.pool, &assertions)" not in runtime_source
+    )

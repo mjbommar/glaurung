@@ -95,9 +95,9 @@ def _decode_call_target(ins) -> int | None:
             _abs_mem_target_x86,
         )
     except Exception:
-        _decode_immediate_target = None  # type: ignore
-        _is_rip_relative_x64 = None  # type: ignore
-        _abs_mem_target_x86 = None  # type: ignore
+        _decode_immediate_target = None
+        _is_rip_relative_x64 = None
+        _abs_mem_target_x86 = None
     # Immediate target from operand text
     if _decode_immediate_target is not None:
         try:

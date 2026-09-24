@@ -32,10 +32,10 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "tests" / "decompiler_fixtures"))
-import dectest as DT  # ty: ignore[unresolved-import]
-import fixture_harness as H  # ty: ignore[unresolved-import]
-import manifest as M  # ty: ignore[unresolved-import]
-import stripped_differential as SD  # ty: ignore[unresolved-import]
+import dectest as DT
+import fixture_harness as H
+import manifest as M
+import stripped_differential as SD
 
 
 # --------------------------------------------------------------------------

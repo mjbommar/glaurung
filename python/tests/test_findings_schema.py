@@ -172,6 +172,7 @@ def test_vulnerability_finding_roundtrips_json():
     data = f.model_dump_json()
     parsed = VulnerabilityFinding.model_validate_json(data)
     assert parsed.cwe == "CWE-190"
+    assert parsed.bug_site is not None
     assert parsed.bug_site.va == 0x140001910
     assert parsed.confidence == "high"
     assert len(parsed.evidence) == 2

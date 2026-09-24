@@ -17,7 +17,7 @@ import pytest
 
 import glaurung.disasm as dis
 
-FIX = os.environ.get("GLAURUNG_IOCTL_FIXTURES")
+FIX = os.environ.get("GLAURUNG_IOCTL_FIXTURES", "")
 pytestmark = pytest.mark.skipif(
     not FIX, reason="set GLAURUNG_IOCTL_FIXTURES to a dir with the reference .sys files"
 )

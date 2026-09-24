@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal, TypeVar, cast
 
 from pydantic_ai import Agent, RunContext
+from pydantic_ai.models import Model
 
 from ..context import MemoryContext
 from ..tools.base import tool_to_pyd_ai
@@ -581,7 +582,7 @@ StringEncoding = Literal["ascii", "utf16le", "utf16be"]
 def register_analysis_tools(
     agent: Agent[MemoryContext, AgentOutputT],
     *,
-    model_name: str | None = None,
+    model_name: str | Model | None = None,
     tool_filter: set[str] | None = None,
 ) -> Agent[MemoryContext, AgentOutputT]:
     """Register glaurung's memory/analysis tools onto an existing Agent.
@@ -1833,7 +1834,7 @@ def _register_analysis_tools_inner(
 
 
 def create_memory_agent(
-    model: str | None = None,
+    model: str | Model | None = None,
     *,
     tool_filter: set[str] | None = None,
 ) -> Agent[MemoryContext, str]:

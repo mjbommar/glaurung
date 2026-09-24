@@ -7,7 +7,7 @@ from .base import BaseCommand
 from ..formatters.symbols import SymbolsFormatter
 
 
-class SymbolsCommand(BaseCommand):
+class SymbolsCommand(BaseCommand[SymbolsFormatter]):
     """Command for listing symbols from a binary."""
 
     def get_name(self) -> str:

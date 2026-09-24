@@ -97,10 +97,8 @@ def _control_flow_shape(code: str) -> dict[str, int]:
     }
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
-@pytest.mark.parametrize(  # ty: ignore[unresolved-attribute]
-    ("fixture", "function"), CONVERGENCE_CASES
-)
+@pytest.mark.slow
+@pytest.mark.parametrize(("fixture", "function"), CONVERGENCE_CASES)
 def test_round_trip_reaches_a_fixpoint(
     fixture: str, function: str, tmp_path: Path
 ) -> None:
@@ -155,10 +153,8 @@ def test_round_trip_reaches_a_fixpoint(
     )
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
-@pytest.mark.parametrize(  # ty: ignore[unresolved-attribute]
-    ("fixture", "function"), CONVERGENCE_CASES
-)
+@pytest.mark.slow
+@pytest.mark.parametrize(("fixture", "function"), CONVERGENCE_CASES)
 def test_function_recovers_at_both_optimization_levels(
     fixture: str, function: str
 ) -> None:

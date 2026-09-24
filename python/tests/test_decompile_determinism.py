@@ -222,7 +222,7 @@ def test_decbench_render_repeats_identically_in_one_process(
     under a 1-in-30000 chance of showing one distinct answer here.
     """
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
-    import fixture_harness as H  # ty: ignore[unresolved-import]  # added to sys.path above
+    import fixture_harness as H  # added to sys.path above
 
     so, err = H.ensure_fixture(H.SRC / f"{fixture}.rs", cc, opt)
     assert so is not None, f"{fixture}:{cc}:{opt} did not build: {err}"

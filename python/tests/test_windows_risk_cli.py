@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import pathlib
 import io
 import json
@@ -664,7 +665,7 @@ def test_windows_risk_join_reads_unsampled_xref_string(
     }
     _join_string_xrefs(
         str(binary),
-        SimpleNamespace(max_read_bytes=4096, max_file_size=4096, str_min_len=6),
+        argparse.Namespace(max_read_bytes=4096, max_file_size=4096, str_min_len=6),
         [(0x1010, 0x402000, 0x1000)],
         [],
         {0x1000: row},
@@ -702,7 +703,7 @@ def test_windows_risk_join_reads_unsampled_utf16le_xref_string(
     }
     _join_string_xrefs(
         str(binary),
-        SimpleNamespace(max_read_bytes=4096, max_file_size=4096, str_min_len=6),
+        argparse.Namespace(max_read_bytes=4096, max_file_size=4096, str_min_len=6),
         [(0x1010, 0x402800, 0x1000)],
         [],
         {0x1000: row},
@@ -766,7 +767,8 @@ def test_windows_risk_report_tool_uses_context_file(
     monkeypatch.setattr(tool_mod, "_build_report", fake_report)
     ctx = MemoryContext(
         file_path=str(binary),
-        artifact=SimpleNamespace(),
+        # The tool's report builder is patched; the artifact is never read.
+        artifact=SimpleNamespace(),  # ty: ignore[invalid-argument-type]
         budgets=Budgets(max_read_bytes=1234, max_file_size=5678),
     )
     tool = tool_mod.build_tool()

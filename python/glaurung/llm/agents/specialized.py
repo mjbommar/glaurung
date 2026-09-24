@@ -18,7 +18,7 @@ All agents accept a ``MemoryContext`` as deps.
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
@@ -33,7 +33,7 @@ def _make_agent(
     output_type: type,
     system_prompt: str,
     model: Optional[str] = None,
-) -> Agent:
+) -> Agent[MemoryContext, Any]:
     cfg = get_config()
     avail = cfg.available_models()
     model_name = model or (cfg.preferred_model() if any(avail.values()) else "test")
@@ -71,7 +71,9 @@ class FunctionExplanation(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
-def build_function_explain_agent(model: Optional[str] = None) -> Agent:
+def build_function_explain_agent(
+    model: Optional[str] = None,
+) -> Agent[MemoryContext, Any]:
     return _make_agent(
         output_type=FunctionExplanation,
         system_prompt=(
@@ -109,7 +111,7 @@ class BinaryTriageReport(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
-def build_binary_triage_agent(model: Optional[str] = None) -> Agent:
+def build_binary_triage_agent(model: Optional[str] = None) -> Agent[MemoryContext, Any]:
     return _make_agent(
         output_type=BinaryTriageReport,
         system_prompt=(
@@ -148,7 +150,9 @@ class VulnerabilityHuntReport(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
-def build_vulnerability_hunt_agent(model: Optional[str] = None) -> Agent:
+def build_vulnerability_hunt_agent(
+    model: Optional[str] = None,
+) -> Agent[MemoryContext, Any]:
     return _make_agent(
         output_type=VulnerabilityHuntReport,
         system_prompt=(
@@ -181,7 +185,9 @@ class SecurityPostureReport(BaseModel):
     overall_grade: str = Field(..., description="'A' | 'B' | 'C' | 'D' | 'F'")
 
 
-def build_security_posture_agent(model: Optional[str] = None) -> Agent:
+def build_security_posture_agent(
+    model: Optional[str] = None,
+) -> Agent[MemoryContext, Any]:
     return _make_agent(
         output_type=SecurityPostureReport,
         system_prompt=(
@@ -213,7 +219,9 @@ class CallPathFinding(BaseModel):
     notes: str = Field("", description="Caveats — indirect calls, plt stubs, etc.")
 
 
-def build_call_graph_navigator_agent(model: Optional[str] = None) -> Agent:
+def build_call_graph_navigator_agent(
+    model: Optional[str] = None,
+) -> Agent[MemoryContext, Any]:
     return _make_agent(
         output_type=CallPathFinding,
         system_prompt=(
@@ -250,7 +258,7 @@ class RenameSweepReport(BaseModel):
     summary: str
 
 
-def build_rename_sweep_agent(model: Optional[str] = None) -> Agent:
+def build_rename_sweep_agent(model: Optional[str] = None) -> Agent[MemoryContext, Any]:
     return _make_agent(
         output_type=RenameSweepReport,
         system_prompt=(
@@ -286,7 +294,9 @@ class StringClusterReport(BaseModel):
     summary: str
 
 
-def build_string_cluster_agent(model: Optional[str] = None) -> Agent:
+def build_string_cluster_agent(
+    model: Optional[str] = None,
+) -> Agent[MemoryContext, Any]:
     return _make_agent(
         output_type=StringClusterReport,
         system_prompt=(
@@ -326,7 +336,7 @@ class TaintTraceReport(BaseModel):
     summary: str
 
 
-def build_taint_trace_agent(model: Optional[str] = None) -> Agent:
+def build_taint_trace_agent(model: Optional[str] = None) -> Agent[MemoryContext, Any]:
     return _make_agent(
         output_type=TaintTraceReport,
         system_prompt=(

@@ -57,6 +57,14 @@ ArchiveFormat = Literal[
 # ---------------------------------------------------------------------------
 
 
+_TAR_READ_MODES: Dict[str, Literal["r:", "r:gz", "r:bz2", "r:xz"]] = {
+    "tar": "r:",
+    "tar.gz": "r:gz",
+    "tar.bz2": "r:bz2",
+    "tar.xz": "r:xz",
+}
+
+
 def _peek_format(path: Path) -> ArchiveFormat:
     """Return a coarse archive-format label by sniffing magic bytes.
 
@@ -181,12 +189,7 @@ class EnumerateArchiveTool(MemoryTool[EnumerateArchiveArgs, EnumerateArchiveResu
                 pass
         elif fmt in ("tar", "tar.gz", "tar.bz2", "tar.xz"):
             try:
-                mode = {
-                    "tar": "r:",
-                    "tar.gz": "r:gz",
-                    "tar.bz2": "r:bz2",
-                    "tar.xz": "r:xz",
-                }[fmt]
+                mode = _TAR_READ_MODES[fmt]
                 with tarfile.open(path, mode) as tf:
                     for m in tf.getmembers():
                         entries.append(
@@ -297,12 +300,7 @@ class ExtractArchiveEntryTool(
                 with zf.open(args.entry_name) as src:
                     body = src.read()
         elif fmt in ("tar", "tar.gz", "tar.bz2", "tar.xz"):
-            mode = {
-                "tar": "r:",
-                "tar.gz": "r:gz",
-                "tar.bz2": "r:bz2",
-                "tar.xz": "r:xz",
-            }[fmt]
+            mode = _TAR_READ_MODES[fmt]
             with tarfile.open(path, mode) as tf:
                 m = tf.getmember(args.entry_name)
                 f = tf.extractfile(m)
@@ -431,12 +429,7 @@ class ExtractArchiveAllTool(MemoryTool[ExtractArchiveAllArgs, ExtractArchiveAllR
             except zipfile.BadZipFile:
                 pass
         elif fmt in ("tar", "tar.gz", "tar.bz2", "tar.xz"):
-            mode = {
-                "tar": "r:",
-                "tar.gz": "r:gz",
-                "tar.bz2": "r:bz2",
-                "tar.xz": "r:xz",
-            }[fmt]
+            mode = _TAR_READ_MODES[fmt]
             try:
                 with tarfile.open(path, mode) as tf:
                     for m in tf.getmembers():

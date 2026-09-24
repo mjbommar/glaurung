@@ -375,7 +375,7 @@ def test_windows_functionization_rule_replay_surfaces_address_rejection_records(
         "samples/binaries/platforms/windows/vendor/realworld/"
         "windows-update-SurfacePenBleLcAddrAdaptationDriver.sys"
     )
-    _functions, _callgraph, stats = g.analysis.analyze_functions_path_with_stats(  # ty: ignore[unresolved-attribute]
+    _functions, _callgraph, stats = g.analysis.analyze_functions_path_with_stats(
         str(binary_path),
         max_functions=0,
     )

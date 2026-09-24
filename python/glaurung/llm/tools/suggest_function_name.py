@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 from pydantic_ai.settings import ModelSettings
@@ -249,7 +251,7 @@ class SuggestFunctionNameTool(
         # Use the project-default model (openai:gpt-5.4-mini + flex)
         # honoring LLMConfig.default_model / preferred_model().
         model_name = cfg.preferred_model()
-        agent_kwargs = {
+        agent_kwargs: dict[str, Any] = {
             "model": model_name,
             "output_type": SuggestedFunctionName,
             "system_prompt": (

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, Union, Literal
+from typing import Any, Literal, Optional, Union
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -69,7 +69,7 @@ class AnalysisAgentFactory:
     @staticmethod
     def create_agent(
         config: Optional[UnifiedAgentConfig] = None,
-        base_agent: Optional[Agent] = None,
+        base_agent: Optional[Agent[Any, Any]] = None,
     ) -> Union[SinglePassAgent, IterativeRefinementAgent]:
         """
         Create an analysis agent with the specified strategy.

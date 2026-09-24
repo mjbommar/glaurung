@@ -116,6 +116,7 @@ async def test_critique_finding_true_keeps_confidence():
 
     assert f.evidence_supports_claim == "true"
     assert f.confidence == "high"
+    assert f.critique is not None
     assert "strcpy" in f.critique
 
 
@@ -173,6 +174,7 @@ async def test_critique_finding_false_demotes_to_low():
 
     assert f.evidence_supports_claim == "false"
     assert f.confidence == "low"
+    assert f.critique is not None
     assert "runtime helper" in f.critique
 
 

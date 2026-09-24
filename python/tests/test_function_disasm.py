@@ -53,6 +53,7 @@ def test_named_call_targets_and_clean_coverage(kb_db) -> None:
     # An IAT import (call [rip+slot]) is named.
     assert any("SpinLock" in c for c in comments)
     # Intra-function jumps must NOT be counted as unresolved targets.
+    assert fd.coverage is not None
     cov = fd.coverage.to_dict()
     assert cov["facts"]["indirect calls unresolved"] == 0
     assert cov["complete"] is True

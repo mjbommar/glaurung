@@ -8,6 +8,8 @@ from glaurung.llm.context import MemoryContext
 from glaurung.llm.kb.adapters import import_triage
 from glaurung.llm.kb.models import NodeKind
 from glaurung.llm.tools.windows_emit_review_packet import (
+    CandidatePriority,
+    GateStatus,
     WindowsReviewEvidence,
     WindowsReviewPacket,
     WindowsReviewPathStep,
@@ -30,8 +32,8 @@ def _packet(
     *,
     attacker_class: str,
     sink_kind: str,
-    gate_status: str,
-    priority: str,
+    gate_status: GateStatus,
+    priority: CandidatePriority,
     confidence: float,
     provenance: list[str] | None = None,
     proven_gates: list[str] | None = None,
@@ -52,7 +54,7 @@ def _packet(
         required_gates=["destination_range_valid"],
         proven_gates=proven_gates or [],
         missing_required_gates=missing_required_gates or [],
-        gate_status=gate_status,  # type: ignore[arg-type]
+        gate_status=gate_status,
         path=[
             WindowsReviewPathStep(
                 function="nt!NtExample",
@@ -72,7 +74,7 @@ def _packet(
         required_project_facts=["function_names", "call_xrefs"],
         promotion_preconditions_met=promotion_preconditions_met,
         promotion_blockers=promotion_blockers or [],
-        priority=priority,  # type: ignore[arg-type]
+        priority=priority,
         confidence=confidence,
         confidence_reason="test",
         next_validation=["test validation"],

@@ -43,7 +43,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 import glaurung as g
 
@@ -169,6 +169,8 @@ def _rewrite_idiomatic(
     """
     from glaurung.llm.context import Budgets, MemoryContext
     from glaurung.llm.tools.rewrite_function_idiomatic import (
+        Language,
+        RewriteFidelity,
         RewriteFunctionArgs,
         RewriteFunctionIdiomaticTool,
     )
@@ -187,7 +189,7 @@ def _rewrite_idiomatic(
             pseudocode=pseudocode,
             c_prototype=c_prototype,
             role=role,
-            fidelity=fidelity,  # type: ignore[arg-type]
+            fidelity=cast(RewriteFidelity, fidelity),
             suspicious_vas=suspicious_vas or [],
             # Layer-0 tables: populated by F4 prepass when
             # --with-layer0 is set, else empty (F3 behaviour).
@@ -198,7 +200,7 @@ def _rewrite_idiomatic(
             structs=list(struct_pack) if struct_pack else [],
             enums=[],
             error_codes=[],
-            target_language=target_language,  # type: ignore[arg-type]
+            target_language=cast(Language, target_language),
             timeout_ms=int(timeout_ms),
         ),
     )
@@ -216,6 +218,8 @@ def _rewrite_idiomatic(
         }
 
     rw = result.rewrite
+    # The tool always populates ``rewrite`` on the tldr path.
+    assert rw is not None
     return {
         "fidelity": "tldr",
         "source": rw.source,

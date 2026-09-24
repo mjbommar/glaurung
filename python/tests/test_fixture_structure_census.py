@@ -52,7 +52,7 @@ from glaurung._native import metrics
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
-import fixture_structure_census as C  # ty: ignore[unresolved-import]
+import fixture_structure_census as C
 
 BASELINE = C.BASELINE
 

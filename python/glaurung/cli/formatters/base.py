@@ -43,7 +43,7 @@ class BaseFormatter(ABC):
         return self._console
 
     @abstractmethod
-    def format_output(self, data: Any) -> None:
+    def format_output(self, data: Any, /) -> None:
         """Format and output data according to the format type."""
         pass
 

@@ -136,9 +136,9 @@ def logged_agent_run(func):
             llm_logger.log_error("unknown", e)
             raise
 
-    import asyncio
+    import inspect
 
-    if asyncio.iscoroutinefunction(func):
+    if inspect.iscoroutinefunction(func):
         return async_wrapper
     else:
         return sync_wrapper

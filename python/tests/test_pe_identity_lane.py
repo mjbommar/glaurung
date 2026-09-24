@@ -44,7 +44,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 FIXTURE_DIR = ROOT / "tests" / "pe_identity"
 sys.path.insert(0, str(ROOT / "tools"))
 
-import decbench_symbols as S  # ty: ignore[unresolved-import]  # added above
+import decbench_symbols as S  # added above
 
 BITNESS = ["32", "64"]
 LOCAL_BODIES = ["local_body", "calls_import", "calls_local"]

@@ -141,7 +141,7 @@ def run_structured_llm(
 
     cfg = get_config()
     model_name = model or cfg.preferred_model()
-    agent_kwargs = {
+    agent_kwargs: dict[str, Any] = {
         "model": model_name,
         "output_type": output_type,
         "system_prompt": system_prompt,
@@ -161,7 +161,8 @@ def run_structured_llm(
             "service_tier": cfg.openai_service_tier,
         }
     agent_kwargs["model_settings"] = ModelSettings(**model_settings_kwargs)
-    agent = Agent[str, output_type](**agent_kwargs)
+    # Runtime-parameterised alias: ``output_type`` is a value, not a static type.
+    agent = Agent[str, output_type](**agent_kwargs)  # ty: ignore[invalid-type-form]
     try:
         result = agent.run_sync(prompt).output
     except Exception as exc:

@@ -40,7 +40,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 FIXTURE_DIR = ROOT / "tests" / "macho_lane"
 sys.path.insert(0, str(ROOT / "tools"))
 
-import decbench_symbols as S  # ty: ignore[unresolved-import]  # added above
+import decbench_symbols as S  # added above
 
 ARCHES = ["x86_64", "aarch64"]
 FUNCS = ["local_body", "calls_local", "mix_float"]

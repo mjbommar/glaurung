@@ -30,11 +30,11 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "tests" / "decompiler_fixtures"))
 
-import arch_roundtrip as AR  # ty: ignore[unresolved-import]
-import dectest as D  # ty: ignore[unresolved-import]
-import diff_decompile as DD  # ty: ignore[unresolved-import]
-import fixture_harness as H  # ty: ignore[unresolved-import]
-import manifest as M  # ty: ignore[unresolved-import]
+import arch_roundtrip as AR
+import dectest as D
+import diff_decompile as DD
+import fixture_harness as H
+import manifest as M
 
 pytestmark = pytest.mark.slow
 

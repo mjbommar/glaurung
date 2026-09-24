@@ -255,7 +255,9 @@ def _query(args: WindowsProjectCfgPathQueryArgs) -> WindowsProjectCfgPathQueryRe
         confidence,
         reason,
         bypass_path_block_ids=bypass_path[: args.max_path_blocks],
-        entry_to_sink_path_block_ids=entry_path[: args.max_path_blocks],
+        entry_to_sink_path_block_ids=(
+            entry_path[: args.max_path_blocks] if entry_path else []
+        ),
         branch_to_sink_path_block_ids=(
             branch_path[: args.max_path_blocks] if branch_path else []
         ),

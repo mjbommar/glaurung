@@ -171,8 +171,7 @@ def optimized_bst_binary(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Build the pinned Clang O2 tree fixture once for both shape checks."""
     source = FIXTURES / "src" / "15_binary_search_tree.c"
     binary = (
-        tmp_path_factory.mktemp("optimized-bst")
-        / "15_binary_search_tree-clang-O2.so"
+        tmp_path_factory.mktemp("optimized-bst") / "15_binary_search_tree-clang-O2.so"
     )
     compiled = TC.run(
         [
@@ -190,7 +189,7 @@ def optimized_bst_binary(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return binary
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_optimized_bst_search_recovers_latch_and_terminal_returns(
     optimized_bst_binary: Path,
 ) -> None:
@@ -212,7 +211,7 @@ def test_optimized_bst_search_recovers_latch_and_terminal_returns(
     assert "goto " not in code, code
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_optimized_bst_inorder_recovers_one_inner_loop_exit(
     optimized_bst_binary: Path,
 ) -> None:

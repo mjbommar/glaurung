@@ -154,6 +154,7 @@ def test_audited_rename_inlines_warning_in_summary(tmp_path: Path) -> None:
     # Summary contains the inline warning.
     assert "⚠" in rec.summary or "inconsistency" in rec.summary
     # Output structure exposes the verification fields.
+    assert rec.output is not None
     v = rec.output["verification"]
     assert v["matched_family"] == "memory_free"
     assert "family-mismatch" in v["flags"]

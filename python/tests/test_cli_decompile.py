@@ -1096,7 +1096,7 @@ def test_real_stripped_sigaction_callback_recovers_external_int_contract(
     )
     assert stripped_result.returncode == 0, stripped_result.stderr
 
-    results = g.ir.decompile_many(  # ty: ignore[unresolved-attribute]
+    results = g.ir.decompile_many(
         str(stripped),
         [
             int(quiet.entry_point.value),
@@ -1208,7 +1208,7 @@ def test_real_stripped_format_wrapper_recovers_forwarded_string_parameter(
     )
     assert stripped_result.returncode == 0, stripped_result.stderr
 
-    results = g.ir.decompile_many(  # ty: ignore[unresolved-attribute]
+    results = g.ir.decompile_many(
         str(stripped),
         list(targets.values()),
         style="decbench",
@@ -1284,13 +1284,9 @@ def test_real_stripped_plt_got_tail_free_recovers_void_contract(tmp_path: Path) 
     )
     assert stripped_result.returncode == 0, stripped_result.stderr
 
-    plt = dict(
-        g.analysis.elf_plt_map_path(  # ty: ignore[unresolved-attribute]
-            str(stripped)
-        )
-    )
+    plt = dict(g.analysis.elf_plt_map_path(str(stripped)))
     assert any(name == "free@plt" for name in plt.values()), plt
-    results = g.ir.decompile_many(  # ty: ignore[unresolved-attribute]
+    results = g.ir.decompile_many(
         str(stripped),
         [target],
         style="decbench",
@@ -1542,7 +1538,9 @@ def test_real_stripped_arm64_loop_does_not_invent_trailing_parameters(
     )
     assert len(results) == 1
     _, _, text = results[0][:3]
-    signature = next(line for line in text.splitlines() if line.endswith(" {") and "(" in line)
+    signature = next(
+        line for line in text.splitlines() if line.endswith(" {") and "(" in line
+    )
     parameters = signature.split("(", 1)[1].rsplit(")", 1)[0].split(",")
     assert len(parameters) == 2, signature
     # `argc` and `argv` — x2 and x3 are scratch, and the loop's three-argument
@@ -1750,6 +1748,7 @@ def test_decbench_output_parses_with_gcc():
     import subprocess as sp
 
     gcc = shutil.which("gcc")
+    assert gcc is not None  # guaranteed by the skipif above
     flags = [
         gcc,
         "-fsyntax-only",

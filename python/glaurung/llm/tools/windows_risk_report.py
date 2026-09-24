@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from argparse import Namespace
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -68,7 +68,7 @@ class WindowsRiskReportTool(MemoryTool[WindowsRiskReportArgs, WindowsRiskReportR
     ) -> WindowsRiskReportResult:
         del kb
         path = Path(args.path or ctx.file_path)
-        ns = SimpleNamespace(
+        ns = Namespace(
             max_read_bytes=ctx.budgets.max_read_bytes,
             max_file_size=ctx.budgets.max_file_size,
             max_functions=args.max_functions,
@@ -85,7 +85,7 @@ class WindowsRiskReportTool(MemoryTool[WindowsRiskReportArgs, WindowsRiskReportR
         return WindowsRiskReportResult(**report)
 
 
-def _build_report(path: Path, args: SimpleNamespace) -> dict[str, Any]:
+def _build_report(path: Path, args: Namespace) -> dict[str, Any]:
     from ...cli.commands.windows_risk import build_windows_risk_report
 
     return build_windows_risk_report(path, args)

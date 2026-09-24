@@ -331,7 +331,8 @@ def test_prompt_with_fake_pseudocode_strips_section_quotes():
             return fake_body
 
     real_ir = mod.g.ir
-    mod.g.ir = _FakeIR  # type: ignore[attr-defined]
+    # Monkeypatch the native module with a stub for this test only.
+    mod.g.ir = _FakeIR  # ty: ignore[invalid-assignment]
     try:
         ctx = MemoryContext(
             file_path="/nonexistent",

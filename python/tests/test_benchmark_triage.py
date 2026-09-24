@@ -4,7 +4,7 @@ import pytest
 
 # Skip or adapt if pytest-benchmark is not installed
 try:
-    import pytest_benchmark  # type: ignore  # noqa: F401
+    import pytest_benchmark  # noqa: F401
 
     HAS_BENCH = True
 except Exception:  # pragma: no cover - environment dependent

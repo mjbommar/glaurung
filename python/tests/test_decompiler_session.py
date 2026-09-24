@@ -33,7 +33,7 @@ def _build_fixture(tmp_path: Path) -> tuple[Path, int]:
     return binary, int(target.entry_point.value)
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_session_reuses_exact_discovery_without_changing_output(tmp_path: Path) -> None:
     """Two identical queries reuse discovery and remain output-identical."""
     binary, address = _build_fixture(tmp_path)
@@ -74,10 +74,10 @@ def test_session_reuses_exact_discovery_without_changing_output(tmp_path: Path) 
     }
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_diagnostics_bypass_rendered_artifact_cache(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,  # ty: ignore[unresolved-attribute]
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A diagnostic request must execute the pipeline and emit fresh evidence."""
     binary, address = _build_fixture(tmp_path)
@@ -102,7 +102,7 @@ def test_diagnostics_bypass_rendered_artifact_cache(
     }
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_session_reuses_program_facts_across_explicit_discovery_budgets(
     tmp_path: Path,
 ) -> None:
@@ -117,12 +117,8 @@ def test_session_reuses_program_facts_across_explicit_discovery_budgets(
         "symbol_artifacts_initialized": 0,
     }
 
-    one_function = session.decompile_at(
-        address, style="decbench", max_functions=1
-    )
-    two_functions = session.decompile_at(
-        address, style="decbench", max_functions=2
-    )
+    one_function = session.decompile_at(address, style="decbench", max_functions=1)
+    two_functions = session.decompile_at(address, style="decbench", max_functions=2)
 
     assert one_function == two_functions
     assert session.discovery_cache_stats == {
@@ -152,7 +148,5 @@ def test_session_rejects_an_unparseable_image(tmp_path: Path) -> None:
     invalid = tmp_path / "not-an-object"
     invalid.write_bytes(b"not an object")
 
-    with pytest.raises(  # ty: ignore[unresolved-attribute]
-        ValueError, match="image parse failed"
-    ):
+    with pytest.raises(ValueError, match="image parse failed"):
         g.ir.DecompilerSession(str(invalid))

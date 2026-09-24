@@ -29,13 +29,14 @@ import random
 import shutil
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 
-import metric_mutation as MM  # ty: ignore[unresolved-import]
+import metric_mutation as MM
 
 # A single program that every semantics-preserving class can rewrite, with a
 # deterministic, input-covering `main` so that a behaviour change shows up as
@@ -337,7 +338,8 @@ def test_a_run_reports_declines_and_both_halves():
     units = [MM.Unit(key="u/1", name="classify", text=PROGRAM, origin="test")]
     report = MM.run(units, list(MM.CATALOGUE), parity, seed=SEED, corpus="test")
     assert report.seed == SEED and report.units == 1
-    payload = MM.report_json(report)
+    # report_json promises only JSON data; this test reads its documented shape.
+    payload = cast("dict[str, Any]", MM.report_json(report))
     assert payload["seed"] == SEED
     assert payload["catalogue_version"] == MM.CATALOGUE_VERSION
 

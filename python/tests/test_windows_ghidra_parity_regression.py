@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -66,8 +67,8 @@ def _analyze(path: Path) -> list:
     return funcs
 
 
-def _risk_args() -> SimpleNamespace:
-    return SimpleNamespace(
+def _risk_args() -> argparse.Namespace:
+    return argparse.Namespace(
         max_read_bytes=104_857_600,
         max_file_size=1_073_741_824,
         max_functions=4096,

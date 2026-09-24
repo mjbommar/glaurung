@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pydantic_ai import Agent, RunContext
+from pydantic_ai.models import Model
 
 from ..context import MemoryContext
 
@@ -22,7 +23,7 @@ def inject_kb_context(ctx: RunContext[MemoryContext]) -> str:
 
 
 def create_foundation_agent(
-    model: str | None = None,
+    model: str | Model | None = None,
     *,
     output_type: type = str,
     system_prompt: str | None = None,

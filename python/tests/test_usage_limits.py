@@ -107,7 +107,7 @@ def test_build_usage_limits_env_override_propagates_through_helper():
             ul = build_usage_limits()
         assert ul.request_limit == 3
     finally:
-        _config_mod._config_instance = None
+        _config_mod._config = None
 
 
 def test_default_max_output_tokens_returns_config_value():

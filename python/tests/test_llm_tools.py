@@ -29,7 +29,7 @@ _MSVC_PDB = (
 
 
 def test_build_naming_prompt_includes_pseudocode_when_decompile_succeeds(
-    tmp_path: "__import__('pathlib').Path",
+    tmp_path: pathlib.Path,
 ):
     """build_naming_prompt should embed decompiler output when available."""
     sample = Path(

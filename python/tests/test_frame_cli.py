@@ -115,6 +115,7 @@ def test_frame_rename_persists(tmp_path: Path) -> None:
 
     kb = PersistentKnowledgeBase.open(db, binary_path=binary)
     sv = xref_db.get_stack_var(kb, 0x1000, -0x20)
+    assert sv is not None
     assert sv.name == "loop_index"
     assert sv.c_type == "int"  # preserved
     assert sv.set_by == "manual"
@@ -144,6 +145,7 @@ def test_frame_retype_preserves_name(tmp_path: Path) -> None:
 
     kb = PersistentKnowledgeBase.open(db, binary_path=binary)
     sv = xref_db.get_stack_var(kb, 0x1000, -0x10)
+    assert sv is not None
     assert sv.name == "buf"  # preserved
     assert sv.c_type == "uint8_t[16]"
     assert sv.set_by == "manual"
@@ -223,9 +225,13 @@ def test_frame_rename_is_undoable(tmp_path: Path) -> None:
         )
 
     kb = PersistentKnowledgeBase.open(db, binary_path=binary)
-    assert xref_db.get_stack_var(kb, 0x1000, -0x10).name == "renamed_buf"
+    sv = xref_db.get_stack_var(kb, 0x1000, -0x10)
+    assert sv is not None
+    assert sv.name == "renamed_buf"
     xref_db.undo(kb)
-    assert xref_db.get_stack_var(kb, 0x1000, -0x10).name == "buf"
+    sv = xref_db.get_stack_var(kb, 0x1000, -0x10)
+    assert sv is not None
+    assert sv.name == "buf"
     kb.close()
 
 

@@ -18,7 +18,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 
-import diff_decompile as D  # ty: ignore[unresolved-import]  # added above
+import diff_decompile as D  # added above
 
 pytestmark = pytest.mark.slow
 

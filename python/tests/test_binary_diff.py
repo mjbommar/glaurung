@@ -65,6 +65,7 @@ def test_diff_v1_vs_v2_isolates_the_patched_function(tmp_path: Path) -> None:
     dispatch = next(r for r in diff.changed_rows() if r.name == "dispatch")
     # Compiler layout can keep the byte count constant while replacing the
     # body. The content fingerprint, not size monotonicity, proves the patch.
+    assert dispatch.a is not None and dispatch.b is not None
     assert dispatch.b.body_hash != dispatch.a.body_hash
     # `main` should NOT be a structurally interesting change — the
     # bounds-check only lives in dispatch. (The compiler may rewrite

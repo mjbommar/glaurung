@@ -28,7 +28,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from .. import cache as _cache
 
@@ -330,7 +330,7 @@ def _run_name_local_variable(
     def_use_slice: list[str],
     timeout_ms: int,
     use_llm: bool,
-    role_hint: str,
+    role_hint: Literal["parameter", "local", "return", "global", "unknown"],
 ) -> Optional[dict[str, Any]]:
     """Run Tool #5 once. Returns dict payload or None on failure."""
     from glaurung.llm.tools.name_local_variable import (
@@ -347,7 +347,7 @@ def _run_name_local_variable(
                 current_id=ident,
                 recovered_type="int",
                 def_use_slice=def_use_slice,
-                role_hint=role_hint,  # type: ignore[arg-type]
+                role_hint=role_hint,
                 use_llm=use_llm,
             ),
         )

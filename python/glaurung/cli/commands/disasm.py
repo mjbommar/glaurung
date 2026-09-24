@@ -13,7 +13,7 @@ from ..formatters.disasm import DisasmFormatter
 from ..formatters.base import OutputFormat
 
 
-class DisasmCommand(BaseCommand):
+class DisasmCommand(BaseCommand[DisasmFormatter]):
     """Command for disassembling code from a binary."""
 
     def get_name(self) -> str:

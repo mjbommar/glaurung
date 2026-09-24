@@ -88,7 +88,7 @@ def test_killed_canary_value_does_not_make_scalar_result_a_pointer(
     )
     assert stripped_result.returncode == 0, stripped_result.stderr
 
-    results = g.ir.decompile_many(  # ty: ignore[unresolved-attribute]
+    results = g.ir.decompile_many(
         str(stripped),
         [targets["scalar_after_pointer"], targets["pointer_after_canary"]],
         style="decbench",

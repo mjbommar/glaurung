@@ -376,7 +376,7 @@ def test_no_recovered_local_is_read_without_ever_being_assigned(
                 for line in body.splitlines()
                 if re.search(rf"\b{var}\b", line)
                 and not re.match(rf"^[ \t]+[\w \*]+?\b{var}\s*;", line)
-                and (spill.match(line) is None or spill.match(line).group(1) != var)
+                and ((m := spill.match(line)) is None or m.group(1) != var)
             ]
             if observable:
                 problems.append(

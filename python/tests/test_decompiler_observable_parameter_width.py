@@ -99,7 +99,7 @@ def test_real_stripped_low_byte_parameter_is_not_widened_by_its_abi_copy(
     )
     assert stripped_result.returncode == 0, stripped_result.stderr
 
-    results = g.ir.decompile_many(  # ty: ignore[unresolved-attribute]
+    results = g.ir.decompile_many(
         str(stripped),
         [targets["byte_only"], targets["full_word"]],
         style="decbench",

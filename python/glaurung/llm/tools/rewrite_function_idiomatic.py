@@ -606,21 +606,21 @@ class RewriteFunctionIdiomaticTool(
                 pseudocode = f"// decompile failed: {e}"
 
         if args.fidelity == "annotated":
-            heur = _annotated_heuristic_fallback(args, pseudocode)
+            annotated_heur = _annotated_heuristic_fallback(args, pseudocode)
             prompt = _build_prompt_annotated(args, pseudocode)
             annotated = run_structured_llm(
                 prompt=prompt,
                 output_type=AnnotatedFunction,
                 system_prompt=_SYSTEM_PROMPT_ANNOTATED,
-                fallback=lambda: heur,
+                fallback=lambda: annotated_heur,
             )
-            source = "heuristic" if annotated is heur else "llm"
+            source = "heuristic" if annotated is annotated_heur else "llm"
             # Sanity guard: a successful LLM response with an empty
             # blocks list is the "soft refusal" pattern (the LLM gave
             # up but didn't throw). Treat as fallback so callers see
             # the raw pseudocode rather than zero blocks.
-            if annotated is not heur and not annotated.blocks:
-                annotated = heur
+            if annotated is not annotated_heur and not annotated.blocks:
+                annotated = annotated_heur
                 source = "heuristic"
             # Grounding pass: flag store-shaped lines in lifted_c that
             # have no corresponding mem_access write in the same block.

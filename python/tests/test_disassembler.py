@@ -70,10 +70,10 @@ class TestDisassemblerError:
 
     def test_disassembler_error_values(self):
         """Test all DisassemblerError enum values."""
-        assert DisassemblerError.InvalidInstruction
-        assert DisassemblerError.InvalidAddress
-        assert DisassemblerError.InsufficientBytes
-        assert DisassemblerError.UnsupportedInstruction
+        assert DisassemblerError.InvalidInstruction is not None
+        assert DisassemblerError.InvalidAddress is not None
+        assert DisassemblerError.InsufficientBytes is not None
+        assert DisassemblerError.UnsupportedInstruction is not None
         # InternalError requires a string parameter, so we can't test it directly
 
     def test_disassembler_error_display(self):

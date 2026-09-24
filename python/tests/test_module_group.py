@@ -38,6 +38,7 @@ def test_shared_pool_tags_across_family():
     for tag, members in shared.items():
         assert len(members) >= 2  # used by both
     # Coverage must hedge: shared tag != proven overflow path.
+    assert g.coverage is not None
     caveats = " ".join(g.coverage.to_dict()["caveats"]).lower()
     assert "not a proven overflow" in caveats
 

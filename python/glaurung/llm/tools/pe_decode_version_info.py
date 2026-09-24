@@ -182,7 +182,7 @@ def _parse_version_node(
     return _VersionNode(key, value_length, value_type, value, children), end
 
 
-def _decode_fixed_file_info(value: bytes) -> dict[str, int] | None:
+def _decode_fixed_file_info(value: bytes) -> dict[str, int | str] | None:
     if len(value) < 52:
         return None
     fields = [_u32(value, index * 4) for index in range(13)]

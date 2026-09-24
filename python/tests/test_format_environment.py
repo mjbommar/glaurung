@@ -96,7 +96,7 @@ def test_real_stripped_local_vfprintf_sink_types_literal_format_operands(
     )
     assert stripped_result.returncode == 0, stripped_result.stderr
 
-    results = g.ir.decompile_many(  # ty: ignore[unresolved-attribute]
+    results = g.ir.decompile_many(
         str(stripped),
         list(targets.values()),
         style="decbench",

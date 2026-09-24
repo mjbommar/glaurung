@@ -89,7 +89,8 @@ async def test_single_pass_passes_model_settings_not_top_level_kwargs():
 
     fake_pyd_agent = _FakeAgent()
     sp = SinglePassAgent(
-        base_agent=fake_pyd_agent,
+        # A duck-typed test double stands in for pydantic_ai.Agent.
+        base_agent=fake_pyd_agent,  # ty: ignore[invalid-argument-type]
         config=SinglePassConfig(optimize_context=False, pre_populate_kb=False),
         model="anthropic:claude-haiku-4-5",
     )
@@ -109,6 +110,7 @@ async def test_single_pass_passes_model_settings_not_top_level_kwargs():
 
     fake_pyd_agent.run.assert_awaited_once()
     call = fake_pyd_agent.run.await_args
+    assert call is not None  # assert_awaited_once() above guarantees it
     # First positional arg is the question.
     assert call.args[0] == "what is in this file?"
     # Sampling params MUST NOT appear at the top level.
@@ -142,7 +144,8 @@ async def test_iterative_refinement_passes_model_settings_not_top_level_kwargs()
 
     fake_pyd_agent = _FakeAgent()
     it = IterativeRefinementAgent(
-        base_agent=fake_pyd_agent,
+        # A duck-typed test double stands in for pydantic_ai.Agent.
+        base_agent=fake_pyd_agent,  # ty: ignore[invalid-argument-type]
         config=IterativeConfig(),
         model="anthropic:claude-haiku-4-5",
     )
@@ -156,6 +159,7 @@ async def test_iterative_refinement_passes_model_settings_not_top_level_kwargs()
 
     fake_pyd_agent.run.assert_awaited_once()
     call = fake_pyd_agent.run.await_args
+    assert call is not None  # assert_awaited_once() above guarantees it
     forbidden = {
         "temperature",
         "top_p",

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import glaurung as g
 
 from .models import Node, Edge, NodeKind
 from .store import KnowledgeBase
+
+if TYPE_CHECKING:
+    from ..evidence import BinaryEvidence
 
 
 def import_triage(

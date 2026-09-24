@@ -1135,7 +1135,7 @@ def _decompile_pdb_public_range(
     if args.function_va is None or not args.pdb_cache:
         return None
     try:
-        analysis = g.debug.analyze_pe_pdb_cache_path(  # ty: ignore[unresolved-attribute]
+        analysis = g.debug.analyze_pe_pdb_cache_path(
             str(binary_path),
             args.pdb_cache,
             [],

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -540,6 +540,12 @@ class _TargetSinkContext(BaseModel):
     sink_symbols: list[str] = Field(default_factory=list)
 
 
+class _SinkContextFields(TypedDict, total=False):
+    source_function_sink_count: int
+    source_function_sink_kinds: list[str]
+    source_function_sink_symbols: list[str]
+
+
 def _operations(args: WindowsProjectDataLabelFactsArgs) -> list[OperationRecord]:
     path = _resolve_metadata_path(args.sinks_path, "data/kg/pe-sinks.yaml")
     return [_operation_record(entry, path) for entry in _load_yaml_list(path)]
@@ -611,7 +617,7 @@ def _operations_by_symbol(
 def _sink_context_fields(
     sink_context: dict[int, _TargetSinkContext],
     target_va: int,
-) -> dict[str, object]:
+) -> _SinkContextFields:
     context = sink_context.get(target_va)
     if context is None:
         return {}

@@ -14,9 +14,9 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 
-import diff_decompile as D  # ty: ignore[unresolved-import]  # added above
+import diff_decompile as D  # added above
 
-pytestmark = pytest.mark.slow  # ty: ignore[unresolved-attribute]
+pytestmark = pytest.mark.slow
 
 _SOURCE = r"""
 double return_double_after_integer(double value, int scale) {
@@ -121,7 +121,7 @@ def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, capture_output=True, text=True, check=False)
 
 
-@pytest.mark.parametrize(  # ty: ignore[unresolved-attribute]
+@pytest.mark.parametrize(
     (
         "compiler",
         "objdump",

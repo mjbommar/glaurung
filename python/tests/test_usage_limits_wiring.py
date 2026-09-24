@@ -30,7 +30,8 @@ async def test_single_pass_forwards_usage_limits():
 
     fake = _FakeAgent()
     sp = SinglePassAgent(
-        base_agent=fake,
+        # A duck-typed test double stands in for pydantic_ai.Agent.
+        base_agent=fake,  # ty: ignore[invalid-argument-type]
         config=SinglePassConfig(optimize_context=False, pre_populate_kb=False),
         model="openai:gpt-5.4-mini",
     )
@@ -44,6 +45,7 @@ async def test_single_pass_forwards_usage_limits():
 
     fake.run.assert_awaited_once()
     call = fake.run.await_args
+    assert call is not None  # assert_awaited_once() above guarantees it
     assert "usage_limits" in call.kwargs, (
         f"single_pass missed usage_limits; got {list(call.kwargs.keys())}"
     )
@@ -61,7 +63,8 @@ async def test_iterative_refinement_forwards_usage_limits():
 
     fake = _FakeAgent()
     it = IterativeRefinementAgent(
-        base_agent=fake,
+        # A duck-typed test double stands in for pydantic_ai.Agent.
+        base_agent=fake,  # ty: ignore[invalid-argument-type]
         config=IterativeConfig(),
         model="openai:gpt-5.4-mini",
     )
@@ -73,7 +76,9 @@ async def test_iterative_refinement_forwards_usage_limits():
     await it._execute_iteration("prompt", context, _params(), state)
 
     fake.run.assert_awaited_once()
-    ul = fake.run.await_args.kwargs.get("usage_limits")
+    call = fake.run.await_args
+    assert call is not None, "Agent.run was never awaited"
+    ul = call.kwargs.get("usage_limits")
     assert ul is not None
     assert ul.request_limit == 12
 
@@ -89,7 +94,8 @@ async def test_iterative_agents_iterative_forwards_usage_limits():
 
     fake = _FakeAgent()
     strategy = RefinementStrategy(max_iterations=1)
-    it = IterativeAgent(base_agent=fake, strategy=strategy)
+    # A duck-typed test double stands in for pydantic_ai.Agent.
+    it = IterativeAgent(base_agent=fake, strategy=strategy)  # ty: ignore[invalid-argument-type]
 
     # Stub _evaluate_confidence so the loop exits after one iteration
     # without inspecting result content.
@@ -97,10 +103,12 @@ async def test_iterative_agents_iterative_forwards_usage_limits():
         # run_with_refinement is the public entry point; pass a
         # MemoryContext-shaped object that won't be inspected.
         ctx = SimpleNamespace(kb=SimpleNamespace(), file_path="/x")
-        await it.run_with_refinement("q", ctx)
+        await it.run_with_refinement("q", ctx)  # ty: ignore[invalid-argument-type]
 
     fake.run.assert_awaited()
-    ul = fake.run.await_args.kwargs.get("usage_limits")
+    call = fake.run.await_args
+    assert call is not None, "Agent.run was never awaited"
+    ul = call.kwargs.get("usage_limits")
     assert ul is not None, "iterative.py agent.run() missed usage_limits"
 
 
@@ -140,7 +148,9 @@ async def test_findings_runner_forwards_usage_limits():
         await run_findings_pass("/nonexistent.exe", args)
 
     fake.run.assert_awaited()
-    ul = fake.run.await_args.kwargs.get("usage_limits")
+    call = fake.run.await_args
+    assert call is not None, "Agent.run was never awaited"
+    ul = call.kwargs.get("usage_limits")
     assert ul is not None
     # findings_runner overrides request_limit to 8 (tighter than the
     # config default of 12).
@@ -192,7 +202,9 @@ async def test_finding_critic_forwards_usage_limits():
         await critique_finding(f, ctx, model_name="openai:gpt-5.4-mini")
 
     fake.run.assert_awaited()
-    ul = fake.run.await_args.kwargs.get("usage_limits")
+    call = fake.run.await_args
+    assert call is not None, "Agent.run was never awaited"
+    ul = call.kwargs.get("usage_limits")
     assert ul is not None
     assert ul.request_limit == 2
     assert ul.tool_calls_limit == 0  # critic must not call tools

@@ -3,11 +3,14 @@
 import argparse
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Generic, TypeVar
 
 from ..formatters.base import OutputFormat, BaseFormatter
 
+FormatterT = TypeVar("FormatterT", bound=BaseFormatter)
 
-class BaseCommand(ABC):
+
+class BaseCommand(ABC, Generic[FormatterT]):
     """Abstract base class for CLI commands."""
 
     def __init__(self):
@@ -31,7 +34,7 @@ class BaseCommand(ABC):
         pass
 
     @abstractmethod
-    def execute(self, args: argparse.Namespace, formatter: BaseFormatter) -> int:
+    def execute(self, args: argparse.Namespace, formatter: FormatterT) -> int:
         """Execute the command with the given arguments and formatter."""
         pass
 

@@ -257,7 +257,8 @@ async def test_single_pass_records_usage():
         run=AsyncMock(return_value=_fake_result(input_tokens=4_000, output_tokens=800))
     )
     sp = SinglePassAgent(
-        base_agent=fake,
+        # A duck-typed test double stands in for pydantic_ai.Agent.
+        base_agent=fake,  # ty: ignore[invalid-argument-type]
         config=SinglePassConfig(optimize_context=False, pre_populate_kb=False),
         model="openai:gpt-5.4-mini",
     )

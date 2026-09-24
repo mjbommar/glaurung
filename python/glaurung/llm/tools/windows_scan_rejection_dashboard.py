@@ -284,7 +284,7 @@ def _add_native_row(
     path: Path,
     args: WindowsScanRejectionDashboardArgs,
 ) -> None:
-    _functions, _callgraph, native_stats = g.analysis.analyze_functions_path_with_stats(  # ty: ignore[unresolved-attribute]
+    _functions, _callgraph, native_stats = g.analysis.analyze_functions_path_with_stats(
         str(path),
         args.max_read_bytes,
         args.max_file_size,

@@ -42,7 +42,7 @@ REPO = Path(__file__).resolve().parents[2]
 ARCHIVE = REPO / "tests/fixtures/flirt/armtc/newlib_subset.thumb-v7e-m-fp-hard.a"
 
 sys.path.insert(0, str(REPO / "tools"))
-import harvest_armtc  # ty: ignore[unresolved-import]  # added above
+import harvest_armtc  # added above
 
 
 @pytest.fixture(scope="module")

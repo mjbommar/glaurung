@@ -7,7 +7,7 @@ from .base import BaseCommand
 from ..formatters.triage import TriageFormatter
 
 
-class TriageCommand(BaseCommand):
+class TriageCommand(BaseCommand[TriageFormatter]):
     """Command for triaging files."""
 
     def get_name(self) -> str:

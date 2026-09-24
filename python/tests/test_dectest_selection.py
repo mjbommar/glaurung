@@ -27,9 +27,9 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "tests" / "decompiler_fixtures"))
 
-import build_guard as BG  # ty: ignore[unresolved-import]
-import dectest as D  # ty: ignore[unresolved-import]
-import manifest as M  # ty: ignore[unresolved-import]
+import build_guard as BG
+import dectest as D
+import manifest as M
 
 # --- selector grammar ------------------------------------------------------
 
@@ -472,7 +472,7 @@ def test_an_arch_run_is_still_labelled_scoped():
 def test_the_arch_dimension_is_read_from_arch_roundtrip_not_restated():
     """One list. A target added to `arch_roundtrip.TARGETS` must become
     selectable without a second edit here."""
-    import arch_roundtrip as AR  # ty: ignore[unresolved-import]
+    import arch_roundtrip as AR
 
     assert set(D.ARCHES) == set(AR.TARGETS)
 

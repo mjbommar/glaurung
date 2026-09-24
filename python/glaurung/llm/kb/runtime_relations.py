@@ -1499,7 +1499,9 @@ def runtime_mapping_history_json(
         if report.analyzer == "runtime-mapping-behavior"
     ]
     if not reports:
-        raise KeyError(f"no persisted runtime mapping history for capture: {capture_id}")
+        raise KeyError(
+            f"no persisted runtime mapping history for capture: {capture_id}"
+        )
     if len(reports) != 1:
         raise ValueError(
             f"multiple persisted runtime mapping histories for capture: {capture_id}"

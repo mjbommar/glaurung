@@ -20,7 +20,7 @@ from __future__ import annotations
 import sqlite3
 import time
 from dataclasses import dataclass, field
-from typing import Any, Iterable, List, Literal, Optional, Tuple
+from typing import Any, Iterable, List, Literal, Optional, Sequence, Tuple
 
 from .persistent import PersistentKnowledgeBase
 from .provenance import outranks
@@ -917,7 +917,7 @@ def index_data_xrefs(
 
 def _import_external_names(
     kb: PersistentKnowledgeBase,
-    pairs: Iterable[Tuple[int, str]],
+    pairs: Sequence[Tuple[int, str]],
     set_by: str,
 ) -> None:
     """Apply a (va, name) batch from an external recovery source
@@ -2506,6 +2506,8 @@ def record_evidence(
     )
     cite_id = cur.lastrowid
     kb._conn.commit()
+    # A successful INSERT always sets lastrowid.
+    assert cite_id is not None
     return int(cite_id)
 
 

@@ -272,7 +272,7 @@ class TestIterativeRefinementAgent:
             mock_result = MagicMock()
             mock_result.output = MagicMock()
             mock_result.output.confidence = conf
-            mock_result.output.__str__ = lambda: f"Answer with confidence {conf}"
+            mock_result.output.__str__ = lambda: f"Answer with confidence {conf}"  # ty: ignore[invalid-assignment]  # MagicMock dunder override
             results.append(mock_result)
 
         mock_base_agent.run.side_effect = results
@@ -301,7 +301,7 @@ class TestIterativeRefinementAgent:
         mock_result = MagicMock()
         mock_result.output = MagicMock()
         mock_result.output.confidence = 0.3
-        mock_result.output.__str__ = lambda: "Low confidence answer"
+        mock_result.output.__str__ = lambda: "Low confidence answer"  # ty: ignore[invalid-assignment]  # MagicMock dunder override
         mock_base_agent.run.return_value = mock_result
 
         # Create agent with low iteration limit
@@ -393,7 +393,7 @@ class TestIterativeRefinementAgent:
             mock_result = MagicMock()
             mock_result.output = MagicMock()
             mock_result.output.confidence = 0.2  # Stay low to trigger progression
-            mock_result.output.__str__ = lambda: "Answer"
+            mock_result.output.__str__ = lambda: "Answer"  # ty: ignore[invalid-assignment]  # MagicMock dunder override
             return mock_result
 
         mock_base_agent.run = track_temp

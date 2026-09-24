@@ -11,8 +11,8 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 BUILD = ROOT / "tests" / "decompiler_fixtures" / "build"
 sys.path.insert(0, str(ROOT / "tools"))
 
-import diff_decompile as D  # ty: ignore[unresolved-import]  # added above
-import structure_v2_compare as S  # ty: ignore[unresolved-import]  # added above
+import diff_decompile as D  # added above
+import structure_v2_compare as S  # added above
 
 
 def test_structure_axis_compares_both_outputs_on_one_source_denominator() -> None:

@@ -146,7 +146,7 @@ def test_do_while_latch_condition_is_defined(tmp_path):
     import subprocess
 
     sys.path.insert(0, str(ROOT / "tools"))
-    import fixture_toolchain as TC  # ty: ignore[unresolved-import]
+    import fixture_toolchain as TC
 
     source = ROOT / "tests" / "decbench_corpus" / "src" / "checksum.c"
     binary = tmp_path / "checksum-gcc-O2.so"
@@ -244,7 +244,7 @@ def test_all_and_vas_agree():
     import sys as _sys
 
     _sys.path.insert(0, str(ROOT / "tools"))
-    import diff_decompile as D  # ty: ignore[unresolved-import]
+    import diff_decompile as D
 
     _td = M.tmpdir()
     with tempfile.TemporaryDirectory(**({"dir": _td} if _td else {})) as td:
@@ -403,9 +403,7 @@ def test_optimized_tail_dispatch_recovers_portable_local_function_table(
         assert handler in result.stdout, result.stdout
     assert "unrecovered indirect jump" not in result.stdout, result.stdout
     table_calls = [
-        line
-        for line in result.stdout.splitlines()
-        if "ops[" in line and "]))(" in line
+        line for line in result.stdout.splitlines() if "ops[" in line and "]))(" in line
     ]
     assert len(table_calls) == 1, result.stdout
     call_line = table_calls[0].strip()
@@ -485,7 +483,7 @@ def test_sum_array_recovers_a_for_loop(tmp_path):
     import subprocess
 
     sys.path.insert(0, str(ROOT / "tools"))
-    import fixture_toolchain as TC  # ty: ignore[unresolved-import]
+    import fixture_toolchain as TC
 
     source = ROOT / "tests" / "decbench_corpus" / "src" / "arrays.c"
     binary = tmp_path / "arrays-gcc-O0.so"
@@ -526,7 +524,7 @@ def test_signs_renders_lifted_select_as_pure_ternary(tmp_path: Path, opt: str) -
     import subprocess
 
     sys.path.insert(0, str(ROOT / "tools"))
-    import fixture_toolchain as TC  # ty: ignore[unresolved-import]
+    import fixture_toolchain as TC
 
     source = ROOT / "tests" / "decbench_corpus" / "src" / "arith.c"
     binary = tmp_path / f"arith-gcc-{opt[1:]}.so"
@@ -564,7 +562,7 @@ def test_nested_conditional_result_recovers_direct_returns(tmp_path: Path) -> No
     import subprocess
 
     sys.path.insert(0, str(ROOT / "tools"))
-    import fixture_toolchain as TC  # ty: ignore[unresolved-import]
+    import fixture_toolchain as TC
 
     source = ROOT / "tests" / "decbench_corpus" / "src" / "branches.c"
     binary = tmp_path / "branches-gcc-O2.so"
@@ -625,7 +623,7 @@ def test_classify_keeps_the_source_if_chain_out_of_a_ternary(tmp_path: Path) -> 
     import subprocess
 
     sys.path.insert(0, str(ROOT / "tools"))
-    import fixture_toolchain as TC  # ty: ignore[unresolved-import]
+    import fixture_toolchain as TC
 
     source = ROOT / "tests" / "decbench_corpus" / "src" / "branches.c"
     binary = tmp_path / "branches-gcc-O0.so"
@@ -665,7 +663,7 @@ def test_classify_clang_o2_recovers_signed_relations_without_flag_locals(
     import subprocess
 
     sys.path.insert(0, str(ROOT / "tools"))
-    import fixture_toolchain as TC  # ty: ignore[unresolved-import]
+    import fixture_toolchain as TC
 
     source = ROOT / "tests" / "decbench_corpus" / "src" / "branches.c"
     binary = tmp_path / "branches-clang-O2.so"
@@ -703,7 +701,7 @@ def test_recursion_clang_o0_recovers_exhaustive_direct_returns(tmp_path: Path) -
     import subprocess
 
     sys.path.insert(0, str(ROOT / "tools"))
-    import fixture_toolchain as TC  # ty: ignore[unresolved-import]
+    import fixture_toolchain as TC
 
     source = ROOT / "tests" / "decbench_corpus" / "src" / "recursion.c"
     binary = tmp_path / "recursion-clang-O0.so"
@@ -769,7 +767,7 @@ def test_recursion_gcc_o2_inherits_declared_parameter_types(tmp_path: Path) -> N
     import subprocess
 
     sys.path.insert(0, str(ROOT / "tools"))
-    import fixture_toolchain as TC  # ty: ignore[unresolved-import]
+    import fixture_toolchain as TC
 
     source = ROOT / "tests" / "decbench_corpus" / "src" / "recursion.c"
     binary = tmp_path / "recursion-gcc-O2.so"

@@ -143,6 +143,7 @@ def test_memory_context_open_persistent(tmp_path: Path) -> None:
         db_path=db,
         session="main",
     )
+    assert isinstance(ctx.kb, PersistentKnowledgeBase)
     ctx.kb.add_node(Node(kind=NodeKind.note, label="via-ctx", text="hello"))
     ctx.kb.close()
 
@@ -152,6 +153,7 @@ def test_memory_context_open_persistent(tmp_path: Path) -> None:
         db_path=db,
         session="main",
     )
+    assert isinstance(ctx2.kb, PersistentKnowledgeBase)
     labels = [n.label for n in ctx2.kb.nodes()]
     assert "via-ctx" in labels
     ctx2.kb.close()

@@ -15,11 +15,11 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "tests" / "decompiler_fixtures"))
 
-import arch_roundtrip as A  # ty: ignore[unresolved-import]  # added above
-import diff_decompile as D  # ty: ignore[unresolved-import]  # added above
-import manifest as M  # ty: ignore[unresolved-import]  # added above
+import arch_roundtrip as A  # added above
+import diff_decompile as D  # added above
+import manifest as M  # added above
 
-pytestmark = pytest.mark.slow  # ty: ignore[unresolved-attribute]
+pytestmark = pytest.mark.slow
 
 A32_ARCH = "armv7_a32"
 A32_OBJDUMP = "arm-linux-gnueabihf-objdump"
@@ -194,7 +194,7 @@ def test_a32_o0_frame_pointer_stack_arguments_round_trip(
     _assert_qemu_round_trip(target, source, reference, fixture, functions)
 
 
-@pytest.mark.parametrize("arch", ARM32_ARCHES)  # ty: ignore[unresolved-attribute]
+@pytest.mark.parametrize("arch", ARM32_ARCHES)
 def test_arm32_o2_rb_validate_round_trips_source_asm_ir_c_and_execution(
     tmp_path: Path, arch: str
 ) -> None:
@@ -279,7 +279,7 @@ def test_arm32_o2_rb_validate_round_trips_source_asm_ir_c_and_execution(
     assert results[function]["detail"].endswith("cases (native target ABI)"), results
 
 
-@pytest.mark.parametrize(  # ty: ignore[unresolved-attribute]
+@pytest.mark.parametrize(
     ("arch", "opt"),
     (("armv7", "O0"), ("armv7", "O2"), (A32_ARCH, "O0"), (A32_ARCH, "O2")),
 )
@@ -340,7 +340,7 @@ def test_arm32_packet_parser_round_trips_bitfields_rotates_and_smlabb(
     )
 
 
-@pytest.mark.parametrize("arch", ARM32_ARCHES)  # ty: ignore[unresolved-attribute]
+@pytest.mark.parametrize("arch", ARM32_ARCHES)
 def test_arm32_o2_finite_difference_round_trips_signed_long_accumulate(
     tmp_path: Path, arch: str
 ) -> None:
@@ -382,7 +382,7 @@ def test_arm32_o2_finite_difference_round_trips_signed_long_accumulate(
     )
 
 
-@pytest.mark.parametrize("arch", ARM32_ARCHES)  # ty: ignore[unresolved-attribute]
+@pytest.mark.parametrize("arch", ARM32_ARCHES)
 def test_arm32_o0_rb_validate_round_trips_split_frame_addresses(
     tmp_path: Path, arch: str
 ) -> None:

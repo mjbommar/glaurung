@@ -25,9 +25,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "tests" / "decompiler_fixtures"))
-import fixture_harness as H  # ty: ignore[unresolved-import]  # added to sys.path above
-import fixture_toolchain as TC  # ty: ignore[unresolved-import]
-import manifest as M  # ty: ignore[unresolved-import]
+import fixture_harness as H  # added to sys.path above
+import fixture_toolchain as TC
+import manifest as M
 
 BASELINE = ROOT / "tests" / "decompiler_fixtures" / "baseline.json"
 

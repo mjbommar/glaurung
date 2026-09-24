@@ -18,7 +18,7 @@ here rather than shipping.
 
 from __future__ import annotations
 
-import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -33,7 +33,7 @@ VA = 0x1000
 def kb(tmp_path: Path):
     """A throwaway KB. `tmp_path` keeps this out of the shared /tmp litter."""
     db = tmp_path / "precedence.glaurung"
-    return PersistentKnowledgeBase.open(str(db), binary_path=os.sys.executable)
+    return PersistentKnowledgeBase.open(str(db), binary_path=sys.executable)
 
 
 def _set_name(kb, value: str, set_by: str) -> None:
@@ -42,7 +42,7 @@ def _set_name(kb, value: str, set_by: str) -> None:
 
 def _get_name(kb) -> str | None:
     row = xref_db.get_function_name(kb, VA)
-    return getattr(row, "canonical", row)
+    return None if row is None else row.canonical
 
 
 def _set_comment(kb, value: str, set_by: str) -> None:
@@ -59,7 +59,7 @@ def _set_label(kb, value: str, set_by: str) -> None:
 
 def _get_label(kb) -> str | None:
     row = xref_db.get_data_label(kb, VA)
-    return getattr(row, "name", row)
+    return None if row is None else row.name
 
 
 #: (human name, setter, getter). Every annotation an analyst can write by hand.

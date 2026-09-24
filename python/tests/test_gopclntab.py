@@ -111,6 +111,7 @@ def test_manual_rename_wins_over_gopclntab(tmp_path: Path) -> None:
     # Re-run index — the gopclntab pass must respect the manual entry.
     xref_db.index_callgraph(kb, str(binary), force=True)
     name = xref_db.get_function_name(kb, main_va)
+    assert name is not None
     assert name.canonical == "user_renamed_main"
     assert name.set_by == "manual"
     kb.close()

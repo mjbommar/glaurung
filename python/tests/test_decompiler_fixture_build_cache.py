@@ -34,8 +34,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "tests" / "decompiler_fixtures"))
-import fixture_harness as H  # ty: ignore[unresolved-import]  # added to sys.path above
-import fixture_toolchain as TC  # ty: ignore[unresolved-import]
+import fixture_harness as H  # added to sys.path above
+import fixture_toolchain as TC
 
 #: A small, fast C fixture. Any lane would do; this one compiles in milliseconds.
 C_FIXTURE = "13_loop_early_exit"

@@ -18,7 +18,7 @@ candidates, then asks the user / next tool whether to peel each one.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Literal
+from typing import List, Literal, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -38,7 +38,7 @@ ExecutableFormat = Literal[
 
 
 # Magic-byte signatures and the validators that reject false positives.
-_SIGNATURES = [
+_SIGNATURES: List[Tuple[bytes, ExecutableFormat, int]] = [
     (b"\x7fELF\x01", "elf32", 16),
     (b"\x7fELF\x02", "elf64", 16),
     (b"MZ", "pe", 64),  # validated separately by checking PE header pointer
@@ -157,11 +157,11 @@ class FindEmbeddedExecutablesTool(
                 start = pos + 1
                 if args.skip_first_match and pos == 0:
                     continue
-                if not _validate(data, pos, fmt):  # type: ignore[arg-type]
+                if not _validate(data, pos, fmt):
                     continue
                 matches.append(
                     EmbeddedExecutable(
-                        format=fmt,  # type: ignore[arg-type]
+                        format=fmt,
                         offset=pos,
                         signature_bytes=data[pos : pos + 8].hex(),
                     )

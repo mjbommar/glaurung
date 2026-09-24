@@ -14,9 +14,9 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 
-import diff_decompile as D  # ty: ignore[unresolved-import]  # added above
+import diff_decompile as D  # added above
 
-pytestmark = pytest.mark.slow  # ty: ignore[unresolved-attribute]
+pytestmark = pytest.mark.slow
 
 _SOURCE = """
 #include <stdatomic.h>
@@ -67,9 +67,7 @@ def test_x86_cmpxchg_preserves_memory_when_the_comparison_fails(
     assert "cmpxchg" in disassembly.stdout, disassembly.stdout
 
     function = D.exported_functions(str(original))["cas_exchange"]
-    llir = g.ir.lift_window_at(  # ty: ignore[unresolved-attribute]
-        str(original), function, 24, 64
-    )
+    llir = g.ir.lift_window_at(str(original), function, 24, 64)
     conditional_stores = [op for op in llir if op["kind"] == "cond_store"]
     assert len(conditional_stores) == 1, llir
     assert conditional_stores[0]["cond"] == "%zf"

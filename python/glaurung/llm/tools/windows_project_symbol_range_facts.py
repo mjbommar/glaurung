@@ -4,7 +4,7 @@ import json
 import sqlite3
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field
 
@@ -475,7 +475,9 @@ def _containing_pdata(boundaries: list[_BoundaryRow], va: int) -> _BoundaryRow |
     if not matches:
         return None
     return sorted(
-        matches, key=lambda item: (item.end_va - item.entry_va, -item.confidence)
+        # Every match has a non-None end_va (filtered above).
+        matches,
+        key=lambda item: (cast(int, item.end_va) - item.entry_va, -item.confidence),
     )[0]
 
 

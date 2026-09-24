@@ -155,3 +155,24 @@ ignore = [
     "E702",
     "E722",
 ]
+
+# --- ty ---------------------------------------------------------------------
+#
+# The test suite imports helpers that pytest reaches through `sys.path` inserts
+# rather than packaging: the fixture harness and corpus tools under `tools/`,
+# the fixture manifests beside their corpora, and `scripts/recover_source.py`.
+# Without these roots every such import is `unresolved-import` and every name
+# drawn from it is `Unknown`, so `ty` could neither check the call nor tell a
+# real miss from a path it was never shown.
+[tool.ty.environment]
+extra-paths = [
+    "tools",
+    "scripts",
+    "tests/decompiler_fixtures",
+    "tests/realistic_corpus",
+]
+
+[tool.ty.analysis]
+# The `graphs` extra, not a dev dependency: `source_cfg` imports it lazily and
+# its tests skip without it. An absent optional import is not a defect.
+allowed-unresolved-imports = ["networkx", "networkx.**"]

@@ -34,10 +34,13 @@ import argparse
 import shlex
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional, cast
 
 from .base import BaseCommand
 from ..formatters.base import BaseFormatter
+
+if TYPE_CHECKING:
+    from glaurung import Function
 
 
 def _tool_count(agent: object) -> str:
@@ -139,9 +142,9 @@ class ReplCommand(BaseCommand):
 
         # Cached function map (entry_va → Function), populated lazily so the
         # REPL stays cheap on cold open. Refresh when the user runs `goto`.
-        _funcs_cache: dict[int, object] = {}
+        _funcs_cache: dict[int, Function] = {}
 
-        def _ensure_funcs() -> dict[int, object]:
+        def _ensure_funcs() -> dict[int, Function]:
             if not _funcs_cache:
                 import glaurung as g
 
@@ -432,7 +435,7 @@ class ReplCommand(BaseCommand):
 
         def cmd_types(argv: List[str]) -> None:
             kind = argv[0] if argv else None
-            recs = type_db.list_types(kb, kind=kind)  # type: ignore[arg-type]
+            recs = type_db.list_types(kb, kind=cast("type_db.TypeKind | None", kind))
             sys.stdout.write(f"  {len(recs)} types:\n")
             for rec in recs[:30]:
                 sys.stdout.write(

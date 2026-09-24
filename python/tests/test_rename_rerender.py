@@ -142,8 +142,10 @@ def test_set_function_name_is_undoable(tmp_path: Path) -> None:
 
     xref_db.set_function_name(kb, 0x1000, "first", set_by="manual")
     xref_db.set_function_name(kb, 0x1000, "renamed", set_by="manual")
-    assert xref_db.get_function_name(kb, 0x1000).canonical == "renamed"
+    name = xref_db.get_function_name(kb, 0x1000)
+    assert name is not None and name.canonical == "renamed"
 
     xref_db.undo(kb)
-    assert xref_db.get_function_name(kb, 0x1000).canonical == "first"
+    name = xref_db.get_function_name(kb, 0x1000)
+    assert name is not None and name.canonical == "first"
     kb.close()

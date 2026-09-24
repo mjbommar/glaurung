@@ -203,8 +203,8 @@ int main(int argc, char **argv) {
         assert actual.stdout == expected.stdout
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
-@pytest.mark.skipif(  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
+@pytest.mark.skipif(
     shutil.which("gcc") is None or shutil.which("strip") is None,
     reason="gcc and strip are required",
 )

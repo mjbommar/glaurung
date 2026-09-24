@@ -24,7 +24,7 @@ KNOWN_PREFIXES = ("unknown_base", "no_bound", "no_table_at:")
 def _stats() -> dict:
     if not SAMPLE.exists():
         pytest.skip("checked-in gcc -O2 sample not present")
-    _funcs, _cg, stats = g.analysis.analyze_functions_path_with_stats(  # ty: ignore[unresolved-attribute]
+    _funcs, _cg, stats = g.analysis.analyze_functions_path_with_stats(
         str(SAMPLE),
         104_857_600,
         104_857_600,
@@ -74,7 +74,7 @@ def test_resolved_dispatches_give_the_histogram_a_denominator():
 def test_a_declined_dispatch_block_is_not_reported_as_a_function_exit():
     if not SAMPLE.exists():
         pytest.skip("checked-in gcc -O2 sample not present")
-    funcs, _cg, stats = g.analysis.analyze_functions_path_with_stats(  # ty: ignore[unresolved-attribute]
+    funcs, _cg, stats = g.analysis.analyze_functions_path_with_stats(
         str(SAMPLE),
         104_857_600,
         104_857_600,

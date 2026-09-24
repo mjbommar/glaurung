@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest import mock
 
 import pytest  # noqa: F401  — used by fixtures
@@ -156,7 +157,7 @@ def _run_decompile(args, mocked_text: str = "function sub_1840 { ret; }"):
     Returns (rc, formatter_lines, decompile_call_count, args_seen).
     """
     from glaurung.cli.commands.decompile import DecompileCommand
-    from glaurung.cli.formatters.base import OutputFormat
+    from glaurung.cli.formatters.base import BaseFormatter, OutputFormat
 
     lines: list[str] = []
 
@@ -179,7 +180,8 @@ def _run_decompile(args, mocked_text: str = "function sub_1840 { ret; }"):
         # always pass a VA, so this mock is defensive.
         mock.patch("glaurung.analysis.detect_entry_path", return_value=None),
     ):
-        rc = cmd.execute(args, _Fmt())
+        # _Fmt duck-types the two BaseFormatter members DecompileCommand uses.
+        rc = cmd.execute(args, cast(BaseFormatter, _Fmt()))
 
     return rc, lines, call_log
 

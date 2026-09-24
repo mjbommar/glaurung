@@ -78,12 +78,16 @@ def _scan_utf16be(data: bytes, min_len: int) -> Iterable[tuple[str, int, EncKind
         yield text, start, "utf16be"
 
 
+def _default_encodings() -> list[EncKind]:
+    return ["ascii", "utf16le", "utf16be"]
+
+
 class StringsSearchArgs(BaseModel):
     query: str = Field(..., description="Substring or regex to search within strings")
     case_sensitive: bool = False
     regex: bool = False
     encodings: list[EncKind] = Field(
-        default_factory=lambda: ["ascii", "utf16le", "utf16be"],
+        default_factory=_default_encodings,
         description="Encodings to scan",
     )
     min_length: int = 4

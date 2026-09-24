@@ -18,7 +18,7 @@ SOURCE = ROOT / "tests" / "fixtures" / "classify_signed_loop.c"
 
 def _build(compiler: str, output: Path) -> None:
     sys.path.insert(0, str(ROOT / "tools"))
-    import fixture_toolchain as TC  # ty: ignore[unresolved-import]
+    import fixture_toolchain as TC
 
     result = TC.run(
         [compiler, "-shared", "-fPIC", "-g", "-O0", "-o", str(output), str(SOURCE)],

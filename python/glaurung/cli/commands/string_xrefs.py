@@ -11,7 +11,7 @@ window — every entry is jumpable to the call site that uses it.
 
 import argparse
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import glaurung as g
 
@@ -232,7 +232,7 @@ class StringsXrefsCommand(BaseCommand):
 
             xref_map = _build_offset_to_xref_map(kb, bin_str)
 
-            rows = []
+            rows: List[Dict[str, Any]] = []
             for s in art.strings.strings:
                 if args.encoding != "any" and s.encoding != args.encoding:
                     continue

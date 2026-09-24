@@ -31,6 +31,7 @@ def test_switchy_self_diff_all_rows_have_identical_structural_hash() -> None:
     paired = [r for r in diff.rows if r.a is not None and r.b is not None]
     assert paired, "self-diff should produce at least one paired row"
     for r in paired:
+        assert r.a is not None and r.b is not None  # filtered above
         # Either both sides have a non-empty fingerprint and they match,
         # or both are empty (thunk/0-block function). They CAN'T differ
         # for a self-diff.

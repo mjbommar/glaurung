@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -24,7 +25,7 @@ def runner():
 
 # Reduced verbatim record from the real bin_000.elf @ 0x8350 paid canary run.
 # It intentionally preserves the observed CLI schema and stage provenance.
-REAL_CANARY = {
+REAL_CANARY: dict[str, Any] = {
     "entry_va": 0x8350,
     "c_prototype": "void sub_8350(int initreq_fd);",
     "role": "ioctl_handler",

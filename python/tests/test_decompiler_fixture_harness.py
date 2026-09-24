@@ -16,6 +16,7 @@ import sys
 import tempfile
 from itertools import pairwise
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -415,7 +416,6 @@ def test_compiler_complex_runtime_stays_an_external_boundary() -> None:
     )
     local = D.defined_functions(binary)
     helper = next(name for name in local if name == "__muldc3")
-    assert helper
     closed = D.include_referenced_local_callees(
         binary,
         "extern double __muldc3(double, double, double, double);\n"
@@ -2287,7 +2287,7 @@ def test_recursive_linked_list_round_trips_values_links_and_pointer_returns():
 
 
 #: A caller-owned node array: `next` links back into it, then two scalars.
-_LINKED_NODE = {
+_LINKED_NODE: dict[str, Any] = {
     "k": "ptr",
     "p": {
         "k": "struct",

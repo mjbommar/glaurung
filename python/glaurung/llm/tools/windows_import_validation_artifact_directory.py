@@ -18,6 +18,17 @@ from .windows_record_validation_artifact_bundle import (
 )
 
 
+def _default_required_kinds() -> list[WindowsValidationArtifactKind]:
+    return [
+        "kdnet_attach_log",
+        "harness_stdout",
+        "harness_stderr",
+        "binary_identity",
+        "stock_transcript",
+        "current_transcript",
+    ]
+
+
 class WindowsImportValidationArtifactDirectoryArgs(BaseModel):
     candidate_id: str = Field(
         ...,
@@ -36,14 +47,7 @@ class WindowsImportValidationArtifactDirectoryArgs(BaseModel):
         description="Observed validation execution outcome for the imported directory.",
     )
     required_kinds: list[WindowsValidationArtifactKind] = Field(
-        default_factory=lambda: [
-            "kdnet_attach_log",
-            "harness_stdout",
-            "harness_stderr",
-            "binary_identity",
-            "stock_transcript",
-            "current_transcript",
-        ],
+        default_factory=_default_required_kinds,
         description="Artifact kinds required before the bundle is ready for review.",
     )
     max_files: int = Field(

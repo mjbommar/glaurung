@@ -21,7 +21,7 @@ except ImportError:
 
 def test_annotate_functions_path_go_sample():
     # Skip if LLM dependencies not available
-    if not HAS_LLM_DEPS:
+    if not HAS_LLM_DEPS or annotate_functions_path is None or AnnotateBudgets is None:
         return
 
     # Use a known present sample (Go linux/amd64)
@@ -57,7 +57,7 @@ def test_annotate_functions_path_go_sample():
 
 def test_annotate_functions_path_windows_iat_calls():
     # Skip if LLM dependencies not available
-    if not HAS_LLM_DEPS:
+    if not HAS_LLM_DEPS or annotate_functions_path is None or AnnotateBudgets is None:
         return
 
     # Use a Windows x86_64 sample (cross-built) with simple imports (printf/puts)
@@ -89,7 +89,7 @@ def test_annotate_functions_path_windows_iat_calls():
 
 def test_elf_got_map_and_arm64_evidence():
     # Skip if LLM dependencies not available
-    if not HAS_LLM_DEPS:
+    if not HAS_LLM_DEPS or annotate_functions_path is None or AnnotateBudgets is None:
         return
 
     # Validate ELF GOT mapping runs and ARM64 evidence captures functions
@@ -131,7 +131,7 @@ def test_elf_got_map_and_arm64_evidence():
 
 def test_riscv64_and_armhf_annotation():
     # Skip if LLM dependencies not available
-    if not HAS_LLM_DEPS:
+    if not HAS_LLM_DEPS or annotate_functions_path is None or AnnotateBudgets is None:
         return
 
     # RISC-V sample

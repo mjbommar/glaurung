@@ -144,7 +144,9 @@ def test_a_weaker_source_cannot_overwrite_a_comment(kb, strong, weak):
 def test_a_weaker_source_cannot_overwrite_a_stack_variable(kb, strong, weak):
     xref_db.set_stack_var(kb, function_va=VA, offset=-24, name="strong", set_by=strong)
     xref_db.set_stack_var(kb, function_va=VA, offset=-24, name="weak", set_by=weak)
-    assert xref_db.get_stack_var(kb, VA, -24).name == "strong"
+    sv = xref_db.get_stack_var(kb, VA, -24)
+    assert sv is not None
+    assert sv.name == "strong"
 
 
 @pytest.mark.parametrize("strong,weak", LADDER_CASES)

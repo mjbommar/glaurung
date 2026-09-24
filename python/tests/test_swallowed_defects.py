@@ -61,7 +61,8 @@ def test_refinement_feedback_node_is_actually_stored() -> None:
 
     # Before the fix this raised TypeError: add_node() got an unexpected
     # keyword argument 'id'.
-    agent._add_refinement_feedback(ctx, state, 0.25)
+    # A MemoryContext-shaped stub: only .kb is read.
+    agent._add_refinement_feedback(ctx, state, 0.25)  # ty: ignore[invalid-argument-type]
 
     node = kb.get_node("feedback_2")
     assert node is not None, "refinement feedback never reached the KB"

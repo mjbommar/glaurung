@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # `find_dotenv()` walks parent directories from cwd, so running glaurung
 # from any subtree of a repo that has a .env file Just Works.
 try:
-    from dotenv import find_dotenv, load_dotenv  # type: ignore
+    from dotenv import find_dotenv, load_dotenv
 
     _dotenv_path = find_dotenv(usecwd=True)
     if _dotenv_path:

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -32,7 +33,7 @@ DIGEST_B = "b" * 64
 
 
 def _blob(key: str = "libz/1.2.11/gcc-11-O2/x86_64", digest: str = DIGEST_A, **kw):
-    fields = dict(
+    fields: dict[str, Any] = dict(
         key=key,
         kind="flirt-masked-pattern-v1",
         format="flirt-json/2",
@@ -56,7 +57,7 @@ def _blob(key: str = "libz/1.2.11/gcc-11-O2/x86_64", digest: str = DIGEST_A, **k
 
 
 def _manifest(**kw) -> m.Manifest:
-    fields = dict(
+    fields: dict[str, Any] = dict(
         set_name="base",
         set_version="2026.09.1",
         serial=41,

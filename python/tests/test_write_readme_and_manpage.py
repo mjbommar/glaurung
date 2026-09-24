@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from glaurung.llm.context import MemoryContext
@@ -17,7 +19,7 @@ from glaurung.llm.tools.write_readme_and_manpage import (
 
 
 def _args(**overrides) -> WriteReadmeAndManpageArgs:
-    base = dict(
+    base: dict[str, Any] = dict(
         project_name="test_project",
         synopsis="test_project [OPTIONS]",
         description="A recovered project for testing the docs pipeline.",
@@ -94,8 +96,8 @@ def test_orchestrator_helper_falls_back_when_tool_raises(tmp_path, monkeypatch) 
         "recover_source",
         "scripts/recover_source.py",
     )
+    assert spec is not None and spec.loader is not None
     rs = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
     spec.loader.exec_module(rs)
 
     # Force the tool to raise — simulates Bug I (wrong-shape return,
@@ -132,8 +134,8 @@ def test_orchestrator_helper_falls_back_when_tool_returns_bad_shape(
         "recover_source",
         "scripts/recover_source.py",
     )
+    assert spec is not None and spec.loader is not None
     rs = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
     spec.loader.exec_module(rs)
 
     monkeypatch.setattr(

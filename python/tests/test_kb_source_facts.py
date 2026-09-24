@@ -8,6 +8,7 @@ that the provenance ladder -- not arrival order -- decides what wins.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -30,7 +31,7 @@ int parse_header(const char *buf, unsigned int len)
 
 
 @pytest.fixture
-def kb(tmp_path: Path) -> PersistentKnowledgeBase:
+def kb(tmp_path: Path) -> Iterator[PersistentKnowledgeBase]:
     """An open project over a throwaway binary."""
     binary = tmp_path / "target.bin"
     binary.write_bytes(b"\x7fELF" + b"\x00" * 64)

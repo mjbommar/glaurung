@@ -44,6 +44,7 @@ def test_mingw_hello_is_canonical(
     )
     assert built.returncode == 0, built.stderr
     if stripped:
+        assert strip is not None  # the skip above guarantees it
         stripped_result = subprocess.run(
             [strip, "--strip-all", str(binary)],
             capture_output=True,

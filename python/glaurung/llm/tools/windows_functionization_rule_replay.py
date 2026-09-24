@@ -283,7 +283,7 @@ def _native_case_signal(
         return "failed", "native_replay_missing_binary", [str(binary_path)], []
 
     max_functions = int(case.get("native_max_functions") or 0)
-    functions, _callgraph, stats = g.analysis.analyze_functions_path_with_stats(  # ty: ignore[unresolved-attribute]
+    functions, _callgraph, stats = g.analysis.analyze_functions_path_with_stats(
         str(binary_path),
         max_functions=max_functions,
     )
@@ -464,7 +464,7 @@ def _format_native_scan_rejections(stats: dict[str, Any]) -> str:
 
 def _native_head_bytes(binary_path: Path, address: int) -> bytes | None:
     try:
-        offset = g.analysis.va_to_file_offset_path(  # ty: ignore[unresolved-attribute]
+        offset = g.analysis.va_to_file_offset_path(
             str(binary_path),
             address,
         )

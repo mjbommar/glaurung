@@ -17,7 +17,9 @@ D = importlib.import_module("diff_decompile")
 INCOMPLETE_MARKER = "GLAURUNG-INCOMPLETE"
 
 
-@pytest.mark.parametrize(("style", "types"), [("decbench", True), ("c", False), ("", False)])
+@pytest.mark.parametrize(
+    ("style", "types"), [("decbench", True), ("c", False), ("", False)]
+)
 def test_discovered_exact_range_matches_every_whole_cfg_entry_point(
     style: str, types: bool
 ) -> None:
@@ -75,7 +77,9 @@ def test_lower_exact_range_budget_preserves_output_and_names_the_fired_limit() -
         "style": "decbench",
     }
 
-    complete = g.ir.decompile_range_at(path, va, va, va + 0x26, max_blocks=4096, **common)
+    complete = g.ir.decompile_range_at(
+        path, va, va, va + 0x26, max_blocks=4096, **common
+    )
     limited = g.ir.decompile_range_at(path, va, va, va + 0x26, max_blocks=1, **common)
 
     assert limited != complete

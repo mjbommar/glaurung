@@ -16,10 +16,14 @@ from .base import MemoryTool, ToolMeta
 WhereKind = Literal["all", "dynamic", "imports", "exports", "libs"]
 
 
+def _default_where() -> list[WhereKind]:
+    return ["all", "imports", "exports"]
+
+
 class SymbolsSearchArgs(BaseModel):
     query: str = Field(..., description="Substring or regex to search for")
     where: list[WhereKind] = Field(
-        default_factory=lambda: ["all", "imports", "exports"],
+        default_factory=_default_where,
         description="Symbol categories to search",
     )
     case_sensitive: bool = False

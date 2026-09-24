@@ -54,7 +54,9 @@ async def test_findings_runner_passes_default_max_output_tokens():
         )
         await run_findings_pass("/nonexistent.exe", args)
 
-    ms = fake.run.await_args.kwargs.get("model_settings")
+    call = fake.run.await_args
+    assert call is not None, "Agent.run was never awaited"
+    ms = call.kwargs.get("model_settings")
     assert ms is not None
     # ModelSettings is a TypedDict; check by key.
     assert ms["max_tokens"] == default_max_output_tokens()
@@ -100,7 +102,9 @@ async def test_finding_critic_passes_4k_max_tokens_not_512():
 
         await critique_finding(finding, ctx, model_name="openai:gpt-5.4-mini")
 
-    ms = fake.run.await_args.kwargs.get("model_settings")
+    call = fake.run.await_args
+    assert call is not None, "Agent.run was never awaited"
+    ms = call.kwargs.get("model_settings")
     assert ms is not None
     assert ms["max_tokens"] >= 2048, (
         f"critic max_tokens too tight: {ms.get('max_tokens')}; "

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from ..context import MemoryContext
-from ..kb.binary_diff import diff_binaries
+from ..kb.binary_diff import FunctionDiff, diff_binaries
 from ..kb.models import Edge, Node, NodeKind
 from ..kb.store import KnowledgeBase
 from .base import MemoryTool, ToolMeta
@@ -191,7 +191,9 @@ class WindowsSeedBinaryDiffTriageTool(
         )
 
 
-def _triage_seed(seed, rows_by_name: dict[str, object]) -> SeedBinaryDiffTriageRecord:
+def _triage_seed(
+    seed, rows_by_name: dict[str, FunctionDiff]
+) -> SeedBinaryDiffTriageRecord:
     functions: list[SeedFunctionDiffStatus] = []
     changed: list[str] = []
     missing: list[str] = []

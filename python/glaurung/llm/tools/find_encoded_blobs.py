@@ -22,7 +22,7 @@ import io
 import lzma
 import re
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -658,7 +658,7 @@ def build_scan_xor_encoded_strings() -> MemoryTool[
 CompressedFormat = Literal["gzip", "zlib", "bzip2", "xz", "zstd"]
 
 
-_COMPRESSED_SIGNATURES = [
+_COMPRESSED_SIGNATURES: List[Tuple[bytes, CompressedFormat]] = [
     (b"\x1f\x8b", "gzip"),
     (b"\x78\x01", "zlib"),  # no-compression
     (b"\x78\x9c", "zlib"),  # default
@@ -775,7 +775,7 @@ class FindCompressedBlobsTool(
                 blobs.append(
                     CompressedBlob(
                         offset=pos,
-                        format=fmt,  # type: ignore[arg-type]
+                        format=fmt,
                         confirmed_size=len(decoded),
                         decoded_preview_hex=decoded[:32].hex(),
                         looks_like=_looks_like(decoded),

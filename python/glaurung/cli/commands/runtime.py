@@ -347,12 +347,8 @@ class RuntimeCommand(BaseCommand):
         packet: dict[str, Any], formatter: BaseFormatter
     ) -> None:
         capture = packet["capture_summary"]["capture"]
-        formatter.output_plain(
-            f"evidence packet for capture {capture['capture_id']}"
-        )
+        formatter.output_plain(f"evidence packet for capture {capture['capture_id']}")
         formatter.output_plain(f"export policy: {packet['export_policy']}")
-        formatter.output_plain(
-            f"analysis reports: {len(packet['analysis_reports'])}"
-        )
+        formatter.output_plain(f"analysis reports: {len(packet['analysis_reports'])}")
         formatter.output_plain(f"payloads: {len(packet['payloads'])}")
         formatter.output_plain("omitted: " + ", ".join(packet["omissions"]))

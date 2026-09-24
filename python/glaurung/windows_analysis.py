@@ -11,7 +11,7 @@ from typing import Any, Callable, Iterable
 
 import bisect
 
-from . import _native, analysis, disasm, symbols  # ty: ignore[unresolved-import]
+from . import _native, analysis, disasm, symbols
 from .windows_config import WindowsAnalysisConfig
 
 
@@ -386,7 +386,7 @@ def import_callers(
         entry_va, func_name = _containing(int(site_va))
         groups[(str(name), entry_va, func_name)].append(int(site_va))
 
-    out = [
+    out: list[dict[str, Any]] = [
         {
             "import_name": name,
             "function": func_name,

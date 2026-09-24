@@ -46,7 +46,7 @@ def test_discovery_metrics_counts_chunks() -> None:
     class _Range:
         def __init__(self, start: int, size: int) -> None:
             class _A:
-                pass
+                value: int
 
             self.start = _A()
             self.start.value = start

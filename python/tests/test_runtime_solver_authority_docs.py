@@ -7,11 +7,7 @@ HYBRID_DOCS = (
     ROOT / "docs" / "architecture" / "runtime-instruction-trace.md",
     ROOT / "docs" / "development" / "roadmap" / "runtime-analysis.md",
     ROOT / "docs" / "design" / "hybrid-analysis-data-model" / "README.md",
-    ROOT
-    / "docs"
-    / "design"
-    / "hybrid-analysis-data-model"
-    / "objective-ladder.md",
+    ROOT / "docs" / "design" / "hybrid-analysis-data-model" / "objective-ladder.md",
 )
 
 

@@ -127,7 +127,7 @@ class IterativeRefinementAgent:
 
     def __init__(
         self,
-        base_agent: Agent,
+        base_agent: Agent[Any, Any],
         config: Optional[IterativeConfig] = None,
         model: Optional[str] = None,
     ):
@@ -599,7 +599,7 @@ class IterativeRefinementAgent:
 
 
 def create_iterative_agent(
-    base_agent: Agent,
+    base_agent: Agent[Any, Any],
     config: Optional[IterativeConfig] = None,
     model: Optional[str] = None,
 ) -> IterativeRefinementAgent:

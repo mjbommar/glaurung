@@ -42,7 +42,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 CANARY = ROOT / "tests" / "decompiler_fixtures" / "canary"
 sys.path.insert(0, str(ROOT / "tools"))
 
-import diff_decompile as D  # ty: ignore[unresolved-import]  # added above
+import diff_decompile as D  # added above
 
 #: A subset of the canary set. Determinism is a property of the pipeline rather
 #: than of any one shape, so this trades breadth for staying inside the
@@ -152,7 +152,9 @@ def test_the_subject_list_is_not_empty():
         assert (CANARY / name).is_file(), f"{name} is not in the canary set"
 
 
-def _profiled_batch(binary: Path, addresses: list[int]) -> tuple[dict[str, str], dict[str, str]]:
+def _profiled_batch(
+    binary: Path, addresses: list[int]
+) -> tuple[dict[str, str], dict[str, str]]:
     environment = os.environ.copy()
     environment["GLAURUNG_PIPELINE_PROFILE"] = "1"
     process = subprocess.run(

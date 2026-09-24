@@ -987,7 +987,9 @@ def test_runtime_cli_reads_only_persisted_redacted_contracts(
         expected_crash = analyze_and_persist_crash(
             kb, persisted.capture_id, binary.read_bytes()
         ).report_json
-        assert runtime_crash_explanation_json(kb, persisted.capture_id) == expected_crash
+        assert (
+            runtime_crash_explanation_json(kb, persisted.capture_id) == expected_crash
+        )
         expected_summary = runtime_capture_summary_json(kb, persisted.capture_id)
         expected_evidence = runtime_evidence_packet_json(kb, persisted.capture_id)
         expected_sensitive_evidence = runtime_evidence_packet_json(
@@ -1040,12 +1042,7 @@ def test_runtime_cli_reads_only_persisted_redacted_contracts(
     )
     assert capsys.readouterr().out == expected_crash + "\n"
 
-    assert (
-        cli_main(
-            ["runtime", "crash", str(database), persisted.capture_id]
-        )
-        == 0
-    )
+    assert cli_main(["runtime", "crash", str(database), persisted.capture_id]) == 0
     crash_text = capsys.readouterr().out
     assert "Glaurung runtime crash analysis" in crash_text
     assert "Outcome: no crash" in crash_text
@@ -3990,9 +3987,10 @@ def test_trace_relates_observed_indirect_call_without_mutating_static_cfg(
     coverage = report["main_image_address_coverage"]
     assert coverage["status"] == "inferred", coverage
     assert coverage["value"]["observed_step_count"] > 0
-    assert coverage["value"]["exact_step_count"] == coverage["value"][
-        "observed_step_count"
-    ]
+    assert (
+        coverage["value"]["exact_step_count"]
+        == coverage["value"]["observed_step_count"]
+    )
     assert coverage["value"]["failures"] == []
     assert report["observed_indirect_targets"]
     targets = [
@@ -4022,17 +4020,16 @@ def test_trace_relates_observed_indirect_call_without_mutating_static_cfg(
         target_values[0]["expression_root_id"]
         == static_call["call_target_expression_id"]
     )
-    assert target["target"]["value"]["source_static_va"] != target["target"]["value"][
-        "target_static_va"
-    ]
+    assert (
+        target["target"]["value"]["source_static_va"]
+        != target["target"]["value"]["target_static_va"]
+    )
     assert target["target"]["value"]["transfer_kind"] == "indirect_call"
     assert target["operation_occurrence"]["status"] == "inferred"
 
     capsule = json.loads(capture.capsule_json)
     matching_event = next(
-        event
-        for event in capsule["events"]
-        if event["sequence"] == target["sequence"]
+        event for event in capsule["events"] if event["sequence"] == target["sequence"]
     )
     matching_event["fields"]["after_address"] = str(0xDEADBEEF)
     wrong_target_report = json.loads(
@@ -4409,9 +4406,7 @@ def test_instruction_trace_observes_direct_stack_store(
         assert effective_address["value"]["displacement"] == -28
     occurrence = relation["operation_occurrence"]
     assert occurrence["status"] == "inferred", occurrence
-    assert occurrence["value"]["static_operation"]["id"].startswith(
-        "static-operation-"
-    )
+    assert occurrence["value"]["static_operation"]["id"].startswith("static-operation-")
     assert occurrence["value"]["static_operation"]["function_id"].startswith(
         "static-function-"
     )
@@ -5603,6 +5598,7 @@ def test_file_trace_normalizes_world_writable_chmod(
     malformed_evaluation = HARNESS.evaluate_semantic_result(malformed_result, oracle)
     assert malformed_evaluation["passed"] is False
     assert malformed_evaluation["matched"] == 0
+
 
 @pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc is unavailable")
 @pytest.mark.skipif(shutil.which("strace") is None, reason="strace is unavailable")
@@ -6871,12 +6867,12 @@ def test_ioctl_input_to_call_relation_supported_build_matrix(
             "static-expression-"
         )
         assert [
-            value["role"]
-            for value in definition["static_operation"]["semantic_values"]
+            value["role"] for value in definition["static_operation"]["semantic_values"]
         ] == ["defined_value"]
-        assert definition["static_operation"]["semantic_values"][0][
-            "expression_root_id"
-        ] == definition["static_operation"]["defined_value_expression_id"]
+        assert (
+            definition["static_operation"]["semantic_values"][0]["expression_root_id"]
+            == definition["static_operation"]["defined_value_expression_id"]
+        )
         if scenario != "bad" or link != "pie":
             return
         capsule = json.loads(capture.capsule_json)
@@ -7649,11 +7645,13 @@ def test_underallocation_direct_canary_store_occurs_across_build_matrix(
         for value in operation["semantic_values"]
         if value["role"] == "memory_address"
     )
-    assert source_pointer["value"]["semantic_binding"]["semantic_value_id"] == (
-        address_value["id"]
+    assert (
+        source_pointer["value"]["semantic_binding"]["semantic_value_id"]
+        == (address_value["id"])
     )
-    assert source_pointer["value"]["semantic_binding"]["variable_id"] == (
-        source_pointer["value"]["static_variable"]["id"]
+    assert (
+        source_pointer["value"]["semantic_binding"]["variable_id"]
+        == (source_pointer["value"]["static_variable"]["id"])
     )
     assert source_pointer["value"]["pointer_byte_len"] == 8
     assert (
@@ -8443,9 +8441,7 @@ def test_heap_provider_preserves_post_free_write_against_ended_object(
         assert source_pointer["value"]["static_variable"]["id"].startswith(
             "static-variable-"
         )
-        assert source_pointer["value"]["static_type"]["id"].startswith(
-            "static-type-"
-        )
+        assert source_pointer["value"]["static_type"]["id"].startswith("static-type-")
         assert (
             source_pointer["value"]["static_variable"]["type_id"]
             == source_pointer["value"]["static_type"]["id"]
@@ -8459,11 +8455,13 @@ def test_heap_provider_preserves_post_free_write_against_ended_object(
             ]["call_register_inputs"]
             if call_input["position"] == 0
         )
-        assert source_pointer["value"]["semantic_binding"]["semantic_value_id"] == (
-            call_input["value_id"]
+        assert (
+            source_pointer["value"]["semantic_binding"]["semantic_value_id"]
+            == (call_input["value_id"])
         )
-        assert source_pointer["value"]["semantic_binding"]["variable_id"] == (
-            source_pointer["value"]["static_variable"]["id"]
+        assert (
+            source_pointer["value"]["semantic_binding"]["variable_id"]
+            == (source_pointer["value"]["static_variable"]["id"])
         )
         assert source_pointer["value"]["relation"] == "points_to_runtime_object_start"
     if scenario == "bad":

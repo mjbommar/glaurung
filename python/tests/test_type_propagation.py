@@ -151,7 +151,7 @@ def test_propagation_lifts_c2_demo_via_libc_calls(tmp_path: Path) -> None:
     ]
     assert typed
     # Sanity: types come from the libc proto bundle vocabulary.
-    seen_types = {s.c_type for s in typed}
+    seen_types = {s.c_type for s in typed if s.c_type}
     libc_shaped = {
         t
         for t in seen_types

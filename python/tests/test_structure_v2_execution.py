@@ -10,7 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 
-import structure_v2_execution as E  # ty: ignore[unresolved-import]  # added above
+import structure_v2_execution as E  # added above
 
 
 def _comparison(revision: str = "abc") -> dict:

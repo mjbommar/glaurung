@@ -14,8 +14,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 
-import diff_decompile as D  # ty: ignore[unresolved-import]  # added above
-import fixture_toolchain as TC  # ty: ignore[unresolved-import]  # added above
+import diff_decompile as D  # added above
+import fixture_toolchain as TC  # added above
 
 # Every COMPILE here goes through the pinned toolchain image, not the host
 # compiler. These tests assert on recovered C, which follows the compiled
@@ -30,7 +30,7 @@ import fixture_toolchain as TC  # ty: ignore[unresolved-import]  # added above
 # `subprocess.run` deliberately: execution is native and must not be
 # containerised.
 
-pytestmark = pytest.mark.slow  # ty: ignore[unresolved-attribute]
+pytestmark = pytest.mark.slow
 
 
 def _matching_brace(text: str, opening: int) -> int:
@@ -69,8 +69,8 @@ def test_switch_arms_reach_the_real_loop_latch(tmp_path: Path) -> None:
     code = D.decompiled_c(str(binary), functions["fsm"])
     assert code is not None
     assert "signed char c;" in code, code
-    assert ("int i;" in code or "for (int i =" in code), code
-    assert ("int st;" in code or "int st =" in code), code
+    assert "int i;" in code or "for (int i =" in code, code
+    assert "int st;" in code or "int st =" in code, code
 
     # The preferred recovery is a structured switch whose C `break`s flow to
     # one latch after the switch.  Requiring a particular number of gotos made
@@ -267,11 +267,7 @@ def test_cross_block_table_base_recovers_clang_o2_switch(tmp_path: Path) -> None
 def test_wide_selector_switch_borrows_default_shared_return(tmp_path: Path) -> None:
     """A table case sharing the default's RET must keep all typed case edges."""
     source = (
-        ROOT
-        / "tests"
-        / "decompiler_fixtures"
-        / "src"
-        / "215_switch_on_wide_selector.c"
+        ROOT / "tests" / "decompiler_fixtures" / "src" / "215_switch_on_wide_selector.c"
     )
     binary = tmp_path / "wide-selector-clang-O2.so"
     compiled = TC.run(
@@ -322,14 +318,12 @@ def test_wide_selector_switch_borrows_default_shared_return(tmp_path: Path) -> N
     assert results["wide_selector_mixed"]["status"] == "pass", results
 
 
-def test_signed_tree_edge_preserves_unsigned_wide_selector_boundary(tmp_path: Path) -> None:
+def test_signed_tree_edge_preserves_unsigned_wide_selector_boundary(
+    tmp_path: Path,
+) -> None:
     """A signed compare in Clang's tree must not reinterpret uint64_t in C."""
     source = (
-        ROOT
-        / "tests"
-        / "decompiler_fixtures"
-        / "src"
-        / "215_switch_on_wide_selector.c"
+        ROOT / "tests" / "decompiler_fixtures" / "src" / "215_switch_on_wide_selector.c"
     )
     binary = tmp_path / "wide-selector-high-labels-clang-O2.so"
     compiled = TC.run(
@@ -450,8 +444,8 @@ def test_array_address_chain_folds_and_round_trips(tmp_path: Path) -> None:
     code = D.decompiled_c(str(binary), functions["sum_array"])
     assert code is not None
     assert "a[" in code, code
-    assert ("int i;" in code or "for (int i =" in code), code
-    assert ("int s;" in code or "int s =" in code), code
+    assert "int i;" in code or "for (int i =" in code, code
+    assert "int s;" in code or "int s =" in code, code
     assert "arg0" not in code, code
     assert "long var3;" not in code and "long var6;" not in code, code
     assert (
@@ -790,7 +784,7 @@ def test_gcc_o2_packed_bubble_swap_round_trips(tmp_path: Path) -> None:
     assert results["bubble"]["status"] == "pass", results
 
 
-@pytest.mark.parametrize("compiler", ["gcc", "clang"])  # ty: ignore[unresolved-attribute]
+@pytest.mark.parametrize("compiler", ["gcc", "clang"])
 def test_o2_pointer_return_keeps_declared_dwarf_kind(
     tmp_path: Path, compiler: str
 ) -> None:
@@ -1073,7 +1067,7 @@ def test_clang_o0_range_default_recovers_direct_return_switch(
     assert results["dispatch"]["status"] == "pass", results
 
 
-@pytest.mark.parametrize("compiler", ["gcc", "clang"])  # ty: ignore[unresolved-attribute]
+@pytest.mark.parametrize("compiler", ["gcc", "clang"])
 def test_optimized_early_default_recovers_one_exhaustive_switch(
     tmp_path: Path, compiler: str
 ) -> None:

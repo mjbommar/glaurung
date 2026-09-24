@@ -91,11 +91,13 @@ def test_evidence_recorded_when_kb_is_persistent(tmp_path: Path) -> None:
     # Synth a RunContext-like wrapper with `.deps`. pydantic-ai's
     # RunContext is a dataclass we can construct directly.
     from pydantic_ai import RunContext
+    from pydantic_ai.models.test import TestModel
+    from pydantic_ai.usage import RunUsage
 
     run_ctx = RunContext[MemoryContext](
         deps=ctx,
-        model="test",
-        usage=None,
+        model=TestModel(),
+        usage=RunUsage(),
         prompt="",
         tool_call_id=None,
     )

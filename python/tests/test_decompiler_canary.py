@@ -41,7 +41,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 CANARY = ROOT / "tests" / "decompiler_fixtures" / "canary"
 sys.path.insert(0, str(ROOT / "tools"))
 
-import diff_decompile as D  # ty: ignore[unresolved-import]  # added above
+import diff_decompile as D  # added above
 
 #: Per-object expectations. Each names ONE exported function and the property
 #: that function exists to demonstrate, so a failure says which recovery

@@ -160,6 +160,13 @@ def _summary(
     hashes = {entry.sha256 for entry in entries}
     has_base = any(entry.version is None for entry in entries)
     has_versioned = any(entry.version is not None for entry in entries)
+    sorted_entries = sorted(
+        entries,
+        key=lambda entry: (
+            entry.version if entry.version is not None else -1,
+            entry.entry_name,
+        ),
+    )
     return JavaDuplicateClassSummary(
         class_name=class_name,
         dotted_class_name=class_name.replace("/", "."),
@@ -168,13 +175,7 @@ def _summary(
         same_hash=len(hashes) == 1,
         divergent_hashes=len(hashes) > 1,
         multi_release_only=has_base and has_versioned and len(entries) == 2,
-        entries=sorted(
-            entries,
-            key=lambda entry: (
-                entry.version if entry.version is not None else -1,
-                entry.entry_name,
-            ),
-        ),
+        entries=sorted_entries,
     )
 
 

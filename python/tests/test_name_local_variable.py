@@ -22,7 +22,8 @@ from glaurung.llm.tools.name_local_variable import (
 def _bare_ctx() -> MemoryContext:
     return MemoryContext(
         file_path="/dev/null",
-        artifact=None,
+        # These tools never read the artifact; a bare context omits it.
+        artifact=None,  # ty: ignore[invalid-argument-type]
         budgets=Budgets(timeout_ms=1000),
     )
 

@@ -26,7 +26,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 from glaurung import runtime_analysis
 
@@ -224,7 +224,9 @@ def validate_instruction_trace_counterfactual_child(
         and candidate.get("sequence") == candidate_sequence
     ]
     if len(matches) != 1:
-        raise ValueError("counterfactual identity does not select one original candidate")
+        raise ValueError(
+            "counterfactual identity does not select one original candidate"
+        )
     candidate = matches[0]
     counterfactual = candidate.get("counterfactual")
     if not isinstance(counterfactual, dict) or counterfactual.get("status") != (
@@ -234,7 +236,9 @@ def validate_instruction_trace_counterfactual_child(
     source_name = candidate.get("source_name")
     match = re.fullmatch(r"argv\[(\d+)\]", source_name or "")
     if match is None or int(match.group(1)) == 0:
-        raise ValueError("counterfactual validation currently supports argv inputs only")
+        raise ValueError(
+            "counterfactual validation currently supports argv inputs only"
+        )
     argument_position = int(match.group(1)) - 1
     if argument_position >= len(original_arguments):
         raise ValueError("counterfactual argv source is absent from original arguments")
@@ -248,9 +252,10 @@ def validate_instruction_trace_counterfactual_child(
     source = sources[0]
     if source["sensitivity"] != "public":
         raise ValueError("counterfactual validation refuses non-public input")
-    if source["byte_len"] != len(original_input) or source["sha256"] != hashlib.sha256(
-        original_input
-    ).hexdigest():
+    if (
+        source["byte_len"] != len(original_input)
+        or source["sha256"] != hashlib.sha256(original_input).hexdigest()
+    ):
         raise ValueError("original argv bytes disagree with captured input identity")
 
     materialized = bytearray(original_input)
@@ -342,7 +347,9 @@ def validate_instruction_trace_counterfactual_child(
         ]
         if len(validation_matches) != 1:
             status = "unknown"
-            reason = "validation capture does not contain one matching branch occurrence"
+            reason = (
+                "validation capture does not contain one matching branch occurrence"
+            )
             observed_edge = None
         else:
             observed_edge = validation_matches[0].get("observed_edge")
@@ -374,9 +381,7 @@ def validate_instruction_trace_counterfactual_child(
         "mutations": mutations,
         "static_operation": operation,
         "predicted_branch_taken": counterfactual.get("predicted_branch_taken"),
-        "predicted_target_static_va": counterfactual.get(
-            "predicted_target_static_va"
-        ),
+        "predicted_target_static_va": counterfactual.get("predicted_target_static_va"),
         "observed_edge": observed_edge,
     }
     if expected_crash_class is not None:
@@ -2016,19 +2021,23 @@ def _parse_os_trace(
                 if result < 0 and closed.group("errno") is not None:
                     fields["errno"] = closed.group("errno")
                 event = {"kind": "descriptor_close", "fields": fields}
-        if event is None and not recognized_thread_create and line.startswith(
-            (
-                "openat(",
-                "newfstatat(",
-                "chmod(",
-                "pipe2(",
-                "socketpair(",
-                "socket(",
-                "fork(",
-                "vfork(",
-                "clone(",
-                "clone3(",
-                "wait4(",
+        if (
+            event is None
+            and not recognized_thread_create
+            and line.startswith(
+                (
+                    "openat(",
+                    "newfstatat(",
+                    "chmod(",
+                    "pipe2(",
+                    "socketpair(",
+                    "socket(",
+                    "fork(",
+                    "vfork(",
+                    "clone(",
+                    "clone3(",
+                    "wait4(",
+                )
             )
         ):
             raise ValueError("in-scope path event could not be normalized")
@@ -3372,8 +3381,9 @@ def _parse_heap_snapshot_records(
     data: bytes,
     *,
     require_summary: bool = True,
-) -> tuple[list[dict[str, object]], int]:
-    records: list[dict[str, object]] = []
+) -> tuple[list[dict[str, Any]], int]:
+    # Heterogeneous per-field values (ints plus the ``bytes`` payload).
+    records: list[dict[str, Any]] = []
     offset = 0
     summaries = 0
     dropped = 0
@@ -4155,20 +4165,23 @@ def capture_instruction_trace_child(
         heap_mapping_end: int | None = None
         heap_mapping_id: str | None = None
         if heap_mapping is not None:
-            heap_mapping_start = heap_mapping.get("start")
-            heap_mapping_end = heap_mapping.get("end")
-            heap_mapping_id = heap_mapping.get("id")
+            heap_start_value = heap_mapping.get("start")
+            heap_end_value = heap_mapping.get("end")
+            heap_id_value = heap_mapping.get("id")
             if (
-                not isinstance(heap_mapping_start, int)
-                or isinstance(heap_mapping_start, bool)
-                or not isinstance(heap_mapping_end, int)
-                or isinstance(heap_mapping_end, bool)
-                or not isinstance(heap_mapping_id, str)
+                not isinstance(heap_start_value, int)
+                or isinstance(heap_start_value, bool)
+                or not isinstance(heap_end_value, int)
+                or isinstance(heap_end_value, bool)
+                or not isinstance(heap_id_value, str)
                 or not 0
-                < heap_mapping_end - heap_mapping_start
+                < heap_end_value - heap_start_value
                 <= _INSTRUCTION_TRACE_HEAP_BYTES
             ):
                 raise RuntimeError("heap timeline mapping exceeds acquisition budget")
+            heap_mapping_start = heap_start_value
+            heap_mapping_end = heap_end_value
+            heap_mapping_id = heap_id_value
             before_heap = _process_vm_read(
                 proc.pid, heap_mapping_start, heap_mapping_end - heap_mapping_start
             )
@@ -4407,7 +4420,7 @@ def capture_instruction_trace_child(
                 "core_dumped": False,
             }
         )
-        provider_records: list[dict[str, object]] = []
+        provider_records: list[dict[str, Any]] = []
         provider_record_bytes = b""
         if provider_file is not None:
             provider_file.flush()
@@ -4825,7 +4838,7 @@ def capture_instruction_trace_child(
             events.sort(
                 key=lambda event: (
                     str(event.get("thread_id", "")),
-                    int(event["sequence"]),
+                    int(cast(int, event["sequence"])),
                 )
             )
         input_artifacts = [artifact]

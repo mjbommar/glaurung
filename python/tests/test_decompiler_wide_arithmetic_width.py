@@ -31,10 +31,10 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "tests" / "decompiler_fixtures"))
 sys.path.insert(0, str(ROOT / "tools"))
 
-import diff_decompile as D  # ty: ignore[unresolved-import]  # added above
-import manifest as M  # ty: ignore[unresolved-import]  # added above
+import diff_decompile as D  # added above
+import manifest as M  # added above
 
-pytestmark = pytest.mark.slow  # ty: ignore[unresolved-attribute]
+pytestmark = pytest.mark.slow
 
 #: Constant divisors and a widening multiply: every one of these lowers to a
 #: 32x32 multiply-high or a double-width divide on a 32-bit target.
@@ -110,7 +110,7 @@ def _build(compiler: str, extra: tuple[str, ...], directory: Path) -> Path:
     return target
 
 
-@pytest.mark.parametrize(  # ty: ignore[unresolved-attribute]
+@pytest.mark.parametrize(
     ("arch", "compiler", "extra", "recovers_double_width"), _TARGETS
 )
 def test_wide_arithmetic_never_names_int128_on_a_32_bit_target(

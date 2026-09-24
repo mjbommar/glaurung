@@ -69,12 +69,15 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from .function_structural import (
     RARE_MAX_OCCURRENCES as FS_RARE_MAX_OCCURRENCES,
     RARE_MIN_BLOCKS as FS_RARE_MIN_BLOCKS,
 )
+
+if TYPE_CHECKING:
+    from .structural_fingerprint import FunctionStructure
 
 
 @dataclass(frozen=True)
@@ -1027,6 +1030,8 @@ def render_diff_markdown(diff: BinaryDiff, *, max_rows: int = 0) -> str:
                 label = f"`{r.a.name}` → `{r.b.name}`"
             else:
                 label = f"`{r.name}`"
+            # Changed rows are always two-sided.
+            assert r.a is not None and r.b is not None
             lines.append(
                 f"| {delta_str} | {sim_str} | {label} | `{sa}` | `{sb}` "
                 f"| {r.a.size} | {r.b.size} |"
@@ -1039,8 +1044,10 @@ def render_diff_markdown(diff: BinaryDiff, *, max_rows: int = 0) -> str:
         lines.append("")
         for r in diff.rows:
             if r.status == "added":
+                assert r.b is not None  # added rows carry the b side
                 lines.append(f"- **+** `{r.name}` (new in b, size={r.b.size})")
             elif r.status == "removed":
+                assert r.a is not None  # removed rows carry the a side
                 lines.append(f"- **−** `{r.name}` (gone from b, was size={r.a.size})")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"

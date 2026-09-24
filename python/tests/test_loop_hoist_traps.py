@@ -39,7 +39,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "tests" / "decompiler_fixtures"))
-import fixture_harness as H  # ty: ignore[unresolved-import]  # added to sys.path above
+import fixture_harness as H  # added to sys.path above
 
 #: (fixture, compiler, opt, function) — the exact cells that regress under always-hoist.
 TRAPS = [

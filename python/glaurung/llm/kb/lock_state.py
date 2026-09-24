@@ -260,7 +260,8 @@ def analyze_locks(
     start = va
     if start is None:
         try:
-            start = int(function, 0)
+            # A None ``function`` deliberately raises TypeError, handled below.
+            start = int(function, 0)  # ty: ignore[invalid-argument-type]
         except (TypeError, ValueError):
             start = name_to_va.get(function)
             if start is None:

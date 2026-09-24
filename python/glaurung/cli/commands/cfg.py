@@ -11,7 +11,7 @@ from ..formatters.cfg import CFGFormatter
 from ..formatters.base import OutputFormat
 
 
-class CFGCommand(BaseCommand):
+class CFGCommand(BaseCommand[CFGFormatter]):
     """Command for CFG analysis."""
 
     def get_name(self) -> str:

@@ -1,6 +1,8 @@
 """Tests for LLM integration (memory-first)."""
 
+from typing import cast
 from unittest.mock import MagicMock
+from pydantic_ai import RunContext
 from pydantic_ai.models.test import TestModel
 
 from glaurung.llm import LLMConfig
@@ -55,7 +57,8 @@ def test_inject_kb_context_uses_memory():
         def __init__(self, deps):
             self.deps = deps
 
-    context_str = inject_kb_context(RC(ctx))
+    # RC duck-types the only RunContext member the injector reads (`.deps`).
+    context_str = inject_kb_context(cast(RunContext[MemoryContext], RC(ctx)))
     assert "file=/test.exe" in context_str
     assert "kb_nodes=" in context_str
 

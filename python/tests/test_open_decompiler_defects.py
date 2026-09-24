@@ -42,7 +42,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 SRC_DIR = ROOT / "tests" / "open_defects"
 sys.path.insert(0, str(ROOT / "tools"))
 
-import diff_decompile as D  # ty: ignore[unresolved-import]  # added above
+import diff_decompile as D  # added above
 
 
 @pytest.fixture(scope="module", params=["gcc", "clang"])

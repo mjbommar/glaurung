@@ -57,14 +57,14 @@ BUILD = ROOT / "tests" / "decompiler_fixtures" / "build"
 INVENTORY = ROOT / "tests" / "open_defects" / "known_failures.json"
 sys.path.insert(0, str(ROOT / "tools"))
 
-import diff_decompile as D  # ty: ignore[unresolved-import]  # added above
+import diff_decompile as D  # added above
 
 # The SAME parameter splitter and type classifier the inventory was built with.
 # Re-implementing them here is how the first version produced 36 spurious
 # XPASSes: a naive `split(",")` disagrees with the generator's depth-aware
 # split on any signature containing nested parentheses, so the two disagreed
 # about which parameter `arg2` even is.
-import gen_known_failures as G  # ty: ignore[unresolved-import]  # added above
+import gen_known_failures as G  # added above
 
 #: The measured inventory. Typed explicitly because `json.loads` returns
 #: `Any | list | dict`, so every `.get` below is an unresolved-attribute error

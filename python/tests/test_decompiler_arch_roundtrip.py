@@ -34,12 +34,12 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "tests" / "decompiler_fixtures"))
-import arch_roundtrip as A  # ty: ignore[unresolved-import]
-import build_guard as BG  # ty: ignore[unresolved-import]
-import diff_decompile as D  # ty: ignore[unresolved-import]
-import fixture_harness as H  # ty: ignore[unresolved-import]
-import fixture_toolchain as TC  # ty: ignore[unresolved-import]
-import manifest as M  # ty: ignore[unresolved-import]
+import arch_roundtrip as A
+import build_guard as BG
+import diff_decompile as D
+import fixture_harness as H
+import fixture_toolchain as TC
+import manifest as M
 
 _TD = M.tmpdir()
 WORKDIR_KW = {"dir": _TD} if _TD else {}
@@ -579,7 +579,7 @@ def test_a_cross_lane_links_the_rebuild_against_the_host_reference(tmp_path):
     assert "undefined symbol" not in detail, detail
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 @pytest.mark.parametrize(
     ("fixture", "function"),
     [
@@ -619,7 +619,7 @@ def test_aarch64_spilled_arg0_call_results_round_trip(
     assert results[function]["status"] == "pass", results[function]
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_aarch64_o0_distinct_call_result_types_round_trip(tmp_path: Path) -> None:
     """Sequential ``x0`` results must retain their own callee prototypes."""
     if shutil.which(A.TARGETS["aarch64"].cc) is None:
@@ -649,7 +649,7 @@ def test_aarch64_o0_distinct_call_result_types_round_trip(tmp_path: Path) -> Non
     assert results[function]["status"] == "pass", results[function]
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_aarch64_recursive_saved_parameter_round_trips(tmp_path: Path) -> None:
     """A recursive call must not replace a saved entry parameter with x0."""
     if shutil.which(A.TARGETS["aarch64"].cc) is None:
@@ -679,7 +679,7 @@ def test_aarch64_recursive_saved_parameter_round_trips(tmp_path: Path) -> None:
     assert results[function]["status"] == "pass", results[function]
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_aarch64_vectorized_find_first_set_round_trips(tmp_path: Path) -> None:
     """A packed pre-scan must preserve the scalar search window and result."""
     if shutil.which(A.TARGETS["aarch64"].cc) is None:
@@ -709,7 +709,7 @@ def test_aarch64_vectorized_find_first_set_round_trips(tmp_path: Path) -> None:
     assert results[function]["status"] == "pass", results[function]
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_aarch64_aliased_load_pair_round_trips_rb_validation(tmp_path: Path) -> None:
     """LDP aliases and BFI partial definitions must round-trip without live-ins."""
     if shutil.which(A.TARGETS["aarch64"].cc) is None:
@@ -749,7 +749,7 @@ def test_aarch64_aliased_load_pair_round_trips_rb_validation(tmp_path: Path) -> 
     )
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_aarch64_packed_bit_insert_round_trips_topological_sort(tmp_path: Path) -> None:
     """BIT must preserve masked indegrees before Kahn queue construction."""
     if shutil.which(A.TARGETS["aarch64"].cc) is None:
@@ -779,7 +779,7 @@ def test_aarch64_packed_bit_insert_round_trips_topological_sort(tmp_path: Path) 
     assert results[function]["status"] == "pass", results[function]
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_aarch64_optimized_call_flow_round_trips(tmp_path: Path) -> None:
     """Implicit x0 inputs survive loops and a prior-call-result tail call."""
     if shutil.which(A.TARGETS["aarch64"].cc) is None:
@@ -811,7 +811,7 @@ def test_aarch64_optimized_call_flow_round_trips(tmp_path: Path) -> None:
     } == {function: "pass" for function in sorted(functions)}, results
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_aarch64_optimized_indirect_tail_dispatch_round_trips(tmp_path: Path) -> None:
     """AArch64 ``br`` must return the selected function-table result."""
     if shutil.which(A.TARGETS["aarch64"].cc) is None:
@@ -843,7 +843,7 @@ def test_aarch64_optimized_indirect_tail_dispatch_round_trips(tmp_path: Path) ->
     } == {function: "pass" for function in sorted(functions)}, results
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_aarch64_o2_compact_signed_byte_switch_round_trips(tmp_path: Path) -> None:
     """GCC's LDRB/SXTB branch table must contribute every dense switch arm."""
     if shutil.which(A.TARGETS["aarch64"].cc) is None:
@@ -872,7 +872,7 @@ def test_aarch64_o2_compact_signed_byte_switch_round_trips(tmp_path: Path) -> No
     assert results["dense_dispatch"]["status"] == "pass", results
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_i386_o2_got_relative_switches_round_trip(tmp_path: Path) -> None:
     """GCC i386 PIC offsets are relative to the GOT base, not their table."""
     if shutil.which(A.TARGETS["i386"].cc) is None or shutil.which("qemu-i386") is None:
@@ -904,7 +904,7 @@ def test_i386_o2_got_relative_switches_round_trip(tmp_path: Path) -> None:
     } == {function: "pass" for function in sorted(functions)}, results
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_a32_o2_pc_relative_byte_switch_round_trips(tmp_path: Path) -> None:
     """GCC A32 PIC byte offsets are relative to pc at the terminal add."""
     arch = "armv7_a32"
@@ -938,7 +938,7 @@ def test_a32_o2_pc_relative_byte_switch_round_trips(tmp_path: Path) -> None:
     } == {function: "pass" for function in sorted(functions)}, results
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 @pytest.mark.parametrize("arch", ["armv7", "armv7_a32"])
 def test_arm32_o2_wide_selector_uses_both_aapcs_entry_words(
     tmp_path: Path, arch: str
@@ -983,7 +983,7 @@ def test_arm32_o2_wide_selector_uses_both_aapcs_entry_words(
     } == {function: "pass" for function in sorted(functions)}, results
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 @pytest.mark.parametrize(
     ("optimization", "functions"),
     [
@@ -1043,7 +1043,7 @@ def test_i386_wide_selector_uses_both_cdecl_stack_words(
     } == {function: "pass" for function in sorted(functions)}, results
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_i386_o2_wide_guard_recovers_one_source_comparison(tmp_path: Path) -> None:
     """Two cdecl dword comparisons are one uint64_t range predicate."""
     arch = "i386"
@@ -1063,7 +1063,7 @@ def test_i386_o2_wide_guard_recovers_one_source_comparison(tmp_path: Path) -> No
     assert "0 - var8" not in recovered, recovered
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_a32_o2_loop_byte_switch_round_trips_in_shadow_v2(tmp_path: Path) -> None:
     """Discovery and typed transport reach the structurer that owns loop latches."""
     arch = "armv7_a32"
@@ -1096,7 +1096,7 @@ def test_a32_o2_loop_byte_switch_round_trips_in_shadow_v2(tmp_path: Path) -> Non
     assert results["dispatch_in_loop"]["status"] == "pass", results
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_a32_o2_loop_byte_switch_round_trips_in_v1(tmp_path: Path) -> None:
     """Production locally owns every switch-case backedge inside the loop."""
     arch = "armv7_a32"
@@ -1137,7 +1137,7 @@ def test_a32_o2_loop_byte_switch_round_trips_in_v1(tmp_path: Path) -> None:
     assert results["dispatch_in_loop"]["status"] == "pass", results
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_a32_raw_switch_private_diamond_stays_inside_its_case(tmp_path: Path) -> None:
     """A predecessor-closed branching handler is owned by its typed case."""
     arch = "armv7_a32"
@@ -1177,7 +1177,7 @@ def test_a32_raw_switch_private_diamond_stays_inside_its_case(tmp_path: Path) ->
     assert results[function]["status"] == "pass", results
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_a32_multiple_wide_byte_switches_decline_without_crashing(
     tmp_path: Path,
 ) -> None:
@@ -1213,7 +1213,7 @@ def test_a32_multiple_wide_byte_switches_decline_without_crashing(
     assert "base64_decode" in completed.stdout
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_aarch64_optimized_readonly_switch_results_round_trip(tmp_path: Path) -> None:
     """A terminating range guard must make the following table load portable."""
     if shutil.which(A.TARGETS["aarch64"].cc) is None:
@@ -1245,10 +1245,8 @@ def test_aarch64_optimized_readonly_switch_results_round_trip(tmp_path: Path) ->
     } == {function: "pass" for function in sorted(functions)}, results
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
-@pytest.mark.parametrize(  # ty: ignore[unresolved-attribute]
-    "arch", ["armv7", "armv7_a32"]
-)
+@pytest.mark.slow
+@pytest.mark.parametrize("arch", ["armv7", "armv7_a32"])
 def test_arm32_optimized_readonly_switch_result_round_trips(
     tmp_path: Path, arch: str
 ) -> None:
@@ -1281,7 +1279,7 @@ def test_arm32_optimized_readonly_switch_result_round_trips(
     assert results[function]["status"] == "pass", results[function]
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_a32_instruction_predication_round_trips_conditional_polarity(
     tmp_path: Path,
 ) -> None:
@@ -1330,7 +1328,7 @@ def test_a32_instruction_predication_round_trips_conditional_polarity(
     } == {function: "pass" for function in sorted(functions)}, results
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_a32_predicated_store_round_trips_cas_update(tmp_path: Path) -> None:
     """A false A32 store predicate must leave target memory untouched."""
     arch = "armv7_a32"
@@ -1362,7 +1360,7 @@ def test_a32_predicated_store_round_trips_cas_update(tmp_path: Path) -> None:
     assert results[function]["status"] == "pass", results[function]
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_aarch64_optimized_clz_idiom_round_trips(tmp_path: Path) -> None:
     """AArch64 CLZ must define the exact-width bit-length computation."""
     if shutil.which(A.TARGETS["aarch64"].cc) is None:
@@ -1392,7 +1390,7 @@ def test_aarch64_optimized_clz_idiom_round_trips(tmp_path: Path) -> None:
     assert results[function]["status"] == "pass", results[function]
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_aarch64_optimized_factorial_preserves_its_wide_accumulator(
     tmp_path: Path,
 ) -> None:
@@ -1426,7 +1424,7 @@ def test_aarch64_optimized_factorial_preserves_its_wide_accumulator(
     } == {function: "pass" for function in sorted(functions)}, results
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_aarch64_o0_kmp_array_initializer_aliases_indexed_storage(
     tmp_path: Path,
 ) -> None:
@@ -1457,7 +1455,7 @@ def test_aarch64_o0_kmp_array_initializer_aliases_indexed_storage(
     assert results["kmp_search"]["status"] == "pass", results
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_aarch64_o2_horizontal_reduction_preserves_all_integer_lanes(
     tmp_path: Path,
 ) -> None:
@@ -1488,7 +1486,7 @@ def test_aarch64_o2_horizontal_reduction_preserves_all_integer_lanes(
     assert results["for_sum"]["status"] == "pass", results
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_aarch64_o2_signed_lane_max_preserves_continue_semantics(
     tmp_path: Path,
 ) -> None:
@@ -1519,7 +1517,7 @@ def test_aarch64_o2_signed_lane_max_preserves_continue_semantics(
     assert results["loop_continue"]["status"] == "pass", results
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_aarch64_o2_byte_table_permutation_preserves_reverse_mutation(
     tmp_path: Path,
 ) -> None:
@@ -1550,7 +1548,7 @@ def test_aarch64_o2_byte_table_permutation_preserves_reverse_mutation(
     assert results["mutate_reverse"]["status"] == "pass", results
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_aarch64_o0_unsigned_byte_load_preserves_zero_offset_parameter_access(
     tmp_path: Path,
 ) -> None:
@@ -1581,7 +1579,7 @@ def test_aarch64_o0_unsigned_byte_load_preserves_zero_offset_parameter_access(
     assert results["process"]["status"] == "pass", results
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_aarch64_o2_halfword_byte_swap_preserves_packet_length_bounds(
     tmp_path: Path,
 ) -> None:
@@ -1613,7 +1611,7 @@ def test_aarch64_o2_halfword_byte_swap_preserves_packet_length_bounds(
     assert results["parse_packet"]["status"] == "pass", results
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_aarch64_o0_non_byte_aligned_extracts_keep_all_live_bits(
     tmp_path: Path,
 ) -> None:
@@ -1645,7 +1643,7 @@ def test_aarch64_o0_non_byte_aligned_extracts_keep_all_live_bits(
     assert results["trunc_u16_after_mul"]["status"] == "pass", results
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_aarch64_o2_x0_roles_preserve_wide_product_and_identity_return(
     tmp_path: Path,
 ) -> None:
@@ -1677,7 +1675,7 @@ def test_aarch64_o2_x0_roles_preserve_wide_product_and_identity_return(
     assert results["rt_u32"]["status"] == "pass", results
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_aarch64_o2_direct_callee_live_ins_preserve_a_wide_call_result(
     tmp_path: Path,
 ) -> None:
@@ -1708,8 +1706,8 @@ def test_aarch64_o2_direct_callee_live_ins_preserve_a_wide_call_result(
     assert results["call_fold_wide_result"]["status"] == "pass", results
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
-@pytest.mark.parametrize(  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
+@pytest.mark.parametrize(
     ("fixture", "function"),
     [
         ("15_binary_search_tree", "bst_inorder_checksum"),
@@ -1943,9 +1941,9 @@ def test_genuine_target_execution_is_configured_for_all_ilp32_lanes():
     """
     assert A.native_runner("x86_64") is None
     assert A.native_runner("aarch64") is None
-    assert A.native_runner("i386")[:1] == ["qemu-i386"]
-    assert A.native_runner("armv7")[:1] == ["qemu-arm"]
-    assert A.native_runner("armv7_a32")[:1] == ["qemu-arm"]
+    assert (A.native_runner("i386") or [])[:1] == ["qemu-i386"]
+    assert (A.native_runner("armv7") or [])[:1] == ["qemu-arm"]
+    assert (A.native_runner("armv7_a32") or [])[:1] == ["qemu-arm"]
 
 
 def test_native_worker_refuses_malformed_vectors_and_unknown_integer_widths():
@@ -1981,7 +1979,7 @@ def test_native_worker_materializes_flat_struct_pointer_arrays_exactly():
     assert ".color = (uint32_t)(1)" in worker
 
 
-@pytest.mark.slow  # ty: ignore[unresolved-attribute]
+@pytest.mark.slow
 def test_native_execution_compares_ilp32_returns_and_buffer_effects(tmp_path):
     """Non-vacuity for the generated target worker, using a real i386 process."""
     if not _multilib_available(tmp_path) or shutil.which("qemu-i386") is None:

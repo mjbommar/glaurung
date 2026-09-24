@@ -19,7 +19,7 @@ class StringsDisplayOptions:
     truncate_json_strings: bool = False
 
 
-class StringsCommand(BaseCommand):
+class StringsCommand(BaseCommand[StringsFormatter]):
     """Analyze strings comprehensively with stats and distributions."""
 
     def get_name(self) -> str:

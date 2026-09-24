@@ -4,7 +4,7 @@ Python-friendly re-exports for triage types.
 These map directly to the Rust types in `glaurung._native.triage`.
 """
 
-import glaurung._native as _native  # type: ignore
+import glaurung._native as _native
 from typing import Any
 
 # Import triage types from the triage attribute

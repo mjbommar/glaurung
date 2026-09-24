@@ -49,7 +49,7 @@ class SinglePassAgent:
 
     def __init__(
         self,
-        base_agent: Agent,
+        base_agent: Agent[Any, Any],
         config: Optional[SinglePassConfig] = None,
         model: Optional[str] = None,
     ):
@@ -284,7 +284,7 @@ class SinglePassAgent:
 
 
 def create_single_pass_agent(
-    base_agent: Agent,
+    base_agent: Agent[Any, Any],
     config: Optional[SinglePassConfig] = None,
     model: Optional[str] = None,
 ) -> SinglePassAgent:

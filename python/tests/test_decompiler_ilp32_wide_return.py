@@ -16,11 +16,11 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "tests" / "decompiler_fixtures"))
 
-import arch_roundtrip as A  # ty: ignore[unresolved-import]  # added above
-import diff_decompile as D  # ty: ignore[unresolved-import]  # added above
-import manifest as M  # ty: ignore[unresolved-import]  # added above
+import arch_roundtrip as A  # added above
+import diff_decompile as D  # added above
+import manifest as M  # added above
 
-pytestmark = pytest.mark.slow  # ty: ignore[unresolved-attribute]
+pytestmark = pytest.mark.slow
 
 FIXTURE = "11_call_shapes"
 FUNCTIONS = {"widen_mul", "call_fold_wide_result"}
@@ -118,7 +118,7 @@ def _decompile(binary: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
-@pytest.mark.parametrize("target", TARGETS, ids=lambda target: target.arch)  # ty: ignore[unresolved-attribute]
+@pytest.mark.parametrize("target", TARGETS, ids=lambda target: target.arch)
 def test_ilp32_wide_return_round_trips_source_asm_ir_c_and_execution(
     tmp_path: Path, target: TargetEvidence
 ) -> None:

@@ -79,6 +79,7 @@ async def test_critic_skips_demoted_finding_no_llm_call():
     # Verdict + critique synthesized locally from the L4 issue.
     f = report.findings[0]
     assert f.evidence_supports_claim == "false"
+    assert f.critique is not None
     assert f.critique.startswith("skipped (L4 verifier already flagged):")
     assert "function 'ghost' not found in analysis" in f.critique
 

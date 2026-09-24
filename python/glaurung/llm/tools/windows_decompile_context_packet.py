@@ -250,9 +250,7 @@ class WindowsDecompileContextPacketTool(
 
 def _cfg_summary(binary_path: Path, function_va: int) -> WindowsContextCfgSummary:
     try:
-        functions, _callgraph = g.analysis.analyze_functions_path(  # ty: ignore[unresolved-attribute]
-            str(binary_path)
-        )
+        functions, _callgraph = g.analysis.analyze_functions_path(str(binary_path))
     except Exception:
         return WindowsContextCfgSummary()
     for func in functions:
@@ -280,7 +278,7 @@ def _instructions(
     args: WindowsDecompileContextPacketArgs,
 ) -> list[WindowsContextInstruction]:
     try:
-        raw = g.disasm.disassemble_window_at(  # ty: ignore[unresolved-attribute]
+        raw = g.disasm.disassemble_window_at(
             str(binary_path),
             args.function_va,
             window_bytes=args.window_bytes,
@@ -326,7 +324,7 @@ def _decompile(
     if args.max_decompile_chars == 0:
         return None, False, "decompile_disabled"
     try:
-        text = g.ir.decompile_at(  # ty: ignore[unresolved-attribute]
+        text = g.ir.decompile_at(
             str(binary_path),
             args.function_va,
             timeout_ms=args.timeout_ms,

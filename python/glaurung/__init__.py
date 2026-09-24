@@ -8,7 +8,7 @@ Python-friendly entry points. Rust types remain available under
 
 from enum import Enum
 
-from . import _native as _native  # type: ignore
+from . import _native as _native
 import importlib as _importlib
 import sys as _sys
 from . import similarity as similarity

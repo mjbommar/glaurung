@@ -29,7 +29,7 @@ FIXTURE_DIR = ROOT / "tests" / "decbench_adapter"
 FIXTURE = FIXTURE_DIR / "stdcall_symbols.dll"
 sys.path.insert(0, str(ROOT / "tools"))
 
-import decbench_symbols as S  # ty: ignore[unresolved-import]  # added above
+import decbench_symbols as S  # added above
 
 
 @pytest.fixture(scope="module")

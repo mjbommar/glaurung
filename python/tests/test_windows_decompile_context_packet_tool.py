@@ -31,7 +31,7 @@ def _ctx(tmp_path: Path) -> MemoryContext:
     return ctx
 
 
-@pytest.mark.skipif(  # ty: ignore[unresolved-attribute]
+@pytest.mark.skipif(
     not WIN64_SAMPLE.exists(),
     reason="win64 PE sample missing",
 )
@@ -73,7 +73,7 @@ def test_windows_decompile_context_packet_collects_bounded_function_context(
     )
 
 
-@pytest.mark.skipif(  # ty: ignore[unresolved-attribute]
+@pytest.mark.skipif(
     not WIN64_SAMPLE.exists(),
     reason="win64 PE sample missing",
 )

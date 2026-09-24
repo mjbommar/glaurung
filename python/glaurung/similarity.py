@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Iterable, List
 
-import glaurung._native as _native  # type: ignore
+import glaurung._native as _native
 
 # Re-export native CTPH primitives for convenience
 ctph_hash_bytes = _native.similarity.ctph_hash_bytes

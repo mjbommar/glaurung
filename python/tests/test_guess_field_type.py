@@ -13,15 +13,16 @@ loop with ++).
 from __future__ import annotations
 
 import importlib.util
+from types import ModuleType
 
 
-def _load() -> object:
+def _load() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "recover_source",
         "scripts/recover_source.py",
     )
+    assert spec is not None and spec.loader is not None
     rs = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
     spec.loader.exec_module(rs)
     return rs
 
