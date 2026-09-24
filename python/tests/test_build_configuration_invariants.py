@@ -808,6 +808,48 @@ def test_no_recovered_condition_is_decidable_from_the_emitted_code_alone(
     )
 
 
+#: The TLS displacement of the x86-64 glibc stack guard (`%fs:0x28`).
+_GUARD_LITERAL = re.compile(r"(?:!=|==|=)\s*\(?\s*(?:\(\s*long\s*\)\s*)*\(?\s*0x28\b")
+
+
+@pytest.mark.parametrize("config", CONFIG_NAMES)
+def test_a_stripped_stack_guard_is_never_rendered_as_its_tls_offset(
+    built, config
+) -> None:
+    """Without DWARF, the guard is still an opaque per-thread value.
+
+    The stripped twin of each lane (`strip -s`, same addresses) is where the
+    frame is recovered from machine code alone. With gcc-13 `-O2
+    -fstack-protector-strong`, `bc_buffer_and_scalars` copies `%rsp` into a
+    scratch register before the frame escapes to a global, so the whole 88-byte
+    frame stays ONE object and the guard slot is `&local_58 + 72` rather than a
+    `%stack_N` of its own. The canary pass did not recognise that slot, and the
+    renderer printed the guard's TLS displacement as a value:
+
+        *(long *)((&local_58[0] + 72)) = (long)((long)(0x28));
+        ...
+        if (*(long *)((&local_58[0] + 72)) != 0x28) { __stack_chk_fail(); }
+
+    which states that the canary IS the number 0x28 and makes the check dead.
+    """
+    _require(built, config)
+    stripped = built["stripped"].get(config)
+    if stripped is None:
+        pytest.skip(f"DECLARED SKIP: no stripped twin of {config} (no `strip`)")
+    vas = _symbol_vas(built["binaries"][config])
+    bodies = _decompile_by_va(stripped, vas)
+    problems = [
+        f"{name}: {line.strip()}"
+        for name, body in sorted(bodies.items())
+        for line in body.splitlines()
+        if _GUARD_LITERAL.search(line)
+    ]
+    assert not problems, (
+        f"{config} (stripped) renders the stack guard as its TLS offset:\n"
+        + "\n".join(problems)
+    )
+
+
 # --------------------------------------------------------------------------
 # 8. An executable has an entry point and a shared object does not.
 # --------------------------------------------------------------------------
