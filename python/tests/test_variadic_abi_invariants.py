@@ -121,11 +121,18 @@ CONTROLS = ("vsa_control_fixed", "vsa_control_mixed")
 #: Opaque SSA identity correctly declines that ambiguous merge and exposes the
 #: incoming SysV `al` vector-count read as `ret`. Keep the cell strict-xfail
 #: until variadic machine-state lowering models that live-in explicitly.
+#:
+#: 2026-09-24: six lanes left the inventory (and gcc:O2 vsa_forward, unmarked,
+#: is clean again). Their only undefined read was the
+#: `test %al,%al` guard left EMPTY once the unobserved vector save-area stores
+#: were pruned (`label_prune::prune_empty_pure_ifs` now removes it). The five
+#: below still read an `al`/save-area live-in that some statement observes.
 _UNDEFINED_XFAILS = {
-    (cc, opt, name)
-    for cc, opt in LANES
-    for name in VARIADIC
-    if (cc, opt, name) not in {("gcc", "O2", "vsa_forward")}
+    ("gcc", "O0", "vsa_double_args"),
+    ("gcc", "O2", "vsa_int_only"),
+    ("gcc", "O2", "vsa_double_args"),
+    ("clang", "O2", "vsa_int_only"),
+    ("clang", "O2", "vsa_double_args"),
 }
 VARIADIC_CASES = [
     pytest.param(
