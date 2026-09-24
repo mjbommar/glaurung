@@ -138,7 +138,7 @@ def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
             [],
             None,
             None,
-            r"ret %rax#\d+",
+            r"ret %value\d+",
             "ret",
         ),
         (
@@ -147,7 +147,7 @@ def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
             [],
             "qemu-aarch64",
             "/usr/aarch64-linux-gnu",
-            r"ret %x0#\d+",
+            r"ret %value\d+",
             "ret",
         ),
         (
@@ -156,7 +156,7 @@ def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
             ["-march=armv7-a", "-mfpu=vfpv3-d16", "-mfloat-abi=hard", "-mthumb"],
             "qemu-arm",
             "/usr/arm-linux-gnueabihf",
-            r"ret %r0#\d+",
+            r"ret %value\d+",
             "bx\tlr",
         ),
     ],
@@ -226,6 +226,9 @@ def test_direct_integer_results_have_exact_ssa_return_edges_and_round_trip(
     assert decompiled.returncode == 0, decompiled.stderr
     assert "===== prototype-resolved LLIR =====" in decompiled.stderr
     assert "===== prepared numbered LLIR =====" in decompiled.stderr
+    # The return reads an exact numbered SSA value. Since 8f5285b9 those keys
+    # are opaque (`valueN`) rather than the `reg#version` spelling, so the
+    # machine register no longer appears in the name.
     assert re.search(return_pattern, decompiled.stderr), decompiled.stderr
     recovered_code = decompiled.stdout
     assert "return " in recovered_code, recovered_code

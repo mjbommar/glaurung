@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -104,7 +105,10 @@ def test_real_stripped_local_vfprintf_sink_types_literal_format_operands(
     )
     rendered = {int(record[1]): record[2] for record in results}
     literal_text = rendered[targets["literal_caller"]]
-    assert "char * arg0" in literal_text.split("{", 1)[0], literal_text
+    # Declarators are source-shaped (`char *arg0`) since 38f3f6cc; the property
+    # is the pointer TYPE, not where the space falls.
+    char_pointer_arg0 = re.compile(r"\bchar \*\s*arg0\b")
+    assert char_pointer_arg0.search(literal_text.split("{", 1)[0]), literal_text
     for name in ("dynamic_caller", "conflicting_caller"):
         control = rendered[targets[name]]
-        assert "char * arg0" not in control.split("{", 1)[0], control
+        assert not char_pointer_arg0.search(control.split("{", 1)[0]), control
