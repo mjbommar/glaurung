@@ -1,10 +1,10 @@
 {
  "note": "Test files classified by what they NEED. Applied as pytest markers by python/tests/conftest.py. Regenerate with tools/gen_test_facets.py; do not hand-edit.",
  "counts": {
-  "core": 337,
-  "lfs": 114,
-  "toolchain": 39,
-  "fixtures": 38,
+  "core": 315,
+  "lfs": 133,
+  "fixtures": 41,
+  "toolchain": 40,
   "docker": 20,
   "llm": 5,
   "decbench": 5
@@ -104,7 +104,7 @@
    "lfs"
   ],
   "test_build_configuration_invariants.py": [
-   "core"
+   "toolchain"
   ],
   "test_cfg.py": [
    "lfs"
@@ -293,7 +293,7 @@
    "docker"
   ],
   "test_decompiler_declaration_authority.py": [
-   "core"
+   "fixtures"
   ],
   "test_decompiler_defuse_census.py": [
    "core"
@@ -308,7 +308,7 @@
    "toolchain"
   ],
   "test_decompiler_entrypoint_equivalence.py": [
-   "core"
+   "fixtures"
   ],
   "test_decompiler_fixture_build_cache.py": [
    "fixtures",
@@ -354,7 +354,7 @@
    "toolchain"
   ],
   "test_decompiler_line_mappings.py": [
-   "core"
+   "fixtures"
   ],
   "test_decompiler_memory_objects.py": [
    "toolchain"
@@ -421,7 +421,7 @@
    "core"
   ],
   "test_demangle_integration.py": [
-   "core"
+   "lfs"
   ],
   "test_demangle_pass.py": [
    "lfs"
@@ -889,7 +889,7 @@
    "core"
   ],
   "test_pass_health_report.py": [
-   "core"
+   "lfs"
   ],
   "test_patch.py": [
    "lfs"
@@ -947,7 +947,7 @@
    "core"
   ],
   "test_realworld_windows_vendor_corpus.py": [
-   "core"
+   "lfs"
   ],
   "test_recover_source_externs.py": [
    "toolchain"
@@ -1110,7 +1110,7 @@
    "core"
   ],
   "test_suspicious_symbols.py": [
-   "core"
+   "lfs"
   ],
   "test_swallowed_defects.py": [
    "lfs"
@@ -1126,7 +1126,7 @@
    "lfs"
   ],
   "test_symbols_demangled.py": [
-   "core"
+   "lfs"
   ],
   "test_symbols_python.py": [
    "core"
@@ -1198,7 +1198,8 @@
    "core"
   ],
   "test_variable_addresses.py": [
-   "toolchain"
+   "toolchain",
+   "lfs"
   ],
   "test_variadic_abi_invariants.py": [
    "core"
@@ -1211,13 +1212,13 @@
    "toolchain"
   ],
   "test_verify_tutorial.py": [
-   "core"
+   "lfs"
   ],
   "test_view_cli.py": [
    "lfs"
   ],
   "test_view_function_tools.py": [
-   "core"
+   "lfs"
   ],
   "test_vtable_discovery.py": [
    "lfs"
@@ -1268,7 +1269,7 @@
    "core"
   ],
   "test_windows_candidate_start_worklist_tool.py": [
-   "core"
+   "lfs"
   ],
   "test_windows_candidate_validation_report_tool.py": [
    "core"
@@ -1283,7 +1284,7 @@
    "core"
   ],
   "test_windows_cli_analyst.py": [
-   "core"
+   "lfs"
   ],
   "test_windows_compare_selector_cases_tool.py": [
    "core"
@@ -1304,7 +1305,7 @@
    "lfs"
   ],
   "test_windows_data_ref_confidence_tool.py": [
-   "core"
+   "lfs"
   ],
   "test_windows_decompile_context_packet_tool.py": [
    "lfs"
@@ -1331,10 +1332,10 @@
    "core"
   ],
   "test_windows_function_body_split_candidates_tool.py": [
-   "core"
+   "lfs"
   ],
   "test_windows_function_boundary_diff_tool.py": [
-   "core"
+   "lfs"
   ],
   "test_windows_function_chunks.py": [
    "core"
@@ -1346,10 +1347,10 @@
    "lfs"
   ],
   "test_windows_function_start_explain_tool.py": [
-   "core"
+   "lfs"
   ],
   "test_windows_functionization_review_agent.py": [
-   "core"
+   "lfs"
   ],
   "test_windows_functionization_rule_replay_tool.py": [
    "lfs"
@@ -1358,7 +1359,7 @@
    "core"
   ],
   "test_windows_ghidra_parity_baseline.py": [
-   "core"
+   "lfs"
   ],
   "test_windows_ghidra_parity_regression.py": [
    "core"
@@ -1370,7 +1371,7 @@
    "core"
   ],
   "test_windows_import_thunk_catalog_tool.py": [
-   "core"
+   "lfs"
   ],
   "test_windows_import_validation_artifact_directory_tool.py": [
    "core"
@@ -1541,7 +1542,7 @@
    "lfs"
   ],
   "test_windows_rule_authoring_agent.py": [
-   "core"
+   "lfs"
   ],
   "test_windows_runner_artifact_promotion_apply_tool.py": [
    "core"
@@ -1559,7 +1560,7 @@
    "lfs"
   ],
   "test_windows_simd_start_classifier_tool.py": [
-   "core"
+   "lfs"
   ],
   "test_windows_sink_to_gate_review_agent.py": [
    "core"

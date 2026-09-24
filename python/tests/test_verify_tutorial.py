@@ -30,7 +30,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from scripts import verify_tutorial
+
+# `lfs`: the 01-install chapter that `--check` replays runs `glaurung kickoff`
+# on samples/binaries/.../hello-c-clang-debug, a Git LFS object. On a checkout
+# without LFS the command analyses the 130-byte pointer file and the recorded
+# evidence "drifts" to `format: None`. The sample path lives in the chapter's
+# commands, not in this file, so tools/gen_test_facets.py cannot see it.
+pytestmark = pytest.mark.lfs
 
 ROOT = Path(__file__).resolve().parents[2]
 INSTALL_FIXTURES = ROOT / "docs" / "tutorial" / "_fixtures" / "01-install"

@@ -545,15 +545,37 @@ def _ptrace(request: int, tid: int, data: object = 0) -> None:
         raise OSError(error_number, os.strerror(error_number))
 
 
+#: Backoff bounds for `_wait_ptrace_stop`. A single-step stop usually arrives
+#: within microseconds; the ceiling only matters for a stop that is genuinely
+#: slow (a checkpoint, a syscall), where 5 ms of latency is irrelevant.
+_PTRACE_POLL_FIRST_SLEEP = 0.00002
+_PTRACE_POLL_MAX_SLEEP = 0.005
+
+
 def _wait_ptrace_stop(tid: int, timeout: float) -> int:
+    """Wait for `tid` to enter a ptrace stop, polling with exponential backoff.
+
+    This sits on the per-instruction path of `capture_instruction_trace_child`,
+    so its latency multiplies by the step count. A flat 5 ms sleep after a
+    missed first poll made every single-step cost at least 5 ms whenever the
+    tracee had not been scheduled yet: 1,325 steps took 7.5 s of a 10 s budget
+    on a 16-core developer box, and a smaller or virtualised CI runner
+    exhausted the budget outright. Backing off from 20 us keeps the common
+    case fast without spinning on a slow stop.
+    """
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    pause = _PTRACE_POLL_FIRST_SLEEP
+    while True:
         waited, status = os.waitpid(tid, os.WNOHANG | _WAIT_ALL)
         if waited == tid:
             if os.WIFSTOPPED(status):
                 return os.WSTOPSIG(status)
             raise RuntimeError(f"thread {tid} left before register capture")
-        time.sleep(0.005)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(pause, remaining))
+        pause = min(pause * 2, _PTRACE_POLL_MAX_SLEEP)
     raise TimeoutError(f"thread {tid} did not enter ptrace stop")
 
 

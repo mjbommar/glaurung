@@ -46,7 +46,9 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.slow
+# `toolchain`: every configuration is compiled at test time by `COMPILER`, a
+# spelling tools/gen_test_facets.py cannot see, so the facet is declared here.
+pytestmark = [pytest.mark.slow, pytest.mark.toolchain]
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -342,19 +344,82 @@ def _unassigned_reads(body: str) -> list[str]:
     return out
 
 
-def _configs_xfail(failing: set[str], reason: str) -> list:
-    """`CONFIG_NAMES` with some configurations marked as known-failing.
+#: The configuration whose frame recovery is a known open defect, and the
+#: machine-code shape that triggers it. See `_expect_frame_defect`.
+FRAME_DEFECT_CONFIG = "lto"
+FRAME_DEFECT_FUNCTION = "bc_buffer_and_scalars"
 
-    `strict=True`, for the reason the emission-invariants module gives: the
-    marker itself fails once the defect is fixed, which forces the reason text
-    to be removed rather than left to rot into a lie.
+#: `mov %rsp,<memory>`: the frame's base address stored straight from the stack
+#: pointer, with no `lea` and no intermediate register. AT&T operand order, as
+#: `objdump -d` prints it; the destination is the operand after the comma, and
+#: it is memory exactly when it contains a parenthesis.
+RAW_RSP_STORE = re.compile(r"\bmov\s+%rsp,\s*[^\s%]*\(")
+
+
+def _stores_raw_stack_pointer(binary: Path, function: str) -> bool:
+    """Does `function`'s machine code store `%rsp` itself to memory?
+
+    Read from `objdump`, not from Glaurung: this decides what the test EXPECTS,
+    so it cannot come from the tool under test.
     """
-    return [
-        pytest.param(name, marks=pytest.mark.xfail(reason=reason, strict=True))
-        if name in failing
-        else name
-        for name in CONFIG_NAMES
-    ]
+    done = subprocess.run(
+        ["objdump", "-d", "--no-show-raw-insn", str(binary)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=True,
+    )
+    inside = False
+    for line in done.stdout.splitlines():
+        if line.endswith(f"<{function}>:"):
+            inside = True
+            continue
+        if inside:
+            if not line.strip():
+                break
+            if RAW_RSP_STORE.search(line):
+                return True
+    if not inside:
+        raise AssertionError(f"{binary.name}: objdump shows no <{function}>")
+    return False
+
+
+def _expect_frame_defect(
+    request: pytest.FixtureRequest, built, config: str, reason: str
+) -> None:
+    """Mark the `-flto` lane xfail(strict) exactly when the defect's trigger is
+    present in the binary this host's compiler actually produced.
+
+    The defect needs two things at once. `-flto` puts the concrete DIE for
+    `bc_buffer_and_scalars` behind a cross-CU `DW_AT_abstract_origin`, so no
+    DWARF frame facts reach it; and the compiler must then store the raw stack
+    pointer (`mov %rsp,bc_escape(%rip)`) instead of first copying it to a
+    register. GCC 15 does the latter and the recovery emits `long rsp;
+    rsp = (rsp - 88);`. GCC 13 (ubuntu-24.04, the CI runner) goes through
+    `mov %rsp,%r8` and the frame IS recovered, so a static strict xfail XPASSed
+    there. The same source without `-g` reproduces it under GCC 15 at plain
+    `-pie -O2`, which is how the two halves were separated.
+
+    Keyed on the observed instruction, never on a compiler version: where the
+    trigger is absent the lane must pass like every other one, and where it is
+    present a fix still flips the strict marker.
+    """
+    if config != FRAME_DEFECT_CONFIG:
+        return
+    binary = _require(built, config)
+    if not _have("objdump"):
+        pytest.skip(
+            "DECLARED SKIP: no `objdump`; cannot tell whether this build carries "
+            "the known -flto frame defect's trigger"
+        )
+    if _stores_raw_stack_pointer(binary, FRAME_DEFECT_FUNCTION):
+        request.applymarker(
+            pytest.mark.xfail(
+                reason=f"{reason} Trigger observed in this build: `mov %rsp,"
+                f"<memory>` in {FRAME_DEFECT_FUNCTION} (see _expect_frame_defect).",
+                strict=True,
+            )
+        )
 
 
 # --------------------------------------------------------------------------
@@ -568,20 +633,21 @@ def test_the_recovered_interface_is_identical_in_every_configuration(
 # --------------------------------------------------------------------------
 # 4. Frame disjointness.
 # --------------------------------------------------------------------------
-@pytest.mark.parametrize(
-    "config",
-    _configs_xfail(
-        {"lto"},
-        "OPEN DEFECT (-flto): no frame object is recovered in any function, so "
-        "this test's own non-vacuity assertion fires — there are no extents to "
-        "check for overlap. Not a separate defect: it is the same cross-CU "
-        "`DW_AT_abstract_origin` failure the two tests below record, where "
-        "nothing establishes the frame and the prologue `sub $0x58,%rsp` is "
-        "lifted as arithmetic on an unknown. This test is the third thing that "
-        "loses to it, and it fails loudly rather than passing on an empty set.",
-    ),
+DISJOINT_DEFECT = (
+    "OPEN DEFECT (-flto): no frame object is recovered in any function, so "
+    "this test's own non-vacuity assertion fires — there are no extents to "
+    "check for overlap. Not a separate defect: it is the same cross-CU "
+    "`DW_AT_abstract_origin` failure the two tests below record, where "
+    "nothing establishes the frame and the prologue `sub $0x58,%rsp` is "
+    "lifted as arithmetic on an unknown. This test is the third thing that "
+    "loses to it, and it fails loudly rather than passing on an empty set."
 )
-def test_frame_locals_occupy_disjoint_byte_ranges(built, recovered, config) -> None:
+
+
+@pytest.mark.parametrize("config", CONFIG_NAMES)
+def test_frame_locals_occupy_disjoint_byte_ranges(
+    built, recovered, config, request
+) -> None:
     """Two named frame slots may not claim the same byte, in any configuration.
 
     The property is the one the emission-invariants module states, applied to a
@@ -599,6 +665,7 @@ def test_frame_locals_occupy_disjoint_byte_ranges(built, recovered, config) -> N
     optimiser scalarises the function completely, it touches no stack at all, and
     this test passes vacuously in the two configurations that need it most.
     """
+    _expect_frame_defect(request, built, config, DISJOINT_DEFECT)
     _require(built, config)
     problems: list[str] = []
     declared_any = 0
@@ -849,23 +916,22 @@ def test_the_default_entry_point_decompile_works_for_an_executable(
 # --------------------------------------------------------------------------
 # 9. A stack object that exists in the machine code is recovered as one.
 # --------------------------------------------------------------------------
-@pytest.mark.parametrize(
-    "config",
-    _configs_xfail(
-        {"lto"},
-        "OPEN DEFECT (-flto): `bc_buffer_and_scalars` recovers NO frame object "
-        "at all. The 64-byte array becomes `long rsp; rsp = (rsp - 88);` — the "
-        "stack pointer modelled as an ordinary local that is read before it is "
-        "written — and every write to the array is then `*(signed char *)(var5 - "
-        "1)` off that undefined value. Same root cause as the interface defect: "
-        "with the DWARF facts unreachable through the cross-CU "
-        "`DW_AT_abstract_origin`, nothing establishes the frame, so the prologue "
-        "`sub $0x58,%rsp` is lifted as arithmetic on an unknown rather than as a "
-        "frame allocation.",
-    ),
+FRAME_OBJECT_DEFECT = (
+    "OPEN DEFECT (-flto): `bc_buffer_and_scalars` recovers NO frame object "
+    "at all. The 64-byte array becomes `long rsp; rsp = (rsp - 88);` — the "
+    "stack pointer modelled as an ordinary local that is read before it is "
+    "written — and every write to the array is then `*(signed char *)(var5 - "
+    "1)` off that undefined value. Same root cause as the interface defect: "
+    "with the DWARF facts unreachable through the cross-CU "
+    "`DW_AT_abstract_origin`, nothing establishes the frame, so the prologue "
+    "`sub $0x58,%rsp` is lifted as arithmetic on an unknown rather than as a "
+    "frame allocation."
 )
+
+
+@pytest.mark.parametrize("config", CONFIG_NAMES)
 def test_a_frame_object_is_recovered_wherever_the_machine_code_allocates_one(
-    built, recovered, config
+    built, recovered, config, request
 ) -> None:
     """An address computed from the frame register and stored away IS a local.
 
@@ -881,6 +947,7 @@ def test_a_frame_object_is_recovered_wherever_the_machine_code_allocates_one(
     slots that WERE recovered can coexist; it is trivially satisfied by
     recovering none. This asks whether they were recovered.
     """
+    _expect_frame_defect(request, built, config, FRAME_OBJECT_DEFECT)
     _require(built, config)
     body = recovered[config].get("bc_buffer_and_scalars")
     assert body, f"{config}: bc_buffer_and_scalars recovered no body"
@@ -899,21 +966,20 @@ def test_a_frame_object_is_recovered_wherever_the_machine_code_allocates_one(
 # --------------------------------------------------------------------------
 # 10. A value read is a value assigned, in every configuration.
 # --------------------------------------------------------------------------
-@pytest.mark.parametrize(
-    "config",
-    _configs_xfail(
-        {"lto"},
-        "OPEN DEFECT (-flto): `bc_buffer_and_scalars` emits `long rsp;` and then "
-        "`rsp = (rsp - 88);` as its first statement, so the stack pointer is read "
-        "before anything defines it and that undefined value reaches a store to a "
-        "global and every write into the buffer. The recovered function's "
-        "behaviour is not merely unknown, it is unspecified. Same mechanism as "
-        "the interface defect above: no DWARF reaches the concrete DIE, so no "
-        "frame is established.",
-    ),
+UNASSIGNED_READ_DEFECT = (
+    "OPEN DEFECT (-flto): `bc_buffer_and_scalars` emits `long rsp;` and then "
+    "`rsp = (rsp - 88);` as its first statement, so the stack pointer is read "
+    "before anything defines it and that undefined value reaches a store to a "
+    "global and every write into the buffer. The recovered function's "
+    "behaviour is not merely unknown, it is unspecified. Same mechanism as "
+    "the interface defect above: no DWARF reaches the concrete DIE, so no "
+    "frame is established."
 )
+
+
+@pytest.mark.parametrize("config", CONFIG_NAMES)
 def test_no_recovered_local_is_read_without_ever_being_assigned(
-    built, recovered, config
+    built, recovered, config, request
 ) -> None:
     """An unassigned value must not be able to influence the result.
 
@@ -929,6 +995,7 @@ def test_no_recovered_local_is_read_without_ever_being_assigned(
     for the caller's value of a callee-saved register, it is unassigned by
     construction, and every target emits it.
     """
+    _expect_frame_defect(request, built, config, UNASSIGNED_READ_DEFECT)
     _require(built, config)
     problems: list[str] = []
     for name, body in sorted(recovered[config].items()):

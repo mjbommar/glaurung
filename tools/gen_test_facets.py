@@ -41,7 +41,11 @@ RULES: dict[str, re.Pattern[str]] = {
     # clone and on the test-suite CI runner.
     "fixtures": re.compile(
         r"decompiler_fixtures/build|FIXTURE_BUILD\b|fixture_harness|"
-        r"decompiler_fixtures\"\s*/\s*\"build|known_failures\.json"
+        r"decompiler_fixtures\"\s*/\s*\"build|known_failures\.json|"
+        # `FIXTURES = ROOT / "tests" / "decompiler_fixtures"` then, anywhere
+        # later, `FIXTURES / "build" / ...`: the two halves of the path are
+        # joined through a variable no single-line pattern can follow.
+        r"\A(?=[\s\S]*[\"/]decompiler_fixtures\b)(?=[\s\S]*/\s*[\"']build[\"'])"
     ),
     # Invokes a compiler at test time (as opposed to reading a committed .so).
     "toolchain": re.compile(
@@ -57,7 +61,19 @@ RULES: dict[str, re.Pattern[str]] = {
     ),
     # Reads sample binaries, which are Git LFS objects: a checkout without
     # `lfs: true` sees 130-byte pointer files.
-    "lfs": re.compile(r"samples/(binaries|packed|adversarial|source)\b"),
+    #
+    # `.gitattributes` is the authority on what is LFS. Besides samples/, it
+    # stores the Windows Ghidra-parity baselines and the Axeyum shadow-split
+    # corpora there, and a test reading either sees a pointer file (a JSON
+    # parse of "version https://git-lfs..."). The pathlib-join spelling
+    # (`ROOT / "samples" / "binaries"`) is matched as well as the slash one.
+    "lfs": re.compile(
+        r"samples/(binaries|packed|adversarial|source|containers)\b|"
+        r"[\"']samples[\"']\s*/\s*[\"'](binaries|packed|containers)[\"']|"
+        r"data/baselines/windows-ghidra-parity\b|"
+        r"axeyum-qfbv/(shadow-splits|malformed-exports)[^\"'\s]*\.smt2|"
+        r"reference/specifications/"
+    ),
     # Needs the pinned fixture-toolchain Docker image. The rule wants an
     # INVOCATION, not the word: a test that merely says "docker" in a docstring
     # about CI would otherwise be tiered as needing it.
@@ -76,7 +92,19 @@ RULES: dict[str, re.Pattern[str]] = {
 
 
 def classify(text: str) -> list[str]:
-    found = [name for name, rule in RULES.items() if rule.search(text)]
+    """Return the facets `text` needs, or `["core"]` for none.
+
+    An explicit `pytest.mark.<facet>` in the file counts as needing it. The
+    conftest hook only ADDS markers, so without this a file that declares
+    `pytestmark = pytest.mark.lfs` (because its dependency hides behind a
+    CLI default the rules cannot see) would also be marked `core` and still
+    be selected by `-m core`.
+    """
+    found = [
+        name
+        for name, rule in RULES.items()
+        if rule.search(text) or re.search(rf"pytest\.mark\.{name}\b", text)
+    ]
     return found or ["core"]
 
 

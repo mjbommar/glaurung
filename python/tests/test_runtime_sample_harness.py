@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import importlib.util
 import hashlib
 import json
@@ -22,6 +23,49 @@ assert SPEC is not None and SPEC.loader is not None
 HARNESS = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = HARNESS
 SPEC.loader.exec_module(HARNESS)
+
+CORE_PATTERN = Path("/proc/sys/kernel/core_pattern")
+NO_REGULAR_CORE = "expected exactly one regular core file"
+
+
+def _core_policy_redirect() -> str | None:
+    """Why this host will not leave a regular `core*` file in the child's
+    working directory, or None when its policy says it will.
+
+    A `|handler` pattern (apport, systemd-coredump) hands the dump to a
+    program, and whether that program also writes a file into the crashing
+    process's cwd is its business, not the kernel's. A pattern with a `/` in it
+    writes somewhere other than the cwd.
+    """
+    try:
+        pattern = CORE_PATTERN.read_text().strip()
+    except OSError:
+        return None
+    if pattern.startswith("|"):
+        return f"core_pattern pipes dumps to `{pattern.split()[0][1:]}`"
+    if "/" in pattern:
+        return f"core_pattern writes dumps outside the working directory: {pattern}"
+    return None
+
+
+@contextlib.contextmanager
+def _skip_if_host_redirects_cores():
+    """Turn "no regular core file" into a declared skip ONLY when the host's
+    core policy explains it.
+
+    The capture paths require exactly one regular core file in the capture
+    directory. On a host whose `core_pattern` pipes or redirects dumps, zero is
+    the host's doing, not ours: skip, naming the policy. On a host whose policy
+    should have produced the file, the same RuntimeError is a real failure and
+    is re-raised.
+    """
+    try:
+        yield
+    except RuntimeError as error:
+        reason = _core_policy_redirect()
+        if NO_REGULAR_CORE in str(error) and reason is not None:
+            pytest.skip(f"host core policy: {reason}")
+        raise
 
 
 def test_runtime_corpus_has_balanced_real_sources() -> None:
@@ -2204,13 +2248,14 @@ def test_traced_guard_fault_requires_ordered_mapping_transition(
 
     sample = next(item for item in HARNESS.load_samples() if item.id == sample_id)
     binary = HARNESS.compile_sample(sample, "gcc", "O0", "pie", tmp_path)
-    capture = capture_traced_child_core(
-        binary,
-        [HARNESS.scenario_arg(sample, "bad")],
-        environment=HARNESS.fixture_environment(sample),
-        timeout=10.0,
-        public_input=b"bad",
-    )
+    with _skip_if_host_redirects_cores():
+        capture = capture_traced_child_core(
+            binary,
+            [HARNESS.scenario_arg(sample, "bad")],
+            environment=HARNESS.fixture_environment(sample),
+            timeout=10.0,
+            public_input=b"bad",
+        )
     capsule = json.loads(capture.capsule_json)
     assert capsule["identity"]["acquisition"] == "trace"
     assert capsule["provider.strace"]["event_scope"] == [
@@ -3911,17 +3956,18 @@ def test_counterfactual_neighbor_reaches_real_null_write_crash(tmp_path: Path) -
         neighboring[mutation["source_offset"]] = int(mutation["replacement_hex"], 16)
     assert bytes(neighboring) == b"bad"
 
-    validation_result = validate_instruction_trace_counterfactual_child(
-        binary,
-        capture.capsule_json,
-        capture.payloads,
-        [supplied.decode()],
-        source_id=candidates[0]["source_id"],
-        candidate_sequence=candidates[0]["sequence"],
-        environment=HARNESS.fixture_environment(sample),
-        timeout=10,
-        expected_crash_class="null_write",
-    )
+    with _skip_if_host_redirects_cores():
+        validation_result = validate_instruction_trace_counterfactual_child(
+            binary,
+            capture.capsule_json,
+            capture.payloads,
+            [supplied.decode()],
+            source_id=candidates[0]["source_id"],
+            candidate_sequence=candidates[0]["sequence"],
+            environment=HARNESS.fixture_environment(sample),
+            timeout=10,
+            expected_crash_class="null_write",
+        )
     assert validation_result.materialized_input == b"bad"
     validation_relation = json.loads(validation_result.validation_json)
     assert validation_relation["status"] == "validated", validation_relation

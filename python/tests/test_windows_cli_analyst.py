@@ -4,6 +4,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from glaurung.cli.main import GlaurungCLI
 from glaurung.llm.agents.windows_target_pipeline import (
     WindowsTargetPipelineBlockerWorkItem,
@@ -23,6 +25,13 @@ from glaurung.llm.tools.windows_pipeline_blocker_task_plan import (
     WindowsPipelineBlockerTask,
     WindowsPipelineBlockerTaskPlanResult,
 )
+
+# `windows analyst` and `windows corpus-guard` default to the Ghidra-parity
+# baselines under data/baselines/windows-ghidra-parity/ and to the vendor corpus
+# under samples/binaries/, all Git LFS objects. The paths live in the CLI's
+# argument defaults, where tools/gen_test_facets.py cannot see them, so the
+# requirement is declared here; the generator reads it and tiers the file `lfs`.
+pytestmark = pytest.mark.lfs
 
 
 def _packet() -> WindowsReviewPacket:
