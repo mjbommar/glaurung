@@ -17,6 +17,7 @@ produced against `master` @ `b8884687` on 2026-09-02.
 
 | file | date | what it recorded | superseded by / known-false claims |
 |---|---|---|---|
+| [ci-recovery-2026-09-24.md](ci-recovery-2026-09-24.md) | 2026-09-24 | returning master's CI lanes to evidence: type/format/doc gates, build lanes, honest test tiers, ratchet refreshes, and merged decompiler repairs with bisected culprits | the open-regression list is a snapshot; the fixture baseline refresh and the WIP branches it names were still pending |
 | [master-wrap-2026-09-17.md](master-wrap-2026-09-17.md) | 2026-09-17 | canonical-checkout outstanding-work review, non-destructive master integration, CET relocation helper and validation limits | dated delivery evidence; whole Python terminal result and inherited gate repairs remain follow-up work |
 | [pyext-separation-2024-12.md](pyext-separation-2024-12.md) | 2025-09-03 | December-2024 plan to move all PyO3 code behind a `src/py/` boundary | `src/py/` was never created; core modules still carry `#[pyclass]`; its "keep `.pyi` stubs in sync" advice is reversed by the current never-hand-write-a-`.pyi` rule. The `cfg_attr(feature, pymethods)` gotcha it records is real and still true |
 | [tutorial-plan-2026-04.md](tutorial-plan-2026-04.md) | 2026-08-05 | the tutorial track's design: 64 task IDs, chapter tree, and open GAPs | superseded as a plan by the shipped tutorial; its §CC precedence ladder is one of four mutually inconsistent copies and is wrong (the code's ladder is in `llm/kb/provenance.py`); its line-427 sample path does not exist |
