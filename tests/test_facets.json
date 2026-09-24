@@ -1,11 +1,11 @@
 {
  "note": "Test files classified by what they NEED. Applied as pytest markers by python/tests/conftest.py. Regenerate with tools/gen_test_facets.py; do not hand-edit.",
  "counts": {
-  "core": 315,
+  "core": 314,
   "lfs": 133,
-  "fixtures": 41,
+  "fixtures": 42,
   "toolchain": 40,
-  "docker": 20,
+  "docker": 21,
   "llm": 5,
   "decbench": 5
  },
@@ -296,7 +296,8 @@
    "fixtures"
   ],
   "test_decompiler_defuse_census.py": [
-   "core"
+   "fixtures",
+   "docker"
   ],
   "test_decompiler_determinism.py": [
    "core"

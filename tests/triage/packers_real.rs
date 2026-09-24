@@ -255,9 +255,12 @@ fn test_packer_scan_limits() {
             pos
         );
 
-        // Should complete quickly even for large files
+        // A sanity bound, not a benchmark (`cargo bench --bench triage` is the
+        // measurement). This runs unoptimised on shared CI runners, where a
+        // 100 ms limit failed at 121 ms; two seconds still catches a scan that
+        // went quadratic.
         assert!(
-            duration.as_millis() < 100,
+            duration.as_millis() < 2_000,
             "Scan took too long: {:?}",
             duration
         );

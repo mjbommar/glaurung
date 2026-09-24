@@ -41,7 +41,11 @@ sys.path.insert(0, str(ROOT / "tests" / "decompiler_fixtures"))
 import defuse as D
 
 BASELINE = ROOT / "tests" / "decompiler_fixtures" / "defuse_baseline.json"
-pytestmark = pytest.mark.slow
+# `defuse` compiles its corpus through the pinned Docker toolchain
+# (`fixture_toolchain`), which the facet rules cannot see from this file, so
+# say it here: without these the file ran in `python-core` and errored
+# trying to build the image. The census is a by-hand gate (CLAUDE.md).
+pytestmark = [pytest.mark.slow, pytest.mark.docker, pytest.mark.fixtures]
 
 
 @pytest.fixture(scope="session")
