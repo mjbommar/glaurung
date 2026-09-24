@@ -52,7 +52,9 @@ def test_address_taken_cpp_stack_objects_round_trip(compiler: str) -> None:
     functions = D.exported_functions(str(binary))
     code = D.decompiled_c(str(binary), functions["cpp_ctor_dtor"])
     assert code is not None
-    storage = re.search(r"unsigned char local_20\[(\d+)\];", code)
+    # The object is the source's `Tracer t`; DWARF names it, so the frame
+    # coordinate spelling `local_20` is only the stripped-name fallback.
+    storage = re.search(r"unsigned char (?:local_20|t)\[(\d+)\];", code)
     assert storage is not None, code
     assert int(storage.group(1)) >= 16, code
 
