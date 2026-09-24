@@ -205,8 +205,206 @@ fn fold_expr(expr: &mut Expr, targets: &HashMap<u64, u64>) {
     }
 }
 
+/// Turn an x86 `call *slot(%rip)` through a GOT slot this image fills with one
+/// of its OWN function entries into a direct call to that entry, on LLIR.
+///
+/// [`fold_got_pointer_loads`] makes the same substitution, but on the AST —
+/// after the per-caller direct-callee analysis has already run over LLIR
+/// `CallTarget::Direct` targets only. A GOT-resolved callee therefore reached
+/// the renderer by NAME with no recovered layout: the call site guessed its
+/// arguments while the callee's own definition carried its real prototype.
+/// Rust `cdylib`s call every `std` helper this way (`call
+/// *__rust_dealloc@GOTPCREL(%rip)`), so once GOT targets resolved through
+/// `.rela.dyn` (`4f6762bc`) a caller rendered `__rust_dealloc(p)` beside a
+/// `__rust_dealloc` defined with a different arity, and the differential unit
+/// stopped compiling.
+///
+/// Only the one-instruction shape is rewritten: the pointer load and the call
+/// share a machine address, so nothing can observe or redefine the loaded
+/// pointer in between, and the load is left in place for liveness. The target
+/// must be a discovered function entry (`is_function_entry`); a slot resolving
+/// to data is not a call target this pass can vouch for.
+pub fn devirtualize_got_calls(
+    function: &mut crate::ir::types::LlirFunction,
+    targets: &HashMap<u64, u64>,
+    is_function_entry: impl Fn(u64) -> bool,
+) {
+    use crate::ir::types::{CallEffects, CallTarget, LlirInstr, Op, Value};
+    if targets.is_empty() {
+        return;
+    }
+    for block in &mut function.blocks {
+        let block_ends_function = block.succs.is_empty();
+        let last = block.instrs.len().saturating_sub(1);
+        let mut tail_return_at = None;
+        for index in 1..block.instrs.len() {
+            let (before, after) = block.instrs.split_at_mut(index);
+            let load = &before[index - 1];
+            let transfer = &mut after[0];
+            if load.va != transfer.va {
+                continue;
+            }
+            let Op::Load { dst, addr } = &load.op else {
+                continue;
+            };
+            if addr.base.is_some()
+                || addr.index.is_some()
+                || addr.segment.is_some()
+                || !matches!(addr.size, 4 | 8)
+                || addr.disp < 0
+            {
+                continue;
+            }
+            let Some(&entry) = targets.get(&(addr.disp as u64)) else {
+                continue;
+            };
+            if !is_function_entry(entry) {
+                continue;
+            }
+            match &mut transfer.op {
+                Op::Call { target, .. } => {
+                    if matches!(target, CallTarget::Indirect(Value::Reg(register)) if register == dst)
+                    {
+                        *target = CallTarget::Direct(entry);
+                    }
+                }
+                // `jmp *slot(%rip)` ending the function: the same sibling call
+                // `lift_function::recover_proven_direct_tail_calls` makes of a
+                // direct `jmp`, so its argument registers stay live.
+                Op::IndirectJump {
+                    target: Value::Reg(register),
+                    index: None,
+                } if register == dst && index == last && block_ends_function => {
+                    transfer.op = Op::Call {
+                        target: CallTarget::Direct(entry),
+                        effects: Some(CallEffects {
+                            is_tail_call: true,
+                            ..CallEffects::default()
+                        }),
+                    };
+                    tail_return_at = Some(transfer.va);
+                }
+                _ => {}
+            }
+        }
+        if let Some(va) = tail_return_at {
+            block.instrs.push(LlirInstr { va, op: Op::Return });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    fn got_call_function(slot: i64) -> crate::ir::types::LlirFunction {
+        use crate::ir::types::{
+            CallTarget, LlirBlock, LlirFunction, LlirInstr, MemOp, Op, VReg, Value,
+        };
+        LlirFunction {
+            entry_va: 0x23510,
+            blocks: vec![LlirBlock {
+                start_va: 0x2355d,
+                end_va: 0x23563,
+                instrs: vec![
+                    LlirInstr {
+                        va: 0x2355d,
+                        op: Op::Load {
+                            dst: VReg::phys("t0"),
+                            addr: MemOp::plain(None, None, 1, slot, 8),
+                        },
+                    },
+                    LlirInstr {
+                        va: 0x2355d,
+                        op: Op::Call {
+                            target: CallTarget::Indirect(Value::Reg(VReg::phys("t0"))),
+                            effects: None,
+                        },
+                    },
+                ],
+                succs: vec![],
+            }],
+        }
+    }
+
+    fn call_target(function: &crate::ir::types::LlirFunction) -> crate::ir::types::CallTarget {
+        match &function.blocks[0].instrs[1].op {
+            crate::ir::types::Op::Call { target, .. } => target.clone(),
+            other => panic!("not a call: {other:?}"),
+        }
+    }
+
+    /// `170_rust_panic_unwind-rustc-O2.so` at 0x2355d: `call *0x34705(%rip)`,
+    /// slot 0x57c68, which `.rela.dyn` fills with `__rust_dealloc` (0x7470).
+    #[test]
+    fn got_call_to_an_own_function_entry_becomes_direct() {
+        let mut function = got_call_function(0x57c68);
+        let targets = HashMap::from([(0x57c68, 0x7470)]);
+        super::devirtualize_got_calls(&mut function, &targets, |va| va == 0x7470);
+        assert_eq!(
+            call_target(&function),
+            crate::ir::types::CallTarget::Direct(0x7470)
+        );
+        // The load stays: it is the machine's own read of the slot.
+        assert!(matches!(
+            function.blocks[0].instrs[0].op,
+            crate::ir::types::Op::Load { .. }
+        ));
+    }
+
+    /// `jmp *0x346e7(%rip)` at 0x2357b, the same slot, ending the function.
+    #[test]
+    fn terminal_got_jump_to_an_own_function_entry_becomes_a_tail_call() {
+        use crate::ir::types::{CallEffects, CallTarget, Op, VReg, Value};
+        let mut function = got_call_function(0x57c68);
+        function.blocks[0].instrs[1].op = Op::IndirectJump {
+            target: Value::Reg(VReg::phys("t0")),
+            index: None,
+        };
+        let targets = HashMap::from([(0x57c68, 0x7470)]);
+        super::devirtualize_got_calls(&mut function, &targets, |va| va == 0x7470);
+        assert!(matches!(
+            function.blocks[0].instrs[1].op,
+            Op::Call {
+                target: CallTarget::Direct(0x7470),
+                effects: Some(CallEffects {
+                    is_tail_call: true,
+                    ..
+                }),
+            }
+        ));
+        assert!(matches!(function.blocks[0].instrs[2].op, Op::Return));
+
+        // A jump with CFG successors is a dispatch, not a sibling call.
+        let mut dispatch = got_call_function(0x57c68);
+        dispatch.blocks[0].instrs[1].op = Op::IndirectJump {
+            target: Value::Reg(VReg::phys("t0")),
+            index: None,
+        };
+        dispatch.blocks[0].succs = vec![0x7470];
+        super::devirtualize_got_calls(&mut dispatch, &targets, |va| va == 0x7470);
+        assert!(matches!(
+            dispatch.blocks[0].instrs[1].op,
+            Op::IndirectJump { .. }
+        ));
+    }
+
+    #[test]
+    fn got_call_to_data_or_an_unknown_slot_stays_indirect() {
+        let targets = HashMap::from([(0x57c68, 0x58088)]);
+        let mut data_target = got_call_function(0x57c68);
+        super::devirtualize_got_calls(&mut data_target, &targets, |va| va == 0x7470);
+        assert!(matches!(
+            call_target(&data_target),
+            crate::ir::types::CallTarget::Indirect(_)
+        ));
+
+        let mut unknown_slot = got_call_function(0x57c70);
+        super::devirtualize_got_calls(&mut unknown_slot, &targets, |_| true);
+        assert!(matches!(
+            call_target(&unknown_slot),
+            crate::ir::types::CallTarget::Indirect(_)
+        ));
+    }
+
     use super::*;
     use crate::ir::ast::{CatchClause, OriginSet};
     use crate::ir::types::VReg;

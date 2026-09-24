@@ -497,9 +497,16 @@ fn is_identity_value(
         return true;
     }
     identities.is_some_and(|identities| {
-        identities
-            .unambiguous_physical_base(&VReg::phys(name))
-            .is_some()
+        let value = VReg::phys(name);
+        // A coalesced value (several SSA versions of one register) may take the
+        // recovered type only when every version is DEFINED at one width. Mixed
+        // widths mean the recovered hint may be the narrowest definition's:
+        // `rustc -O2 iter_take_skip` coalesces `mov $-1,%rax` with `xor
+        // %eax,%eax` into `ret`, the hint says four bytes, and `unsigned int ret
+        // = -1` returned 4294967295 from an `i64` function.
+        identities.exact(&value).is_some()
+            || (identities.unambiguous_physical_base(&value).is_some()
+                && identities.unambiguous_definition_width(&value).is_some())
     })
 }
 
@@ -684,17 +691,36 @@ mod identity_tests {
         let value = VReg::phys("opaque_value");
         let mut identities = crate::ir::value_number::ValueIdentities::default();
         for version in [1, 2] {
-            identities.record(
-                value.clone(),
-                crate::ir::ssa::SsaValue {
-                    base: VReg::phys("rax"),
-                    version,
-                },
-            );
+            let identity = crate::ir::ssa::SsaValue {
+                base: VReg::phys("rax"),
+                version,
+            };
+            identities.record(value.clone(), identity.clone());
+            identities.attach_definition_width(&identity, 8);
         }
 
         assert!(identities.exact(&value).is_none());
         assert_eq!(planned_opaque_type(&identities), "char *");
+    }
+
+    /// `mov $-1,%rax` and `xor %eax,%eax` coalesced into one `ret`: the
+    /// versions disagree on definition width, so the recovered (narrowest)
+    /// hint must not become the declaration.
+    #[test]
+    fn coalesced_mixed_width_identity_keeps_machine_word_declaration() {
+        let value = VReg::phys("opaque_value");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for (version, width) in [(1, 8), (2, 4)] {
+            let identity = crate::ir::ssa::SsaValue {
+                base: VReg::phys("rax"),
+                version,
+            };
+            identities.record(value.clone(), identity.clone());
+            identities.attach_definition_width(&identity, width);
+        }
+
+        assert!(identities.unambiguous_physical_base(&value).is_some());
+        assert_ne!(planned_opaque_type(&identities), "char *");
     }
 
     #[test]

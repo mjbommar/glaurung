@@ -371,7 +371,19 @@ pub(super) fn discover_function(
                         && tgt != entry.value
                         && is_exec_target
                         && facts.target_is_plt_stub(tgt);
-                    if is_pe_tail_target || is_elf_x86_tail_target || is_elf_plt_tail_target {
+                    let is_elf_symbol_tail_target = unconditional
+                        // Only the pure thunk shape: the jump IS the function's
+                        // first instruction. See `elf_x86_symbol_tail_target`.
+                        && cur_va == entry.value
+                        && !facts.owns(tgt)
+                        && tgt != entry.value
+                        && is_exec_target
+                        && elf_x86_symbol_tail_target(facts.image, data, tgt, arch);
+                    if is_pe_tail_target
+                        || is_elf_x86_tail_target
+                        || is_elf_plt_tail_target
+                        || is_elf_symbol_tail_target
+                    {
                         call_edges.push(FunctionXref {
                             callsite_va: cur_va,
                             target_va: tgt,

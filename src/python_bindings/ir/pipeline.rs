@@ -547,6 +547,10 @@ pub(super) fn run_ast_passes(
         })
         .map(|(target, layout)| (*target, layout.clone()))
         .collect::<std::collections::HashMap<_, _>>();
+    let tail_call_arities = reconstruction_layouts
+        .iter()
+        .map(|(target, layout)| (*target, layout.len()))
+        .collect::<std::collections::HashMap<_, _>>();
     let mut parameter_roles = prototype
         .map(crate::ir::types_recover::RecoveredPrototype::parameter_role_map)
         .unwrap_or_default();
@@ -618,6 +622,7 @@ pub(super) fn run_ast_passes(
             f,
             cc,
             addr_map,
+            &tail_call_arities,
             value_identities,
         );
         crate::ir::call_args::recover_resolved_tail_calls_with_identities(f, cc, value_identities);
@@ -1162,6 +1167,16 @@ pub(super) fn decompile_function(
     let mut raw = crate::ir::lift_function::lift_function_from_image(image, discovered)
         .map_err(|error| FunctionPipelineError::Lift(error.to_string()))?;
     stages.advance("lift", PipelineStage::Start, PipelineStage::Lifted)?;
+    // Before callee facts: a call through a GOT slot this image fills with its
+    // own function is a direct call, and must get that callee's layout exactly
+    // as a `call rel32` would. See `ir::got_fold::devirtualize_got_calls`.
+    crate::ir::got_fold::devirtualize_got_calls(&mut raw, got_targets, |va| {
+        functions
+            .iter()
+            .any(|function| function.entry_point.value == va)
+            || (image.defined_symbol_name_at(va).is_some()
+                && image.executable_ranges().any(|range| range.contains(&va)))
+    });
     let mut callee_facts = prepare_direct_callee_facts(
         image,
         functions,

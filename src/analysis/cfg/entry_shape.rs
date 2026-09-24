@@ -100,6 +100,45 @@ pub(super) fn elf_x86_tail_target_looks_like_function_start(
         || matches!(after_landing_pad, [0x53 | 0x55 | 0x56 | 0x57, ..])
 }
 
+/// Does an x86 ELF direct-jump target begin a function the object's own symbol
+/// table defines?
+///
+/// Code built without CET (every `rustc` object, jammy `clang`) has no ENDBR for
+/// [`elf_x86_tail_target_looks_like_function_start`] to find, so a sibling call
+/// such as `__rust_dealloc: jmp __rdl_dealloc` was walked as an intra-function
+/// branch. The thunk then had no call, no callee, and therefore no parameters:
+/// it rendered as `long __rust_dealloc(void)` beside callers passing three
+/// arguments, and every Rust differential unit that included it stopped
+/// compiling. A defined TEXT symbol starting exactly at the target is the same
+/// independent entry evidence the CET landing pad is. A `.cold` symbol is not:
+/// GCC names the split-off cold part of the SAME function that way, and a jump
+/// into it is a local branch.
+///
+/// The caller (`walk::discover_function`) applies this only to a jump that IS
+/// the function's first instruction — the thunk shape. Applied to every
+/// terminal jump it also split non-CET `clang -O2` sibling calls out of their
+/// callers, which moved the `cfr-normalized` XC-O2 retrieval AUC below its
+/// ratchet (0.885345 < 0.8855, `cargo test --features python-ext --test
+/// identity_retrieval normalized_cfr_retrieval_ratchets`); that is a separate
+/// decision with its own evidence, not a side effect of this one.
+pub(super) fn elf_x86_symbol_tail_target(
+    image: Option<&crate::program::image::ProgramImage>,
+    data: &[u8],
+    target_va: u64,
+    arch: BArch,
+) -> bool {
+    if !matches!(arch, BArch::X86 | BArch::X86_64) || !data.starts_with(b"\x7fELF") {
+        return false;
+    }
+    let Some(image) = image else {
+        return false;
+    };
+    let Some(name) = image.defined_symbol_name_at(target_va) else {
+        return false;
+    };
+    !name.contains(".cold") && image.defined_text_symbol_address(name) == Some(target_va)
+}
+
 /// Heuristic: does `data[file_off..]` look like the start of a real
 /// function?
 ///

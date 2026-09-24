@@ -106,7 +106,7 @@ use dispatch_resolution::resolve_dispatch;
 // deliberately NOT in the list: `scan` names it only from `prologue_gate_tests`,
 // so importing it here is an unused import in the shipped build.
 use entry_shape::{
-    classify_function_shapes, classify_pe_thunk_head,
+    classify_function_shapes, classify_pe_thunk_head, elf_x86_symbol_tail_target,
     elf_x86_tail_target_looks_like_function_start, has_function_boundary_marker,
     head_looks_like_fn_start, pe_head_looks_like_simd_continuation,
     pe_tail_target_looks_like_function_start, pe_xref_seed_looks_like_function_start,

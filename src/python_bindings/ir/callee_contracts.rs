@@ -197,6 +197,58 @@ fn refine_call_boundary_from_declared(
     }
 }
 
+/// Keep a non-C callee's live-in argument registers at its call sites.
+///
+/// A DWARF prototype LOCKS the arity the callee analysis reports, but for a
+/// language ABI that DWARF arity does not describe the machine boundary: a Rust
+/// closure's DWARF can list no parameter while its body reads the environment
+/// pointer in `%rdi`, and a `#[track_caller]` function such as `panic_fmt`
+/// receives a hidden `Location` in `%rsi` that DWARF omits. The callee's own
+/// DEFINITION is rendered from its live-in registers (every entry value keeps
+/// its ABI slot, `value_number::attach_abi_parameter_slots`), so a caller using
+/// the locked arity passed `panic_fmt(fmt)` to a `panic_fmt(long arg0, long
+/// arg1)`, and the unit containing both did not compile. Extending the call
+/// layout to the same register prefix makes the two agree. C and C++ keep the
+/// lock: their DWARF IS the platform ABI.
+fn extend_locked_language_abi_layout(
+    layout: &mut Vec<crate::ir::types::VReg>,
+    call_prototype: &mut crate::ir::call_contracts::CallPrototype,
+    prototype: &crate::ir::types_recover::RecoveredPrototype,
+    live_slots: &std::collections::HashSet<usize>,
+    cc: crate::ir::call_args::CallConv,
+    source_uses_platform_c_abi: bool,
+) {
+    if source_uses_platform_c_abi
+        || cc != crate::ir::call_args::CallConv::SysVAmd64
+        || !prototype.parameter_arity_is_locked()
+        || call_prototype.variadic
+        || call_prototype.parameter_types.len() != layout.len()
+    {
+        return;
+    }
+    let registers = crate::ir::abi::argument_slots(cc);
+    let Some(highest) = live_slots
+        .iter()
+        .copied()
+        .filter(|slot| *slot < registers.len())
+        .max()
+    else {
+        return;
+    };
+    // Only a pure register prefix is extended: a layout already holding
+    // anything but the ordinary integer registers in slot order is a shape
+    // this function does not claim to understand.
+    if layout.iter().zip(registers.iter()).any(
+        |(value, names)| !matches!(value, crate::ir::types::VReg::Phys(name) if name == names[0]),
+    ) {
+        return;
+    }
+    for names in registers.iter().take(highest + 1).skip(layout.len()) {
+        layout.push(crate::ir::types::VReg::phys(names[0]));
+        call_prototype.parameter_types.push("long".to_string());
+    }
+}
+
 fn source_uses_platform_c_abi(image: &crate::program::image::ProgramImage, body_va: u64) -> bool {
     image
         .dwarf_functions()
@@ -1180,6 +1232,14 @@ fn recover_direct_callee_definition(
         .map(|parameter| parameter.value.base.clone())
         .collect::<Vec<_>>();
     let mut call_prototype = recovered_call_prototype(&prototype, cc);
+    extend_locked_language_abi_layout(
+        &mut layout,
+        &mut call_prototype,
+        &prototype,
+        &parameter_slots,
+        cc,
+        source_uses_platform_c_abi(image, body_va),
+    );
     let fixed_prefix = crate::ir::abi::fixed_parameter_prefix_len(cc, &layout);
     layout.truncate(fixed_prefix);
     call_prototype.parameter_types.truncate(fixed_prefix);
@@ -1239,6 +1299,11 @@ pub(super) fn recover_direct_callee_layouts(
     cache: &mut std::collections::HashMap<u64, Option<RecoveredDirectCallee>>,
 ) -> DirectCalleeFacts {
     let mut facts = DirectCalleeFacts::default();
+    let local_blocks = caller
+        .blocks
+        .iter()
+        .map(|block| block.start_va)
+        .collect::<std::collections::HashSet<_>>();
     let callees: std::collections::BTreeSet<u64> = caller
         .blocks
         .iter()
@@ -1248,6 +1313,22 @@ pub(super) fn recover_direct_callee_layouts(
                 target: crate::ir::types::CallTarget::Direct(address),
                 ..
             } => Some(address),
+            // A branch leaving this function for another function's entry is
+            // a sibling call the AST later recovers (conditional ones never
+            // reach `lift_function`'s terminal-jump conversion). Its argument
+            // count must come from the same callee analysis as a `call`'s.
+            crate::ir::types::Op::Jump { target }
+            | crate::ir::types::Op::CondJump { target, .. }
+                if !local_blocks.contains(&target)
+                    && (functions
+                        .iter()
+                        .any(|function| function.entry_point.value == target)
+                        || image.defined_symbol_name_at(target).is_some_and(|name| {
+                            image.defined_text_symbol_address(name) == Some(target)
+                        })) =>
+            {
+                Some(target)
+            }
             _ => None,
         })
         .collect();
@@ -1477,6 +1558,64 @@ fn recover_table_entry_layouts(
 #[cfg(test)]
 mod tests {
     use crate::ir::call_contracts::{CallPrototype, CallPrototypeAuthority};
+
+    fn locked_two_int_prototype() -> crate::ir::types_recover::RecoveredPrototype {
+        let mut prototype = crate::ir::types_recover::RecoveredPrototype::default();
+        let int = Some(crate::ir::types_recover::TypeHint::Int {
+            signed: true,
+            width: 4,
+        });
+        prototype.apply_locked_parameters(crate::ir::call_args::CallConv::SysVAmd64, &[int, int]);
+        assert!(prototype.parameter_arity_is_locked());
+        prototype
+    }
+
+    fn extended(
+        live: &[usize],
+        platform_c_abi: bool,
+    ) -> (Vec<crate::ir::types::VReg>, CallPrototype) {
+        let prototype = locked_two_int_prototype();
+        let mut layout = prototype
+            .parameters()
+            .iter()
+            .map(|parameter| parameter.value.base.clone())
+            .collect::<Vec<_>>();
+        let mut call =
+            super::recovered_call_prototype(&prototype, crate::ir::call_args::CallConv::SysVAmd64);
+        super::extend_locked_language_abi_layout(
+            &mut layout,
+            &mut call,
+            &prototype,
+            &live.iter().copied().collect(),
+            crate::ir::call_args::CallConv::SysVAmd64,
+            platform_c_abi,
+        );
+        (layout, call)
+    }
+
+    /// `rustc -O2` `fold_generic`: DWARF locks `(v, n)`, the body also reads
+    /// `%rdx` at entry, and the definition renders three parameters. Every
+    /// call site must pass three too.
+    #[test]
+    fn locked_rust_callee_layout_keeps_its_live_in_register_prefix() {
+        let (layout, call) = extended(&[0, 1, 2], false);
+        assert_eq!(
+            layout,
+            vec![
+                crate::ir::types::VReg::phys("rdi"),
+                crate::ir::types::VReg::phys("rsi"),
+                crate::ir::types::VReg::phys("rdx"),
+            ]
+        );
+        assert_eq!(call.parameter_types.len(), 3);
+    }
+
+    #[test]
+    fn locked_c_callee_layout_is_the_declaration() {
+        let (layout, call) = extended(&[0, 1, 2], true);
+        assert_eq!(layout.len(), 2);
+        assert_eq!(call.parameter_types.len(), 2);
+    }
 
     fn table(targets: &[u64]) -> crate::ir::function_tables::FunctionPointerTable {
         crate::ir::function_tables::FunctionPointerTable {

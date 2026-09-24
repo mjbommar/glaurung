@@ -124,27 +124,46 @@ pub fn recover_resolved_direct_tail_calls(
     arch: CallConv,
     names: &std::collections::HashMap<u64, String>,
 ) {
-    recover_resolved_direct_tail_calls_impl(f, arch, names, TailCallAuthority::LegacySpelling);
+    recover_resolved_direct_tail_calls_impl(
+        f,
+        arch,
+        names,
+        &std::collections::HashMap::new(),
+        TailCallAuthority::LegacySpelling,
+    );
 }
 
+/// `arities` holds the recovered parameter count of callees whose layout the
+/// caller's direct-callee analysis proved. A jump to one of them forwards
+/// exactly that many argument registers; forwarding the whole ABI bank to a
+/// one-parameter `drop_in_place` rendered `f(var0, ..., var5)` against a
+/// one-parameter definition in the same unit.
 pub(crate) fn recover_resolved_direct_tail_calls_with_identities(
     f: &mut Function,
     arch: CallConv,
     names: &std::collections::HashMap<u64, String>,
+    arities: &std::collections::HashMap<u64, usize>,
     identities: &ValueIdentities,
 ) {
-    recover_resolved_direct_tail_calls_impl(f, arch, names, TailCallAuthority::Exact(identities));
+    recover_resolved_direct_tail_calls_impl(
+        f,
+        arch,
+        names,
+        arities,
+        TailCallAuthority::Exact(identities),
+    );
 }
 
 fn recover_resolved_direct_tail_calls_impl(
     f: &mut Function,
     arch: CallConv,
     names: &std::collections::HashMap<u64, String>,
+    arities: &std::collections::HashMap<u64, usize>,
     authority: TailCallAuthority<'_>,
 ) {
     let mut local_labels = std::collections::HashSet::new();
     collect_labels(&f.body, &mut local_labels);
-    recover_direct_tail_calls_in_body(&mut f.body, arch, names, &local_labels, authority);
+    recover_direct_tail_calls_in_body(&mut f.body, arch, names, arities, &local_labels, authority);
 }
 
 fn collect_labels(body: &[Stmt], labels: &mut std::collections::HashSet<u64>) {
@@ -203,6 +222,7 @@ fn recover_direct_tail_calls_in_body(
     body: &mut Vec<Stmt>,
     arch: CallConv,
     names: &std::collections::HashMap<u64, String>,
+    arities: &std::collections::HashMap<u64, usize>,
     local_labels: &std::collections::HashSet<u64>,
     authority: TailCallAuthority<'_>,
 ) {
@@ -214,44 +234,80 @@ fn recover_direct_tail_calls_in_body(
                 else_body,
                 ..
             } => {
-                recover_direct_tail_calls_in_body(then_body, arch, names, local_labels, authority);
+                recover_direct_tail_calls_in_body(
+                    then_body,
+                    arch,
+                    names,
+                    arities,
+                    local_labels,
+                    authority,
+                );
                 if let Some(else_body) = else_body {
                     recover_direct_tail_calls_in_body(
                         else_body,
                         arch,
                         names,
+                        arities,
                         local_labels,
                         authority,
                     );
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                recover_direct_tail_calls_in_body(body, arch, names, local_labels, authority)
+                recover_direct_tail_calls_in_body(
+                    body,
+                    arch,
+                    names,
+                    arities,
+                    local_labels,
+                    authority,
+                )
             }
-            Stmt::For { body, .. } => {
-                recover_direct_tail_calls_in_body(body, arch, names, local_labels, authority)
-            }
+            Stmt::For { body, .. } => recover_direct_tail_calls_in_body(
+                body,
+                arch,
+                names,
+                arities,
+                local_labels,
+                authority,
+            ),
             Stmt::Switch { cases, default, .. } => {
                 for (_, case) in cases {
-                    recover_direct_tail_calls_in_body(case, arch, names, local_labels, authority);
+                    recover_direct_tail_calls_in_body(
+                        case,
+                        arch,
+                        names,
+                        arities,
+                        local_labels,
+                        authority,
+                    );
                 }
                 if let Some(default) = default {
                     recover_direct_tail_calls_in_body(
                         default,
                         arch,
                         names,
+                        arities,
                         local_labels,
                         authority,
                     );
                 }
             }
             Stmt::TryCatch { try_body, catches } => {
-                recover_direct_tail_calls_in_body(try_body, arch, names, local_labels, authority);
+                recover_direct_tail_calls_in_body(
+                    try_body,
+                    arch,
+                    names,
+                    arities,
+                    local_labels,
+                    authority,
+                );
                 for catch in catches {
                     recover_direct_tail_calls_in_body(
                         &mut catch.body,
                         arch,
                         names,
+                        arities,
                         local_labels,
                         authority,
                     );
@@ -277,14 +333,15 @@ fn recover_direct_tail_calls_in_body(
 
     let mut index = 0;
     while index < body.len() {
-        let callee = match body[index].semantic() {
-            Stmt::Goto { target } if !local_labels.contains(target) => {
+        let (callee, arity) = match body[index].semantic() {
+            Stmt::Goto { target } if !local_labels.contains(target) => (
                 names.get(target).map(|name| Expr::Named {
                     va: *target,
                     name: name.clone(),
-                })
-            }
-            _ => None,
+                }),
+                arities.get(target).copied(),
+            ),
+            _ => (None, None),
         };
         let Some(callee) = callee else {
             index += 1;
@@ -297,7 +354,7 @@ fn recover_direct_tail_calls_in_body(
         let args = if has_local_setup {
             Vec::new()
         } else {
-            (0..arg_slots(arch).len())
+            (0..arity.unwrap_or(arg_slots(arch).len()))
                 .map(|slot| Expr::Reg(VReg::phys(format!("arg{slot}"))))
                 .collect()
         };
@@ -977,6 +1034,7 @@ mod tests {
             &mut exact,
             CallConv::SysVAmd64,
             &names,
+            &std::collections::HashMap::new(),
             &identities,
         );
         assert!(matches!(&exact.body[1], Stmt::Call { args, .. } if args.is_empty()));
@@ -986,9 +1044,25 @@ mod tests {
             &mut misleading,
             CallConv::SysVAmd64,
             &names,
+            &std::collections::HashMap::new(),
             &identities,
         );
         assert!(matches!(&misleading.body[1], Stmt::Call { args, .. } if args.len() == 6));
+
+        // With the callee's recovered layout known, forward exactly that many.
+        let mut known = caller("rdi#1");
+        let target = match &known.body[1] {
+            Stmt::Goto { target } => *target,
+            other => panic!("fixture is not a jump: {other:?}"),
+        };
+        recover_resolved_direct_tail_calls_with_identities(
+            &mut known,
+            CallConv::SysVAmd64,
+            &names,
+            &std::collections::HashMap::from([(target, 1)]),
+            &identities,
+        );
+        assert!(matches!(&known.body[1], Stmt::Call { args, .. } if args.len() == 1));
     }
 
     #[test]

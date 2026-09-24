@@ -1437,6 +1437,80 @@ mod tests {
         assert!(matches!(blocks[0].instrs[2].op, Op::Return));
     }
 
+    /// Compiled, not hand-built: a non-CET thunk's `jmp` to a symbol-defined
+    /// function is a tail call, while a jump into `hot.cold` stays local.
+    #[test]
+    fn non_cet_symbol_thunk_is_a_tail_call_but_a_cold_part_is_not() {
+        use crate::program::image::ProgramImage;
+        use std::process::Command;
+        let directory = tempfile::tempdir().expect("thunk fixture directory");
+        let binary = directory.path().join("thunk.elf");
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/cfg/symbol_tail_thunk.S");
+        let output = Command::new("clang")
+            .args([
+                "--target=x86_64-linux-gnu",
+                "-nostdlib",
+                "-no-pie",
+                "-Wl,-e,tail_caller",
+                "-o",
+            ])
+            .arg(&binary)
+            .arg(source)
+            .output()
+            .expect("compile real thunk fixture");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let image = ProgramImage::from_bytes(std::fs::read(binary).expect("read fixture"))
+            .expect("index fixture");
+        let address = |name| {
+            image
+                .unique_defined_text_symbol_address(name)
+                .expect("fixture symbol")
+        };
+        let lift = |name| {
+            let function = crate::analysis::cfg::discover_function_image_at(
+                &image,
+                &crate::analysis::cfg::Budgets::default(),
+                address(name),
+            )
+            .expect("fixture CFG");
+            lift_function_from_image(&image, &function).expect("lift fixture")
+        };
+
+        let real = address("real_dealloc");
+        let thunk = lift("dealloc_thunk");
+        let ops = thunk
+            .blocks
+            .iter()
+            .flat_map(|block| block.instrs.iter().map(|instruction| &instruction.op))
+            .collect::<Vec<_>>();
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                Op::Call {
+                    target: CallTarget::Direct(target),
+                    effects: Some(CallEffects { is_tail_call: true, .. }),
+                } if *target == real
+            )),
+            "the thunk's jump must be a tail call to real_dealloc: {ops:?}"
+        );
+        assert!(
+            thunk.blocks.iter().all(|block| block.start_va != real),
+            "real_dealloc's body must not be absorbed into the thunk"
+        );
+
+        let cold = address("hot.cold");
+        let hot = lift("hot");
+        assert!(
+            hot.blocks.iter().any(|block| block.start_va == cold),
+            "a jump into the function's own .cold part is a local branch"
+        );
+    }
+
     #[test]
     fn local_direct_jump_remains_control_flow() {
         let entry = crate::core::address::Address::new(
