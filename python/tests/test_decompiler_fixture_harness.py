@@ -1281,7 +1281,13 @@ def test_real_callee_contract_does_not_cross_an_explicit_integer_conversion():
 
     assert decompiled is not None
     signature = decompiled.splitlines()[0]
-    assert "forward_narrow(unsigned int arg0)" in signature, decompiled
+    # The property is the WIDTH at the conversion boundary: a 32-bit input,
+    # not the callee's 64-bit type. Its signedness is deliberately unresolved
+    # since 8bf704f4 (WP6 per-use signedness, docs/history/
+    # decompiler-review-2026-09-02/results/wp6-per-use-signedness.md): a
+    # 32-to-64-bit x86 zero-extension is neutral evidence, so `int` and
+    # `unsigned int` are both faithful declarations here.
+    assert re.search(r"forward_narrow\((?:unsigned )?int arg0\)", signature), decompiled
     assert "forward_narrow(unsigned long arg0)" not in signature, decompiled
 
 
@@ -1304,8 +1310,16 @@ def test_real_pointer_contract_does_not_cross_a_zero_extension():
 
     assert decompiled is not None
     signature = decompiled.splitlines()[0]
-    assert "forward_address(unsigned int arg0)" in signature, decompiled
-    assert "forward_address(char * arg0)" not in signature, decompiled
+    # The property is the WIDTH at the conversion boundary: a 32-bit input,
+    # not the callee's 64-bit type. Its signedness is deliberately unresolved
+    # since 8bf704f4 (WP6 per-use signedness, docs/history/
+    # decompiler-review-2026-09-02/results/wp6-per-use-signedness.md): a
+    # 32-to-64-bit x86 zero-extension is neutral evidence, so `int` and
+    # `unsigned int` are both faithful declarations here.
+    assert re.search(r"forward_address\((?:unsigned )?int arg0\)", signature), (
+        decompiled
+    )
+    assert not re.search(r"forward_address\(char \*\s*arg0\)", signature), decompiled
 
 
 def test_real_known_memcpy_output_declares_a_self_contained_library_prototype():
@@ -1503,7 +1517,8 @@ def test_real_pointer_parameter_arithmetic_has_a_pointer_boundary():
     function_va = D.exported_functions(binary)["advance_pointer"]
     decompiled = D.decompiled_c(binary, function_va)
     assert decompiled is not None
-    assert "advance_pointer(char * cursor" in decompiled, decompiled
+    # Declarators are source-shaped (`char *cursor`) since 38f3f6cc.
+    assert re.search(r"advance_pointer\(char \*\s*cursor", decompiled), decompiled
     assert "cursor = (char *)" in decompiled, decompiled
 
     with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
@@ -1618,7 +1633,14 @@ def test_real_pointer_word_select_call_converts_each_conditional_arm():
     assert decompiled is not None
     assert '"glaurung-call-select"' in decompiled, decompiled
     assert " ? " in decompiled, decompiled
-    assert '(void *)("glaurung-call-select")' in decompiled, decompiled
+    # A string literal is already a pointer arm; since 38f3f6cc the
+    # source-shaped renderer no longer spells a redundant `(void *)` on it.
+    # The property is that BOTH arms are pointers, which the
+    # `-Werror=int-conversion` rebuild below decides.
+    assert re.search(
+        r'\? (?:\(void \*\)\()?"glaurung-call-select"|: (?:\(void \*\)\()?"glaurung-call-select"',
+        decompiled,
+    ), decompiled
 
     with tempfile.TemporaryDirectory(**WORKDIR_KW) as td:
         source_path = Path(td) / "pointer_word_select_call.c"
@@ -2141,7 +2163,7 @@ def test_struct_signatures_are_executed_at_the_real_sysv_abi(monkeypatch):
     monkeypatch.setattr(
         D,
         "decompiled_c",
-        lambda _b, va: recovered[
+        lambda _b, va, shadow_v2=False: recovered[
             next(name for name, sig in sigs.items() if sig["va"] == va)
         ],
     )
