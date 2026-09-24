@@ -7,7 +7,10 @@ use sha2::{Digest, Sha256};
 
 use super::capsule::{PageContent, ProcessCapsule, RuntimeObjectKind};
 use super::correlation::StaticValueExpression;
-use super::correlation::{resolve_runtime_address, AddressResolution, FunctionResolution};
+use super::correlation::{
+    resolve_runtime_address, resolve_static_code, resolve_static_function, AddressResolution,
+    FunctionResolution, StaticCodeResolution,
+};
 use super::crash::Evidence;
 use super::event_correlation::{correlate_input_events, OperationOccurrence};
 use super::instruction_trace::analyze_instruction_trace;
@@ -1269,6 +1272,117 @@ fn unknown_tuple(reason: &str) -> RelationEvidence {
     )
 }
 
+/// One `[saved rbp][return address]` record pushed by a callee of `main`.
+struct MainFrameRecord {
+    function_entry: u64,
+    function_name: Option<String>,
+    frame_pointer: u64,
+    record_address: u64,
+    return_address: u64,
+}
+
+/// Validate the 16 bytes at `cursor` as a frame record pushed by a callee of
+/// `main`, or return `None`.
+///
+/// A value merely resolving into `main` is not a return address: glibc's
+/// start-up frame holds `main`'s own entry address as a function pointer, and
+/// an adjacent stack pointer makes that slot look like a frame record. A
+/// return address is only accepted when the exact-image instruction ending at
+/// it is a `call` inside `main`. The record must also lie wholly below the
+/// frame it names, since a callee's record is pushed beneath its caller's.
+#[allow(clippy::too_many_arguments)]
+fn main_callee_frame_record(
+    capsule: &ProcessCapsule,
+    payloads: &BTreeMap<String, Vec<u8>>,
+    image: &ProgramImage,
+    process_id: &str,
+    memory: &RuntimeMemoryView,
+    return_sites: &mut BTreeMap<u64, Option<(u64, Option<String>)>>,
+    cursor: u64,
+    stack_end: u64,
+) -> Option<MainFrameRecord> {
+    let record = memory.read_runtime_bytes(cursor, 16).ok()?;
+    let next_rbp = u64::from_le_bytes(record[0..8].try_into().ok()?);
+    let return_address = u64::from_le_bytes(record[8..16].try_into().ok()?);
+    if next_rbp < cursor.checked_add(16)?
+        || next_rbp & 7 != 0
+        || next_rbp.saturating_add(16) > stack_end
+    {
+        return None;
+    }
+    let site = match return_sites.get(&return_address) {
+        Some(site) => site.clone(),
+        None => {
+            let site = main_return_site(capsule, payloads, image, process_id, return_address);
+            return_sites.insert(return_address, site.clone());
+            site
+        }
+    };
+    let (function_entry, function_name) = site?;
+    memory.read_runtime_bytes(next_rbp, 16).ok()?;
+    Some(MainFrameRecord {
+        function_entry,
+        function_name,
+        frame_pointer: next_rbp,
+        record_address: cursor,
+        return_address,
+    })
+}
+
+/// Return `main`'s entry and name when `return_address` immediately follows
+/// an exact-image `call` instruction inside `main`.
+fn main_return_site(
+    capsule: &ProcessCapsule,
+    payloads: &BTreeMap<String, Vec<u8>>,
+    image: &ProgramImage,
+    process_id: &str,
+    return_address: u64,
+) -> Option<(u64, Option<String>)> {
+    let AddressResolution::Exact { address } =
+        resolve_runtime_address(capsule, payloads, image, process_id, return_address)
+    else {
+        return None;
+    };
+    // A return address is never a function entry: `Exact` means the value is
+    // `main` itself (a function pointer), not a return into it.
+    let FunctionResolution::Interior {
+        entry_va,
+        name,
+        end_va,
+    } = address.function
+    else {
+        return None;
+    };
+    if name.as_deref() != Some("main") {
+        return None;
+    }
+    let static_return_va = address.static_va;
+    let call_byte = static_return_va.checked_sub(1)?;
+    let function = resolve_static_function(image, call_byte);
+    if !matches!(
+        &function,
+        FunctionResolution::Exact { entry_va: owner, .. }
+            | FunctionResolution::Interior { entry_va: owner, .. }
+            if *owner == entry_va
+    ) {
+        return None;
+    }
+    let StaticCodeResolution::Resolved {
+        instruction_va,
+        instruction_end,
+        mnemonic,
+        ..
+    } = resolve_static_code(image, call_byte, &function)
+    else {
+        return None;
+    };
+    (instruction_va >= entry_va
+        && instruction_end == static_return_va
+        && static_return_va <= end_va
+        && mnemonic.starts_with("call"))
+    .then_some((entry_va, name))
+}
+
 fn relate_one_write(
     capsule: &ProcessCapsule,
     payloads: &BTreeMap<String, Vec<u8>>,
@@ -1313,54 +1427,50 @@ fn relate_one_write(
         return unknown_tuple("checkpoint stack pointer has no unique mapping");
     };
     let scan_end = stack_end.min(rsp.saturating_add(MAX_FRAME_SCAN_BYTES));
-    let mut frame_candidates = BTreeSet::new();
+    let mut return_sites = BTreeMap::new();
+    let mut frame_records = Vec::new();
     let mut cursor = rsp.saturating_add(7) & !7;
     while cursor.saturating_add(16) <= scan_end {
-        let Ok(record) = memory.read_runtime_bytes(cursor, 16) else {
-            cursor = cursor.saturating_add(8);
-            continue;
-        };
-        let next_rbp = u64::from_le_bytes(record[0..8].try_into().expect("eight bytes"));
-        let return_address = u64::from_le_bytes(record[8..16].try_into().expect("eight bytes"));
-        if next_rbp <= cursor || next_rbp & 7 != 0 || next_rbp.saturating_add(16) > stack_end {
-            cursor = cursor.saturating_add(8);
-            continue;
-        }
-        let AddressResolution::Exact { address } =
-            resolve_runtime_address(capsule, payloads, image, process_id, return_address)
-        else {
-            cursor = cursor.saturating_add(8);
-            continue;
-        };
-        let (function_entry, function_name) = match address.function {
-            FunctionResolution::Exact { entry_va, name, .. }
-            | FunctionResolution::Interior { entry_va, name, .. }
-                if name.as_deref() == Some("main") =>
-            {
-                (entry_va, name)
-            }
-            _ => {
-                cursor = cursor.saturating_add(8);
-                continue;
-            }
-        };
-        if memory.read_runtime_bytes(next_rbp, 16).is_ok() {
-            frame_candidates.insert((
-                function_entry,
-                function_name,
-                next_rbp,
-                cursor,
-                return_address,
-            ));
+        if let Some(record) = main_callee_frame_record(
+            capsule,
+            payloads,
+            image,
+            process_id,
+            &memory,
+            &mut return_sites,
+            cursor,
+            stack_end,
+        ) {
+            frame_records.push(record);
         }
         cursor = cursor.saturating_add(8);
     }
-    let frame_candidates = frame_candidates.into_iter().collect::<Vec<_>>();
-    let [candidate] = frame_candidates.as_slice() else {
+    // Every call main makes pushes main's frame pointer beside a return site in
+    // main, so stale records left by earlier callees name the same frame as the
+    // live one. The frame is identified when every validated record agrees on
+    // it; a disagreement is a second frame (or forged evidence) and fails closed.
+    let frames = frame_records
+        .iter()
+        .map(|record| (record.function_entry, record.frame_pointer))
+        .collect::<BTreeSet<_>>();
+    if frames.len() != 1 {
+        return unknown_tuple("checkpoint stack does not identify one unique main frame");
+    }
+    // The live record sits directly below main's frame; stale copies can only
+    // survive in deeper (lower) callee frames.
+    let Some(live) = frame_records
+        .into_iter()
+        .max_by_key(|record| record.record_address)
+    else {
         return unknown_tuple("checkpoint stack does not identify one unique main frame");
     };
-    let (function_entry, function_name, frame_pointer, record_address, return_address) =
-        candidate.clone();
+    let MainFrameRecord {
+        function_entry,
+        function_name,
+        frame_pointer,
+        record_address,
+        return_address,
+    } = live;
     let Some(call_frame_cfa) = frame_pointer.checked_add(16) else {
         return unknown_tuple("main call-frame address overflowed");
     };
@@ -1374,7 +1484,8 @@ fn relate_one_write(
     };
     let frame = Evidence::Inferred {
         value: frame_value.clone(),
-        source: "bounded x86-64 frame record whose return resolves to exact-image main".to_string(),
+        source: "bounded x86-64 frame record whose return follows an exact-image call in main"
+            .to_string(),
     };
 
     let dwarf_functions = image.dwarf_functions();

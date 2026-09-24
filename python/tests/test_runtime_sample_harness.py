@@ -3497,6 +3497,110 @@ def test_pipe_read_overflow_retains_source_to_concrete_memory_effect(
         }
 
 
+@pytest.mark.skipif(shutil.which("strace") is None, reason="strace is unavailable")
+def test_stack_frame_identity_ignores_records_that_are_not_main_return_sites(
+    tmp_path: Path,
+) -> None:
+    """The main frame must come from return sites, not from stale stack words.
+
+    glibc 2.39's start-up frame keeps ``main``'s own entry address beside a
+    stack pointer, which is byte-for-byte a ``[saved rbp][return]`` record.
+    Ubuntu 24.04 CI saw exactly that and lost every stack-object relation.
+    Seed the same decoy into a real capture, plus a stale copy of the live
+    record (which must still name the one frame) and a conflicting record
+    (which must fail closed).
+    """
+    from glaurung import runtime_analysis
+    from glaurung.runtime_capture import capture_mapping_trace_child
+
+    if shutil.which("gcc") is None:
+        pytest.skip("gcc is unavailable")
+    sample = next(
+        item for item in HARNESS.load_samples() if item.id == "memory_read_overflow"
+    )
+    binary = HARNESS.compile_sample(sample, "gcc", "O0", "pie", tmp_path)
+    capture = capture_mapping_trace_child(
+        binary,
+        [HARNESS.scenario_arg(sample, "bad")],
+        environment=HARNESS.fixture_environment(sample),
+        cwd=tmp_path,
+        public_input=b"bad",
+        public_ipc_content=True,
+        capture_read_destinations=True,
+        capture_read_checkpoint=True,
+    )
+    capsule = json.loads(capture.capsule_json)
+    payloads = dict(capture.payloads)
+
+    def read_relation(capsule_json: str, items: dict[str, bytes]) -> dict[str, Any]:
+        report = json.loads(
+            runtime_analysis.analyze_process_capsule_stack_writes(
+                capsule_json, list(items.items()), binary.read_bytes()
+            )
+        )
+        return next(
+            item
+            for item in report["relations"]
+            if item["event_kind"] == "descriptor_read"
+        )
+
+    baseline = read_relation(capture.capsule_json, payloads)
+    assert baseline["frame"]["status"] == "inferred", baseline["frame"]
+    frame = baseline["frame"]["value"]
+    frame_pointer = frame["frame_pointer"]
+    live_record = frame["evidence_record_address"]
+    load_bias = min(
+        mapping["start"]
+        for mapping in capsule["mappings"]
+        if mapping.get("module_id") == "module-main"
+    )
+    main_entry = load_bias + frame["function_entry"]
+
+    stack_page = capsule["pages"][0]
+    stack_payload = stack_page["content"]["payload"]
+    stack_start = stack_page["start"]
+    stack_end = stack_start + stack_page["byte_len"]
+    scan_start = (stack_start + 7) & ~7
+    assert scan_start + 16 <= live_record < frame_pointer
+    assert frame_pointer + 128 <= stack_end
+
+    def seeded(records: dict[int, tuple[int, int]]) -> tuple[str, dict[str, bytes]]:
+        data = bytearray(payloads[stack_payload["id"]])
+        for address, (saved_rbp, return_address) in records.items():
+            offset = address - stack_start
+            data[offset : offset + 16] = saved_rbp.to_bytes(
+                8, "little"
+            ) + return_address.to_bytes(8, "little")
+        mutated = json.loads(capture.capsule_json)
+        page_payload = mutated["pages"][0]["content"]["payload"]
+        page_payload["sha256"] = hashlib.sha256(data).hexdigest()
+        mutated_json = runtime_analysis.canonicalize_process_capsule_json(
+            json.dumps(mutated, separators=(",", ":"))
+        )
+        return mutated_json, {**payloads, stack_payload["id"]: bytes(data)}
+
+    # glibc's start-up frame: a stack pointer beside main's entry address.
+    startup_decoy = {frame_pointer + 32: (frame_pointer + 64, main_entry)}
+    decoyed = read_relation(*seeded(startup_decoy))
+    assert decoyed["frame"] == baseline["frame"]
+    assert decoyed["object"] == baseline["object"]
+
+    # A stale record left by an earlier callee of main names the same frame.
+    stale = read_relation(
+        *seeded({**startup_decoy, scan_start: (frame_pointer, frame["return_address"])})
+    )
+    assert stale["frame"] == baseline["frame"]
+
+    # A second frame claiming the same return site is a contradiction.
+    conflicting = read_relation(
+        *seeded({scan_start: (frame_pointer + 16, frame["return_address"])})
+    )
+    assert conflicting["frame"] == {
+        "status": "unknown",
+        "reason": "checkpoint stack does not identify one unique main frame",
+    }
+
+
 def test_read_checkpoint_requires_destination_capture(tmp_path: Path) -> None:
     from glaurung.runtime_capture import capture_mapping_trace_child
 
