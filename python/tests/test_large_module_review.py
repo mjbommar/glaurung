@@ -648,6 +648,16 @@ REVIEWED_LARGE_MODULES: dict[str, str] = {
         "each pass separately. Seams: a shared reads kernel, plus elimination / "
         "callee-saved-spill pruning / promoted-object pruning."
     ),
+    "ir/direct_output.rs": (
+        "SPLIT OWED (2026-09-24) at 1,058, crossed by the float-result repair "
+        "(8251b6f3: a float-typed prototype no longer takes its result from the "
+        "integer bank). The return-materialisation core (materialize_*, "
+        "find_written_*_reg, apply_default_return) is one owner. Two cleanup passes "
+        "that only share its return-register predicates also live here: "
+        "prune_unread_promoted_locals* (~270 lines) and "
+        "prune_void_entry_result_restores* (~190). Seam: move those two into their "
+        "own module beside dead_stores.rs."
+    ),
     "ir/verify_defs.rs": (
         "accepted (2026-09-24) at 1,273 (839 at 3e82c79a): one verifier with two rules "
         "(NeverDefined, flow-sensitive UsedBeforeDefinition) run from one driver, "

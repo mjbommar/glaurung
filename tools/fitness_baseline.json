@@ -577,6 +577,32 @@
       "worsened": [
         "product_mean_loc: 476.4172535211268 -> 476.443661971831 (worse)"
       ]
+    },
+    {
+      "measures": {
+        "ir_files_above_1000": 28,
+        "ir_median_loc": 478.5,
+        "product_files_above_1000": 58,
+        "product_files_above_2000": 9,
+        "product_loc_above_1000": 91881,
+        "product_max_loc": 7397,
+        "product_mean_loc": 476.443661971831,
+        "product_median_loc": 318.0,
+        "product_pct_loc_above_1000": 33.95203606533146
+      },
+      "owners_grew": [
+        "runtime_analysis/stack_objects.rs: 1539 -> 1650 (+111)",
+        "ir/lift_x86.rs: 2364 -> 2400 (+36)",
+        "ir/types_recover.rs: 2140 -> 2161 (+21)",
+        "ir/ast.rs: 2101 -> 2120 (+19)"
+      ],
+      "worsened": [
+        "product_mean_loc: 476.443661971831 -> 477.4119718309859 (worse)",
+        "product_files_above_1000: 58 -> 59 (worse)",
+        "product_pct_loc_above_1000: 33.95203606533146 -> 34.34229450160416 (worse)",
+        "ir_files_above_1000: 28 -> 29 (worse)",
+        "product_loc_above_1000: 91881 -> 93126 (worse)"
+      ]
     }
   ],
   "architecture_growth_approvals": [
@@ -591,14 +617,14 @@
   ],
   "ir": {
     "file_count": 196,
-    "files_above_1000": 28,
+    "files_above_1000": 29,
     "files_above_2000": 6,
-    "loc_in_files_above_1000": 41462,
+    "loc_in_files_above_1000": 42596,
     "max_loc": 2746,
-    "mean_loc": 584.5765306122449,
+    "mean_loc": 586.5816326530612,
     "median_loc": 478.5,
-    "pct_loc_above_1000": 36.187018337013534,
-    "total_loc": 114577
+    "pct_loc_above_1000": 37.04966513003392,
+    "total_loc": 114970
   },
   "largest_files": [
     {
@@ -614,7 +640,7 @@
       "path": "ir/ast/dec_render.rs"
     },
     {
-      "loc": 2364,
+      "loc": 2400,
       "path": "ir/lift_x86.rs"
     },
     {
@@ -622,16 +648,16 @@
       "path": "symbolic/solver/mod.rs"
     },
     {
-      "loc": 2140,
+      "loc": 2161,
       "path": "ir/types_recover.rs"
+    },
+    {
+      "loc": 2120,
+      "path": "ir/ast.rs"
     },
     {
       "loc": 2107,
       "path": "ir/call_args.rs"
-    },
-    {
-      "loc": 2101,
-      "path": "ir/ast.rs"
     },
     {
       "loc": 2077,
@@ -663,15 +689,15 @@
     }
   ],
   "measures": {
-    "ir_files_above_1000": 28,
+    "ir_files_above_1000": 29,
     "ir_median_loc": 478.5,
-    "product_files_above_1000": 58,
+    "product_files_above_1000": 59,
     "product_files_above_2000": 9,
-    "product_loc_above_1000": 91881,
+    "product_loc_above_1000": 93126,
     "product_max_loc": 7397,
-    "product_mean_loc": 476.443661971831,
+    "product_mean_loc": 477.4119718309859,
     "product_median_loc": 318.0,
-    "product_pct_loc_above_1000": 33.95203606533146
+    "product_pct_loc_above_1000": 34.34229450160416
   },
   "oversized_files": {
     "analysis/cfg/repair.rs": 1507,
@@ -680,7 +706,7 @@
     "debug/dwarf.rs": 1563,
     "disasm/native_aarch64.rs": 4165,
     "flirt/mod.rs": 1701,
-    "ir/ast.rs": 2101,
+    "ir/ast.rs": 2120,
     "ir/ast/dec_render.rs": 2746,
     "ir/ast/decbench_render.rs": 1093,
     "ir/ast/lower_conds.rs": 1035,
@@ -692,19 +718,20 @@
     "ir/call_result_split.rs": 1041,
     "ir/const_fold.rs": 1938,
     "ir/dead_stores.rs": 1275,
+    "ir/direct_output.rs": 1058,
     "ir/dwarf_fields.rs": 1162,
     "ir/function_tables.rs": 1357,
     "ir/guard_chain.rs": 1294,
     "ir/high_variables.rs": 1450,
     "ir/lift_arm32.rs": 1996,
     "ir/lift_arm64.rs": 2077,
-    "ir/lift_x86.rs": 2364,
+    "ir/lift_x86.rs": 2400,
     "ir/lift_x86/packed.rs": 1212,
     "ir/loop_form.rs": 1455,
     "ir/ssa.rs": 1057,
     "ir/stack_locals/rewrite.rs": 1024,
     "ir/switch_ladder.rs": 1252,
-    "ir/types_recover.rs": 2140,
+    "ir/types_recover.rs": 2161,
     "ir/verify_defs.rs": 1273,
     "ir/x86_prologue.rs": 1290,
     "ir/x87.rs": 1101,
@@ -722,7 +749,7 @@
     "runtime_analysis/corruption.rs": 1294,
     "runtime_analysis/crash.rs": 1131,
     "runtime_analysis/instruction_trace.rs": 7397,
-    "runtime_analysis/stack_objects.rs": 1539,
+    "runtime_analysis/stack_objects.rs": 1650,
     "symbolic/ordered_replay.rs": 1047,
     "symbolic/ordered_trace.rs": 1277,
     "symbolic/solver/axeyum_backend.rs": 1004,
@@ -735,14 +762,14 @@
   },
   "product": {
     "file_count": 568,
-    "files_above_1000": 58,
+    "files_above_1000": 59,
     "files_above_2000": 9,
-    "loc_in_files_above_1000": 91881,
+    "loc_in_files_above_1000": 93126,
     "max_loc": 7397,
-    "mean_loc": 476.443661971831,
+    "mean_loc": 477.4119718309859,
     "median_loc": 318.0,
-    "pct_loc_above_1000": 33.95203606533146,
-    "total_loc": 270620
+    "pct_loc_above_1000": 34.34229450160416,
+    "total_loc": 271170
   },
   "root": "src",
   "schema": "glaurung-fitness-report-v1",
@@ -752,7 +779,7 @@
       "measure": "product_mean_loc",
       "meets_target": false,
       "target": 450.0,
-      "value": 476.443661971831
+      "value": 477.4119718309859
     },
     {
       "label": "Product-code median",
@@ -766,7 +793,7 @@
       "measure": "product_files_above_1000",
       "meets_target": false,
       "target": 35.0,
-      "value": 58
+      "value": 59
     },
     {
       "label": "Product files above 2,000 LOC",
@@ -780,7 +807,7 @@
       "measure": "product_pct_loc_above_1000",
       "meets_target": false,
       "target": 25.0,
-      "value": 33.95203606533146
+      "value": 34.34229450160416
     },
     {
       "label": "src/ir median",
@@ -794,7 +821,7 @@
       "measure": "ir_files_above_1000",
       "meets_target": false,
       "target": 5.0,
-      "value": 28
+      "value": 29
     },
     {
       "label": "Largest product file",
@@ -808,7 +835,7 @@
       "measure": "product_loc_above_1000",
       "meets_target": false,
       "target": 42000.0,
-      "value": 91881
+      "value": 93126
     }
   ]
 }
