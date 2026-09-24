@@ -34,19 +34,19 @@ use crate::ir::types_recover::TypeMap;
 /// "no widening applies here" — recurse, but do not insert casts at this level.
 type Want = Option<u8>;
 
-/// Rewrite `f` so every implicitly widened read is an explicit zero-extension.
+/// Rewrite `f` so every implicitly widened read is an explicit zero-extension,
+/// at the target's machine-register width and keyed by exact opaque SSA
+/// identities.
 ///
 /// Semantics-preserving with respect to the *machine*, not to the C we emitted
 /// before: that is the point. Definitions, uses, control flow and value identities
 /// are unchanged, so `verify_defs` and the structural lane see the same function.
-/// Rewrite implicit widening using the target's machine-register width.
 ///
 /// Decompilation entry points know the calling convention and must pass four
 /// for ARM32/i386 so their recovered C is not widened merely because the
 /// differential runner rebuilds it on an LP64 host. Exact identities are
 /// required because recovered declaration width belongs to a value, not its
 /// display spelling.
-/// Rewrite implicit widening using exact opaque SSA identities.
 pub fn insert_widening_casts_for_machine_width_with_identities(
     f: &mut Function,
     tm: &TypeMap,

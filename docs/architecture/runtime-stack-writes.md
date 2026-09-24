@@ -1,5 +1,7 @@
 # Runtime stack-write relations
 
+> **Kind:** architecture · **Status:** maintained
+
 `glaurung-runtime-stack-write-report-v1` relates an observed input write to an
 authoritative static stack-object contract without copying runtime state into
 `ProgramImage` or the decompiler AST.

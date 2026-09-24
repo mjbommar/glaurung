@@ -94,9 +94,9 @@ comparison metrics can: cyclomatic and cognitive complexity, nesting, loop
 depth, Halstead, statement and node censuses, dead-statement detection, a call
 graph, and a fixed-width feature vector. That surface is
 [`docs/reference/source-metrics.md`](../../reference/source-metrics.md),
-implemented in [`src/csource/metrics/`](../../../src/csource/metrics/mod.rs)
+implemented in [`cindergraph/src/csource/metrics/`](https://github.com/mjbommar/cindergraph/blob/8bd20512158d19d4cf632caba4bbed629271a3e5/crates/cindergraph/src/csource/metrics/mod.rs)
 over the language-neutral half in
-[`src/syntax/metrics.rs`](../../../src/syntax/metrics.rs), and exposed as
+[`cindergraph/src/syntax/metrics.rs`](https://github.com/mjbommar/cindergraph/blob/8bd20512158d19d4cf632caba4bbed629271a3e5/crates/cindergraph/src/syntax/metrics.rs), and exposed as
 `glaurung.source` and `glaurung source-metrics`.
 
 It is computed on `csource::cfg` and never on `csource::joern`, for the reason

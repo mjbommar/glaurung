@@ -1,8 +1,11 @@
 # Six-cell rerun at the 2026-09-16 Axeyum pin — sizing and preflight
 
-> **Kind:** working note · **Status:** preflight (sections below the host
-> section were written before any timing row was observed). The result is in
-> `bench-results/glaurung-six-cell-neutral-20260917/` and in
+> **Kind:** record · **Date:** 2026-09-17
+>
+> A preflight working note: sections below the host section were written
+> before any timing row was observed. It stays at this path, not under
+> `history/`, because the preregistered `registration.json` cites it here.
+> The result is in `bench-results/glaurung-six-cell-neutral-20260917/` and in
 > [`solver-033`](../decisions/solver-033-six-cell-rerun-at-the-2026-09-16-pin.md).
 
 This is item 3 of [`improvement-list-2026-09-16.md`](improvement-list-2026-09-16.md)

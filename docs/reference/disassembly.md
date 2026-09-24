@@ -58,8 +58,10 @@ coverage footer.
 
 With `--engine auto`, the current backend registry uses:
 
-- iced-x86 for x86 and x86-64; and
-- Capstone for ARM, AArch64, MIPS, MIPS64, PPC, PPC64, RISC-V, and RISC-V64.
+- iced-x86 for x86 and x86-64;
+- Glaurung's native AArch64 decoder for AArch64, falling back to Capstone for
+  any instruction it does not yet decode; and
+- Capstone for ARM, MIPS, MIPS64, PPC, PPC64, RISC-V, and RISC-V64.
 
 The CLI accepts `auto`, `iced`, or `capstone`. Explicit `iced` is valid only for
 x86/x86-64. Backend availability for Capstone architectures depends on the

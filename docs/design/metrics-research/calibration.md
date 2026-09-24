@@ -198,7 +198,7 @@ Non-negotiable, in order of how easily each is lost:
    ([`src/metrics/mod.rs`](../../../src/metrics/mod.rs)); it survives only if
    every new metric restates it.
 2. **Every tie-break is a total order.** The LSAP in
-   [`src/syntax/ged.rs`](../../../src/syntax/ged.rs) does this with an ascending
+   [`cindergraph/src/syntax/ged.rs`](https://github.com/mjbommar/cindergraph/blob/8bd20512158d19d4cf632caba4bbed629271a3e5/crates/cindergraph/src/syntax/ged.rs) does this with an ascending
    column scan and a strict `<`; a tree edit distance needs the same discipline
    in its traceback, because equal-cost edit scripts are common on small trees.
 3. **Budgets are work, not wall clock.** This is the one that will actually

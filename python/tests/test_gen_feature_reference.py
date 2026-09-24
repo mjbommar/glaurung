@@ -68,16 +68,20 @@ def test_every_cargo_feature_has_a_table_row() -> None:
     assert not missing, f"cargo-features.md is missing rows for: {missing}"
 
 
-def test_python_ext_does_not_pull_in_symbolic() -> None:
-    """The specific, previously-costly claim CLAUDE.md records: `cargo test
-    --features python-ext` does not compile `src/symbolic/`. Pin it directly
-    against the computed closure, not just against the rendered page, so a
-    change to the generator's resolution logic cannot quietly invert it.
+def test_python_ext_reaches_symbolic_only_through_the_default_solver() -> None:
+    """The claim CLAUDE.md records: `python-ext` itself does not compile
+    `src/symbolic/`, but the ordinary default/Python lane does, because
+    ADR-037 made `solver-axeyum` a default feature. Pin both directly against
+    the computed closure, not just against the rendered page, so a change to
+    the generator's resolution logic cannot quietly invert either.
     """
     gen = _load_generator()
     cargo = gen._load_cargo_toml()
-    closure = gen._closure(["default", "python-ext"], cargo["features"])
-    assert "symbolic" not in closure
+    features = cargo["features"]
+    assert "symbolic" not in gen._closure(["python-ext"], features)
+    closure = gen._closure(["default", "python-ext"], features)
+    assert "solver-axeyum" in closure
+    assert "symbolic" in closure
     assert "exec" in closure
 
 

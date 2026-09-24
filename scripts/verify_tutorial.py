@@ -309,7 +309,11 @@ def chapter_install() -> list[tuple[str, list[str]]]:
             [
                 "bash",
                 "-c",
-                "uv run glaurung --help 2>&1 | head -3",
+                # The usage line and the subcommand list, which is what this
+                # fixture pins. argparse wraps the trailing `...` onto its own
+                # line on 3.12 and leaves it on the list's line from 3.13, so
+                # `head -3` drifted with the interpreter; drop it.
+                "uv run glaurung --help 2>&1 | head -2 | sed 's/} \\.\\.\\.$/}/'",
             ],
         ),
         ("kickoff-smoketest", cmd("kickoff", str(S_HELLO_C))),

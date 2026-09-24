@@ -1,6 +1,8 @@
 # Solver ADR-037 — Axeyum is authoritative for every SAT/SMT decision
 
-> **Kind:** decision · **Status:** held · **Date:** 2026-09-17
+> **Kind:** decision · **Status:** maintained
+
+**ADR status:** Held since 2026-09-17.
 
 **Context:** Glaurung's hybrid analysis had proved its first counterfactual
 gates with a Z3-authoritative build even though Axeyum is the project's own

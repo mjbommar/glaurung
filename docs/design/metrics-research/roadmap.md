@@ -154,7 +154,7 @@ while M4 is built.
 
 **Deliverable.** A Riesen–Bunke local-edge-structure substitution cost feeding
 the existing LSAP. It reuses `solve_assignment(cells: &[Cost], order: usize)` in
-[`src/syntax/ged.rs`](../../../src/syntax/ged.rs) unchanged — that function is
+[`cindergraph/src/syntax/ged.rs`](https://github.com/mjbommar/cindergraph/blob/8bd20512158d19d4cf632caba4bbed629271a3e5/crates/cindergraph/src/syntax/ged.rs) unchanged — that function is
 the reuse seam, decoupled from the cost model and already carrying the
 determinism contract.
 

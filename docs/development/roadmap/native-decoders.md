@@ -1,6 +1,6 @@
 # Glaurung-native instruction decoders
 
-> **Kind:** plan · **Status:** active
+> **Kind:** plan · **Status:** proposed
 
 This workstream replaces Capstone's production capabilities inside Glaurung
 with safe, portable Rust decoders, ports the applicable upstream test estate,

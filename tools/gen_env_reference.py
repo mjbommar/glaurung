@@ -343,7 +343,9 @@ PURPOSES: dict[str, str] = {
     "DECBENCH_SAMPLE_TREE": "Path to a local decbench-sample-set-glaurung-tree checkout for `tools/decbench_redecompile_tree.py`.",
     "DECBENCH_PYTHON": "Interpreter used to run DecBench's own scripts.",
     "DECBENCH_COLUMN": "Result-column name DecBench records this run under.",
+    "BUDGET_RECEIPT": "Path to write the DecBench replay's resource-budget receipt, naming every override of the published budgets.",
     "GLAURUNG_DECBENCH_JOBS": "Parallelism for a DecBench matrix run.",
+    "GLAURUNG_DECBENCH_LINE_MAPPINGS": "Set to `1` to forward the decompiler line map to DecBench (only useful when the run has preprocessed `.i` sources).",
     # --- Third-party model/tooling comparison ---------------------------
     "OPENAI_API_KEY": "OpenAI credential for `glaurung ask`/`name-func`/the LLM agent stack.",
     "ANTHROPIC_API_KEY": "Anthropic credential; the configured fallback model family.",
@@ -359,7 +361,6 @@ PURPOSES: dict[str, str] = {
     "PROBE_OUT": "Internal to `test_cli_startup_is_lazy.py`'s own subprocess probe -- a scratch path for passing a result back, not a project configuration variable.",
     # --- Rust: decompiler pass tracing / IR ------------------------------
     "GLAURUNG_DUMP_PASSES": "Dump each IR pipeline pass's output for inspection.",
-    "GLAURUNG_PARSE_FULL_CORPUS": "Opt in to the C front end's full-corpus sweep (1,606 files, 11.9 M lines); the default lane reads a 14-file slice so it stays about a second.",
     "GLAURUNG_PASS_HEALTH": "Emit per-pass health/diagnostic accounting.",
     "GLAURUNG_PASS_STATS": "Emit per-pass timing/statistics.",
     "GLAURUNG_ACCOUNT_STRUCTURE": "Emit structuring-pass accounting output.",

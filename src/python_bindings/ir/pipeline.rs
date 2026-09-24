@@ -477,6 +477,16 @@ impl AstPassOrder {
     }
 }
 
+/// Fold the pre-naming AST using explicit register and stack parameter roles.
+fn fold_early_constants(
+    function: &mut crate::ir::ast::Function,
+    value_identities: &crate::ir::value_number::ValueIdentities,
+    parameter_slots: &std::collections::HashSet<usize>,
+) -> bool {
+    let parameter_identities = value_identities.with_parameter_slots(parameter_slots);
+    crate::ir::const_fold::fold_constants_with_identities(function, &parameter_identities)
+}
+
 /// THE AST pass pipeline. Every public decompile entry point runs exactly this.
 ///
 /// It used to be copy-pasted into four functions — `decompile_at`, `decompile_range_at`,
@@ -493,16 +503,6 @@ impl AstPassOrder {
 /// The pass-by-pass AST dump (`GLAURUNG_DUMP_PASSES=1`) is read here, so EVERY entry
 /// point gets identical diagnostics rather than only the one that happened to carry the
 /// macro. Debugging `--all` used to produce no dump at all.
-/// Fold the pre-naming AST using explicit register and stack parameter roles.
-fn fold_early_constants(
-    function: &mut crate::ir::ast::Function,
-    value_identities: &crate::ir::value_number::ValueIdentities,
-    parameter_slots: &std::collections::HashSet<usize>,
-) -> bool {
-    let parameter_identities = value_identities.with_parameter_slots(parameter_slots);
-    crate::ir::const_fold::fold_constants_with_identities(function, &parameter_identities)
-}
-
 pub(super) fn run_ast_passes(
     f: &mut crate::ir::ast::Function,
     profiler: &mut crate::decompile::profile::FunctionProfiler,

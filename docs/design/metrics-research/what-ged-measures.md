@@ -112,7 +112,7 @@ as the front end gets good enough for the residue to matter.
 cell is a function of four numbers per node — in-degree, out-degree,
 `is_entrypoint`, `is_exitpoint` — and nothing else. The proof is in the reference
 implementation's shape and is already ported and asserted in
-[`src/syntax/ged.rs`](../../../src/syntax/ged.rs) (`degree_multiset_is_the_only_topology_that_matters`).
+[`cindergraph/src/syntax/ged.rs`](https://github.com/mjbommar/cindergraph/blob/8bd20512158d19d4cf632caba4bbed629271a3e5/crates/cindergraph/src/syntax/ged.rs) (`degree_multiset_is_the_only_topology_that_matters`).
 
 Two consequences follow immediately, and both are measurable.
 

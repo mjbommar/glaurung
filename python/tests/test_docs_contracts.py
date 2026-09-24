@@ -94,8 +94,8 @@ def test_disasm_default_resource_bounds() -> None:
 
 
 def test_disasm_engine_registry_backend_split() -> None:
-    """disassembly.md's engine table: iced for x86/x86-64, Capstone for the
-    rest of the listed architectures.
+    """disassembly.md's engine table: iced for x86/x86-64, the native decoder
+    with a Capstone fallback for AArch64, Capstone for the rest.
     """
     src = _read(SRC / "disasm" / "registry.rs")
     m = re.search(
@@ -103,8 +103,11 @@ def test_disasm_engine_registry_backend_split() -> None:
         src,
     )
     assert m is not None
+    assert re.search(r"Architecture::ARM64 => Some\(Backend::Aarch64Hybrid \{", src), (
+        "AArch64 no longer selects the native+Capstone hybrid the doc describes"
+    )
     m2 = re.search(
-        r"Architecture::ARM\s*\n\s*\| Architecture::ARM64\s*\n\s*"
+        r"Architecture::ARM\s*\n\s*"
         r"\| Architecture::MIPS\s*\n\s*\| Architecture::MIPS64\s*\n\s*"
         r"\| Architecture::PPC\s*\n\s*\| Architecture::PPC64\s*\n\s*"
         r"\| Architecture::RISCV\s*\n\s*\| Architecture::RISCV64",

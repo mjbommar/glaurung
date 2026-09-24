@@ -1,6 +1,6 @@
 # Hybrid analysis current state
 
-> **Kind:** design checkpoint · **Date:** 2026-09-17
+> **Kind:** design · **Status:** maintained · checkpoint of 2026-09-17
 
 This checkpoint records what the first accumulated hybrid/runtime tranche
 actually proves. The objective ladder remains authoritative: representative

@@ -580,7 +580,7 @@ plainly, because the honest reason is worse. Here is the table:
 
 | step | complexity | deterministic | already exists |
 |---|---|---|---|
-| build the CFG | linear in the AST | yes | yes, [`src/csource/cfg/`](../../../src/csource/cfg/mod.rs) |
+| build the CFG | linear in the AST | yes | yes, [`cindergraph/src/csource/cfg/`](https://github.com/mjbommar/cindergraph/blob/8bd20512158d19d4cf632caba4bbed629271a3e5/crates/cindergraph/src/csource/cfg/mod.rs) |
 | dominators / post-dominators | `O(n a(n))` Lengauer-Tarjan | yes | no, but standard |
 | reaching definitions | bit-vector fixpoint, `O(n * m * vars / w)` | yes | yes over LLIR, [`src/ir/use_def.rs`](../../../src/ir/use_def.rs) and [`src/ir/ssa.rs`](../../../src/ir/ssa.rs) |
 | 1-WL certificate of any of the above | `O(r (n + m))` | yes | no, but trivial |
@@ -641,7 +641,7 @@ family.** In priority order, with the evidence:
 4. **If a diagnostic is wanted anyway**, prefer the adjacency-aware graded CFG
    distance of [`structural-metrics.md`](structural-metrics.md) §2.1 over any
    dependence overlay. It reuses `solve_assignment` in
-   [`src/syntax/ged.rs`](../../../src/syntax/ged.rs) with its determinism
+   [`cindergraph/src/syntax/ged.rs`](https://github.com/mjbommar/cindergraph/blob/8bd20512158d19d4cf632caba4bbed629271a3e5/crates/cindergraph/src/syntax/ged.rs) with its determinism
    contract, and it answers the question a developer actually asks -- *which
    edge* -- which no certificate over any higher-order object can answer at all.
 

@@ -62,7 +62,7 @@ canonical counterexample in
 [`../static-c-analysis/joern-behavior.md`](../static-c-analysis/joern-behavior.md)
 §2 — and it costs `O(n·m·d)` to build the matrix instead of `O(n·m)`. It reuses
 `solve_assignment(cells: &[Cost], order: usize) -> Assignment` in
-[`src/syntax/ged.rs`](../../../src/syntax/ged.rs) unchanged, including its
+[`cindergraph/src/syntax/ged.rs`](https://github.com/mjbommar/cindergraph/blob/8bd20512158d19d4cf632caba4bbed629271a3e5/crates/cindergraph/src/syntax/ged.rs) unchanged, including its
 determinism contract (ascending column scan, strict `<` tie-break). **Verdict:
 build it as a graded diagnostic, never as the headline.**
 
@@ -103,7 +103,7 @@ Genuinely informative: nesting depth is exactly what a degree sequence destroys,
 and a decompiler that flattens a doubly-nested loop into two sequential loops is
 committing a real error that CFG isomorphism sometimes misses. Lengauer–Tarjan is
 `O(n α(n))`, deterministic, and already the kind of thing
-[`src/csource/cfg/`](../../../src/csource/cfg/mod.rs) can support.
+[`cindergraph/src/csource/cfg/`](https://github.com/mjbommar/cindergraph/blob/8bd20512158d19d4cf632caba4bbed629271a3e5/crates/cindergraph/src/csource/cfg/mod.rs) can support.
 
 But it is a *coarsening* of the CFG. Every blindness the CFG has, the dominator
 tree inherits — including the 27.24% single-node class, whose dominator tree is a
@@ -147,7 +147,7 @@ graded measure of exactly the property the fixture gates spot-check.
 1,606 decompiled files and 11.9 M lines with zero errors, and `csource::cfg`
 builds 188,716 CFGs
 ([`../static-c-analysis/roadmap.md`](../static-c-analysis/roadmap.md) §3–§4).
-The AST is [`src/syntax/tree.rs`](../../../src/syntax/tree.rs). Nothing new has
+The AST is [`cindergraph/src/syntax/tree.rs`](https://github.com/mjbommar/cindergraph/blob/8bd20512158d19d4cf632caba4bbed629271a3e5/crates/cindergraph/src/syntax/tree.rs). Nothing new has
 to exist.
 
 **It is cheap and deterministic.** Zhang–Shasha on ordered trees is
