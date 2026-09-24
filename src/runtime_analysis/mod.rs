@@ -14,6 +14,11 @@ pub mod crash;
 pub mod elf_core;
 pub mod event_correlation;
 pub mod input;
+/// Replays observed instructions through the concrete emulator, so it exists
+/// only when `exec` is built (the fuzz crate builds without it).
+#[cfg(feature = "exec")]
 pub mod instruction_trace;
 pub mod memory;
+/// Built on [`instruction_trace`], so it carries the same `exec` gate.
+#[cfg(feature = "exec")]
 pub mod stack_objects;

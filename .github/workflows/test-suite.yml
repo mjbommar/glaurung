@@ -75,7 +75,9 @@ jobs:
       - name: Install the fixture compilers the Rust tests demand
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi
+          # `llvm` provides the unversioned `llvm-strip` that `DECLARED_TOOLS`
+          # in src/testing.rs demands.
+          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi llvm
       - name: Rust tests
         # REQUIRE_TOOLCHAINS makes a missing compiler fail instead of skip.
         env:
@@ -114,7 +116,9 @@ jobs:
       - name: Install the fixture compilers these tests demand
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi
+          # `llvm` provides the unversioned `llvm-strip` that `DECLARED_TOOLS`
+          # in src/testing.rs demands.
+          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi llvm
       - name: Symbolic engine tests
         env:
           GLAURUNG_REQUIRE_TOOLCHAINS: "1"
@@ -206,6 +210,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             gcc-multilib libc6-dev-i386 || true
+      # `llvm-strip` and `llvm-readobj` for the checked-strip replay tests,
+      # which skip without them.
+      - name: Install LLVM binutils
+        run: sudo apt-get install -y --no-install-recommends llvm || true
       - name: Sync dependencies
         run: uv sync --locked --dev
       - name: Build the extension

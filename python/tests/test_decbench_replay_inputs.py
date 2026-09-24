@@ -65,6 +65,9 @@ def test_checked_strip_removes_debug_and_preserves_source(
 def test_checked_strip_preserves_pe_source_and_odd_addresses(
     tmp_path: pathlib.Path,
 ) -> None:
+    # COFF validation reads the symbol table back with llvm-readobj.
+    if shutil.which("llvm-readobj") is None:
+        pytest.skip("llvm-readobj is required to validate a stripped PE")
     binary = ROOT / "tests" / "decbench_adapter" / "stdcall_symbols.dll"
     original = binary.read_bytes()
     stripped = tmp_path / "stdcall_symbols.dll"

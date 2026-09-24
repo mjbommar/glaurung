@@ -4285,6 +4285,7 @@ fn select_input_dependent_branches(
             }
         })
         .collect::<Vec<_>>();
+    #[cfg(feature = "symbolic")]
     for lineage_id in counterfactual_lineages.into_values() {
         crate::symbolic::solver::close_runtime_solver_path(lineage_id);
     }

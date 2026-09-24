@@ -383,7 +383,7 @@ fn run_llir_dataflow(f: &mut LlirFunction, cc: CallConv) {
     }
     let (_, _, provisional_slots) =
         value_number::value_number_with_parameter_slots(f, &ssa_info, cc);
-    let _ = types_recover::recover_types(f);
+    let _ = types_recover::recover_raw_types(f);
     let _ = types_recover::recover_prototype(f, &ssa_info, cc, &provisional_slots);
     let _ = value_number::value_number_with_parameter_slots(f, &ssa_info, cc);
 }
@@ -478,8 +478,8 @@ fn bench_micro_passes(c: &mut Criterion) {
             )
         })
     });
-    group.bench_function("types_recover::recover_types", |b| {
-        b.iter(|| types_recover::recover_types(&subject.normalized))
+    group.bench_function("types_recover::recover_raw_types", |b| {
+        b.iter(|| types_recover::recover_raw_types(&subject.normalized))
     });
     group.bench_function("types_recover::recover_prototype", |b| {
         b.iter(|| {

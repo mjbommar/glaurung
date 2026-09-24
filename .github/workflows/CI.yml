@@ -44,7 +44,11 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: x86_64
-          args: --release --out dist
+          # Name the interpreter. Without one, maturin asks the manylinux2014
+          # container for `python3`, which is older than `requires-python`
+          # (>=3.12), and fails with "Couldn't find any python interpreters".
+          # 3.12 is the floor, so it is the one a smoke build should prove.
+          args: --release --out dist --interpreter python3.12
           sccache: 'true'
           manylinux: auto
       # No upload: the artifact is the proof, not the product.
