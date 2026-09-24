@@ -31,9 +31,10 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use super::dwarf_render_types::{
     dwarf_prototype_type_is_renderable, source_type_with_complete_struct_alias,
 };
+use super::return_ctype::is_wide_coalesced_value;
 use super::{
-    ctype_for, infer_return_ctype, is_high_variable, is_promoted_local_in, parse_arg_index,
-    CallPrototype, DecIdents, Stmt, TypeHint, TypeMap, VReg,
+    ctype_for, infer_return_ctype, int_ctype, is_high_variable, is_promoted_local_in,
+    parse_arg_index, CallPrototype, DecIdents, Stmt, TypeHint, TypeMap, VReg,
 };
 use crate::ir::dwarf_type_env::DwarfTypeEnv;
 use crate::ir::types_recover::RecoveredOutputKind;
@@ -196,7 +197,12 @@ impl DeclarationPlan {
                         || is_promoted_local_in(n, source_locals)
                         || is_identity_value(n, value_identities)
                     {
-                        integer_types.insert(n.clone(), (*signed, *width));
+                        let width = if is_wide_coalesced_value(n, value_identities) {
+                            8
+                        } else {
+                            *width
+                        };
+                        integer_types.insert(n.clone(), (*signed, width));
                     }
                 }
             }
@@ -218,7 +224,12 @@ impl DeclarationPlan {
                             || is_promoted_local_in(n, source_locals)
                             || is_identity_value(n, value_identities))
                     {
-                        integer_widths.insert(n.clone(), *width);
+                        let width = if is_wide_coalesced_value(n, value_identities) {
+                            8
+                        } else {
+                            *width
+                        };
+                        integer_widths.insert(n.clone(), width);
                     }
                 }
             }
@@ -335,7 +346,12 @@ impl DeclarationPlan {
                 .cloned()
                 .or_else(|| struct_pointer_types.get(local.as_str()).cloned())
                 .unwrap_or_else(|| {
-                    if is_promoted_local_in(local, source_locals)
+                    if is_wide_coalesced_value(local, value_identities) {
+                        match tm.and_then(|types| types.get(&VReg::phys(local))) {
+                            Some(TypeHint::Int { signed, .. }) => int_ctype(signed, 8).to_string(),
+                            _ => ctype_for(local, tm).to_string(),
+                        }
+                    } else if is_promoted_local_in(local, source_locals)
                         || is_identity_value(local, value_identities)
                     {
                         ctype_for(local, tm).to_string()

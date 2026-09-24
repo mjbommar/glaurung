@@ -72,6 +72,12 @@ pub struct ValueIdentities {
     by_numbered_value: HashMap<VReg, BTreeSet<SsaValue>>,
     value_id_by_ssa: HashMap<SsaValue, ValueId>,
     definition_widths_by_value_id: HashMap<ValueId, BTreeSet<u8>>,
+    /// Values COMPUTED at 64 bits: the destination of a 64-bit arithmetic,
+    /// logical, shift or sign-extending operation. A 32-bit x86 write's
+    /// implicit zero-extension and a plain copy are deliberately absent -- the
+    /// first is a 32-bit value in a 64-bit carrier, the second has its own
+    /// source.
+    wide_computations: HashSet<ValueId>,
     #[cfg(test)]
     next_value_id: u32,
     physical_bases_by_value: HashMap<VReg, BTreeSet<String>>,
@@ -270,6 +276,29 @@ impl ValueIdentities {
             .entry(value_id)
             .or_default()
             .insert(width);
+    }
+
+    /// Record that the SSA value `identity` was computed by a 64-bit operation.
+    pub(crate) fn attach_wide_computation(&mut self, identity: &SsaValue) {
+        if let Some(value_id) = self.value_id_by_ssa.get(identity).copied() {
+            self.wide_computations.insert(value_id);
+        }
+    }
+
+    /// Whether any SSA value represented by `value` was computed at 64 bits.
+    ///
+    /// A phi-coalesced variable is only as narrow as its widest member: a
+    /// loop-carried `rax` that starts as `xor %eax,%eax` and is then advanced
+    /// by `shr $1,%rax` / `add %rdx,%rax` holds 64-bit data, whatever the
+    /// function eventually returns from it.
+    pub(crate) fn represents_wide_computation(&self, value: &VReg) -> bool {
+        self.candidates(value).is_some_and(|candidates| {
+            candidates.iter().any(|identity| {
+                self.value_id_by_ssa
+                    .get(identity)
+                    .is_some_and(|value_id| self.wide_computations.contains(value_id))
+            })
+        })
     }
 
     /// Attach ABI parameter slots to exact version-zero values.
@@ -731,6 +760,11 @@ fn value_number_with_parameter_evidence(
                 if let Some(value) = ssa.def_value_ref(lf, addr) {
                     definition_widths_by_value.insert(value.clone(), width);
                     identities.attach_definition_width(value, width);
+                    if width == 8
+                        && matches!(raw_op, Op::Bin { .. } | Op::Un { .. } | Op::SExt { .. })
+                    {
+                        identities.attach_wide_computation(value);
+                    }
                 }
             }
         }
@@ -990,6 +1024,83 @@ mod tests {
     use super::*;
     use crate::ir::ssa::{compute_ssa, compute_ssa_for_target};
     use crate::ir::use_def::def_uses;
+
+    /// The shape of `61_fixed_point:gcc:O2:fixed_sqrt`'s loop-carried root:
+    /// `xor %eax,%eax` (a 32-bit write, lifted with its implicit
+    /// zero-extension) and then `shr $1,%rax` (a 64-bit computation).
+    #[test]
+    fn wide_computations_exclude_the_implicit_zero_extension() {
+        use crate::ir::types::{BinOp, LlirBlock, Width};
+        let instr = |va, op| LlirInstr { va, op };
+        let raw = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x100c,
+                instrs: vec![
+                    instr(
+                        0x1000,
+                        Op::Bin {
+                            dst: VReg::phys("eax"),
+                            op: BinOp::Xor,
+                            lhs: Value::Reg(VReg::phys("eax")),
+                            rhs: Value::Reg(VReg::phys("eax")),
+                        },
+                    ),
+                    instr(
+                        0x1000,
+                        Op::ZExt {
+                            dst: VReg::phys("rax"),
+                            src: Value::Reg(VReg::phys("eax")),
+                            from: Width::W32,
+                            to: Width::W64,
+                        },
+                    ),
+                    instr(
+                        0x1004,
+                        Op::Bin {
+                            dst: VReg::phys("rax"),
+                            op: BinOp::Shr,
+                            lhs: Value::Reg(VReg::phys("rax")),
+                            rhs: Value::Const(1),
+                        },
+                    ),
+                    instr(
+                        0x1008,
+                        Op::Store {
+                            addr: crate::ir::types::MemOp {
+                                base: Some(VReg::phys("rdi")),
+                                index: None,
+                                scale: 1,
+                                disp: 0,
+                                size: 8,
+                                segment: None,
+                                endian: crate::ir::types::Endian::Little,
+                            },
+                            src: Value::Reg(VReg::phys("rax")),
+                        },
+                    ),
+                ],
+                succs: vec![],
+            }],
+        };
+        let ssa = compute_ssa(&raw);
+        let (numbered, _, _, identities) =
+            value_number_with_parameter_slots_lifetimes_and_identities(
+                &raw,
+                &ssa,
+                CallConv::SysVAmd64,
+                &[],
+            );
+        let destination = |index: usize| {
+            def_ref(&numbered.blocks[0].instrs[index].op)
+                .cloned()
+                .expect("numbered definition")
+        };
+
+        assert!(!identities.represents_wide_computation(&destination(1)));
+        assert!(identities.represents_wide_computation(&destination(2)));
+    }
 
     #[test]
     fn real_arm_entry_pointer_survives_later_result_storage_reuse() {

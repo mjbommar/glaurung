@@ -276,8 +276,11 @@ pub fn recover_types_valued(lf: &LlirFunction, ssa: &SsaInfo) -> TypeMapV {
                 }
             }
             for (raw, value) in values.uses.iter().flatten() {
-                if matches!(raw, VReg::Phys(_)) {
+                if let VReg::Phys(name) = raw {
                     tm.upsert(value.clone(), int_for_reg(raw));
+                    if let Some(width) = crate::ir::types::phys_reg_width(name) {
+                        tm.record_raw_read(value, (width.bits() / 8).max(1) as u8);
+                    }
                 }
             }
 

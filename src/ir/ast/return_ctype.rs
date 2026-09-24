@@ -40,6 +40,13 @@ pub(crate) fn declared_int_type_with_identities(
     let value = VReg::Phys(ident.to_string());
     let has_storage_identity =
         identities.is_some_and(|identities| identities.unambiguous_physical_base(&value).is_some());
+    if has_storage_identity && is_wide_coalesced_value(ident, identities) {
+        return match tm.and_then(|types| types.get(&value)) {
+            Some(TypeHint::Pointer { .. } | TypeHint::CodePointer | TypeHint::Float { .. }) => None,
+            Some(TypeHint::Int { signed, .. }) => Some((signed, 8)),
+            _ => Some((true, 8)),
+        };
+    }
     if has_storage_identity || identities.is_none() && is_high_variable(ident) {
         return match tm.and_then(|types| types.get(&value)) {
             Some(TypeHint::Int { signed, width }) => Some((signed, width)),
@@ -63,6 +70,29 @@ pub(crate) fn declared_int_type_with_identities(
         TypeHint::Int { signed, width } => Some((signed, width)),
         _ => None,
     }
+}
+
+/// Whether `ident` is a phi-coalesced variable (several SSA values sharing one
+/// storage base) that includes a 64-bit computation.
+///
+/// Such a variable holds 64-bit data even when its role's type fact is
+/// narrower. The case that matters is `ret`, whose fact is the function's
+/// `int32_t` result while its loop-carried members are `int64_t`:
+/// `28_euler_ode:clang:O2:euler_decay_q16` keeps its `int64_t state` and
+/// `61_fixed_point:gcc:O2:fixed_sqrt` its `uint64_t root` in `rax`, the
+/// register they are finally returned from. Declaring or widening that
+/// variable as 32-bit truncates the state on every iteration. An exact (single
+/// SSA value) identity is not covered: its own type fact already describes it.
+pub(crate) fn is_wide_coalesced_value(
+    ident: &str,
+    identities: Option<&crate::ir::value_number::ValueIdentities>,
+) -> bool {
+    let value = VReg::Phys(ident.to_string());
+    identities.is_some_and(|identities| {
+        identities.unambiguous_physical_base(&value).is_some()
+            && identities.exact(&value).is_none()
+            && identities.represents_wide_computation(&value)
+    })
 }
 
 /// The C type of an expression from recovered types, when determinable. Value-
@@ -464,6 +494,48 @@ mod tests {
         assert_eq!(
             declared_int_type_with_identities("opaque-local", Some(&tm), Some(&identities)),
             Some((false, 4))
+        );
+    }
+
+    /// `61_fixed_point:gcc:O2:fixed_sqrt` keeps `uint64_t root` in `rax`:
+    /// `xor %eax,%eax` starts it, `shr $1,%rax` / `add %rdx,%rax` advance it,
+    /// and the function returns its low half as `int32_t`. The coalesced `ret`
+    /// carries the result's 32-bit fact, but one of its members is a 64-bit
+    /// computation, so it must be declared 64-bit.
+    #[test]
+    fn coalesced_declaration_with_a_wide_computation_is_machine_wide() {
+        let tm = type_map(&[(
+            "ret",
+            TypeHint::Int {
+                signed: true,
+                width: 4,
+            },
+        )]);
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        for version in [1, 2] {
+            identities.record(
+                VReg::phys("ret"),
+                crate::ir::ssa::SsaValue {
+                    base: VReg::phys("rax"),
+                    version,
+                },
+            );
+        }
+        assert_eq!(
+            declared_int_type_with_identities("ret", Some(&tm), Some(&identities)),
+            Some((true, 4)),
+            "without wide evidence the coalesced fact is kept"
+        );
+
+        identities.attach_wide_computation(&crate::ir::ssa::SsaValue {
+            base: VReg::phys("rax"),
+            version: 2,
+        });
+
+        assert!(is_wide_coalesced_value("ret", Some(&identities)));
+        assert_eq!(
+            declared_int_type_with_identities("ret", Some(&tm), Some(&identities)),
+            Some((true, 8))
         );
     }
 

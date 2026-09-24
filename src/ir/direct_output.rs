@@ -44,6 +44,7 @@ pub(crate) fn materialize_direct_output(function: &mut Function) {
     materialize_direct_output_with_live_in(
         function,
         None,
+        &[],
         &|value| matches!(value, VReg::Phys(name) if name == "ret"),
     );
 }
@@ -53,7 +54,7 @@ pub(crate) fn materialize_direct_output_with_identities(
     function: &mut Function,
     identities: &crate::ir::value_number::ValueIdentities,
 ) {
-    materialize_direct_output_with_live_in(function, None, &|value| {
+    materialize_direct_output_with_live_in(function, None, &[], &|value| {
         identity_is_result_storage(identities, value)
     });
 }
@@ -143,13 +144,68 @@ fn materialize_prototype_output_impl(
     let live_in_result = live_in_result.filter(|_| {
         authority.exact().is_some() || !body_writes_abi_return_storage(&function.body, cc)
     });
+    // A proven floating-point result on an ABI whose float results occupy
+    // their own bank (`xmm0`, AAPCS64 `v0`) is never the integer result
+    // register. Such a function may still leave an unrelated value in
+    // `rax`/`x0` -- gcc keeps `naive_sum_f64`'s loop end pointer there -- and
+    // projecting it would return that pointer's bits as the `double`.
+    let float_bank = prototype
+        .filter(|prototype| {
+            prototype.output_kind() == RecoveredOutputKind::Direct
+                && matches!(
+                    prototype.result().and_then(|result| result.hint),
+                    Some(crate::ir::types_recover::TypeHint::Float { .. })
+                )
+        })
+        .and_then(|_| separate_float_result_bank(cc));
+    let excluded: &[&str] = if float_bank.is_some() {
+        crate::ir::abi::integer_return_registers(cc)
+    } else {
+        &[]
+    };
     // This pass runs before role naming. A literal `ret` here may be a source
     // or debug spelling and is not evidence of machine result storage.
-    materialize_direct_output_with_live_in(function, live_in_result, &|value| {
-        authority
-            .exact()
-            .is_some_and(|identities| identity_is_result_storage(identities, value))
+    materialize_direct_output_with_live_in(function, live_in_result, excluded, &|value| {
+        authority.exact().is_some_and(|identities| {
+            identity_is_result_storage(identities, value)
+                && float_bank.is_none_or(|bank| identity_occupies_bank(identities, value, bank))
+        })
     });
+}
+
+/// The float result bank of an ABI that keeps it disjoint from the integer
+/// result register. Soft-float ARM returns a `float` in `r0` and i386 in
+/// `st0` (which neither projection tier names), so neither qualifies.
+fn separate_float_result_bank(cc: CallConv) -> Option<&'static [&'static str]> {
+    matches!(
+        cc,
+        CallConv::SysVAmd64 | CallConv::Win64 | CallConv::Aarch64
+    )
+    .then(|| crate::ir::abi::float_return_registers(cc))
+}
+
+/// Whether at least one SSA value represented by `value` lives in `bank`.
+///
+/// "At least one", not "all": a coalesced call result may legitimately carry
+/// both a `rax` and an `xmm0` identity, and it is still the float result.
+fn identity_occupies_bank(
+    identities: &crate::ir::value_number::ValueIdentities,
+    value: &VReg,
+    bank: &[&str],
+) -> bool {
+    identities.candidates(value).is_some_and(|candidates| {
+        candidates.iter().any(|identity| {
+            identity
+                .canonical_physical_base()
+                .is_some_and(|base| bank.contains(&crate::ir::abi::ssa_base(base)))
+        })
+    })
+}
+
+/// Whether `value` is an unversioned spelling of a result register this
+/// projection has ruled out.
+fn is_excluded_result_register(value: &VReg, excluded: &[&str]) -> bool {
+    matches!(value, VReg::Phys(name) if excluded.contains(&name.as_str()))
 }
 
 fn body_writes_abi_return_storage(body: &[Stmt], cc: CallConv) -> bool {
@@ -204,15 +260,17 @@ fn body_writes_abi_return_storage(body: &[Stmt], cc: CallConv) -> bool {
 fn materialize_direct_output_with_live_in(
     function: &mut Function,
     live_in_result: Option<&VReg>,
+    excluded: &[&str],
     canonical_role_is_result: &impl Fn(&VReg) -> bool,
 ) {
-    let written = find_written_return_reg(&function.body, canonical_role_is_result)
+    let written = find_written_return_reg(&function.body, excluded, canonical_role_is_result)
         .or_else(|| find_written_float_result_reg(&function.body));
     if let Some(return_register) = written {
         if let Some(live_in_result) = live_in_result {
             apply_reaching_default_return(
                 &mut function.body,
                 live_in_result,
+                excluded,
                 canonical_role_is_result,
             );
         } else {
@@ -234,15 +292,21 @@ fn materialize_direct_output_with_live_in(
 fn apply_reaching_default_return(
     body: &mut [Stmt],
     live_in_result: &VReg,
+    excluded: &[&str],
     canonical_role_is_result: &impl Fn(&VReg) -> bool,
 ) {
-    fn is_result(value: &VReg, canonical_role_is_result: &impl Fn(&VReg) -> bool) -> bool {
-        match value {
-            VReg::Phys(name) if name == "ret" => canonical_role_is_result(value),
-            _ => is_return_reg(value) || canonical_role_is_result(value),
-        }
-    }
+    let is_result = |value: &VReg| match value {
+        VReg::Phys(name) if name == "ret" => canonical_role_is_result(value),
+        _ if is_excluded_result_register(value, excluded) => false,
+        _ => is_return_reg(value) || canonical_role_is_result(value),
+    };
+    reaching_walk(body, live_in_result.clone(), &is_result);
+}
 
+fn reaching_walk(body: &mut [Stmt], reaching: VReg, is_result: &impl Fn(&VReg) -> bool) {
+    walk(body, reaching, is_result);
+
+    /// `canonical_role_is_result` here is the complete result-storage test.
     fn walk(
         body: &mut [Stmt],
         mut reaching: VReg,
@@ -253,10 +317,10 @@ fn apply_reaching_default_return(
                 Stmt::Origin { .. } => {
                     unreachable!("semantic statement cannot be an origin wrapper")
                 }
-                Stmt::Assign { dst, .. } if is_result(dst, canonical_role_is_result) => {
+                Stmt::Assign { dst, .. } if canonical_role_is_result(dst) => {
                     reaching = dst.clone();
                 }
-                Stmt::Call { dst: Some(dst), .. } if is_result(dst, canonical_role_is_result) => {
+                Stmt::Call { dst: Some(dst), .. } if canonical_role_is_result(dst) => {
                     reaching = dst.clone();
                 }
                 Stmt::Return { value } if value.is_none() => {
@@ -308,8 +372,6 @@ fn apply_reaching_default_return(
             }
         }
     }
-
-    walk(body, live_in_result.clone(), canonical_role_is_result);
 }
 
 /// Remove machine output operands once prototype recovery has established that
@@ -899,6 +961,7 @@ fn clear_body_return_values(body: &mut [Stmt]) {
 /// dead in a way that read as load-bearing.
 fn find_written_return_reg(
     body: &[Stmt],
+    excluded: &[&str],
     canonical_role_is_result: &impl Fn(&VReg) -> bool,
 ) -> Option<VReg> {
     let is_result = |value: &VReg| match value {
@@ -906,6 +969,7 @@ fn find_written_return_reg(
         // authorize it. Other values may be the unversioned compatibility
         // spelling or an exact SSA identity proved to occupy result storage.
         VReg::Phys(name) if name == "ret" => canonical_role_is_result(value),
+        _ if is_excluded_result_register(value, excluded) => false,
         _ => is_return_reg(value) || canonical_role_is_result(value),
     };
     // SSA-numbered names distinguish successive values in the same machine
@@ -922,18 +986,20 @@ fn find_written_return_reg(
                 ..
             } => else_body
                 .as_deref()
-                .and_then(|body| find_written_return_reg(body, canonical_role_is_result))
-                .or_else(|| find_written_return_reg(then_body, canonical_role_is_result)),
+                .and_then(|body| find_written_return_reg(body, excluded, canonical_role_is_result))
+                .or_else(|| find_written_return_reg(then_body, excluded, canonical_role_is_result)),
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                find_written_return_reg(body, canonical_role_is_result)
+                find_written_return_reg(body, excluded, canonical_role_is_result)
             }
-            Stmt::For { body, .. } => find_written_return_reg(body, canonical_role_is_result),
+            Stmt::For { body, .. } => {
+                find_written_return_reg(body, excluded, canonical_role_is_result)
+            }
             Stmt::Switch { cases, default, .. } => default
                 .as_deref()
-                .and_then(|body| find_written_return_reg(body, canonical_role_is_result))
+                .and_then(|body| find_written_return_reg(body, excluded, canonical_role_is_result))
                 .or_else(|| {
                     cases.iter().rev().find_map(|(_, body)| {
-                        find_written_return_reg(body, canonical_role_is_result)
+                        find_written_return_reg(body, excluded, canonical_role_is_result)
                     })
                 }),
             _ => None,
@@ -1474,6 +1540,65 @@ mod tests {
             function.body.last(),
             Some(&Stmt::Return {
                 value: Some(Expr::Reg(call_result)),
+            })
+        );
+    }
+
+    /// `181_compensated_summation:gcc:O2:naive_sum_f64`:
+    ///
+    /// ```text
+    /// pxor %xmm0,%xmm0 ; ...
+    /// lea 0x4(%rdi,%rsi,4),%rax        ; loop END POINTER, lives in rax
+    /// loop: ... addsd %xmm1,%xmm0 ; cmp %rax,%rdi ; jne loop
+    /// ret                              ; double result in xmm0
+    /// ```
+    ///
+    /// The prototype proves a `double` result. A value whose only storage is
+    /// the INTEGER result bank is not that result, however late it is written:
+    /// projecting it made every return of the function return the loop bound.
+    #[test]
+    fn float_prototype_output_ignores_integer_bank_only_values() {
+        let end_pointer = VReg::phys("value0");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.record(
+            end_pointer.clone(),
+            SsaValue {
+                base: VReg::phys("rax"),
+                version: 1,
+            },
+        );
+        let mut prototype = RecoveredPrototype::default();
+        prototype.apply_locked_output(
+            RecoveredOutputKind::Direct,
+            Some(TypeHint::Float { width: 8 }),
+        );
+        let mut function = Function {
+            name: "naive_sum_f64".into(),
+            entry_va: 0,
+            body: vec![
+                Stmt::Assign {
+                    dst: VReg::phys("xmm0"),
+                    src: Expr::Const(0),
+                },
+                Stmt::Assign {
+                    dst: end_pointer,
+                    src: Expr::Reg(VReg::phys("arg0")),
+                },
+                Stmt::Return { value: None },
+            ],
+        };
+
+        materialize_prototype_output(
+            &mut function,
+            CallConv::SysVAmd64,
+            Some(&prototype),
+            &identities,
+        );
+
+        assert_eq!(
+            function.body.last(),
+            Some(&Stmt::Return {
+                value: Some(Expr::Reg(VReg::phys("xmm0"))),
             })
         );
     }

@@ -490,11 +490,27 @@ pub fn recover_types_for_with_identities(
         if width == 0 {
             continue;
         }
-        let signed = match tm.get(value) {
-            Some(TypeHint::Int { signed, .. }) => signed,
-            _ => true,
+        let (signed, current_width) = match tm.get(value) {
+            Some(TypeHint::Int { signed, width }) => (signed, Some(width)),
+            _ => (true, None),
         };
-        tm.upsert(value.clone(), TypeHint::Int { signed, width });
+        // `upsert` keeps the narrower width, which is right while the only
+        // evidence is a sub-register read. It is wrong once the value is also
+        // read at its full definition width: then the narrow read is a
+        // truncating view (clang's `div %esi` fast path beside `cqo; idiv
+        // %rcx` on the same dividend), and narrowing the value makes the
+        // renderer compute `(int)(x) >> 63` for a 64-bit sign broadcast.
+        let read_whole = identities.value_ids(value).is_some_and(|value_ids| {
+            !value_ids.is_empty()
+                && value_ids
+                    .iter()
+                    .all(|id| valued_types.widest_raw_read_by_id(*id) == Some(width))
+        });
+        if read_whole && current_width.is_some_and(|current| current < width) {
+            tm.force_int_width(value.clone(), width);
+        } else {
+            tm.upsert(value.clone(), TypeHint::Int { signed, width });
+        }
     }
     refine_return_type(lf, &mut tm, cc, TypeRecoveryAuthority::Exact(identities));
     tm

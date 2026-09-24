@@ -324,6 +324,14 @@ pub struct TypeMapV {
     strong_parameter_refinements: HashSet<ValueId>,
     value_ids: HashMap<SsaValue, ValueId>,
     values_by_id: HashMap<ValueId, SsaValue>,
+    /// The widest architectural view through which each value is READ.
+    ///
+    /// `inner` deliberately keeps the narrowest view it saw (a sub-register
+    /// read is source-width evidence), so it cannot say whether a value was
+    /// also consumed whole. This companion can: a value defined through `rax`
+    /// and read both as `rax` and as `eax` is a 64-bit value with a truncating
+    /// 32-bit view, not an `int`.
+    widest_raw_reads: HashMap<ValueId, u8>,
     #[cfg(test)]
     next_test_value_id: u32,
 }
@@ -385,6 +393,19 @@ impl TypeMapV {
     /// Read a fact through the opaque identity owned by the originating SSA.
     pub(crate) fn get_by_id(&self, value_id: ValueId) -> Option<TypeHint> {
         self.inner.get(&value_id).copied()
+    }
+
+    /// The widest exact architectural width at which `value_id` is read.
+    pub(crate) fn widest_raw_read_by_id(&self, value_id: ValueId) -> Option<u8> {
+        self.widest_raw_reads.get(&value_id).copied()
+    }
+
+    /// Record one read of `value` through an architectural view `width` bytes wide.
+    fn record_raw_read(&mut self, value: &SsaValue, width: u8) {
+        if let Some(value_id) = self.ensure_value_id(value) {
+            let widest = self.widest_raw_reads.entry(value_id).or_insert(0);
+            *widest = (*widest).max(width);
+        }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&SsaValue, &TypeHint)> {

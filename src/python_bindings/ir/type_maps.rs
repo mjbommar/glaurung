@@ -215,7 +215,7 @@ fn float_expression_width(
     use crate::ir::ast::Expr;
     use crate::ir::types_recover::TypeHint;
 
-    match expression {
+    match expression.semantic() {
         Expr::Reg(register) => match types.get(register) {
             Some(TypeHint::Float { width }) => Some(width),
             _ => None,
@@ -287,16 +287,24 @@ fn refine_float_copy_types(
         value_identities: Option<&crate::ir::value_number::ValueIdentities>,
     ) {
         for statement in body {
-            match statement {
-                Stmt::Assign { dst, src } => refine(dst, src, types, changed),
-                Stmt::Store {
-                    addr: Expr::Reg(destination @ Phys(_)),
-                    src,
-                    ..
-                } if value_identities
-                    .is_some_and(|identities| identities.is_promoted_stack_object(destination)) =>
+            // Provenance wrappers (`Stmt::Origin`, `Expr::Origin`) are
+            // render-neutral; matching them instead of their semantics skipped
+            // every attributed copy and promoted-slot store.
+            match statement.semantic() {
+                Stmt::Assign { dst, src } => refine(dst, src.semantic(), types, changed),
+                Stmt::Store { addr, src, .. }
+                    if matches!(
+                        addr.semantic(),
+                        Expr::Reg(destination @ Phys(_))
+                            if value_identities.is_some_and(|identities| {
+                                identities.is_promoted_stack_object(destination)
+                            })
+                    ) =>
                 {
-                    refine(destination, src, types, changed);
+                    let Expr::Reg(destination) = addr.semantic() else {
+                        unreachable!("guard matched a register address")
+                    };
+                    refine(destination, src.semantic(), types, changed);
                 }
                 Stmt::If {
                     then_body,
@@ -560,6 +568,36 @@ fn recover_numbered_types(
     )
 }
 
+/// Install the prototype's fact for one parameter role.
+///
+/// The prototype's hint is keyed by the parameter's exact live-in SSA value,
+/// while the storage-keyed map it refines merges every lifetime of the
+/// register. For a float parameter that difference is a width: clang's
+/// `cvtss2sd %xmm1,%xmm1` reads a `float` argument and writes a `double` back
+/// into the same register, so the storage map says `double` and
+/// `refine_from_value` (which never narrows one float to another) kept it,
+/// rendering `double mix_float(double, double)` for `(double, float)`.
+fn apply_parameter_fact(
+    types: &mut crate::ir::types_recover::TypeMap,
+    role: crate::ir::types::VReg,
+    hint: crate::ir::types_recover::TypeHint,
+    locked: bool,
+) {
+    use crate::ir::types_recover::TypeHint;
+    if locked {
+        types.apply_locked_fact(role, hint);
+        return;
+    }
+    if let (Some(TypeHint::Float { width: current }), TypeHint::Float { width: exact }) =
+        (types.get(&role), hint)
+    {
+        if current != exact {
+            types.clear_value_fact(&role);
+        }
+    }
+    types.refine_from_value(role, hint);
+}
+
 pub(super) fn decbench_type_maps(
     f: &crate::ir::ast::Function,
     lf_raw: &crate::ir::types::LlirFunction,
@@ -625,11 +663,12 @@ pub(super) fn decbench_type_maps(
             )
         });
         if let Some(hint) = hint {
-            if prototype.parameter_is_locked(parameter.slot) {
-                decl.apply_locked_fact(role, hint);
-            } else {
-                decl.refine_from_value(role, hint);
-            }
+            apply_parameter_fact(
+                &mut decl,
+                role,
+                hint,
+                prototype.parameter_is_locked(parameter.slot),
+            );
         }
     }
     merge_slot_sizes(&mut decl, slot_sizes, cc);
@@ -672,11 +711,12 @@ pub(super) fn decbench_type_maps(
             )
         });
         if let Some(hint) = hint {
-            if prototype.parameter_is_locked(parameter.slot) {
-                width.apply_locked_fact(role, hint);
-            } else {
-                width.refine_from_value(role, hint);
-            }
+            apply_parameter_fact(
+                &mut width,
+                role,
+                hint,
+                prototype.parameter_is_locked(parameter.slot),
+            );
         }
     }
     merge_slot_sizes(&mut width, slot_sizes, cc);
@@ -861,6 +901,101 @@ mod tests {
                 width: 4,
             }),
             "the renderer must consume the SSA-owned raw-use width"
+        );
+    }
+
+    /// `61_fixed_point:clang:O2:fixed_divide` (clang 14):
+    ///
+    /// ```text
+    /// movslq %edi,%rax ; shl $0x10,%rax   ; the 64-bit dividend
+    /// cqto             ; idiv %rcx        ; read as rax (64-bit path)
+    /// div %esi                            ; read as eax (32-bit fast path)
+    /// ```
+    ///
+    /// The one 32-bit read made the value-keyed map (which keeps the narrowest
+    /// view it saw) call the dividend `int`, and the renderer then printed the
+    /// `cqo` sign broadcast as `(int)(var2) >> 63` — the sign of the low word
+    /// instead of the value, so `fixed_divide(INT_MIN, INT_MIN)` returned
+    /// INT_MIN instead of 65536.  A value DEFINED at 64 bits and also READ at
+    /// 64 bits is a 64-bit value; the narrow read is a truncating view of it.
+    #[test]
+    fn numbered_renderer_types_keep_definition_width_read_at_full_width() {
+        use crate::ir::types::{BinOp, LlirBlock, LlirFunction, LlirInstr, Op, Value, Width};
+        let instr = |va, op| LlirInstr { va, op };
+        let raw = LlirFunction {
+            entry_va: 0x1000,
+            blocks: vec![LlirBlock {
+                start_va: 0x1000,
+                end_va: 0x1010,
+                instrs: vec![
+                    instr(
+                        0x1000,
+                        Op::SExt {
+                            dst: VReg::phys("rax"),
+                            src: Value::Reg(VReg::phys("edi")),
+                            from: Width::W32,
+                            to: Width::W64,
+                        },
+                    ),
+                    instr(
+                        0x1004,
+                        Op::Bin {
+                            dst: VReg::phys("rax"),
+                            op: BinOp::Shl,
+                            lhs: Value::Reg(VReg::phys("rax")),
+                            rhs: Value::Const(16),
+                        },
+                    ),
+                    instr(
+                        0x1008,
+                        Op::Bin {
+                            dst: VReg::phys("rdx"),
+                            op: BinOp::Sar,
+                            lhs: Value::Reg(VReg::phys("rax")),
+                            rhs: Value::Const(63),
+                        },
+                    ),
+                    instr(
+                        0x100c,
+                        Op::Bin {
+                            dst: VReg::phys("ecx"),
+                            op: BinOp::Add,
+                            lhs: Value::Reg(VReg::phys("eax")),
+                            rhs: Value::Reg(VReg::phys("edx")),
+                        },
+                    ),
+                ],
+                succs: vec![],
+            }],
+        };
+        let ssa = crate::ir::ssa::compute_ssa(&raw);
+        let valued_types = crate::ir::types_recover::recover_types_valued(&raw, &ssa);
+        let (numbered, _, _, identities) =
+            crate::ir::value_number::value_number_with_parameter_slots_lifetimes_and_identities(
+                &raw,
+                &ssa,
+                CallConv::SysVAmd64,
+                &[],
+            );
+        let Op::Bin {
+            dst: shifted,
+            op: BinOp::Shl,
+            ..
+        } = &numbered.blocks[0].instrs[1].op
+        else {
+            panic!("expected the numbered shift")
+        };
+
+        let exact =
+            recover_numbered_types(&numbered, CallConv::SysVAmd64, &identities, &valued_types);
+
+        assert_eq!(
+            exact.get(shifted),
+            Some(TypeHint::Int {
+                signed: true,
+                width: 8,
+            }),
+            "a 64-bit definition read as rax must not be narrowed by its eax view"
         );
     }
 
@@ -1091,6 +1226,69 @@ mod tests {
         refine_float_copy_types(&body, &mut types, 512, Some(&identities));
 
         assert_eq!(types.get(&object), Some(TypeHint::Float { width: 4 }));
+    }
+
+    /// `181_compensated_summation:gcc:O2:summation_disagrees` spills the first
+    /// call's `double` result (`movsd %xmm0,0x8(%rsp)`) across the second call.
+    /// The promoted-slot store carries provenance, so it arrives wrapped in
+    /// `Stmt::Origin` (and its address in `Expr::Origin`). Matching the wrapper
+    /// instead of its semantics left `local_20` a `long`, and the reload was
+    /// then compared with the other `double` as an integer's VALUE.
+    #[test]
+    fn float_copy_refinement_sees_through_attributed_statements() {
+        use crate::ir::ast::OriginSet;
+        let object_name = "local_20".to_string();
+        let object = VReg::phys(&object_name);
+        let copy = VReg::phys("var5");
+        let mut identities = crate::ir::value_number::ValueIdentities::default();
+        identities.attach_promoted_stack_objects([&object_name]);
+        let mut types = TypeMap::default();
+        types.upsert_public(VReg::phys("var2"), TypeHint::Float { width: 8 });
+        types.upsert_public(
+            object.clone(),
+            TypeHint::Int {
+                signed: true,
+                width: 8,
+            },
+        );
+        let body = vec![
+            Stmt::Store {
+                addr: Expr::Reg(object.clone()).with_origins(OriginSet::one(0x11fc)),
+                src: Expr::Reg(VReg::phys("var2")),
+                size: 8,
+            }
+            .with_origins(OriginSet::one(0x11fc)),
+            Stmt::Assign {
+                dst: copy.clone(),
+                src: Expr::Reg(object.clone()),
+            }
+            .with_origins(OriginSet::one(0x1207)),
+        ];
+
+        refine_float_copy_types(&body, &mut types, 512, Some(&identities));
+
+        assert_eq!(types.get(&object), Some(TypeHint::Float { width: 8 }));
+        assert_eq!(types.get(&copy), Some(TypeHint::Float { width: 8 }));
+    }
+
+    /// `tests/macho_lane` `mix_float(double d, float f)` on x86-64: clang
+    /// converts the `float` in place (`cvtss2sd %xmm1,%xmm1`), so the
+    /// register-keyed map records `xmm1` as a `double`. The live-in prototype
+    /// fact is exact and must win.
+    #[test]
+    fn exact_float_parameter_width_replaces_the_merged_register_width() {
+        let role = VReg::phys("arg1");
+        let mut types = TypeMap::default();
+        types.upsert_public(role.clone(), TypeHint::Float { width: 8 });
+
+        super::apply_parameter_fact(
+            &mut types,
+            role.clone(),
+            TypeHint::Float { width: 4 },
+            false,
+        );
+
+        assert_eq!(types.get(&role), Some(TypeHint::Float { width: 4 }));
     }
 
     #[test]
