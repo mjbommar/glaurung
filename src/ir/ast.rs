@@ -1327,6 +1327,21 @@ fn local_reg_spelling(
     }
 }
 
+/// Whether a named call target is the stack protector's failure routine --
+/// evidence the ORIGINAL was built with a protector.
+///
+/// The callee is `__stack_chk_fail@plt` through a PLT thunk and plain
+/// `__stack_chk_fail` when bound directly; the suffix is stripped at print
+/// time, so split it the way `ir::canary` does. On i386 `-fPIC` glibc routes
+/// the failure through its hidden alias `__stack_chk_fail_local`, so match the
+/// prefix rather than the exact name -- otherwise every 32-bit protected
+/// function keeps the suppression it must not have.
+fn is_stack_check_target(name: &str) -> bool {
+    name.split('@')
+        .next()
+        .is_some_and(|base| base.starts_with("__stack_chk_fail"))
+}
+
 fn collect_idents_expr(
     e: &Expr,
     ids: &mut DecIdents,
@@ -1385,8 +1400,16 @@ fn collect_idents_expr(
             collect_idents_expr(addr, ids, identities);
         }
         Expr::Call { target, args, .. } => {
-            if !matches!(target.semantic(), Expr::Named { .. }) {
-                collect_idents_expr(target, ids, identities);
+            match target.semantic() {
+                // The same protector evidence as a statement call: when the
+                // failure path is not proven noreturn (i386 `-fPIC`'s
+                // `__stack_chk_fail_local`), it renders as a VALUED call.
+                Expr::Named { name, .. } => {
+                    if is_stack_check_target(name) {
+                        ids.calls_stack_check = true;
+                    }
+                }
+                _ => collect_idents_expr(target, ids, identities),
             }
             for argument in args {
                 collect_idents_expr(argument, ids, identities);
@@ -1473,11 +1496,7 @@ fn collect_idents_stmt(
                 // alias `__stack_chk_fail_local` instead, so match the prefix
                 // rather than the exact name — otherwise every 32-bit protected
                 // function keeps the suppression it must not have.
-                if name
-                    .split('@')
-                    .next()
-                    .is_some_and(|base| base.starts_with("__stack_chk_fail"))
-                {
+                if is_stack_check_target(name) {
                     ids.calls_stack_check = true;
                 }
             } else {
@@ -2669,6 +2688,32 @@ mod tests {
         assert!(c_style.contains(
             "// proto: BOOL ReadFile(HANDLE hFile, LPVOID lpBuffer, DWORD nNumberOfBytesToRead"
         ));
+    }
+
+    /// i386 `-fPIC` protectors fail through `__stack_chk_fail_local`; when that
+    /// path is not proven noreturn it renders as `ret = __stack_chk_fail_local()`.
+    /// The valued call is the same evidence; missing it emitted
+    /// `no_stack_protector` on protected 32-bit functions
+    /// (`test_a_recovered_frame_array_does_not_invite_a_stack_protector[i386]`).
+    #[test]
+    fn valued_stack_check_call_keeps_protector_evidence() {
+        let statement = Stmt::Assign {
+            dst: VReg::phys("ret"),
+            src: Expr::Call {
+                target: Box::new(Expr::Named {
+                    va: 0x2000,
+                    name: "__stack_chk_fail_local".to_string(),
+                }),
+                args: Vec::new(),
+                call_spec: None,
+                result_width: None,
+            },
+        };
+        let mut ids = DecIdents::default();
+
+        collect_idents_stmt(&statement, &mut ids, None);
+
+        assert!(ids.calls_stack_check);
     }
 
     #[test]
