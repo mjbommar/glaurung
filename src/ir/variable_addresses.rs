@@ -30,7 +30,7 @@
 //! inside the function, so it passes a consumer's validator and silently
 //! mis-attributes the evidence to the wrong variable.
 //!
-//! 1. **Exact coordinate match only.** `(ssa_base(base), disp)` must equal the
+//! 1. **Exact coordinate match only.** `(frame_base(base), disp)` must equal the
 //!    slot's published coordinate. No ranges, no nearest-match.
 //! 2. **An indexed access is not this scalar.** `MemOp { index: Some(..) }` at a
 //!    slot's coordinate is an element of an array that *starts* there, which is
@@ -109,8 +109,23 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use crate::ir::abi::ssa_base;
 use crate::ir::types::{LlirFunction, MemOp, Op, VReg};
+
+/// The storage identity of a frame-base register: unversioned, and with the
+/// 32-bit x86 frame and stack pointers named by their canonical parents.
+///
+/// Stack promotion mints every x86 frame coordinate on `rbp`/`rsp`, while the
+/// i386 lifter addresses the same storage through `ebp`/`esp`. Joining on the
+/// spelling left every i386 variable without a single address. Only these two
+/// names are mapped: an AArch64 `sp` or ARM `r11` is its own storage, and a
+/// generic x86 view table would misread `sp` as the 16-bit view of `rsp`.
+fn frame_base(name: &str) -> &str {
+    match crate::ir::abi::ssa_base(name) {
+        "ebp" => "rbp",
+        "esp" => "rsp",
+        base => base,
+    }
+}
 
 /// Every `MemOp` an op reads or writes through.
 ///
@@ -139,7 +154,7 @@ fn is_stack_pointer(name: &str) -> bool {
 /// The physical register an op defines, unversioned.
 fn defined_register(op: &Op) -> Option<String> {
     match crate::ir::use_def::def_uses(op).0 {
-        Some(VReg::Phys(name)) => Some(ssa_base(&name).to_string()),
+        Some(VReg::Phys(name)) => Some(frame_base(&name).to_string()),
         _ => None,
     }
 }
@@ -155,7 +170,7 @@ fn coordinate_of(addr: &MemOp) -> Option<(&str, i64)> {
     let VReg::Phys(base) = addr.base.as_ref()? else {
         return None;
     };
-    Some((ssa_base(base), addr.disp))
+    Some((frame_base(base), addr.disp))
 }
 
 /// Machine addresses per promoted stack-local name.
@@ -176,7 +191,7 @@ pub fn stack_slot_addresses(
     let mut owner: HashMap<(&str, i64), Option<&str>> = HashMap::new();
     for (name, (base, disp)) in frame_coordinates {
         owner
-            .entry((ssa_base(base), *disp))
+            .entry((frame_base(base), *disp))
             .and_modify(|slot| *slot = None)
             .or_insert(Some(name.as_str()));
     }
@@ -315,6 +330,32 @@ mod tests {
         ]);
         let got = stack_slot_addresses(&lf, &coords(&[("local_18", "rbp", -24)]));
         assert_eq!(got.get("local_18"), Some(&vec![0x1004, 0x100c]));
+    }
+
+    /// i386 accesses its frame through `ebp`, while stack promotion mints every
+    /// x86 frame coordinate on the canonical parent `rbp`. The same storage
+    /// under two spellings of one register joined to nothing, so every i386
+    /// variable reported zero addresses (`test_i386_addresses_survive_the_audit`).
+    #[test]
+    fn an_i386_frame_base_matches_its_canonical_coordinate() {
+        let lf = func(vec![
+            (
+                0x1162,
+                Op::Store {
+                    addr: mem(Some("ebp"), None, -8),
+                    src: Value::Const(0),
+                },
+            ),
+            (
+                0x11a4,
+                Op::Load {
+                    dst: VReg::Phys("eax".into()),
+                    addr: mem(Some("ebp#2"), None, -8),
+                },
+            ),
+        ]);
+        let got = stack_slot_addresses(&lf, &coords(&[("steps", "rbp", -8)]));
+        assert_eq!(got.get("steps"), Some(&vec![0x1162, 0x11a4]));
     }
 
     /// SSA versioning is spelling, not identity -- `rbp#3` is `rbp`.
