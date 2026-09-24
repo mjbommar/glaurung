@@ -902,7 +902,8 @@ def build_one(
                 "build_seconds": round(elapsed, 3),
                 "raw_signatures": 0,
                 "unique_signatures": 0,
-                "dropped_ambiguous": 0,
+                "ambiguous_keys": 0,
+                "ambiguous_names": 0,
                 "signatures_with_masked_bytes": 0,
                 "signatures_with_crc": 0,
                 "signatures_with_refs": 0,
@@ -916,7 +917,10 @@ def build_one(
         "build_seconds": round(elapsed, 3),
         "raw_signatures": int(stats["raw_signatures"]),
         "unique_signatures": int(stats["unique_signatures"]),
-        "dropped_ambiguous": int(stats["dropped_ambiguous"]),
+        # The archive builder no longer drops ambiguous leaves (7fb0781e): it
+        # keeps one entry carrying every name and reports how many there are.
+        "ambiguous_keys": int(stats["ambiguous_keys"]),
+        "ambiguous_names": int(stats["ambiguous_names"]),
         "signatures_with_masked_bytes": int(stats["signatures_with_masked_bytes"]),
         "signatures_with_crc": int(stats["signatures_with_crc"]),
         "signatures_with_refs": int(stats["signatures_with_refs"]),
@@ -999,7 +1003,8 @@ def build_set(
                         "build_seconds": 0.0,
                         "raw_signatures": 0,
                         "unique_signatures": 0,
-                        "dropped_ambiguous": 0,
+                        "ambiguous_keys": 0,
+                        "ambiguous_names": 0,
                         "signatures_with_masked_bytes": 0,
                         "signatures_with_crc": 0,
                         "signatures_with_refs": 0,
@@ -1048,7 +1053,7 @@ def build_set(
                 print(
                     f"{key}: unique={row['unique_signatures']} "
                     f"raw={row['raw_signatures']} "
-                    f"ambiguous={row['dropped_ambiguous']} "
+                    f"ambiguous={row['ambiguous_keys']} "
                     f"{row['build_seconds']}s",
                     flush=True,
                 )
@@ -1068,7 +1073,8 @@ def build_set(
             "with_signatures": sum(1 for r in libraries if r["unique_signatures"]),
             "raw_signatures": sum(int(r["raw_signatures"]) for r in libraries),
             "unique_signatures": sum(int(r["unique_signatures"]) for r in libraries),
-            "dropped_ambiguous": sum(int(r["dropped_ambiguous"]) for r in libraries),
+            "ambiguous_keys": sum(int(r["ambiguous_keys"]) for r in libraries),
+            "ambiguous_names": sum(int(r["ambiguous_names"]) for r in libraries),
             "build_seconds": round(
                 sum(float(r["build_seconds"]) for r in libraries), 3
             ),
