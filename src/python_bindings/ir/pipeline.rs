@@ -1716,7 +1716,7 @@ pub(super) fn lower_and_run_ast_passes(
         &mut value_identities,
     )?;
     if selected_shadow_v2 {
-        crate::ir::structure_v2::presentation::flatten_terminal_elses(&mut function);
+        crate::ir::structure_v2::cleanup::flatten_terminal_elses(&mut function);
     }
     let ast_value_identities = value_identities
         .with_role_aliases_and_parameter_slots(&role_names, &param_slots)

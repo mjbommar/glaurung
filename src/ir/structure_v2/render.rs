@@ -21,7 +21,7 @@ pub(super) fn render_pseudocode(
 ) -> Option<RenderedPseudocode> {
     let region = adapt_tree(lf, tree)?;
     let mut function = crate::ir::ast::lower(lf, &region, format!("sub_{:x}", lf.entry_va));
-    super::presentation::flatten_terminal_elses(&mut function);
+    super::cleanup::flatten_terminal_elses(&mut function);
     let raw = crate::ir::ast::render_c(&function);
     let prepared = crate::ir::ast::prepare_for_decbench(&function);
     Some(RenderedPseudocode {

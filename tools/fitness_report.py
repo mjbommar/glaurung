@@ -576,6 +576,25 @@ def _accepted_regressions(report: JsonObject, baseline_path: Path) -> list[JsonO
     return history[-50:]
 
 
+def _architecture_growth_approvals(baseline_path: Path) -> list[JsonObject]:
+    """Carry the baseline's pre-registered growth budgets across a rewrite.
+
+    `architecture_growth_approvals` (the WP4 shadow-structurer budget, added in
+    `d9628c6d`) is a decision recorded in the baseline, not a measurement, so
+    `build_report` cannot recompute it. Until 2026-09-24 `--write-baseline`
+    rebuilt the file from the report alone and would have silently deleted the
+    budget that `test_wp4_shadow_architecture_growth_is_bounded_and_expires`
+    enforces. Changing a budget is an edit to the baseline, made on purpose.
+    """
+    if not baseline_path.is_file():
+        return []
+    try:
+        previous = json.loads(baseline_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return list(previous.get("architecture_growth_approvals") or [])
+
+
 def _print_drift(report: JsonObject) -> None:
     """Say out loud how far the accepted baseline has drifted, and how often."""
     history = report.get("accepted_regressions") or []
@@ -614,6 +633,9 @@ def main(argv: list[str] | None = None) -> int:
             report["accepted_regressions"] = _accepted_regressions(
                 report, args.baseline
             )
+            approvals = _architecture_growth_approvals(args.baseline)
+            if approvals:
+                report["architecture_growth_approvals"] = approvals
             args.baseline.write_text(render_json(report), encoding="utf-8")
             print(f"wrote baseline: {args.baseline}")
             _print_drift(report)

@@ -36,6 +36,24 @@ executions), which is why `--features python-ext` adds 122 executions from 32
 declared `python_bindings` attributes. The ratchet is therefore about
 *direction*, not exactness: a module must not lose declared tests, and the
 never-executed pool must not grow.
+
+Recorded losses
+---------------
+
+A loss is accepted only by regenerating the baseline with a dated entry here
+naming where the tests now run.
+
+* **2026-09-24, `csource` 489 -> 128 and `syntax` 222 -> 0 (583 tests).**
+  Commit `b4311b7c` (2026-09-17) deleted the embedded copy of the C
+  source-analysis stack in favour of the `cindergraph` git dependency:
+  `src/syntax/` and `src/csource/{cfg,dataflow,export,lex,metrics,normalize,
+  parse,joern}`. Per `docs/decisions/source-001-depend-on-cindergraph-by-git-rev.md`
+  item 4, 571 of the 583 exist under the same name in cindergraph, two under a
+  changed name, and the ten that did not were carried upstream before the
+  re-pin to `8bd2051`; the one that reads Glaurung's corpus stays here as
+  `tests/source_dataflow_corpus`. 489 - 128 + 222 = 583 exactly, and no other
+  module lost a test in the same regeneration (`analysis`, `ir`, `symbolic`
+  grew; `runtime_analysis` is new).
 """
 
 from __future__ import annotations

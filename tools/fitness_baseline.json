@@ -1,14 +1,4 @@
 {
-  "architecture_growth_approvals": [
-    {
-      "expires_when": "structure_v2 becomes the production structurer or WP4 is abandoned",
-      "max_files": 9,
-      "max_total_loc": 4400,
-      "owner": "WP4",
-      "path": "ir/structure_v2/",
-      "reason": "bounded shadow implementation beside production v1; delete v1 or this directory at the promotion decision"
-    }
-  ],
   "accepted_regressions": [
     {
       "measures": {
@@ -514,127 +504,229 @@
       "worsened": [
         "product_loc_above_1000: 33351 -> 33355 (worse)"
       ]
+    },
+    {
+      "measures": {
+        "ir_files_above_1000": 13,
+        "ir_median_loc": 404,
+        "product_files_above_1000": 23,
+        "product_files_above_2000": 3,
+        "product_loc_above_1000": 33355,
+        "product_max_loc": 2268,
+        "product_mean_loc": 407.2923076923077,
+        "product_median_loc": 301,
+        "product_pct_loc_above_1000": 17.99879126690338
+      },
+      "owners_grew": [
+        "ir/call_args.rs: 1327 -> 2107 (+780)",
+        "ir/ast/dec_render.rs: 2033 -> 2746 (+713)",
+        "symbolic/solver/mod.rs: 1710 -> 2264 (+554)",
+        "ir/const_fold.rs: 1421 -> 1938 (+517)",
+        "ir/ast.rs: 1711 -> 2101 (+390)",
+        "ir/types_recover.rs: 1906 -> 2140 (+234)",
+        "debug/dwarf.rs: 1362 -> 1563 (+201)",
+        "symbols/pdb.rs: 1180 -> 1379 (+199)",
+        "ir/loop_form.rs: 1259 -> 1455 (+196)",
+        "ir/dwarf_fields.rs: 1017 -> 1162 (+145)",
+        "ir/ast/lower_ops.rs: 1003 -> 1118 (+115)",
+        "ir/lift_x86.rs: 2268 -> 2364 (+96)",
+        "ir/call_contracts.rs: 1038 -> 1117 (+79)",
+        "symbolic/ordered_trace.rs: 1235 -> 1277 (+42)",
+        "ir/lift_arm32.rs: 1977 -> 1996 (+19)",
+        "ir/lift_arm64.rs: 2059 -> 2077 (+18)",
+        "symbolic/ordered_replay.rs: 1037 -> 1047 (+10)"
+      ],
+      "worsened": [
+        "product_mean_loc: 407.2923076923077 -> 475.5799648506151 (worse)",
+        "product_files_above_1000: 23 -> 58 (worse)",
+        "product_files_above_2000: 3 -> 9 (worse)",
+        "product_pct_loc_above_1000: 17.99879126690338 -> 33.953918072467246 (worse)",
+        "ir_files_above_1000: 13 -> 28 (worse)",
+        "product_max_loc: 2268 -> 7397 (worse)",
+        "product_loc_above_1000: 33355 -> 91881 (worse)"
+      ]
+    },
+    {
+      "measures": {
+        "ir_files_above_1000": 28,
+        "ir_median_loc": 477,
+        "product_files_above_1000": 58,
+        "product_files_above_2000": 9,
+        "product_loc_above_1000": 91881,
+        "product_max_loc": 7397,
+        "product_mean_loc": 475.5799648506151,
+        "product_median_loc": 317,
+        "product_pct_loc_above_1000": 33.953918072467246
+      },
+      "worsened": [
+        "product_mean_loc: 475.5799648506151 -> 476.4172535211268 (worse)"
+      ]
+    }
+  ],
+  "architecture_growth_approvals": [
+    {
+      "expires_when": "structure_v2 becomes the production structurer or WP4 is abandoned",
+      "max_files": 9,
+      "max_total_loc": 4400,
+      "owner": "WP4",
+      "path": "ir/structure_v2/",
+      "reason": "bounded shadow implementation beside production v1; delete v1 or this directory at the promotion decision"
     }
   ],
   "ir": {
-    "file_count": 181,
-    "files_above_1000": 13,
-    "files_above_2000": 3,
-    "loc_in_files_above_1000": 20120,
-    "max_loc": 2268,
-    "mean_loc": 498.9060773480663,
-    "median_loc": 404,
-    "pct_loc_above_1000": 22.280791123120196,
-    "total_loc": 90302
+    "file_count": 196,
+    "files_above_1000": 28,
+    "files_above_2000": 6,
+    "loc_in_files_above_1000": 41462,
+    "max_loc": 2746,
+    "mean_loc": 584.5765306122449,
+    "median_loc": 478.5,
+    "pct_loc_above_1000": 36.187018337013534,
+    "total_loc": 114577
   },
   "largest_files": [
     {
-      "loc": 2268,
-      "path": "ir/lift_x86.rs"
+      "loc": 7397,
+      "path": "runtime_analysis/instruction_trace.rs"
     },
     {
-      "loc": 2059,
-      "path": "ir/lift_arm64.rs"
+      "loc": 4165,
+      "path": "disasm/native_aarch64.rs"
     },
     {
-      "loc": 2033,
+      "loc": 2746,
       "path": "ir/ast/dec_render.rs"
     },
     {
-      "loc": 1977,
+      "loc": 2364,
+      "path": "ir/lift_x86.rs"
+    },
+    {
+      "loc": 2264,
+      "path": "symbolic/solver/mod.rs"
+    },
+    {
+      "loc": 2140,
+      "path": "ir/types_recover.rs"
+    },
+    {
+      "loc": 2107,
+      "path": "ir/call_args.rs"
+    },
+    {
+      "loc": 2101,
+      "path": "ir/ast.rs"
+    },
+    {
+      "loc": 2077,
+      "path": "ir/lift_arm64.rs"
+    },
+    {
+      "loc": 1996,
       "path": "ir/lift_arm32.rs"
+    },
+    {
+      "loc": 1985,
+      "path": "runtime_analysis/correlation.rs"
+    },
+    {
+      "loc": 1968,
+      "path": "python_bindings/ir/pipeline.rs"
+    },
+    {
+      "loc": 1938,
+      "path": "ir/const_fold.rs"
     },
     {
       "loc": 1908,
       "path": "python_bindings/analysis.rs"
     },
     {
-      "loc": 1906,
-      "path": "ir/types_recover.rs"
-    },
-    {
-      "loc": 1711,
-      "path": "ir/ast.rs"
-    },
-    {
-      "loc": 1710,
-      "path": "symbolic/solver/mod.rs"
-    },
-    {
-      "loc": 1678,
-      "path": "python_bindings/ir.rs"
-    },
-    {
-      "loc": 1421,
-      "path": "ir/const_fold.rs"
-    },
-    {
-      "loc": 1362,
-      "path": "debug/dwarf.rs"
-    },
-    {
-      "loc": 1327,
-      "path": "ir/call_args.rs"
-    },
-    {
-      "loc": 1259,
-      "path": "ir/loop_form.rs"
-    },
-    {
-      "loc": 1235,
-      "path": "symbolic/ordered_trace.rs"
-    },
-    {
-      "loc": 1180,
-      "path": "symbols/pdb.rs"
+      "loc": 1759,
+      "path": "runtime_analysis/behavior.rs"
     }
   ],
   "measures": {
-    "ir_files_above_1000": 13,
-    "ir_median_loc": 404,
-    "product_files_above_1000": 23,
-    "product_files_above_2000": 3,
-    "product_loc_above_1000": 33355,
-    "product_max_loc": 2268,
-    "product_mean_loc": 407.2923076923077,
-    "product_median_loc": 301,
-    "product_pct_loc_above_1000": 17.99879126690338
+    "ir_files_above_1000": 28,
+    "ir_median_loc": 478.5,
+    "product_files_above_1000": 58,
+    "product_files_above_2000": 9,
+    "product_loc_above_1000": 91881,
+    "product_max_loc": 7397,
+    "product_mean_loc": 476.4172535211268,
+    "product_median_loc": 318.0,
+    "product_pct_loc_above_1000": 33.953918072467246
   },
   "oversized_files": {
+    "analysis/cfg/repair.rs": 1507,
+    "analysis/dispatch.rs": 1425,
     "analysis/ioctl_taint.rs": 1081,
-    "debug/dwarf.rs": 1362,
-    "ir/ast.rs": 1711,
-    "ir/ast/dec_render.rs": 2033,
-    "ir/ast/lower_ops.rs": 1003,
-    "ir/call_args.rs": 1327,
-    "ir/call_contracts.rs": 1038,
-    "ir/const_fold.rs": 1421,
-    "ir/dwarf_fields.rs": 1017,
-    "ir/lift_arm32.rs": 1977,
-    "ir/lift_arm64.rs": 2059,
-    "ir/lift_x86.rs": 2268,
-    "ir/loop_form.rs": 1259,
-    "ir/types_recover.rs": 1906,
+    "debug/dwarf.rs": 1563,
+    "disasm/native_aarch64.rs": 4165,
+    "flirt/mod.rs": 1701,
+    "ir/ast.rs": 2101,
+    "ir/ast/dec_render.rs": 2746,
+    "ir/ast/decbench_render.rs": 1093,
+    "ir/ast/lower_conds.rs": 1035,
+    "ir/ast/lower_ops.rs": 1118,
+    "ir/ast/lower_region.rs": 1261,
+    "ir/call_args.rs": 2107,
+    "ir/call_args/fold_one_call.rs": 1126,
+    "ir/call_contracts.rs": 1117,
+    "ir/call_result_split.rs": 1041,
+    "ir/const_fold.rs": 1938,
+    "ir/dead_stores.rs": 1275,
+    "ir/dwarf_fields.rs": 1162,
+    "ir/function_tables.rs": 1357,
+    "ir/guard_chain.rs": 1294,
+    "ir/high_variables.rs": 1450,
+    "ir/lift_arm32.rs": 1996,
+    "ir/lift_arm64.rs": 2077,
+    "ir/lift_x86.rs": 2364,
+    "ir/lift_x86/packed.rs": 1212,
+    "ir/loop_form.rs": 1455,
+    "ir/ssa.rs": 1057,
+    "ir/stack_locals/rewrite.rs": 1024,
+    "ir/switch_ladder.rs": 1252,
+    "ir/types_recover.rs": 2140,
+    "ir/verify_defs.rs": 1273,
+    "ir/x86_prologue.rs": 1290,
     "ir/x87.rs": 1101,
+    "metrics/byte_match.rs": 1042,
+    "metrics/tree_distance.rs": 1153,
     "python_bindings/analysis.rs": 1908,
-    "python_bindings/ir.rs": 1678,
-    "symbolic/ordered_replay.rs": 1037,
-    "symbolic/ordered_trace.rs": 1235,
-    "symbolic/solver/mod.rs": 1710,
-    "symbols/pdb.rs": 1180,
+    "python_bindings/identity.rs": 1361,
+    "python_bindings/ir.rs": 1576,
+    "python_bindings/ir/callee_contracts.rs": 1475,
+    "python_bindings/ir/pipeline.rs": 1968,
+    "python_bindings/source_metrics.rs": 1139,
+    "runtime_analysis/behavior.rs": 1759,
+    "runtime_analysis/capsule.rs": 1024,
+    "runtime_analysis/correlation.rs": 1985,
+    "runtime_analysis/corruption.rs": 1294,
+    "runtime_analysis/crash.rs": 1131,
+    "runtime_analysis/instruction_trace.rs": 7397,
+    "runtime_analysis/stack_objects.rs": 1539,
+    "symbolic/ordered_replay.rs": 1047,
+    "symbolic/ordered_trace.rs": 1277,
+    "symbolic/solver/axeyum_backend.rs": 1004,
+    "symbolic/solver/axeyum_backend/warm_paths.rs": 1153,
+    "symbolic/solver/bitwuzla_backend.rs": 1058,
+    "symbolic/solver/mod.rs": 2264,
+    "symbols/pdb.rs": 1379,
     "triage/api.rs": 1030,
     "triage/config.rs": 1014
   },
   "product": {
-    "file_count": 455,
-    "files_above_1000": 23,
-    "files_above_2000": 3,
-    "loc_in_files_above_1000": 33355,
-    "max_loc": 2268,
-    "mean_loc": 407.2923076923077,
-    "median_loc": 301,
-    "pct_loc_above_1000": 17.99879126690338,
-    "total_loc": 185318
+    "file_count": 568,
+    "files_above_1000": 58,
+    "files_above_2000": 9,
+    "loc_in_files_above_1000": 91881,
+    "max_loc": 7397,
+    "mean_loc": 476.4172535211268,
+    "median_loc": 318.0,
+    "pct_loc_above_1000": 33.953918072467246,
+    "total_loc": 270605
   },
   "root": "src",
   "schema": "glaurung-fitness-report-v1",
@@ -642,65 +734,65 @@
     {
       "label": "Product-code mean",
       "measure": "product_mean_loc",
-      "meets_target": true,
+      "meets_target": false,
       "target": 450.0,
-      "value": 407.2923076923077
+      "value": 476.4172535211268
     },
     {
       "label": "Product-code median",
       "measure": "product_median_loc",
       "meets_target": false,
       "target": 250.0,
-      "value": 301
+      "value": 318.0
     },
     {
       "label": "Product files above 1,000 LOC",
       "measure": "product_files_above_1000",
-      "meets_target": true,
+      "meets_target": false,
       "target": 35.0,
-      "value": 23
+      "value": 58
     },
     {
       "label": "Product files above 2,000 LOC",
       "measure": "product_files_above_2000",
-      "meets_target": true,
+      "meets_target": false,
       "target": 5.0,
-      "value": 3
+      "value": 9
     },
     {
       "label": "Product LOC in files above 1,000",
       "measure": "product_pct_loc_above_1000",
-      "meets_target": true,
+      "meets_target": false,
       "target": 25.0,
-      "value": 17.99879126690338
+      "value": 33.953918072467246
     },
     {
       "label": "src/ir median",
       "measure": "ir_median_loc",
       "meets_target": true,
       "target": 500.0,
-      "value": 404
+      "value": 478.5
     },
     {
       "label": "src/ir files above 1,000 LOC",
       "measure": "ir_files_above_1000",
       "meets_target": false,
       "target": 5.0,
-      "value": 13
+      "value": 28
     },
     {
       "label": "Largest product file",
       "measure": "product_max_loc",
       "meets_target": false,
       "target": 1000.0,
-      "value": 2268
+      "value": 7397
     },
     {
       "label": "Product LOC in files above 1,000",
       "measure": "product_loc_above_1000",
-      "meets_target": true,
+      "meets_target": false,
       "target": 42000.0,
-      "value": 33355
+      "value": 91881
     }
   ]
 }

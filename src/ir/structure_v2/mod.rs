@@ -5,11 +5,10 @@
 //! returns a deterministic candidate or a typed refusal, plus exact graph
 //! coverage. Production authority remains [`crate::ir::structure`].
 
-mod cleanup;
+pub(crate) mod cleanup;
 mod conditions;
 mod dominators;
 mod local;
-pub(crate) mod presentation;
 mod recover;
 mod region;
 pub(crate) mod render;
