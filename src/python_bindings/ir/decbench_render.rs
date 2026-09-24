@@ -614,6 +614,12 @@ fn decbench_text_with_installed_environment(
     pass!("prune_promoted_self_stores", {
         crate::ir::stack_locals::prune_promoted_self_stores(&mut prepared, promoted_stack_slots)
     });
+    // Store pruning can leave a guard with nothing to guard (GCC's variadic
+    // `test %al,%al` over the pruned vector save-area stores); the remaining
+    // `if (c) {}` would only read an ABI live-in the C never defines.
+    pass!("prune_empty_pure_ifs", {
+        crate::ir::label_prune::prune_empty_pure_ifs(&mut prepared)
+    });
     // Typed/local preparation can be the first point at which every saved
     // cdecl32 frame identity has disappeared and GCC's entry-realignment
     // prologue/epilogue becomes one exact balanced transaction. Repeat the

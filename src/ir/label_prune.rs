@@ -791,10 +791,119 @@ fn drop_unreferenced(body: &mut Vec<Stmt>, referenced: &HashSet<u64>) {
     });
 }
 
+/// Remove an `if` whose arms are both empty and whose condition cannot trap
+/// or call.
+///
+/// Store pruning can leave a guard with nothing left to guard. GCC -O2's
+/// variadic prologue is `test %al,%al; je 1f; movaps %xmm0..7 -> save area`,
+/// and once the unobserved vector save-area stores are pruned the result is
+/// `if ((ret & 255) != 0) {}` -- a statement with no effect whose only
+/// observable consequence is a read of the SysV vector-count live-in, which
+/// the definedness verifier correctly reports as undefined
+/// (`test_a_variadic_function_reads_no_undefined_value[gcc-O2-vsa_forward]`).
+/// Only a condition built from registers, constants and arithmetic is
+/// removed; a load or a call keeps its statement.
+pub fn prune_empty_pure_ifs(f: &mut Function) {
+    prune_empty_pure_ifs_in(&mut f.body);
+}
+
+fn prune_empty_pure_ifs_in(body: &mut Vec<Stmt>) {
+    for statement in body.iter_mut() {
+        match statement.semantic_mut() {
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => {
+                prune_empty_pure_ifs_in(then_body);
+                if let Some(else_body) = else_body {
+                    prune_empty_pure_ifs_in(else_body);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                prune_empty_pure_ifs_in(body)
+            }
+            Stmt::Switch { cases, default, .. } => {
+                for (_, body) in cases.iter_mut() {
+                    prune_empty_pure_ifs_in(body);
+                }
+                if let Some(default) = default {
+                    prune_empty_pure_ifs_in(default);
+                }
+            }
+            Stmt::TryCatch { try_body, catches } => {
+                prune_empty_pure_ifs_in(try_body);
+                for catch in catches.iter_mut() {
+                    prune_empty_pure_ifs_in(&mut catch.body);
+                }
+            }
+            _ => {}
+        }
+    }
+    body.retain(|statement| {
+        !matches!(
+            statement.semantic(),
+            Stmt::If { cond, then_body, else_body }
+                if then_body.is_empty()
+                    && else_body.as_ref().is_none_or(Vec::is_empty)
+                    && is_effect_free_condition(cond)
+        )
+    });
+}
+
+fn is_effect_free_condition(expression: &Expr) -> bool {
+    match expression.semantic() {
+        Expr::Reg(_) | Expr::Const(_) => true,
+        Expr::Un { src, .. } => is_effect_free_condition(src),
+        Expr::Cast { expr, .. } => is_effect_free_condition(expr),
+        Expr::Bin { lhs, rhs, .. } | Expr::Cmp { lhs, rhs, .. } => {
+            is_effect_free_condition(lhs) && is_effect_free_condition(rhs)
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ir::ast::{Expr, Function, OriginSet, Stmt};
+
+    #[test]
+    fn an_empty_guard_over_a_register_is_removed_but_not_one_over_a_load() {
+        let register_guard = Stmt::If {
+            cond: Expr::Cmp {
+                op: CmpOp::Ne,
+                lhs: Box::new(Expr::Bin {
+                    op: crate::ir::types::BinOp::And,
+                    lhs: Box::new(Expr::Reg(VReg::phys("ret"))),
+                    rhs: Box::new(Expr::Const(255)),
+                }),
+                rhs: Box::new(Expr::Const(0)),
+            },
+            then_body: Vec::new(),
+            else_body: None,
+        };
+        let load_guard = Stmt::If {
+            cond: Expr::Deref {
+                addr: Box::new(Expr::Reg(VReg::phys("pointer"))),
+                size: 4,
+            },
+            then_body: Vec::new(),
+            else_body: Some(Vec::new()),
+        };
+        let kept = Stmt::Return {
+            value: Some(Expr::Const(0)),
+        };
+        let mut function = Function {
+            name: "vsa_forward".into(),
+            entry_va: 0,
+            body: vec![register_guard, load_guard.clone(), kept.clone()],
+        };
+
+        prune_empty_pure_ifs(&mut function);
+
+        assert_eq!(function.body, vec![load_guard, kept]);
+    }
     use crate::ir::types::{CmpOp, VReg};
 
     #[test]
